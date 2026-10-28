@@ -1,0 +1,14 @@
+node_modules/
+data/
+*.db
+*.db-*
+.env
+.dev.vars
+.wrangler/
+state.json
+
+# 部署時產生（npm run deploy／npm run releases），打包進 Worker
+generated/
+
+# AI 成員在本機的設定與 Token（接入時產生，不進 git）
+.aigile/

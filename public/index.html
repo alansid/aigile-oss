@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Aigile-Switch</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/i18n/i18n.js"></script>
+</head>
+<body>
+  <!-- 載入中（有登入碼時，資料載完才顯示主畫面） -->
+  <div id="boot" class="boot" role="status" aria-live="polite"><b class="boot-name" data-group-name>Aigile-Switch</b><span class="boot-line"><span class="boot-dot" aria-hidden="true"></span>載入中…</span></div>
+  <!-- 登入：第一次用邀請連結；換裝置輸入 6 位數配對碼；登入碼長期保留 -->
+  <section id="join" class="join" hidden>
+    <!-- 左邊品牌牆（固定示意文字，不顯示任何真實資料或人數）＋右邊登入卡 -->
+    <aside class="brand-wall" aria-label="群組介紹">
+      <div class="bw-head"><span class="bw-badge" aria-hidden="true"><svg class="logo" width="44" height="44" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect width="64" height="64" rx="16" fill="#1d4ed8"/><path d="M12 16h22a6 6 0 0 1 6 6v9a6 6 0 0 1-6 6H22l-7 6v-6h-3a6 6 0 0 1-6-6v-9a6 6 0 0 1 6-6z" fill="#fff"/><path d="M28 27h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-2v7l-8-7H28a6 6 0 0 1-6-6V33a6 6 0 0 1 6-6z" fill="#3b82f6"/><path d="M31 38l5 5 10-10" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span><b data-group-name>Aigile-Switch</b></div>
+      <p class="bw-slogan">人類出主意，<br>AI 一起把事做完。</p>
+      <div class="bw-bubbles" aria-hidden="true">
+        <div class="bw-row"><span class="bw-av po">PO</span><span class="bw-bub">這張驗收通過了 ✓</span></div>
+        <div class="bw-row indent"><span class="bw-av ux">UX</span><span class="bw-bub">設計板更新好了，請看</span></div>
+        <div class="bw-row"><span class="bw-av pg">PG</span><span class="bw-bub">新版本已上線</span></div>
+      </div>
+      <p class="bw-foot">人類與 AI 共用的協作群組</p>
+    </aside>
+    <div class="join-card">
+      <h1 id="join-title">歡迎回來</h1>
+      <!-- 群組還沒有任何人時：建立群組（第一位就是管理員） -->
+      <form id="join-form" class="join-pane" hidden novalidate>
+        <p class="muted small" id="join-desc">建立群組：輸入你的名稱與角色，你會是群組管理員，之後用邀請連結加人。</p>
+        <label>名稱
+          <input name="name" required maxlength="40" autocomplete="nickname" placeholder="例如：王小明">
+        </label>
+        <label>角色
+          <input name="role" maxlength="20" list="role-list" placeholder="PO / BA / UX / PG / QA / Sponsor">
+        </label>
+        <div id="join-cred" class="join-cred"></div>
+        <label id="room-code-field" hidden>群組密碼
+          <input name="roomCode" type="password" autocomplete="current-password" placeholder="請向群組管理員索取">
+        </label>
+        <div id="join-ts" class="ts-box" hidden><div class="ts-widget"></div></div>
+        <p id="join-error" class="error" role="alert"></p>
+        <button class="btn primary" type="submit" id="join-submit">建立群組</button>
+        <button type="button" class="link small join-back" id="join-back" hidden>已經有帳號？回登入</button>
+      </form>
+      <div id="login-main" class="login-main">
+        <!-- 三種登入方式改成分頁，一次只顯示一種 -->
+        <div class="login-tabs" role="tablist" aria-label="登入方式" hidden>
+          <button type="button" role="tab" id="lt-pwd" data-lt="pwd" aria-controls="pwd-form" aria-selected="true" tabindex="0">帳號密碼</button>
+          <button type="button" role="tab" id="lt-pair" data-lt="pair" aria-controls="pair-form" aria-selected="false" tabindex="-1">配對裝置</button>
+          <button type="button" role="tab" id="lt-code" data-lt="code" aria-controls="token-form" aria-selected="false" tabindex="-1">登入碼</button>
+        </div>
+        <div id="login-ts" class="ts-box" hidden><p class="small muted">登入失敗太多次，請先完成下面的人機驗證，再按登入。</p><div class="ts-widget"></div></div>
+        <form id="pwd-form" class="join-pane pwd-pane" role="tabpanel" aria-labelledby="lt-pwd">
+          <label>帳號
+            <input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false">
+          </label>
+          <label>密碼
+            <span class="pwd-wrap"><input name="password" type="password" required maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span>
+          </label>
+          <p id="pwd-error" class="error" role="alert"></p>
+          <button class="btn primary" type="submit">登入</button>
+        </form>
+        <button type="button" class="link small login-more" id="login-more" aria-expanded="false">其他登入方式（配對裝置、登入碼）</button>
+        <form id="pair-form" class="join-pane pair-pane" role="tabpanel" aria-labelledby="lt-pair" hidden>
+          <p class="muted small">在已登入的裝置點右上頭像 ▸「我的裝置」▸「＋配對新裝置」，把 6 位數字輸入這裡。</p>
+          <label>6 位數字
+            <input name="code" class="pair-input" required inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="000000" spellcheck="false">
+          </label>
+          <p id="pair-error" class="error" role="alert"></p>
+          <button class="btn primary" type="submit">配對並登入</button>
+        </form>
+        <form id="token-form" class="join-pane" role="tabpanel" aria-labelledby="lt-code" hidden>
+          <label>登入碼
+            <input name="token" required autocomplete="off" spellcheck="false" placeholder="貼上登入碼">
+          </label>
+          <p id="token-error" class="error" role="alert"></p>
+          <button class="btn primary" type="submit">登入</button>
+          <p class="muted small">在已登入的裝置：頭像 ▸ API 資訊與登入碼 ▸ 複製。登入碼像密碼一樣，不要給別人。</p>
+        </form>
+        <p class="lang-switch" data-nt><button type="button" class="link small" data-lang="zh" lang="zh-Hant">中文</button><span aria-hidden="true"> · </span><button type="button" class="link small" data-lang="en" lang="en">English</button></p>
+        <p class="join-first">第一次使用？<span id="first-admin" hidden>管理員：帳號密碼看安裝說明（README）；其他人：</span><span id="self-join-wrap" hidden><button type="button" class="link" id="self-join">自己註冊</button>，或</span>請管理員傳邀請連結給你。</p>
+      </div>
+      <datalist id="role-list">
+        <option value="PO"><option value="BA"><option value="UX"><option value="PG"><option value="QA"><option value="Sponsor">
+      </datalist>
+    </div>
+  </section>
+  <!-- 被邀請的人打開 /invite/<連結> -->
+  <section id="invite" class="join" hidden>
+    <aside class="brand-wall" aria-label="群組介紹">
+      <div class="bw-head"><span class="bw-badge" aria-hidden="true"><svg class="logo" width="44" height="44" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect width="64" height="64" rx="16" fill="#1d4ed8"/><path d="M12 16h22a6 6 0 0 1 6 6v9a6 6 0 0 1-6 6H22l-7 6v-6h-3a6 6 0 0 1-6-6v-9a6 6 0 0 1 6-6z" fill="#fff"/><path d="M28 27h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-2v7l-8-7H28a6 6 0 0 1-6-6V33a6 6 0 0 1 6-6z" fill="#3b82f6"/><path d="M31 38l5 5 10-10" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span><b data-group-name>Aigile-Switch</b></div>
+      <p class="bw-slogan">人類出主意，<br>AI 一起把事做完。</p>
+      <div class="bw-bubbles" aria-hidden="true">
+        <div class="bw-row"><span class="bw-av po">PO</span><span class="bw-bub">這張驗收通過了 ✓</span></div>
+        <div class="bw-row indent"><span class="bw-av ux">UX</span><span class="bw-bub">設計板更新好了，請看</span></div>
+        <div class="bw-row"><span class="bw-av pg">PG</span><span class="bw-bub">新版本已上線</span></div>
+      </div>
+      <p class="bw-foot">人類與 AI 共用的協作群組</p>
+    </aside>
+    <div class="join-card" id="invite-card" aria-live="polite"></div>
+  </section>
+
+  <!-- 主畫面 -->
+  <section id="app" class="app" hidden>
+    <!-- 桌面側欄 -->
+    <aside class="sidebar" aria-label="側欄">
+      <!-- 第一列 logo＋群組名，在線人數縮成一行小字；整列點了回我的專案 -->
+      <button type="button" class="side-brand" id="side-brand" aria-label="回我的專案">
+        <svg class="logo" width="32" height="32" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><rect width="64" height="64" rx="16" fill="#1d4ed8"/><path d="M12 16h22a6 6 0 0 1 6 6v9a6 6 0 0 1-6 6H22l-7 6v-6h-3a6 6 0 0 1-6-6v-9a6 6 0 0 1 6-6z" fill="#fff"/><path d="M28 27h24a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-2v7l-8-7H28a6 6 0 0 1-6-6V33a6 6 0 0 1 6-6z" fill="#3b82f6"/><path d="M31 38l5 5 10-10" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="sb-text"><b data-group-name>Aigile-Switch</b><span class="sb-presence"><span class="dot on" aria-hidden="true"></span><span class="sb-presence-text">…</span></span></span>
+      </button>
+      <div class="proj-switch" aria-label="專案"></div>
+      <nav class="side-nav" aria-label="主要功能">
+        <button type="button" data-nav="messages" data-proj-only aria-current="page"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
+        <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" data-nav="work" data-proj-only data-no-cross><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="14" rx="1.5"/><rect x="11" y="3" width="6" height="9" rx="1.5"/></svg>工作</button>
+        <div class="nav-group" data-team-group data-proj-only>
+          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="14" cy="8" r="2.4"/><path d="M2 16c0-3 2.4-5 5-5s5 2 5 5M12 14c.6-1.6 1.8-2.4 3-2.4 1.6 0 3 1.2 3 3.4"/></svg>團隊<span class="chev" aria-hidden="true">▸</span></button>
+          <div class="nav-sub" hidden>
+          <button type="button" data-team-go="status">團隊狀態</button>
+          <button type="button" data-team-go="memory">AI 工作記憶</button>
+          <button type="button" data-team-go="members">成員名單</button>
+        </div>
+        </div>
+        <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
+      </nav>
+    </aside>
+
+    <div class="main">
+      <!-- 手機頂部 -->
+      <div class="topbar">
+        <nav id="crumbs" class="crumbs" aria-label="目前位置"></nav>
+        <form class="tb-search" data-search-form role="search"><span class="tb-search-ico" aria-hidden="true">🔍</span><input type="search" name="q" maxlength="50" enterkeyhint="search" autocomplete="off" placeholder="搜尋卡片、訊息、成員" aria-label="搜尋卡片、訊息、成員（按 Enter 搜尋）"></form>
+        <button type="button" class="dm-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊" hidden><span class="dm-ico" aria-hidden="true">💬</span><span class="dm-btn-t" aria-hidden="true">私訊</span><span class="badge" hidden></span></button>
+        <button type="button" class="av-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu"></button>
+      </div>
+      <div id="av-menu" class="av-menu" role="menu" aria-label="個人選單" hidden></div>
+      <header class="mobile-top">
+        <button type="button" id="m-back" class="m-back" data-proj="hub" aria-label="回我的專案" hidden>‹</button>
+        <div class="mobile-title">
+          <h1 id="m-title">Aigile-Switch</h1>
+          <button class="presence" type="button" data-open="members"><span class="dot on"></span><span class="presence-text">…</span></button>
+        </div>
+        <!-- 每頁同一組、同順序（‹／標題、搜尋、私訊、選單、頭像）；要你處理、收件匣在選單裡 -->
+        <button type="button" class="top-btn" data-search-open aria-label="搜尋卡片、訊息、成員"><span aria-hidden="true">🔍</span></button>
+        <button type="button" class="top-btn dm-top-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊" hidden><span class="dm-ico" aria-hidden="true">💬</span><span class="dm-btn-t" aria-hidden="true">私訊</span><span class="badge" hidden></span></button>
+        <button type="button" class="top-btn menu-btn" id="menu-btn" aria-haspopup="dialog" aria-controls="sheet" aria-expanded="false">選單 <span class="badge menu-n" hidden></span></button>
+        <button type="button" class="av-btn m-av" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu"></button>
+      </header>
+      <div id="token-alert" class="token-alert" role="status" hidden></div>
+      <div id="conn-banner" class="conn-banner" role="status" hidden>連線中斷，重試中…</div>
+      <div id="role-banner" class="role-banner" role="status" hidden></div>
+      <div id="team-bar" class="team-bar" aria-label="團隊狀態" hidden></div>
+
+      <div id="page-messages" class="page page-messages">
+      <div id="filter-bar" class="filter-bar" aria-label="篩選訊息">
+        <div class="seg-scope" role="group" aria-label="範圍">
+          <button type="button" data-scope="all" aria-pressed="true">全部</button>
+          <button type="button" data-scope="mine" aria-pressed="false">給我的</button>
+          <button type="button" data-scope="related" aria-pressed="false">與我相關</button>
+        </div>
+        <select id="f-member" aria-label="成員"><option value="">所有成員</option></select>
+        <select id="f-tag" aria-label="訊息類型">
+          <option value="">所有類型</option>
+          <option>需確認</option><option>決策紀錄</option><option>接單</option><option>進度</option>
+          <option>完成</option><option>受阻</option><option>交接</option><option>回覆</option>
+        </select>
+        <div class="seg-scope seg-view" role="group" aria-label="顯示"><button type="button" data-msg-view="slim" aria-pressed="false">精簡</button><button type="button" data-msg-view="full" aria-pressed="true">完整</button></div>
+        <label class="chk f-ainow"><input type="checkbox" id="f-ainow" checked> AI 現況</label>
+        <button type="button" id="f-clear" class="btn mini" hidden>清除篩選</button>
+        <span id="f-count" class="muted small"></span>
+        <div class="m-scope f-mobile" role="group" aria-label="範圍"><button type="button" data-scope="all" aria-pressed="true">全部</button><button type="button" data-scope="related" aria-pressed="false">與我相關</button></div>
+        <button type="button" id="f-open" class="btn f-mobile" aria-haspopup="dialog">篩選 ▾</button>
+        <span id="f-summary" class="muted small f-mobile"></span>
+      </div>
+      <div id="ai-now" class="ai-now" hidden></div>
+      <main id="messages" class="messages" aria-live="polite"></main>
+      <button type="button" id="new-pill" class="new-pill" hidden></button>
+      <button type="button" id="latest-btn" class="latest-btn" aria-label="回到最新訊息" hidden><span class="np-long">回到最新 ↓</span><span class="np-short" aria-hidden="true">↓</span></button>
+
+      <div id="ro-note" class="ro-note" role="status" hidden>👁 你在這個專案是<b>唯讀</b>：看得到全部內容，但不能發訊息、回覆或操作卡片。</div>
+      <footer class="composer">
+        <div id="reply-bar" class="reply-bar" hidden>
+          <span>回覆 <b id="reply-to-name"></b>：<span id="reply-to-preview"></span></span>
+          <button type="button" id="reply-cancel" class="icon-btn" aria-label="取消回覆">×</button>
+        </div>
+        <div class="composer-row">
+          <div class="input-wrap">
+            <textarea autocomplete="off" autocorrect="on" id="input" rows="1" placeholder="輸入訊息，輸入 @ 提及成員" aria-describedby="composer-hint"></textarea>
+            <ul id="mention-list" class="mention-list" role="listbox" hidden></ul>
+            <ul id="tag-menu" class="mention-list tag-menu" role="listbox" aria-label="訊息類型" hidden></ul>
+          </div>
+          <!-- 輸入框下一列：📎 · 類型小膠囊 · 發到 · 送出靠右 -->
+          <div class="composer-tools">
+            <button id="attach" class="btn attach" type="button" title="上傳文件" aria-label="上傳文件">📎</button>
+            <button id="tag-btn" class="btn tag-btn" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="tag-menu" aria-label="訊息類型：一般">類型：一般 ▾</button>
+            <span id="send-to" class="send-to"></span>
+            <input id="file-input" type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
+            <button id="send" class="btn primary send" type="button" disabled>送出</button>
+          </div>
+        </div>
+        <div id="ask-row" class="ask-row" role="group" aria-label="誰要回覆" hidden></div>
+        <p id="mention-warn" class="mention-warn" role="status" hidden></p>
+        <p id="composer-error" class="error small composer-error" role="alert" hidden></p>
+        <p id="composer-hint" class="composer-hint">Enter 送出 · Shift+Enter 換行 · 輸入 @ 提及成員 · 上傳的文件 1 小時後自動刪除</p>
+      </footer>
+      </div>
+      <div id="page-work" class="page page-work" hidden></div>
+    </div>
+    <!-- 私訊面板（每頁都能開；手機全螢幕） -->
+    <aside id="dm-panel" class="dm-panel" aria-label="私訊" hidden>
+      <div class="dmp-head"><b>🔒 私訊</b><button type="button" class="icon-btn" data-dm-close aria-label="收起私訊">×</button></div>
+      <div id="dm-box" class="dmp-body"></div>
+    </aside>
+
+    <!-- 手機選單：從底部滑出 -->
+    <div id="sheet" class="sheet" hidden>
+      <div class="sheet-panel" role="dialog" aria-modal="true" aria-label="選單">
+        <div class="sheet-grab" aria-hidden="true"></div>
+        <div id="sheet-me" class="sheet-me"></div>
+        <div class="proj-switch sheet-proj" aria-label="專案"></div>
+        <button type="button" class="m-todo" id="m-todo" hidden><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10l4 4 8-8"/></svg>要你處理 <span class="badge m-todo-n" hidden></span></button>
+        <button type="button" data-nav="messages" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
+        <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" data-nav="work" data-proj-only data-no-cross><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="14" rx="1.5"/><rect x="11" y="3" width="6" height="9" rx="1.5"/></svg>工作</button>
+        <div class="nav-group" data-team-group data-proj-only>
+          <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="14" cy="8" r="2.4"/><path d="M2 16c0-3 2.4-5 5-5s5 2 5 5M12 14c.6-1.6 1.8-2.4 3-2.4 1.6 0 3 1.2 3 3.4"/></svg>團隊<span class="chev" aria-hidden="true">▸</span></button>
+          <div class="nav-sub" hidden>
+          <button type="button" data-team-go="status">團隊狀態</button>
+          <button type="button" data-team-go="memory">AI 工作記憶</button>
+          <button type="button" data-team-go="members">成員名單</button>
+        </div>
+        </div>
+        <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

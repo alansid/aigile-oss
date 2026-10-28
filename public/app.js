@@ -1,0 +1,8444 @@
+// Aigile-Switch 網頁端
+(() => {
+  const $ = sel => document.querySelector(sel);
+  const APP_VERSION = '1.0.0'; // 要跟 package.json 一樣（version-test 會檢查）
+  const TOKEN_KEY = 'aigile-switch-token';
+  const THEME_KEY = 'aigile-switch-theme';
+  const FILTER_KEY = 'aigile-switch-only-mine';
+  const MSG_VIEW_KEY = 'aigile-switch-view'; // 訊息顯示「精簡／完整」，記在這台裝置
+  const ALL = { participantId: '__all__', name: '所有人', role: '通知全體成員', memberType: 'all', isOnline: true };
+
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
+  };
+
+  const state = {
+    token: null,
+    me: null,
+    participants: new Map(),
+    messages: [],
+    byId: new Map(),
+    nextCursor: null,
+    olderCursor: null,
+    replyTo: null,
+    onlyMine: store.get(FILTER_KEY) === '1',
+    filter: { scope: store.get(FILTER_KEY) === '1' ? 'related' : 'all', member: '', tag: '' },
+    expanded: new Set(),  // 已展開全文的長訊息
+    collapsed: new Set(), // 已收合回覆的訊息
+    open: new Set(),      // 從一行／精簡點開的訊息
+    grpOpen: new Set(),   // 展開了較早訊息的卡片組
+    flowOpen: new Set(),  // 已展開的「N 則流程訊息」（以第一則的 id 記）
+    groupOf: new Map(),   // 訊息 id → 所在流程訊息群組的第一則 id（收起時）
+    events: null,
+    roles: null,
+    team: null,
+    unansweredByMsg: new Map(),
+  };
+
+  // ---------- 共用 ----------
+  // 英文介面：平台依固定句型自動發的通知（訊息帶 auto: true）換成英文顯示；人名、卡號、標題照原文，存的內容不動
+  function autoEn(x, depth = 0) {
+    if (!x || typeof x !== 'object' || depth > 6) return;
+    if (Array.isArray(x)) { for (const v of x) autoEn(v, depth + 1); return; }
+    if (x.auto === true && typeof x.text === 'string') x.text = window.aigileI18n.autoMsg(x.text);
+    for (const k in x) if (x[k] && typeof x[k] === 'object') autoEn(x[k], depth + 1);
+  }
+  async function api(path, { method = 'GET', body, timeoutMs = 0 } = {}) {
+    // 輪詢要設逾時，否則網路卡住時 fetch 可能永遠不回來，整個輪詢跟著停
+    const ctl = timeoutMs ? new AbortController() : null;
+    const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
+    let r;
+    try {
+      r = await fetch(path, {
+        method, signal: ctl?.signal,
+        headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(document.hidden ? { 'X-Aigile-Bg': '1' } : {}) }, // 背景分頁，伺服器少寫在線時間
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (e) {
+      const err = new Error(ctl?.signal.aborted ? '連線逾時' : '連線失敗');
+      err.code = ctl?.signal.aborted ? 'TIMEOUT' : 'NETWORK';
+      throw err;
+    } finally { clearTimeout(timer); }
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && window.aigileI18n?.lang === 'en') autoEn(data);
+    if (!r.ok) {
+      const msg = data?.error?.message || `HTTP ${r.status}`;
+      const err = new Error(window.aigileI18n ? window.aigileI18n.err(data?.error?.code, msg) : msg); // 英文介面：依錯誤代碼顯示英文
+      err.code = data?.error?.code; err.captchaRequired = !!data?.error?.captchaRequired; err.suggestion = data?.error?.suggestion || ''; err.field = data?.error?.field || '';
+      state.lastErr = { code: err.code || `HTTP ${r.status}`, at: Date.now() };
+      if (state.me && (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED')) logout(false);
+      throw err;
+    }
+    return data;
+  }
+
+  // 中英不同組法的短句（名字＋的 → name's）；其他介面文字由 /i18n/i18n.js 依字典換
+  const L = (zh, en) => (window.aigileI18n?.lang === 'en' ? en : zh);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const pad = n => String(n).padStart(2, '0');
+  const fmtTime = iso => {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+  const localYmdHm = iso => { const d = new Date(iso); return iso && !isNaN(d) ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}` : ''; }; // 這台電腦的時區
+  const shortId = id => '#' + String(id).slice(-6);
+  const newRequestId = () => 'req_web_' + (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`);
+
+  let toastTimer;
+  function toast(text) {
+    const t = $('#toast');
+    t.textContent = text;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 2400);
+  }
+  // 提示＋一顆按鈕（例如「已建立 C-xxx · 打開」），預設 6 秒消失
+  function actionToast(text, label, onClick, ms = 6000) {
+    const t = $('#toast');
+    t.innerHTML = `${esc(text)} <button type="button" class="link toast-undo" id="toast-act">${esc(label)}</button>`;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+    t.querySelector('#toast-act').onclick = () => { t.hidden = true; clearTimeout(toastTimer); onClick(); };
+  }
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.append(ta); ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    }
+  }
+
+  function applyTheme(t) {
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+  }
+  applyTheme(store.get(THEME_KEY));
+  // 風格 a 清爽（預設）／b 深色側欄／c 溫暖柔和。以帳號為準；這台裝置先記著，開頁不會閃一下
+  const STYLE_KEY = 'aigile-switch-style';
+  const STYLE_OPTS = [['a', '清爽', '白底藍色（預設）'], ['b', '深色側欄', '側欄深色、內容白底'], ['c', '溫暖柔和', '米色暖調、圓角大一點']];
+  function applyStyle(s) {
+    if (s === 'b' || s === 'c') document.documentElement.dataset.style = s;
+    else delete document.documentElement.dataset.style;
+  }
+  applyStyle(store.get(STYLE_KEY));
+  const rememberStyle = s => { applyStyle(s); if (s === 'b' || s === 'c') store.set(STYLE_KEY, s); else store.del(STYLE_KEY); };
+
+  // 文字頭像：AI 用角色代碼（PO、PG…），自訂角色取角色名前兩字；人類取名字第一個字
+  // 顯示用名字：英文介面時系統預設的名字（管理員、預設專案…）照字典換，頭像與專案圖示取它的第一個字
+  const shownName = n => (window.aigileI18n?.lang === 'en' ? window.aigileI18n.tr(n) ?? n : n);
+  const firstChar = (n, fb = '?') => [...(shownName(n) || '')][0] || fb;
+  // 自訂頭像文字優先，否則用預設
+  function avatarText(p) {
+    if (p.avatar) return p.avatar;
+    if (p.memberType === 'ai') return p.roleKey && p.roleKey !== 'custom' ? p.roleKey : [...(shownName(p.role) || 'AI')].slice(0, 2).join('');
+    if (p.memberType === 'system') return L('系', 'S');
+    return firstChar(p.name, L('人', 'H'));
+  }
+  // 有圖片頭像時先顯示文字，圖片載入後由 hydrateAvatars 補上
+  const avatar = p => {
+    const shape = p.memberType === 'ai' ? 'ai' : 'human';
+    if (p.imgUrl) return `<span class="avatar ${shape} img-on" style="background-image:url(&quot;${esc(p.imgUrl)}&quot;)" aria-hidden="true"></span>`;
+    const img = p.avatarImg && p.participantId ? ` data-avimg="${esc(p.participantId)}" data-v="${esc(p.avatarImg)}"` : '';
+    return `<span class="avatar ${shape}"${img} aria-hidden="true">${esc(avatarText(p))}</span>`;
+  };
+  const memberTag = p => p.memberType === 'ai'
+    ? `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`
+    : p.memberType === 'system' ? '<span class="tag sys">[系統]</span>'
+    : '<span class="tag human">[人類]</span>';
+
+  // ---------- 登入：邀請連結加入、6 位數配對、登入碼（長期保留） ----------
+  async function useDevice(token) {
+    state.token = token;
+    store.set(TOKEN_KEY, token);
+    await start();
+  }
+  // Cloudflare Turnstile：伺服器有設 key（/api/health 回 turnstileSiteKey）才載入；註冊一律要過，登入失敗多次後伺服器回 captchaRequired 才出現
+  const ts = { key: '', loading: null, ids: {}, tokens: {} };
+  const loadTs = () => ts.loading || (ts.loading = new Promise((ok, no) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'; sc.async = true;
+    sc.onload = ok; sc.onerror = () => { ts.loading = null; no(new Error('人機驗證載入失敗，請檢查網路後重新整理')); };
+    document.head.append(sc);
+  }));
+  async function tsMount(slot) {
+    if (!ts.key) return;
+    const box = $('#' + slot + '-ts'), w = box.querySelector('.ts-widget');
+    box.hidden = false;
+    if (ts.ids[slot] !== undefined) return;
+    try { await loadTs(); } catch (e) { w.textContent = e.message; return; }
+    if (ts.ids[slot] !== undefined) return;
+    ts.ids[slot] = window.turnstile.render(w, { sitekey: ts.key, size: 'flexible', callback: t => { ts.tokens[slot] = t; }, 'expired-callback': () => { ts.tokens[slot] = ''; }, 'error-callback': () => { ts.tokens[slot] = ''; } });
+  }
+  function tsReset(slot) { ts.tokens[slot] = ''; if (ts.ids[slot] !== undefined) try { window.turnstile.reset(ts.ids[slot]); } catch {} } // token 只能用一次
+  const authLogin = async (method, body) => {
+    const t = ts.tokens.login;
+    try { return useDevice((await api('/api/auth/' + method, { method: 'POST', body: t ? { ...body, turnstileToken: t } : body })).token); }
+    catch (err) { if (t) tsReset('login'); if (err.captchaRequired) tsMount('login'); throw err; }
+  };
+
+  let joinHealth = {};
+  async function showJoin() {
+    $('#boot').hidden = true;
+    $('#app').hidden = true;
+    $('#invite').hidden = true;
+    $('#join').hidden = false;
+    if ($('#token-error').textContent) { showOtherLogins(true); setLoginTab('code', false); } // 登入碼出錯就停在登入碼分頁
+    try {
+      joinHealth = await api('/api/health');
+      ts.key = joinHealth.turnstileSiteKey || '';
+      $('#first-admin').hidden = !joinHealth.defaultCredentials; // 還沒改預設帳密：同一句先講管理員去看 README
+      joinMode(joinHealth.setup ? 'setup' : 'login'); // 群組還沒有人：建立群組
+    } catch {}
+  }
+  // 登入頁三種模式：login 登入；setup 建立群組（第一位）；register 開放註冊時自己註冊
+  function joinMode(mode) {
+    const h = joinHealth, form = mode !== 'login';
+    $('#join-form').hidden = !form;
+    $('#login-main').hidden = form;
+    $('#join-title').textContent = mode === 'setup' ? '建立群組' : mode === 'register' ? '註冊' : '歡迎回來';
+    $('#join-desc').textContent = mode === 'register' ? '填名稱、角色，再設一組帳號密碼（之後用它登入）。註冊後在主畫面申請加入專案，群組管理員或專案 leader 核准後，就看得到專案的訊息與卡片。' : '建立群組：輸入你的名稱與角色，你會是群組管理員，之後用邀請連結加人。';
+    $('#join-submit').textContent = mode === 'register' ? '註冊' : '建立群組';
+    $('#join-back').hidden = mode !== 'register';
+    $('#self-join-wrap').hidden = !h.openJoin;
+    $('#room-code-field').hidden = !h.roomCodeRequired;
+    $('#join-error').textContent = '';
+    if (form && !joinCred) { $('#join-cred').innerHTML = credFieldsHtml('jn'); joinCred = bindCredFields($('#join-form'), 'jn'); }
+    if (form) { tsMount('join'); if (mode === 'register') $('#join-form [name=name]').focus(); }
+  }
+  $('#self-join').addEventListener('click', () => joinMode('register'));
+  let joinCred = null; // 帳號密碼欄位第一次打開註冊表單時才建（credFieldsHtml 定義在後面）
+  $('#join-back').addEventListener('click', () => joinMode('login'));
+
+  // 建立群組（第一位）：建好後同樣換成這台裝置的登入
+  $('#join-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#join-error').textContent = '';
+    try {
+      if (!joinCred.check()) return; // 帳號密碼一定要設，之後用它登入
+      const rc = $('#join-form [name=roomCode]');
+      if (!$('#room-code-field').hidden && !rc.value.trim()) { $('#join-error').textContent = '請輸入群組密碼'; rc.setAttribute('aria-invalid', 'true'); rc.focus(); return; } // 沒填就先擋，不送出去被當成猜錯
+      rc.removeAttribute('aria-invalid');
+      const t = ts.tokens.join;
+      const r = await api('/api/join', { method: 'POST', body: { ...Object.fromEntries(new FormData(e.target)), ...(t ? { turnstileToken: t } : {}) } }).finally(() => { if (t) tsReset('join'); });
+      await authLogin('code', { code: r.token });
+    } catch (err) {
+      if (!joinCred.serverError(err)) $('#join-error').textContent = err.message;
+      if (err.captchaRequired) tsMount('join');
+    }
+  });
+
+  $('#pair-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#pair-error').textContent = '';
+    const code = String(new FormData(e.target).get('code') || '').replace(/\D/g, '');
+    if (code.length !== 6) { $('#pair-error').textContent = '請輸入 6 位數字'; return; }
+    try { await authLogin('pair', { code }); rememberLoginTab('pair'); } catch (err) { state.token = null; $('#pair-error').textContent = err.message; }
+  });
+  // 配對碼：只留數字，打到 6 碼自動送出
+  $('#pair-form .pair-input').addEventListener('input', e => {
+    const v = e.target.value.replace(/\D/g, '').slice(0, 6);
+    if (e.target.value !== v) e.target.value = v;
+    if (v.length === 6) $('#pair-form').requestSubmit();
+  });
+
+  // ---------- 登入方式分頁：帳號密碼｜配對裝置｜登入碼；記住這台裝置上次成功用的分頁 ----------
+  const LOGIN_TAB_KEY = 'aigile-switch-login-tab';
+  const LOGIN_TABS = { pwd: 'pwd-form', pair: 'pair-form', code: 'token-form' };
+  function setLoginTab(k, focus = true) {
+    if (!LOGIN_TABS[k]) k = 'pwd';
+    for (const [t, panel] of Object.entries(LOGIN_TABS)) {
+      const on = t === k, tab = document.querySelector(`[data-lt="${t}"]`);
+      tab.setAttribute('aria-selected', String(on)); tab.tabIndex = on ? 0 : -1;
+      $('#' + panel).hidden = !on;
+    }
+    if (focus) document.querySelector(`#${LOGIN_TABS[k]} input`)?.focus();
+  }
+  const rememberLoginTab = k => store.set(LOGIN_TAB_KEY, k);
+  // 預設只顯示帳號密碼；配對裝置、登入碼收在「其他登入方式」（上次用的是它們就直接展開）
+  function showOtherLogins(on) {
+    document.querySelector('.login-tabs').hidden = !on;
+    $('#login-more').hidden = on;
+    $('#login-more').setAttribute('aria-expanded', String(on));
+  }
+  $('#login-more').addEventListener('click', () => { showOtherLogins(true); document.querySelector('[data-lt="pair"]').focus(); });
+  { const last = store.get(LOGIN_TAB_KEY) || 'pwd'; showOtherLogins(last !== 'pwd'); setLoginTab(last, false); }
+  document.querySelector('.login-tabs').addEventListener('click', e => { const t = e.target.closest('[data-lt]'); if (t) setLoginTab(t.dataset.lt); });
+  document.querySelector('.login-tabs').addEventListener('keydown', e => {
+    const keys = Object.keys(LOGIN_TABS), cur = keys.indexOf(document.activeElement?.dataset?.lt);
+    if (cur < 0) return;
+    const next = e.key === 'ArrowRight' ? (cur + 1) % keys.length : e.key === 'ArrowLeft' ? (cur + keys.length - 1) % keys.length : e.key === 'Home' ? 0 : e.key === 'End' ? keys.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    setLoginTab(keys[next], false);
+    document.querySelector(`[data-lt="${keys[next]}"]`).focus();
+  });
+  $('#pwd-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#pwd-error').textContent = '';
+    const f = new FormData(e.target), btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try { await authLogin('password', { username: String(f.get('username')).trim(), password: f.get('password') }); rememberLoginTab('pwd'); }
+    catch (err) { state.token = null; $('#pwd-error').textContent = err.message; e.target.password.select(); }
+    finally { btn.disabled = false; }
+  });
+  // 密碼欄的「顯示／隱藏」
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-eye]');
+    if (!b) return;
+    const inp = b.parentElement.querySelector('input');
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    b.textContent = show ? '隱藏' : '顯示';
+    b.setAttribute('aria-pressed', String(show));
+  });
+
+  $('#token-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('#token-error').textContent = '';
+    const code = new FormData(e.target).get('token').trim();
+    try { await authLogin('code', { code }); rememberLoginTab('code'); } catch (err) { state.token = null; $('#token-error').textContent = err.message; }
+  });
+
+  // 被邀請頁：/invite/<連結>。連結先收進這個分頁，網址列只留 /invite，重新整理也還在
+  const INVITE_KEY = 'aigile-switch-invite';
+  const ss = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} }, del: k => { try { sessionStorage.removeItem(k); } catch {} } };
+  let inviteTimer = null;
+  async function showInvite() {
+    let tok = decodeURIComponent(location.pathname.replace(/^\/invite\/?/, ''));
+    if (tok) { ss.set(INVITE_KEY, tok); history.replaceState(null, '', '/invite'); } else tok = ss.get(INVITE_KEY) || '';
+    $('#boot').hidden = true; $('#app').hidden = true; $('#join').hidden = true; $('#invite').hidden = false;
+    const card = $('#invite-card');
+    card.innerHTML = '<p class="muted">讀取邀請中…</p>';
+    let d;
+    try { d = await api('/api/auth/invite/peek', { method: 'POST', body: { token: tok } }); } catch { d = { valid: false }; }
+    if (!d.valid) return inviteGone(d.adminName);
+    const reset = d.kind === 'reset';
+    card.innerHTML = `<p class="inv-from"><b>${esc(d.inviterName || '')}</b> 邀請你加入</p>
+      <h1 class="inv-group">${esc(d.groupName)}</h1>
+      <dl class="inv-meta"><dt>專案</dt><dd>${d.projects.length ? d.projects.map(p => esc(p.name)).join('、') : '<span class="muted">還沒有（加入後由管理員指派）</span>'}</dd>
+        <dt>角色</dt><dd>${esc(d.role || '—')}</dd></dl>
+      <form id="inv-form" class="join-pane" novalidate>
+        <label>你的名字<input name="name" value="${esc(d.name)}" maxlength="40" required autocomplete="nickname" ${reset ? 'readonly' : ''}></label>
+        <p class="muted small">${reset ? '這是重設登入的連結：按「加入」後，這台裝置會以你原本的身分登入。' : '確認名字沒錯就按「加入」，這台裝置會記住你。'}</p>
+        <fieldset class="inv-pwd"><legend>設帳號密碼</legend>
+          <p class="muted small">${reset ? '設一組新的帳號密碼（原本有設的會換成這組），' : ''}之後換裝置、清掉瀏覽器都用這組登入。</p>
+          ${credFieldsHtml('iv')}
+        </fieldset>
+        <p id="inv-error" class="error" role="alert"></p>
+        <button class="btn primary" type="submit">加入</button>
+      </form>
+      <p class="muted small inv-left">這個連結 <b id="inv-cd"></b> 後失效，只能用一次。</p>`;
+    const end = Date.parse(d.expiresAt);
+    const tick = () => {
+      const left = end - Date.now();
+      if (!$('#inv-cd')) return clearInterval(inviteTimer);
+      if (left <= 0) { clearInterval(inviteTimer); return inviteGone(d.adminName || d.inviterName); }
+      $('#inv-cd').textContent = invLeft(left); // 可能是幾小時或幾天
+    };
+    clearInterval(inviteTimer); inviteTimer = setInterval(tick, 1000); tick();
+    const invCred = bindCredFields($('#inv-form'), 'iv');
+    $('#inv-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      $('#inv-error').textContent = '';
+      const btn = e.target.querySelector('button[type=submit]');
+      const fd = new FormData(e.target);
+      if (!invCred.check()) return; // 帳號密碼一定要設，之後用它登入
+      btn.disabled = true;
+      try {
+        const r = await api('/api/auth/invite', { method: 'POST', body: { token: tok, name: fd.get('name').trim(), ...invCred.values() } });
+        clearInterval(inviteTimer);
+        ss.del(INVITE_KEY);
+        history.replaceState(null, '', '/');
+        $('#invite').hidden = true;
+        $('#boot').hidden = false;
+        await useDevice(r.token);
+      } catch (err) {
+        btn.disabled = false;
+        if (err.code === 'INVITE_INVALID') return inviteGone(d.adminName || d.inviterName);
+        if (!invCred.serverError(err)) $('#inv-error').textContent = err.message;
+      }
+    });
+  }
+  // 帳號密碼的前端檢查（伺服器也會再檢查）
+  // ---------- 帳號密碼欄位（自己註冊、邀請連結共用）：規則跟伺服器同一套，欄位下即時說哪裡不對 ----------
+  const CRED_BASE = { username: '4～30 字，英文、數字、. _ -；之後登入用', password: '至少 8 碼', passwordAgain: '' };
+  const credFieldsHtml = p => `<label>帳號<input name="username" id="${p}-user" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="${p}-user-hint"></label><p class="field-hint cred-hint" id="${p}-user-hint">${CRED_BASE.username}</p>
+      <label>密碼<span class="pwd-wrap"><input name="password" id="${p}-pwd" type="password" required maxlength="128" autocomplete="new-password" aria-describedby="${p}-pwd-hint"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span></label><p class="field-hint cred-hint" id="${p}-pwd-hint">${CRED_BASE.password}</p>
+      <label>再輸入一次密碼<span class="pwd-wrap"><input name="passwordAgain" id="${p}-again" type="password" required maxlength="128" autocomplete="new-password" aria-describedby="${p}-again-hint"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span></label><p class="field-hint cred-hint" id="${p}-again-hint"></p>`;
+  function bindCredFields(root, p) {
+    const f = { username: root.querySelector(`#${p}-user`), password: root.querySelector(`#${p}-pwd`), passwordAgain: root.querySelector(`#${p}-again`) };
+    const hint = k => root.querySelector(`#${f[k].id}-hint`);
+    const touched = new Set();
+    const errs = () => {
+      const u = f.username.value.trim().toLowerCase(), pw = f.password.value, ag = f.passwordAgain.value;
+      const bad = badChars(u, /[^a-z0-9._-]/g);
+      return {
+        username: !u ? '請輸入帳號' : bad ? `只能用英文、數字和 . _ -，不能有：${bad}` : u.length < 4 ? '至少 4 個字' : u === 'admin' ? '「admin」是保留帳號，換一個' : '',
+        password: !pw ? '請輸入密碼' : pw.length < 8 ? `至少 8 碼（還差 ${8 - pw.length} 碼）` : '',
+        passwordAgain: !ag ? '請再輸入一次密碼' : ag !== pw ? '兩次輸入的密碼不一樣' : '',
+      };
+    };
+    const show = (k, msg) => { const h = hint(k); h.textContent = msg || CRED_BASE[k]; h.classList.toggle('cred-err', !!msg); if (msg) f[k].setAttribute('aria-invalid', 'true'); else f[k].removeAttribute('aria-invalid'); };
+    const run = () => { const e = errs(); for (const k of Object.keys(f)) show(k, touched.has(k) ? e[k] : ''); return e; };
+    for (const [k, el] of Object.entries(f)) el.addEventListener('input', () => { touched.add(k); if (k === 'password' && f.passwordAgain.value) touched.add('passwordAgain'); run(); });
+    return {
+      values: () => ({ username: f.username.value.trim(), password: f.password.value, passwordAgain: f.passwordAgain.value }),
+      check() { Object.keys(f).forEach(k => touched.add(k)); const e = run(); const k = Object.keys(f).find(x => e[x]); if (k) { f[k].focus(); return false; } return true; },
+      serverError(err) { if (!err.field || !f[err.field]) return false; show(err.field, err.message); f[err.field].focus(); return true; },
+      reset() { touched.clear(); for (const el of Object.values(f)) el.value = ''; run(); },
+    };
+  }
+  // 不合規則的字一個一個列：「不能有：空白、!、#」（空白寫成字）
+  const badChars = (v, re) => [...new Set(v.match(re) || [])].slice(0, 6).map(c => (c === ' ' ? L('空白', 'space') : c)).join(L('、', ', '));
+  // 欄位錯誤：紅框＋欄位下方小字（跟網址英文名、帳號密碼欄同一種樣子）；msg 空＝清掉。host：小字放在它後面（預設是欄位的 label）
+  function fieldMsg(inp, msg) {
+    if (!inp) return;
+    const host = inp.closest('[data-msg-host]') || inp.closest('label') || inp;
+    let p = host.nextElementSibling?.classList.contains('field-msg') ? host.nextElementSibling : null;
+    if (!msg) { inp.removeAttribute('aria-invalid'); p?.remove(); return; }
+    if (!p) { p = document.createElement('p'); p.className = 'field-hint field-msg'; p.id = (inp.id || 'f') + '-msg'; p.setAttribute('role', 'alert'); host.after(p); }
+    p.textContent = msg; inp.setAttribute('aria-invalid', 'true'); inp.setAttribute('aria-describedby', p.id); inp.focus();
+  }
+  function credError(username, password, again) {
+    if (!/^[a-z0-9._-]{4,30}$/i.test(username)) return '帳號需為 4～30 字，只能用英文、數字、. _ -';
+    if (password.length < 8) return '密碼至少 8 碼';
+    if (password !== again) return '兩次輸入的密碼不一樣';
+    return '';
+  }
+  // 主機救援連結：/rescue/<連結>，按「登入」才用掉（避免連結預覽先把它用掉）
+  const RESCUE_KEY = 'aigile-switch-rescue';
+  function showRescue() {
+    let tok = decodeURIComponent(location.pathname.replace(/^\/rescue\/?/, ''));
+    if (tok) { ss.set(RESCUE_KEY, tok); history.replaceState(null, '', '/rescue'); } else tok = ss.get(RESCUE_KEY) || '';
+    $('#boot').hidden = true; $('#app').hidden = true; $('#join').hidden = true; $('#invite').hidden = false;
+    const card = $('#invite-card');
+    card.innerHTML = `<h1 data-group-name>${esc(BASE_TITLE)}</h1>
+      <p class="inv-from">主機救援登入</p>
+      <p>用這個一次性連結，以<b>管理員</b>身分登入這台裝置。連結 15 分鐘內有效、只能用一次；登入後管理員的收件匣會收到安全通知。</p>
+      <p id="rsc-error" class="error" role="alert"></p>
+      <button class="btn primary" type="button" id="rsc-go">登入</button>
+      <p><a href="/" class="link" id="rsc-home">回登入頁</a></p>`;
+    if (!tok) { $('#rsc-error').textContent = '這個救援連結已失效（15 分鐘、只能用一次）。請聯絡管理員。'; $('#rsc-go').hidden = true; }
+    $('#rsc-go').onclick = async () => {
+      $('#rsc-error').textContent = '';
+      $('#rsc-go').disabled = true;
+      try {
+        const r = await api('/api/auth/rescue', { method: 'POST', body: { token: tok } });
+        ss.del(RESCUE_KEY);
+        history.replaceState(null, '', '/');
+        $('#invite').hidden = true; $('#boot').hidden = false;
+        await useDevice(r.token);
+      } catch (err) {
+        $('#rsc-go').disabled = false;
+        $('#rsc-error').textContent = err.message;
+        if (err.code === 'RESCUE_INVALID') { ss.del(RESCUE_KEY); $('#rsc-go').hidden = true; }
+      }
+    };
+    $('#rsc-home').onclick = e => { e.preventDefault(); ss.del(RESCUE_KEY); history.replaceState(null, '', '/'); showJoin(); };
+  }
+  function inviteGone(adminName) {
+    clearInterval(inviteTimer);
+    ss.del(INVITE_KEY);
+    $('#invite-card').innerHTML = `<h1 data-group-name>${esc(BASE_TITLE)}</h1>
+      <p class="inv-gone">這個邀請連結已過期或已作廢（也可能已經用過了）。請找${esc(adminName || '管理員')}重新產生一個給你。</p>
+      <p><a href="/" class="link" id="inv-pair">已經加入過？用原本的裝置配對</a></p>`;
+    $('#inv-pair').onclick = e => { e.preventDefault(); history.replaceState(null, '', '/'); showJoin().then(() => $('#pair-form .pair-input').focus()); };
+  }
+  const mmss = ms => { const t = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
+  // 邀請有效時間可選；剩多久（倒數）與清單用的短格式
+  const INV_TTLS = [['15m', '15 分鐘'], ['1h', '1 小時'], ['24h', '24 小時'], ['7d', '7 天']];
+  const INV_RISK = '時間越長、外流風險越大，用完或不需要就作廢。';
+  const invLeft = ms => { const m = Math.ceil(ms / 60000); return ms < 3_600_000 ? mmss(ms) : m < 48 * 60 ? `${Math.floor(m / 60)} 小時 ${m % 60} 分` : `${Math.floor(m / 1440)} 天 ${Math.floor((m % 1440) / 60)} 小時`; };
+  const invLeftShort = ms => { const m = Math.max(1, Math.ceil(ms / 60000)); return m < 60 ? `${m} 分` : m < 48 * 60 ? `${Math.floor(m / 60)} 小時` : `${Math.floor(m / 1440)} 天`; };
+
+  async function logout(confirmFirst = true) {
+    if (confirmFirst && !await confirmDialog({ title: '登出這台裝置？', confirmText: '登出', message: '登出後，這台裝置要重新配對（在其他已登入的裝置點頭像 ▸「我的裝置」▸「＋配對新裝置」）或用登入碼才能再登入。其他裝置不受影響。' })) return;
+    const tok = state.token;
+    state.me = null; // 先清掉，避免登出請求失敗時又觸發登出
+    if (tok) fetch('/api/auth/logout', { method: 'POST', keepalive: true, headers: { Authorization: `Bearer ${tok}` } }).catch(() => {});
+    store.del(TOKEN_KEY);
+    state.token = null;
+    clearTimeout(pollTimer);
+    location.replace('/');
+  }
+  document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
+
+  function drawMe() {
+    const meCard = `<button type="button" class="me-avatar-btn" data-open-profile title="個人資料" aria-label="個人資料（更換頭像）">${avatar(state.me)}</button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(roleNoPj(state.me) || '未設定角色')} · 本人</span></div>`;
+    $('#sheet-me').innerHTML = meCard;
+  }
+
+  document.addEventListener('click', e => { if (e.target.closest('[data-change-avatar]')) { closeSheet(false); changeMyAvatar(); } });
+  document.addEventListener('click', e => { if (e.target.closest('[data-open-profile]')) { closeSheet(false); openSettings({ tab: 'me' }); } }); // 頭像那列 → 個人設定 › 個人資料
+
+  // ---------- 右上頭像選單（每個畫面都有）：我的 AI、成員與權限（管理員）、個人設定、API 資訊與登入碼、登出 ----------
+  const isAdmin = () => !!state.projMeta.adminId && state.projMeta.adminId === state.me?.participantId;
+  // 專案 leader（每個專案可多位、只能人類）
+  const leadersOf = pj => state.projMeta.leaders?.[pj] || [];
+  // 唯讀：人類看名單；AI 跟著主人。所在是跨專案頻道時，只要在任何專案唯讀就算
+  const roOf = (id, pj) => { const p = state.participants?.get(id); const hid = p?.memberType === 'ai' ? p.ownerParticipantId : id; return !!pj && (state.projMeta.readOnly?.[pj] || []).includes(hid); };
+  const meRO = (pj = projectView()) => (PROJECTS.includes(pj) ? roOf(meId(), pj) : pj === 'cross' && PROJECTS.some(x => roOf(meId(), x)));
+  const myLeadProjects = () => (state.me ? PROJECTS.filter(pj => leadersOf(pj).includes(state.me.participantId)) : []);
+  const leaderTag = (id, pj) => (leadersOf(pj).includes(id) ? '<span class="lead-tag" title="專案 leader">★ leader</span>' : '');
+  state.myAiCount = null;
+  function drawAvatarMenu() {
+    if (!state.me) return;
+    document.querySelectorAll('.av-btn:not(.me-more)').forEach(b => { b.innerHTML = avatar(state.me); b.setAttribute('aria-label', `${state.me.name} 的個人選單`); });
+    $('#av-menu').innerHTML = `<button type="button" role="menuitem" class="av-head" data-av="profile" title="個人資料（更換頭像）">${avatar(state.me)}<span class="av-head-txt"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()) || '未設定角色', isAdmin() ? '管理員' : '', '本人'].filter(Boolean).join(' · '))}</span></span><span class="av-head-go" aria-hidden="true">›</span></button>
+      <button type="button" role="menuitem" data-av="settings"><span class="av-ico" aria-hidden="true">⚙️</span>個人設定<span class="muted small">裝置、登入碼</span></button>
+      <button type="button" role="menuitem" data-av="myai"><span class="av-ico" aria-hidden="true">🤖</span>我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
+      ${isAdmin() || myLeadProjects().length ? `<div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">管理</div><button type="button" role="menuitem" data-av="perm"><span class="av-ico" aria-hidden="true">👥</span>成員與權限<span class="muted small">${isAdmin() ? '管理員' : 'leader'}</span></button>` : ''}
+      <div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">平台</div>
+      <button type="button" role="menuitem" data-av="releases"><span class="av-ico" aria-hidden="true">📜</span>版本紀錄<span class="muted small">v${APP_VERSION}</span></button>
+      ${(l => `<button type="button" role="menuitem" data-lang="${l === 'en' ? 'zh' : 'en'}" lang="${l === 'en' ? 'zh-Hant' : 'en'}" data-nt><span class="av-ico" aria-hidden="true">🌐</span>${l === 'en' ? '中文' : 'English'}</button>`)(window.aigileI18n?.lang)}
+      <div class="av-sep" role="separator"></div>
+      <button type="button" role="menuitem" class="av-out" data-av="logout">登出</button>`;
+  }
+  const refreshMyAiCount = () => api('/api/my-ais').then(d => { state.myAiCount = d.items.filter(a => a.status !== 'deleted').length; drawAvatarMenu(); }).catch(() => {});
+  function avOpen(open, from) {
+    const m = $('#av-menu');
+    m.hidden = !open;
+    document.querySelectorAll('.av-btn').forEach(b => b.setAttribute('aria-expanded', String(open && b === from)));
+    if (open) {
+      const r = from.getBoundingClientRect(), h = m.offsetHeight, w = m.offsetWidth;
+      m.style.top = `${Math.round(r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6)}px`; // 側欄最下面的「⋯」往上開
+      if (r.left < innerWidth / 2) { m.style.left = `${Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8)))}px`; m.style.right = 'auto'; }
+      else { m.style.left = 'auto'; m.style.right = `${Math.max(8, Math.round(window.innerWidth - r.right))}px`; }
+      m.querySelector('button')?.focus();
+    }
+  }
+  // 「我的 AI」在專案裡打開就留在那個專案（新角色、預設專案都用它）；其他第一層頁面照舊回總覽
+  const inProjectView = () => PROJECTS.includes(projectView());
+  function goTop(page) { closeSheet(false); if (page === 'myai' && inProjectView()) return showPage(page); if (hasHub()) setProjectView('hub', page); else showPage(page); }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('.av-btn');
+    if (b) return avOpen($('#av-menu').hidden, b);
+    if (!e.target.closest('#av-menu')) { if (!$('#av-menu').hidden) avOpen(false); return; }
+    const it = e.target.closest('[data-av]');
+    if (!it) return;
+    avOpen(false);
+    const k = it.dataset.av;
+    if (k === 'myai' || k === 'perm') goTop(k);
+    else if (k === 'settings') openSettings();
+    else if (k === 'profile') openSettings({ tab: 'me' }); // 更換頭像只在個人設定 › 個人資料
+    else if (k === 'releases') openReleases();
+    else if (k === 'api') openApi();
+    else if (k === 'devices') openDevices();
+    else if (k === 'logout') logout(true);
+  });
+  document.addEventListener('keydown', e => {
+    if ($('#av-menu').hidden || !e.target.closest?.('#av-menu')) return;
+    const items = [...$('#av-menu').querySelectorAll('button')], i = items.indexOf(e.target);
+    if (e.key === 'Escape') { e.preventDefault(); avOpen(false); document.querySelector('.av-btn[aria-expanded="false"]')?.focus(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+  });
+
+  // 彈窗內容捲動時，標題列下緣出現陰影（看得出內容捲到標題列底下）
+  document.addEventListener('scroll', e => { const t = e.target; if (t?.classList?.contains('modal-body')) t.classList.toggle('scrolled', t.scrollTop > 0); }, true);
+
+  // ---------- 啟動 ----------
+  async function start() {
+    await Promise.race([window.aigileI18n?.ready, new Promise(r => setTimeout(r, 3000))]); // 英文字典（最多等 3 秒）
+    state.me = await api('/api/me');
+    if (state.me.memberType !== 'human') {
+      store.del(TOKEN_KEY);
+      state.token = null;
+      state.me = null;
+      $('#token-error').textContent = '這是 AI 的 Token，只能透過 API 存取，不能登入網頁。';
+      return showJoin();
+    }
+    if (state.me.mustChangeCredentials) return showMustChange(); // 還在用預設帳密：先改，其他功能都不能用
+    // 舊的登入方式（瀏覽器存著登入碼、或掃 QR Code 進來）自動換成「這台裝置」的登入，之後可在「我的裝置」管理
+    if (state.me.authKind === 'code') {
+      try {
+        const r = await api('/api/auth/code', { method: 'POST', body: { code: state.token } });
+        state.token = r.token;
+        store.set(TOKEN_KEY, r.token);
+        state.me = await api('/api/me');
+      } catch {}
+    }
+    rememberStyle(state.me.prefs?.style || 'a'); // 帳號上的風格
+    $('#join').hidden = true; // 主畫面等資料載完才顯示（先留在「載入中」）
+    drawMe();
+    // 專案、成員、訊息同時抓（原本一支等一支，每支都要等資料庫）
+    const winP = api(windowUrl());
+    winP.catch(() => {});
+    await Promise.all([loadProjectList().catch(() => {}), loadParticipants()]);
+    const route = parseRoute();
+    state.view = route.view || 'hub';
+    drawProjSwitch();
+    drawAvatarMenu(); refreshMyAiCount();
+    await loadWindow(winP);
+    refreshInboxCount();
+    loadTeam();
+    loadCards().then(() => { renderMessages(false); if (state.page === 'work' || state.page === 'hub') renderWork(); }).catch(() => {});
+    connectEvents();
+    // 網址帶專案與頁面；多專案成員打開 / 先到第一層「我的專案」，只屬一個專案的人直接進自己的專案
+    const savedPage = store.get(PAGE_KEY);
+    await showPage(route.page || (projectView() === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(savedPage) ? savedPage : 'messages'), { replace: true });
+    $('#boot').hidden = true;
+    $('#app').hidden = false;
+    if (state.page === 'messages') scrollBottom();
+    if (state.me.setupWizard) openSetupWizard(); // 預設管理員改完帳密後的第一次設定引導
+  }
+
+  // ---------- 網址英文名（選填）：跟伺服器同一套規則。留空＝依專案名稱自動產生；不合規則就在欄位下說哪裡不對，給建議值一鍵帶入 ----------
+  const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,39}$/, SLUG_RESERVED = ['cross', 'p', 'api', 'hub'];
+  const realSlug = p => (p && p.slug && p.slug !== p.id ? p.slug : ''); // 還沒設時 API 回專案 id（有底線），不能拿來當預設值
+  const slugUsed = exceptId => new Set((state.projectList || []).filter(p => p.id !== exceptId).flatMap(p => [p.slug, p.id.toLowerCase()].filter(Boolean)));
+  const slugClean = v => String(v ?? '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+  function slugFree(base, used) {
+    const ok = s => SLUG_RE.test(s) && !SLUG_RESERVED.includes(s) && !used.has(s);
+    if (ok(base)) return base;
+    for (let n = 2; n < 1000; n++) { const s = `${base.slice(0, 40 - String(n).length - 1)}-${n}`; if (ok(s)) return s; }
+    return base;
+  }
+  function autoSlug(name, used) {
+    const ascii = /^[A-Za-z0-9 _.-]+$/.test(String(name || '').trim()) ? slugClean(name) : '';
+    if (ascii.length >= 2) return slugFree(ascii, used);
+    for (let n = 1; ; n++) if (!used.has(`project-${n}`)) return `project-${n}`;
+  }
+  function slugCheck(raw, name, used) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (!v) return { slug: autoSlug(name, used), auto: true, fromName: /^[A-Za-z0-9 _.-]+$/.test(String(name || '').trim()) && slugClean(name).length >= 2 };
+    const bad = badChars(v, /[^a-z0-9-]/g); // 大寫會自動改小寫，不算錯
+    const why = bad ? `只能用英文小寫、數字和 -，不能有：${bad}` : v.startsWith('-') ? '開頭不能是 -' : v.length < 2 ? '至少 2 個字' : SLUG_RESERVED.includes(v) ? `「${v}」是系統保留字` : '';
+    if (why) { const c = slugClean(v); return { error: '網址英文名' + why, suggestion: c.length >= 2 ? slugFree(c, used) : autoSlug(name, used) }; }
+    if (used.has(v)) return { error: `「${v}」已經有專案在用`, suggestion: slugFree(v, used) };
+    return { slug: v };
+  }
+  const slugFieldHtml = (id, value) => `<label class="field">網址英文名（選填）<input id="${id}" maxlength="40" value="${esc(value)}" placeholder="可留空，自動產生" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="${id}-hint"></label><p class="field-hint slug-hint" id="${id}-hint" aria-live="polite"></p>`;
+  // 即時提示；check()＝送出前檢查（不合規則回 null）；serverError(err)＝伺服器回了建議值就顯示在欄位下
+  function bindSlugField(root, id, nameInput, exceptId) {
+    const inp = root.querySelector('#' + id), hint = root.querySelector(`#${id}-hint`);
+    const bad = (msg, sug) => { hint.innerHTML = `<span class="slug-err">${esc(msg)}</span>${sug ? ` <button type="button" class="link small" data-slug-use="${esc(sug)}">改用 ${esc(sug)}</button>` : ''}`; inp.setAttribute('aria-invalid', 'true'); };
+    const run = () => {
+      const r = slugCheck(inp.value, nameInput?.value || '', slugUsed(exceptId));
+      if (r.error) bad(r.error, r.suggestion);
+      else { hint.innerHTML = `<span>會變成網址</span> <code>/p/${esc(r.slug)}</code>${r.auto ? (r.fromName ? '<span>（依專案名稱自動產生）</span>' : '<span>（專案名稱不是英文，先用編號；想要好記的網址請自己填）</span>') : ''}`; /* 欄位標籤已寫「選填」 */ inp.removeAttribute('aria-invalid'); } // 分段，英文介面才翻得到
+      return r;
+    };
+    inp.addEventListener('input', run); nameInput?.addEventListener?.('input', run);
+    hint.addEventListener('click', e => { const b = e.target.closest('[data-slug-use]'); if (b) { inp.value = b.dataset.slugUse; run(); inp.focus(); } });
+    run();
+    return {
+      check() { const r = run(); if (r.error) { inp.focus(); return null; } return r; },
+      serverError(err) { if (!err.suggestion) return false; bad(err.message, err.suggestion); inp.focus(); return true; },
+    };
+  }
+  // 管理頁改網址英文名：跟引導、新增專案同一個欄位（還沒設時欄位留空，不帶專案 id）
+  function editSlug(id) {
+    const p = state.projectList.find(x => x.id === id);
+    return new Promise(resolve => {
+      const body = openModal('網址英文名', `<form id="se-form" class="stack">${slugFieldHtml('se-slug', realSlug(p))}<p class="muted small">API 與 AI 接入設定的專案代號不變（${esc(id)}），舊網址照樣能開。</p></form>`,
+        { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="se-form">儲存</button>' });
+      const field = bindSlugField(body, 'se-slug', { value: p?.name || '' }, id);
+      setTimeout(() => body.querySelector('#se-slug')?.focus(), 30);
+      body.querySelector('#se-form').addEventListener('submit', async e => {
+        e.preventDefault();
+        const sf = field.check();
+        if (!sf) return;
+        if (!sf.auto && sf.slug === realSlug(p)) { closeModal(); return resolve(null); }
+        try {
+          const r = await api(`/api/projects/${encodeURIComponent(id)}/slug`, { method: 'PUT', body: { slug: sf.auto ? '' : sf.slug } });
+          closeModal(); resolve(r.items?.find(x => x.id === id)?.slug || sf.slug);
+        } catch (err) { if (!field.serverError(err)) toast(err.message); }
+      });
+    });
+  }
+  const swJoinOpen = pj => state.projMeta.join?.[pj.id]?.open !== false; // 專案預設開放申請
+  // 第一次設定引導：群組名稱 → 第一個專案 → 邀請成員 → 第一隻 AI。每步可略過；做完或「全部略過」不再出現；按 × 先關，下次登入再出現
+  async function openSetupWizard() {
+    const [group, health, roles] = await Promise.all([api('/api/group').catch(() => ({})), api('/api/health').catch(() => ({})), loadRoles().catch(() => ({ items: [] }))]);
+    const pj = (state.projectList || []).find(p => !p.archived) || null;
+    const tpl = (roles.items || []).filter(r => r.resident !== false && r.key !== 'custom');
+    const st = { step: 0, invites: [], ai: null, link: null, tool: 'claude', copied: false, demo: null };
+    const SW_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['other', '其他 AI']];
+    const STEPS = ['群組名稱', '第一個專案', '邀請成員', '第一隻 AI'];
+    const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '四個步驟，每步都可以略過；之後在管理頁都改得到。' });
+    const el = body.querySelector('#sw');
+    const finish = async skipped => { try { await api('/api/setup-wizard/done', { method: 'POST' }); } catch {} if (skipped) store.set(NEXT_KEY(), '1'); closeModal(); location.reload(); };
+    const btns = (main, mainLabel) => `<div class="sw-actions"><button type="button" class="link" data-sw="skipall">全部略過</button><span class="grow"></span>${st.step < 3 ? '<button type="button" class="btn" data-sw="skip">略過這步</button>' : ''}${main ? `<button type="button" class="btn primary" data-sw="${main}">${mainLabel}</button>` : ''}</div>`;
+    const draw = (msg = '') => {
+      const head = `<ol class="sw-steps">${STEPS.map((t, i) => `<li class="${i === st.step ? 'on' : i < st.step ? 'done' : ''}"${i === st.step ? ' aria-current="step"' : ''}>${i + 1}. ${t}</li>`).join('')}</ol>`;
+      let html = '';
+      if (st.step === 0) html = `<label class="field">群組名稱<input id="sw-group" maxlength="30" value="${esc(group.name || '')}"></label><p class="field-hint">顯示在登入頁、側欄與分頁標題。</p>${btns('group', '儲存，下一步')}`;
+      else if (st.step === 1) html = pj ? `<label class="field">專案名稱<input id="sw-pj-name" maxlength="20" value="${esc(window.aigileI18n?.lang === 'en' && pj.name === '預設專案' ? 'Default project' : pj.name)}"></label>${slugFieldHtml('sw-pj-slug', realSlug(pj))}<p class="field-hint">卡片編號會用網址英文名的字母開頭，例如網址英文名 web → 卡號 WEB-12。</p>${btns('project', '儲存，下一步')}` : `<p class="muted">還沒有專案。</p>${btns('', '')}`;
+      else if (st.step === 2) html = `<div class="switch-row sw-oj"><div><b id="sw-oj-t">開放自己註冊</b><span class="small muted">${health.openJoin ? `打開中：把網址 <code>${esc(location.origin)}</code> 傳給成員就能註冊。註冊的人一開始沒有專案，可以申請加入開放的專案，或由你在「成員與權限」指派。` : '關閉中：只能用下面的邀請連結加入。'}</span></div><button type="button" class="switch" role="switch" aria-checked="${!!health.openJoin}" aria-labelledby="sw-oj-t" data-sw="openjoin"><span></span></button></div>
+        ${pj ? `<div class="switch-row sw-pj-join"><div><b id="sw-pjj-t">新成員可以申請加入「${esc(pj.name)}」</b><span class="small muted">${swJoinOpen(pj) ? '打開中：自己註冊的人會在主畫面看到這個專案、按「申請加入」，你核准後就加入。' : '關閉中：註冊的人看不到這個專案，要你在「成員與權限」把人加進來。'}</span></div><button type="button" class="switch" role="switch" aria-checked="${swJoinOpen(pj)}" aria-labelledby="sw-pjj-t" data-sw="pjjoin"><span></span></button></div>` : ''}
+        <div class="sw-inv" data-msg-host><label class="field">邀請成員（產生一次性連結，直接加進「${esc(pj?.name || '')}」）<input id="sw-inv-name" maxlength="40" placeholder="成員名字"></label><button type="button" class="btn" data-sw="invite">產生邀請連結</button></div>
+        ${st.invites.length ? `<ul class="sw-links">${st.invites.map((v, i) => `<li><b>${esc(v.name)}</b><code>${esc(v.url)}</code><button type="button" class="btn small" data-sw-copy="${i}">複製連結</button></li>`).join('')}</ul>` : ''}${btns('next', '下一步')}`;
+      else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p>${btns('ai', '建立 AI')}`;
+      else html = `<p class="small">已建立「${esc(st.ai.name)}」。選你用的 AI 工具，按「複製」貼給它，它就會自己接入：</p>
+        <div class="seg-scope sw-tool" role="group" aria-label="你的 AI 工具">${SW_TOOLS.map(([k, t]) => `<button type="button" data-sw-tool="${k}" aria-pressed="${st.tool === k}">${t}</button>`).join('')}</div>
+        <textarea class="sw-text" readonly rows="9" aria-label="接入指令">${esc(shortOnboardingText(st.ai, st.link, st.tool))}</textarea><p class="field-hint">連結 15 分鐘內有效、只能讀一次；過期到「我的 AI」按「短版（已接過）」重新產生。</p><div class="sw-actions"><span class="grow"></span><button type="button" class="btn" data-sw="done">完成</button><button type="button" class="btn primary" data-sw="copyai">${st.copied ? '✓ 已複製' : '複製'}</button></div>`;
+      const demoLine = st.demo ? `<p class="sw-demo small" role="status">已載入示範資料「${esc(st.demo)}」，完成設定後在專案清單看得到；看完到「成員與權限 › 系統」清除。</p>`
+        : '<p class="sw-demo small">想先看看用起來的樣子？<button type="button" class="link" data-sw="demo">載入示範資料</button>（虛構的示範專案，看完可以清掉）</p>';
+      el.innerHTML = head + demoLine + `<p class="error sw-err" role="alert"${msg ? '' : ' hidden'}>${esc(msg)}</p>` + html;
+      if (st.step === 1 && pj) st.slugField = bindSlugField(el, 'sw-pj-slug', el.querySelector('#sw-pj-name'), pj.id);
+      if (st.step === 3 && !st.ai) { const sel = el.querySelector('#sw-role'), nm = el.querySelector('#sw-ai-name'); const fill = () => { const r = tpl.find(x => x.key === sel.value), en = window.aigileI18n?.lang === 'en', sfx = en ? `-${r?.key || 'AI'}-AI` : '的' + (r?.suffix || 'AI'), who = en && state.me.name === '管理員' ? 'Admin' : String(state.me.name || ''); nm.value = who.slice(0, 40 - sfx.length) + sfx; }; /* 英文介面：Admin-PG-AI（名字不能有空白） */ sel.addEventListener('change', fill); fill(); } // 預填不超過 40 字
+      el.querySelector('input, select, textarea, button.primary')?.focus();
+    };
+    el.addEventListener('click', async e => {
+      const b = e.target.closest('[data-sw], [data-sw-copy], [data-sw-tool]');
+      if (!b || b.disabled) return;
+      const act = b.dataset.sw;
+      if (b.dataset.swCopy !== undefined) return toast((await copyText(st.invites[+b.dataset.swCopy].url)) ? '已複製邀請連結' : '複製失敗，請手動複製');
+      if (b.dataset.swTool) { if (st.tool !== b.dataset.swTool) { st.tool = b.dataset.swTool; st.copied = false; draw(); el.querySelector(`[data-sw-tool="${st.tool}"]`)?.focus(); } return; }
+      if (act === 'done' && st.ai && !st.copied && !await confirmDialog({ title: '還沒複製接入指令', confirmText: '直接完成', cancelText: '回去複製', cancelPrimary: true,
+        message: '這段指令只在這裡顯示，連結 15 分鐘內有效。沒複製也沒關係：之後到「我的 AI」按「短版（已接過）」重新產生。' })) return;
+      if (act === 'skipall' || act === 'done') return finish(act === 'skipall');
+      if (act === 'skip' || act === 'next') { st.step++; return draw(); }
+      if (act === 'copyai') { const ok = await copyText(shortOnboardingText(st.ai, st.link, st.tool)); toast(ok ? '已複製，貼到你的 AI 對話' : '複製失敗，請手動複製'); if (ok) { st.copied = true; draw(); } return; }
+      // 錯誤不重畫（使用者打的字留著，改了就能繼續）：對得到欄位就紅框＋欄位下小字，對不到才放上方
+      const showErr = (msg, focusSel) => {
+        const p = el.querySelector('.sw-err'), f = focusSel && el.querySelector(focusSel);
+        el.querySelectorAll('.field-msg').forEach(x => x.remove()); el.querySelectorAll('#sw input[aria-invalid]:not(#sw-pj-slug)').forEach(x => x.removeAttribute('aria-invalid'));
+        if (msg && f) { p.textContent = ''; p.hidden = true; return fieldMsg(f, msg); }
+        p.textContent = msg; p.hidden = !msg;
+      };
+      const badName = v => /[\s@]/.test(v) ? '名字不能有空白或 @' : '';
+      const need = { group: () => { const v = el.querySelector('#sw-group').value.trim(); return !v ? ['請輸入群組名稱（1～30 字）', '#sw-group'] : null; },
+        project: () => { const v = el.querySelector('#sw-pj-name').value.trim(); return !v ? ['請輸入專案名稱（1～20 字）', '#sw-pj-name'] : /[,\n]/.test(v) ? ['專案名稱不能有半形逗號「,」', '#sw-pj-name'] : null; },
+        invite: () => { const v = el.querySelector('#sw-inv-name').value.trim(); return !v ? ['先輸入成員名字，再按「產生邀請連結」', '#sw-inv-name'] : badName(v) ? [badName(v), '#sw-inv-name'] : null; },
+        ai: () => { const v = el.querySelector('#sw-ai-name').value.trim(); return !v ? ['請輸入 AI 名稱（1～40 字）', '#sw-ai-name'] : badName(v) ? [badName(v), '#sw-ai-name'] : null; } }[act]?.();
+      if (need) return showErr(...need);
+      showErr('');
+      b.disabled = true;
+      try {
+        if (act === 'group') { const name = el.querySelector('#sw-group').value.trim(); if (name && name !== group.name) { await api('/api/group', { method: 'PUT', body: { name } }); group.name = name; document.querySelectorAll('[data-group-name]').forEach(x => { x.textContent = name; }); } st.step++; }
+        else if (act === 'project') {
+          const name = el.querySelector('#sw-pj-name').value.trim(), sf = st.slugField.check();
+          if (!sf) { b.disabled = false; return; }
+          if (name && name !== pj.name) { await api(`/api/projects/${encodeURIComponent(pj.id)}`, { method: 'PATCH', body: { name } }); pj.name = name; }
+          if (sf.auto || sf.slug !== realSlug(pj)) { // 留空＝伺服器依名稱自動產生
+            try { const r = await api(`/api/projects/${encodeURIComponent(pj.id)}/slug`, { method: 'PUT', body: { slug: sf.auto ? '' : sf.slug } }); pj.slug = r.items?.find(x => x.id === pj.id)?.slug || sf.slug; }
+            catch (err) { if (st.slugField.serverError(err)) { b.disabled = false; return; } throw err; }
+          }
+          st.step++;
+        } else if (act === 'demo') {
+          st.demo = (await demoLoad()).projectName;
+        } else if (act === 'pjjoin') { // 這個專案開放申請（預設開）
+          const on = !swJoinOpen(pj);
+          await api(`/api/projects/${encodeURIComponent(pj.id)}/join-settings`, { method: 'PUT', body: { open: on, note: state.projMeta.join?.[pj.id]?.note || '' } });
+          state.projMeta.join = { ...(state.projMeta.join || {}), [pj.id]: { ...(state.projMeta.join?.[pj.id] || {}), open: on } };
+        } else if (act === 'openjoin') {
+          const on = !health.openJoin;
+          await api('/api/group/settings', { method: 'PUT', body: { openJoin: on } });
+          health.openJoin = on;
+        } else if (act === 'invite') {
+          const inp = el.querySelector('#sw-inv-name'), name = inp.value.trim();
+          if (!name) { b.disabled = false; return inp.focus(); }
+          const r = await api('/api/invites', { method: 'POST', body: { name, projects: pj ? [pj.id] : [] } });
+          st.invites.push({ name, url: r.url });
+        } else if (act === 'ai') {
+          const r = tpl.find(x => x.key === el.querySelector('#sw-role').value) || tpl[0];
+          const ai = await api('/api/my-ais', { method: 'POST', body: { projects: pj ? [pj.id] : [], roleKey: r.key, role: r.role, name: el.querySelector('#sw-ai-name').value.trim(), duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff } });
+          const link = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: {} });
+          st.ai = ai; st.link = link;
+        }
+        draw();
+      } catch (err) { b.disabled = false; showErr(err.message, { group: '#sw-group', project: '#sw-pj-name', invite: '#sw-inv-name', ai: '#sw-ai-name' }[act]); }
+    });
+    draw();
+  }
+
+  // 預設管理員第一次登入：只顯示這一頁，頂端紅色警告；帳號（不能是 admin）和密碼都改了才重新載入進主畫面
+  function showMustChange() {
+    $('#boot').hidden = true; $('#join').hidden = true; $('#app').hidden = true;
+    document.querySelector('#must-change')?.remove();
+    const box = document.createElement('section');
+    box.id = 'must-change'; box.className = 'must-change';
+    // 規則寫在欄位下方（常駐），錯了就在同一行變紅字；三個密碼欄都有「顯示」
+    box.innerHTML = `<div class="mc-banner" role="alert">⚠ 還在用預設帳密：請先改帳號和密碼，改好才能用其他功能。</div>
+      <form class="mc-form join-pane" id="mc-form" novalidate><h1>改掉預設帳號密碼</h1>
+        <p class="muted small">這是系統自動建的管理員帳號。改好後，其他裝置要用新的帳號密碼登入。</p>
+        <label>目前密碼<span class="pwd-wrap"><input name="current" id="mc-cur" type="password" autocomplete="current-password" required aria-describedby="mc-cur-hint"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示密碼">顯示</button></span></label><p class="field-hint cred-hint" id="mc-cur-hint">剛才登入用的密碼</p>
+        ${credFieldsHtml('mc')}
+        <p class="error" id="mc-err" role="alert"></p>
+        <button class="btn primary" type="submit">儲存</button></form>`;
+    document.body.appendChild(box);
+    const form = box.querySelector('#mc-form'), err = box.querySelector('#mc-err'), cur = form.querySelector('#mc-cur'), curHint = form.querySelector('#mc-cur-hint');
+    const cred = bindCredFields(form, 'mc');
+    const curErr = msg => { curHint.textContent = msg || '剛才登入用的密碼'; curHint.classList.toggle('cred-err', !!msg); if (msg) { cur.setAttribute('aria-invalid', 'true'); cur.focus(); } else cur.removeAttribute('aria-invalid'); };
+    cur.addEventListener('input', () => curErr(''));
+    cur.focus();
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      err.textContent = '';
+      if (!cur.value) return curErr('請先填目前密碼');
+      if (!cred.check()) return;
+      const v = cred.values(), btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        await api('/api/me/password', { method: 'PUT', body: { username: v.username, currentPassword: cur.value, newPassword: v.password, newPasswordAgain: v.passwordAgain } });
+        // 改好了：先告訴他新帳號，按了才進主畫面
+        form.innerHTML = `<h1>帳號密碼已改好</h1><p>下次登入請用帳號 <b class="mc-user">${esc(v.username.toLowerCase())}</b> 和剛設的新密碼。</p><p class="muted small">其他裝置已登出，要用新的帳號密碼重新登入。</p><button class="btn primary" type="button" id="mc-go">開始使用</button>`;
+        box.querySelector('.mc-banner')?.remove();
+        const go = form.querySelector('#mc-go'); go.focus(); go.addEventListener('click', () => location.reload());
+      } catch (e2) {
+        btn.disabled = false;
+        const field = { newPassword: 'password', newPasswordAgain: 'passwordAgain' }[e2.field] || e2.field;
+        if (field === 'currentPassword' || /目前密碼/.test(e2.message)) curErr(e2.message);
+        else if (!cred.serverError({ field, message: e2.message })) err.textContent = e2.message;
+      }
+    });
+  }
+
+  async function loadParticipants() {
+    const d = await api('/api/participants');
+    state.participants = new Map(d.items.map(p => [p.participantId, p]));
+    const online = d.items.filter(p => p.isOnline).length;
+    document.querySelectorAll('.presence-text').forEach(el => { el.textContent = `${d.items.length} 人在群 · 近期活躍 ${online}`; el.dataset.short = `${online} 人在線`; });
+    document.querySelectorAll('.sb-presence-text').forEach(el => { el.textContent = `${d.items.length} 人 · ${online} 人活躍`; });
+    drawTokenAlert(d.items);
+    syncFilterBar();
+    return d.items;
+  }
+
+  // 平台通知（系統私訊）與叫 AI 同步技能的指令，人類看到的預覽改一句白話、不露指令與網址；
+  // 全文（給 AI 的指令）在私訊對話裡照舊，AI 讀到的內容不變
+  const DM_GIST = [
+    [/^\[技能同步\]/, () => '🧩 已請 AI 同步技能，結果會自動顯示在同步清單'],
+    [/^🧩 技能有新版：.*?「(.+?)」第 (\d+) 版(（含腳本)?.*?你有 (\d+) 隻 AI 會用到/, m => `🧩 技能「${m[1]}」有第 ${m[2]} 版${m[3] ? '（含腳本，要你允許）' : ''}，${m[4]} 隻 AI 要同步`],
+    [/^🧩 技能庫下架：.*?「(.+?)」，你有 (\d+) 隻 AI 裝過/, m => `🧩 技能「${m[1]}」已下架，同步後從 ${m[2]} 隻 AI 移除`],
+    [/^⚠ (.+?) 同步技能失敗：(.*?)(?:。同步清單：|$)/, m => `⚠ ${m[1]} 同步技能失敗：${m[2]}`],
+  ];
+  const noUrl = t => t.replace(/https?:\/\/\S+/g, '').replace(/node \.aigile\/\S+[^。]*/g, '').replace(/[：:，]\s*(?=[。]|$)/g, '').replace(/\s+/g, ' ').trim();
+  function dmGist(text, system = false) {
+    const t = String(text || '');
+    for (const [re, f] of DM_GIST) { const m = re.exec(t); if (m) return noUrl(f(m)); }
+    return system ? noUrl(t) : t;
+  }
+  const noteWho = n => n.sender?.system ? { name: '平台通知', memberType: 'system' } : state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
+
+  // Token 到期提醒：只給所屬人類看，到期前 24 小時、2 小時兩段標示
+  function tokenLevel(expiresAt, now = Date.now()) {
+    const left = Date.parse(expiresAt) - now;
+    if (!(left > 0)) return 'expired';
+    if (left <= 2 * 3600_000) return '2h';
+    if (left <= 24 * 3600_000) return '24h';
+    return null;
+  }
+  // 橫幅一行、可收合；收合記在這台瀏覽器，同一批過期／快到期不再每頁跳出，有新的（別隻、或重發後又到期）才再出現
+  const TA_KEY = 'aigile.tokenAlertHidden';
+  const taSig = x => `${x.p.participantId}:${x.level}:${x.p.expiresAt}`;
+  function drawTokenAlert(items) {
+    const box = $('#token-alert');
+    if (!box || state.me?.memberType !== 'human') return;
+    const mine = items.filter(p => p.memberType === 'ai' && p.ownerParticipantId === state.me.participantId && p.status === 'active')
+      .map(p => ({ p, level: tokenLevel(p.expiresAt) })).filter(x => x.level);
+    const hidden = new Set(String(store.get(TA_KEY) || '').split(',').filter(Boolean));
+    const show = mine.filter(x => !hidden.has(taSig(x)));
+    box.hidden = !show.length;
+    if (!show.length) return;
+    const hide = () => { store.set(TA_KEY, mine.map(taSig).join(',')); box.dataset.open = ''; box.hidden = true; };
+    const closeBtn = '<button type="button" class="alert-close" aria-label="收起這則提醒" title="收起（有新的過期才會再出現）">×</button>';
+    const critical = show.filter(x => x.level === 'expired' || x.level === '2h')
+      .sort((a, b) => Date.parse(a.p.expiresAt) - Date.parse(b.p.expiresAt)); // 已過期的排最前面，其次是最快到期的
+    if (critical.length) {
+      // 緊急：深紅底一行；多位同時發生只寫最急的一位並標「共 N 位」
+      const c = critical[0], left = Date.parse(c.p.expiresAt) - Date.now();
+      const what = c.level === 'expired' ? '的 Token 已過期，AI 已停止連線' : `的 Token 剩 ${Math.floor(left / 3600_000)} 小時 ${Math.floor((left % 3600_000) / 60_000)} 分到期`;
+      const more = critical.length > 1 ? `（共 ${critical.length} 位）` : '';
+      box.className = 'token-alert critical';
+      box.dataset.open = '';
+      box.innerHTML = `<span class="token-alert-text" title="${esc(c.p.name + ' ' + what + more)}"><b>${esc(c.p.name)}</b> ${what}${more}</span>
+        <button type="button" class="btn alert-btn">重發 Token</button>${closeBtn}`;
+      box.querySelector('.alert-btn').onclick = () => openMyAi();
+      box.querySelector('.alert-close').onclick = hide;
+      return;
+    }
+    // 一般（24 小時內到期）：一行＋「處理 ›」，點開看全文與動作；「稍後」或 × 收起
+    const text = `你的 AI ${show.map(x => `「${esc(x.p.name)}」Token 24 小時內到期（${fmtTime(x.p.expiresAt)}）`).join('、')}，到期後 AI 會停止連線。`;
+    box.className = 'token-alert';
+    const open = box.dataset.open === 'all';
+    box.innerHTML = open
+      ? `<div class="ta-card"><div>${text}</div><div class="ta-actions"><button type="button" class="btn alert-btn primary">重發 Token</button><button type="button" class="btn alert-later">稍後</button></div></div>`
+      : `<button type="button" class="ta-one"><span class="token-alert-text">${text}</span><span class="ta-go">處理 ›</span></button>${closeBtn}`;
+    if (open) {
+      box.querySelector('.alert-btn').onclick = () => openMyAi();
+      box.querySelector('.alert-later').onclick = hide;
+    } else {
+      box.querySelector('.ta-one').onclick = () => { box.dataset.open = 'all'; drawTokenAlert(items); };
+      box.querySelector('.alert-close').onclick = hide;
+    }
+  }
+
+  // 輪詢：前景每 3 秒拉新訊息，背景分頁放慢到 15 秒；成員與通知數每 15 秒更新
+  let pollTimer = null;
+  let lastSlowPoll = 0;
+  let lastTeamPoll = 0;
+  let pollGen = 0; // 每次重新連線換一代，舊的計時鏈自動結束，不會越疊越多
+  // 內建即時通道（本機／Docker 版的 /api/live）：連著時，新訊息、通知、私訊、卡片一有變就更新，輪詢放慢到 60 秒；
+  // 這個環境沒有（Cloudflare 版回 404）或斷線時，照舊每 5 秒輪詢；斷線 3～15 秒後自己重連
+  const liveConn = { on: false, ctl: null, retry: null, gen: 0, kinds: new Set(), timer: null };
+  async function connectLive() {
+    clearTimeout(liveConn.retry); liveConn.retry = null;
+    liveConn.ctl?.abort();
+    if (!state.token) return;
+    const gen = ++liveConn.gen, ctl = liveConn.ctl = new AbortController();
+    let r;
+    try { r = await fetch('/api/live', { headers: { Authorization: `Bearer ${state.token}` }, signal: ctl.signal }); } catch { return liveDown(gen, 15_000); }
+    if (r.status === 404) { liveConn.on = false; liveConn.ctl = null; return; } // 沒有內建即時通道：照舊輪詢，不再試
+    if (!r.ok || !r.body) return liveDown(gen, r.status === 401 ? 0 : 15_000);
+    liveConn.on = true;
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) { const block = buf.slice(0, i); buf = buf.slice(i + 2); liveEvent(/^event: (.+)$/m.exec(block)?.[1], /^data: (.*)$/m.exec(block)?.[1]); }
+      }
+    } catch {}
+    liveDown(gen, 3_000);
+  }
+  function liveDown(gen, ms) {
+    if (gen !== liveConn.gen) return;
+    liveConn.on = false; liveConn.ctl = null;
+    if (ms) liveConn.retry = setTimeout(connectLive, ms);
+  }
+  // 同一陣子來的多個事件合成一次更新
+  function liveEvent(kind, raw) {
+    if (!kind || kind === 'hello' || kind === 'bye') return;
+    if (kind === 'join') { let x = {}; try { x = JSON.parse(raw || '{}'); } catch {} return onJoinDecided(x).catch(() => {}); }
+    liveConn.kinds.add(kind);
+    clearTimeout(liveConn.timer);
+    liveConn.timer = setTimeout(() => {
+      const k = liveConn.kinds; liveConn.kinds = new Set();
+      if (k.has('message') || k.has('notify')) { catchUp().catch(() => {}); refreshInboxCount(); }
+      if (k.has('dm')) { refreshInboxCount(); if (dmVisible()) loadDmSummary(); }
+      if (k.has('card') && work.loaded) syncCards().catch(() => {});
+    }, 150);
+  }
+  const ensureLive = () => { if (!liveConn.ctl && !liveConn.retry && state.token) connectLive(); };
+  function connectEvents(immediate = false) {
+    clearTimeout(pollTimer);
+    ensureLive(); // 內建即時通道（有就用）
+    const gen = ++pollGen;
+    const tick = async () => {
+      if (!state.token || gen !== pollGen) return;
+      let ok = true;
+      try {
+      ok = await catchUp();
+      if (!document.hidden && Date.now() - lastSlowPoll > 30_000) {
+        lastSlowPoll = Date.now();
+        loadParticipants().catch(() => {});
+        refreshInboxCount();
+      }
+      if (!document.hidden && work.loaded && Date.now() - work.lastSync > (state.page === 'work' ? 30_000 : 90_000)) syncCards().catch(() => {});
+      if (!document.hidden && Date.now() - lastTeamPoll > 300_000) { // 60 秒 → 5 分鐘（操作、換頁時照舊立刻更新）
+        lastTeamPoll = Date.now();
+        loadTeam();
+      }
+      } catch {} finally {
+        // 失敗（或背景分頁）也一定排下一輪；失敗時 5 秒後重試
+        if (gen === pollGen) pollTimer = setTimeout(tick, !ok ? 5_000 : document.hidden || liveConn.on ? 60_000 : 5_000); // 即時通道連著時放慢
+      }
+    };
+    pollTimer = setTimeout(tick, immediate ? 0 : 5_000);
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && state.me) connectEvents(true); }); // 回到前景立刻補抓
+  window.addEventListener('online', () => { if (state.me) connectEvents(true); });
+
+  // 抓取中旗標記開始時間：超過 20 秒還沒結束就當作卡住，允許重抓
+  let catching = 0, connFails = 0;
+  async function catchUp() {
+    if (!state.token || !state.nextCursor) return true;
+    if (catching && Date.now() - catching < 20_000) return true;
+    const mine = catching = Date.now();
+    try {
+      for (let i = 0; i < 5; i++) {
+        const d = await api(`/api/messages?limit=100&after=${encodeURIComponent(state.nextCursor)}`, { timeoutMs: 8_000 });
+        d.items.forEach(onNewMessage);
+        if (d.items.length) state.newMsgAt = Date.now(); // 收件匣據此決定要不要重抓通知
+        state.nextCursor = d.nextCursor;
+        if (!d.hasMore) break;
+      }
+      connFails = 0; setConnBanner(false);
+      return true;
+    } catch {
+      if (++connFails >= 2) setConnBanner(true); // 連續失敗 2 次（約 10 秒）才提示，網路小抖動不閃（UX）
+      return false;
+    } finally { if (catching === mine) catching = 0; }
+  }
+  // 抓取失敗時頂端提示，恢復後自動收起
+  function setConnBanner(down) { const b = $('#conn-banner'); if (b) b.hidden = !down; }
+
+  // ---------- 訊息 ----------
+  let BASE_TITLE = document.title;
+  // 群組名稱由管理員在網頁設定；登入頁、側欄、分頁標題都讀它
+  function applyGroupName(name) {
+    if (!name) return;
+    document.querySelectorAll('[data-group-name]').forEach(el => { el.textContent = name; });
+    document.title = document.title.replace(BASE_TITLE, name);
+    BASE_TITLE = name;
+    document.documentElement.classList.add('gn-ready');
+    store.set(GN_KEY, name);
+  }
+  // 群組名閃一下的修正：先用這台裝置記住的名稱，還沒拿到之前不顯示（CSS 藏起），拿到再換成伺服器的
+  const GN_KEY = 'aigile-switch-group-name';
+  { const cached = store.get(GN_KEY); if (cached) applyGroupName(cached); }
+  fetch('/api/group').then(r => r.json()).then(d => applyGroupName(d.name)).catch(() => {}).finally(() => document.documentElement.classList.add('gn-ready'));
+  const meId = () => state.me.participantId;
+  const isToMe = m => m.recipients.some(r => r.participantId === meId());
+  const isReplyToMe = m => {
+    const parent = m.replyToMessageId && state.byId.get(m.replyToMessageId);
+    return !!parent && parent.author.participantId === meId();
+  };
+  const isMine = m => m.author.participantId === meId();
+  // 這則對我是「要回覆」（true）、「知會」（false），或沒標（undefined，舊訊息照舊）
+  const myAsk = m => m.recipients.find(r => r.participantId === meId())?.ask;
+  // 指定我名下 AI 的訊息（@所有人除外），讓人類知道自己的 AI 被交辦了什麼
+  const toMyAi = m => {
+    if (m.audience === 'all' || isMine(m)) return false;
+    const mine = myAiIds();
+    return !mine.has(m.author.participantId) && m.recipients.some(r => mine.has(r.participantId));
+  };
+  const myAiIds = () => new Set([...state.participants.values()].filter(p => p.ownerParticipantId === meId()).map(p => p.participantId));
+
+  function renderText(text, withLead = false) {
+    let lead = '';
+    if (withLead) {
+      const t = String(text).match(/^\s*\[([^\]\n]{1,40})\]\s?/);
+      if (t) { lead = withLead === 'strip' ? '' : leadPill(t[1]); text = text.slice(t[0].length); } // strip：名字旁已經有標籤，內文不再放一次
+    }
+    let html = esc(text);
+    const names = [...state.participants.values()].map(p => p.name).concat(ALL.name).sort((a, b) => b.length - a.length);
+    for (const n of names) html = html.split('@' + esc(n)).join(`\u0000@${esc(n)}\u0001`);
+    html = html.replace(/\u0000/g, '<span class="mention">').replace(/\u0001/g, '</span>');
+    // 網址轉連結；網址以外的 40 碼 SHA 只顯示前 7 碼，點一下複製完整值
+    return lead + html.split(/(\bhttps?:\/\/[^\s<]+)/).map((part, i) => i % 2
+      ? `<a href="${part}" target="_blank" rel="noopener">${part}</a>`
+      : part.replace(/\b[0-9a-f]{40}\b/g, h => `<button type="button" class="sha" data-sha="${h}" title="${h}（點一下複製）">${h.slice(0, 7)}</button>`)
+        .replace(CARD_REF_G, m => (isCardRef(m) ? capsuleHtml(m) : m))).join('');
+  }
+  // 訊息內的卡號轉成膠囊：卡號＋狀態文字（不只靠顏色）；清單載入後找不到的卡號灰字不可點
+  // 卡號一律是專案卡號（cardId＝MAIN-12）；舊訊息裡的 C-xxx 用卡片的 legacyId 對回專案卡號，原文不改
+  const CARD_REF_G = /\b(?:C-\d{3,}|[A-Z]{2,5}-\d+)\b/g;
+  let legIdx = null, legIdxAt = 0;
+  function cardIdNorm(id) {
+    id = String(id || '');
+    if (!/^C-\d+$/.test(id)) return id;
+    if (!legIdx || legIdxAt !== work.cards.size) { legIdx = new Map([...work.cards.values()].filter(c => c.legacyId).map(c => [c.legacyId, c.cardId])); legIdxAt = work.cards.size; }
+    return legIdx.get(id) || id;
+  }
+  // 文字裡像卡號的字：舊的 C-xxx，或已知專案代號開頭（UTF-8 這類不算）
+  const projCodeSet = () => new Set((state.projectList || []).map(p => p.code).filter(Boolean));
+  const isCardRef = t => /^C-\d{3,}$/.test(t) || work.cards.has(t) || projCodeSet().has(t.split('-')[0]);
+  const cardRefsIn = t => [...new Set((String(t || '').match(CARD_REF_G) || []).filter(isCardRef).map(cardIdNorm))]; // 文字裡提到的卡（專案卡號，舊 C-xxx 換成專案卡號）
+  const ckey = id => work.cards.get(cardIdNorm(id))?.cardId || cardIdNorm(id);
+  const ckeyOf = c => c?.cardId || ckey(c?.cardId || '');
+  // 卡移到別專案會換號：同一張卡（legacyId 相同）舊號那筆拿掉，清單不會出現兩張
+  function putCard(c) {
+    if (c?.legacyId) for (const [k, x] of work.cards) if (k !== c.cardId && x.legacyId === c.legacyId) work.cards.delete(k);
+    work.cards.set(c.cardId, c);
+  }
+  function capsuleHtml(raw) {
+    const id = cardIdNorm(raw), c = work.cards.get(id);
+    if (!c) return work.loaded ? `<button type="button" class="cap cap-miss" data-cap="${esc(id)}" title="點一下查看">${esc(id)}</button>` : esc(id); // 點了再問伺服器（別專案／已封存／不存在）
+    return `<button type="button" class="cap" data-cap="${esc(id)}" data-st="${esc(c.status)}" title="${esc(id)}">${esc(id)}<i class="cdot" aria-hidden="true"></i>${esc(shownName(c.status))}</button>`; // 膠囊在訊息內文裡（畫面翻譯不碰），狀態自己換成英文
+  }
+
+  function subLine(a, pj) {
+    if (a.memberType === 'ai') return [a.role, 'AI', a.ownerName].filter(Boolean).join(' · ');
+    if (a.memberType === 'system') return '系統';
+    const r = pj === undefined ? roleNoPj(a) : roleIn(a, pj); // 依那則訊息的專案；跨專案頻道（pj＝null）不顯示
+    return r || '人類';
+  }
+  function statusTags(m, toMe, replyMe) {
+    const tags = [
+      m.audience === 'all' ? '<span class="tag all">全體通知</span>' : '',
+      toMe && m.audience !== 'all' && !isMine(m) && !m.replyFrom ? '<span class="tag me">指定給我</span>' : '',
+      replyMe && !isMine(m) ? '<span class="tag reply">回覆我</span>' : '',
+      toMyAi(m) ? '<span class="tag my-ai">給我的 AI</span>' : '',
+      unansweredTag(m),
+    ].filter(Boolean);
+    return tags.length ? `<div class="msg-tags">${tags.join('')}</div>` : '';
+  }
+  // 訊息開頭的 [接單]、[完成]… 改成彩色小標籤
+  function leadPill(tag) {
+    const kind = /受阻/.test(tag) ? 'red' : /需確認|需協助/.test(tag) ? 'orange' : /決策紀錄/.test(tag) ? 'grey'
+      : /完成|已部署|已 ?push/.test(tag) ? 'green' : /接單/.test(tag) ? 'indigo' : /進度/.test(tag) ? 'blue' : /交接/.test(tag) ? 'purple' : 'light';
+    return `<span class="lead lead-${kind}">${esc(shownName(tag))}</span>`; // 只是畫面上的標籤（內文照原文）：英文介面顯示英文
+  }
+
+  // ---------- 手機好滑 ----------
+  // 流程訊息（接單／交接／通知／進度）收成一行灰字；手機寬度（或選「精簡」）其他 AI 訊息只露第一句。
+  // 需確認、人類發的、提到我／回覆我的、附檔案的永遠照常顯示。
+  const FLOW_TAGS = ['接單', '交接', '通知', '進度'];
+  const narrowMq = matchMedia('(max-width: 640px)');
+  const slimMode = () => { const v = store.get(MSG_VIEW_KEY); return v ? v === 'slim' : narrowMq.matches; };
+  const authorKind = m => (state.participants.get(m.author.participantId) || m.author).memberType;
+  const mentionsMe = m => !isMine(m) && myAsk(m) !== false && ((isToMe(m) && m.audience !== 'all') || isReplyToMe(m)); // 知會我的不算
+  const keepFull = m => !!m.file || /^\s*\[需確認\]/.test(m.text) || authorKind(m) === 'human' || mentionsMe(m);
+  const isFlowLine = m => !state.open.has(m.messageId) && FLOW_TAGS.includes(tagOf(m.text)) && !keepFull(m);
+  const isSlim = m => !state.open.has(m.messageId) && slimMode() && !keepFull(m) && !FLOW_TAGS.includes(tagOf(m.text));
+  // 提到我／回覆我、我還沒回的（需確認有人類回過也算處理了）
+  const needReply = m => mentionsMe(m) && !repliesOf(m.messageId).some(isMine) && !work.answered?.has(m.messageId);
+  const cardIdOf = t => cardIdNorm((String(t).match(CARD_REF_G) || []).find(isCardRef) || ''); // 專案卡號或舊的 C-xxx
+  // 第一句：去掉開頭的 [標籤] 和【專案名】，取第一行到第一個句號為止
+  function firstSentence(t) {
+    const lines = String(t).replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').replace(/^\s*【[^】\n]{1,20}】\s*/, '').split('\n').map(x => x.trim()).filter(Boolean);
+    const line = lines[0] || '';
+    const cut = line.search(/[。！？!?]/);
+    return cut > 0 ? line.slice(0, cut + 1) : line;
+  }
+  function flowLineHtml(m) {
+    const tag = tagOf(m.text), card = cardIdOf(m.text);
+    const to = tag === '交接' ? (m.audience === 'all' ? '所有人' : m.recipients.map(r => r.name).join('、')) : '';
+    const desc = [tag, card, to ? '給 ' + to : ''].filter(Boolean).join(' ');
+    return `<button type="button" class="flow-line" id="msg-${esc(m.messageId)}" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${m.author.name} ${desc}，${fmtTime(m.createdAt)}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text"><b>${esc(m.author.name)}</b> ${esc(desc)} · <time datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span></button>`;
+  }
+  function slimHtml(m) {
+    const tag = tagOf(m.text), card = cardIdOf(m.text), need = needReply(m);
+    return `<article class="msg slim${need ? ' need-me' : ''}" id="msg-${esc(m.messageId)}"><button type="button" class="slim-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false">
+      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span>
+      <span class="slim-text">${esc(firstSentence(m.text))}</span><span class="sr-only">，展開全文</span></button></article>`;
+  }
+  function flowGroupHtml(run) {
+    const tags = [...new Set(run.map(m => tagOf(m.text)))].join('、');
+    const t1 = fmtTime(run[0].createdAt), t2 = fmtTime(run[run.length - 1].createdAt);
+    return `<button type="button" class="flow-line flow-group" data-flow-group="${esc(run[0].messageId)}" aria-expanded="false" aria-label="${esc(`${run.length} 則流程訊息（${tags}），${t1} 到 ${t2}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text">${run.length} 則流程訊息（${esc(tags)}）· ${t1 === t2 ? t1 : t1 + '–' + t2}</span><span aria-hidden="true">▸</span></button>`;
+  }
+  // 整串清單：連續 3 則以上的一行流程訊息合成一列
+  function listHtml(list) {
+    state.groupOf = new Map();
+    state.grpHidden = new Map();
+    state.lastCard = '';
+    markKids(list);
+    const out = [];
+    for (let i = 0; i < list.length;) {
+      const cid = effCard(list[i]);
+      if (cid) { // B
+        let k = i;
+        while (k < list.length && effCard(list[k]) === cid) k++;
+        out.push(cardGroupHtml(cid, list.slice(i, k)));
+        i = k; continue;
+      }
+      let j = i;
+      while (j < list.length && isFlowLine(list[j]) && !effCard(list[j])) j++;
+      const run = list.slice(i, j);
+      if (run.length >= 3 && !state.flowOpen.has(run[0].messageId)) {
+        for (const m of run) state.groupOf.set(m.messageId, run[0].messageId);
+        out.push(flowGroupHtml(run));
+        i = j; continue;
+      }
+      // UX ：展開過的合併列可以再收起
+      if (run.length >= 3) out.push(`<button type="button" class="flow-line flow-fold" data-flow-fold="${esc(run[0].messageId)}" aria-label="收起這 ${run.length} 則流程訊息"><span class="fl-icon" aria-hidden="true">▴</span><span class="fl-text">收起這 ${run.length} 則流程訊息</span></button>`);
+      if (run.length) { out.push(...run.map(messageHtml)); i = j; continue; }
+      out.push(messageHtml(list[i])); i++;
+    }
+    return out.join('');
+  }
+  // 往上滑離開最底下（超過約一屏）才出現「回到最新 ↓」；有新訊息時用新訊息膠囊，兩個不同時出現
+  function drawLatestBtn() {
+    const b = $('#latest-btn'), box = $('#messages');
+    if (!b || !box) return;
+    const far = box.scrollHeight - box.scrollTop - box.clientHeight > box.clientHeight;
+    b.hidden = !(far && !state.newCount && !state.ctx);
+  }
+  // 讓某則訊息出現在畫面上（在收起的流程群組、一行或精簡裡就打開）
+  function revealMsg(id) {
+    const m = state.byId.get(id);
+    if (!m) return null;
+    if (state.grpHidden?.has(id)) { state.grpOpen.add(state.grpHidden.get(id)); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
+    if (state.groupOf.has(id) || isFlowLine(m) || isSlim(m)) { state.open.add(id); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
+    return document.getElementById('msg-' + id);
+  }
+  // 只捲訊息清單本身，把某則放到清單中間；不用 scrollIntoView（它會連 html/body 一起捲）
+  function scrollMsgTo(el, smooth = true) {
+    const box = $('#messages');
+    if (!el || !box.contains(el)) return;
+    const top = box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top - Math.max(0, (box.clientHeight - el.offsetHeight) / 2);
+    box.scrollTo({ top: Math.max(0, top), behavior: smooth ? 'smooth' : 'auto' });
+  }
+  function setView(v) {
+    store.set(MSG_VIEW_KEY, v);
+    syncFilterBar();
+    const box = $('#messages'), top = box.scrollTop;
+    renderMessages(false); box.scrollTop = top;
+  }
+
+  function messageHtml(m) {
+    const prevCard = state.lastCard;
+    state.lastCard = ''; // 一行／精簡沒有卡片列，下一則同卡要完整顯示
+    if (isFlowLine(m)) return flowLineHtml(m);
+    if (isSlim(m)) return slimHtml(m);
+    const ai = aiParts(m);
+    if (ai && !ai.head && !ai.rest && tagOf(m.text) === '交接') return flowLineHtml(m); // 只有格式字的系統交接通知縮成一行
+    state.lastCard = msgCardOf(m);
+    const toMe = isToMe(m);
+    const replyMe = isReplyToMe(m);
+    const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
+    const a = m.author;
+    const kid = isKid(m);
+    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false ? 'to-me' : '', needReply(m) ? 'need-me' : '', kid ? 'kid' : ''].join(' '); // 知會我的不上底色
+    const recipients = m.replyFrom ? askPillsHtml(m) : m.audience === 'all'
+      ? '<span class="mention">@所有人</span>'
+      : m.recipients.map(r => `<span class="mention">@${esc(r.name)}</span>`).join(' ');
+    return `
+      <article class="${cls}" id="msg-${esc(m.messageId)}">
+        <div class="msg-head">
+          ${avatar(state.participants.get(a.participantId) || a)}
+          <div class="msg-who">
+            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time>${m.project === projectView() ? '' : projTag(m.project)}</div>
+            <div class="msg-line2">${esc(subLine(a, m.project || null))}</div>
+          </div>
+        </div>
+        ${statusTags(m, toMe, replyMe)}
+        ${recipients ? `<div class="recipients"><span class="muted">給</span> ${recipients}</div>` : ''}
+        ${cardRefHtml(m, prevCard)}
+        ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
+        ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, ai) : textHtml(m)}
+        ${authHtml(m)}
+        <div class="msg-foot">
+          <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+          ${m.file ? '' : `<button class="reply-btn newcard" type="button" data-newcard="${esc(m.messageId)}">＋建卡</button>`}
+          ${linkedCapsules(m)}
+          ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && !ai && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
+          ${threadToggle(m)}
+        </div>
+      </article>`;
+  }
+
+  // ---------- 要回覆／知會 ----------
+  // 黃＝要回覆、灰＝知會；輪到我的那顆加外框、寫「要你回覆／知會你」；@所有人一律知會
+  function askPillsHtml(m) {
+    const pill = (ask, me, name) => `<span class="apill ${ask ? 'ask' : 'fyi'}${me ? ' me' : ''}">${ask ? (me ? '要你回覆' : '要回覆') : (me ? '知會你' : '知會')} · ${esc(name)}</span>`;
+    if (m.audience === 'all') return pill(false, isToMe(m) && !isMine(m), '所有人');
+    return [...m.recipients].sort((a, b) => (b.ask ? 1 : 0) - (a.ask ? 1 : 0)).map(r => pill(r.ask, r.participantId === meId(), r.name)).join(' ');
+  }
+  const myAskPill = m => { const a = myAsk(m); return a === undefined || isMine(m) ? '' : `<span class="apill ${a ? 'ask' : 'fyi'} me">${a ? '要你回覆' : '知會你'}</span>`; };
+  // ---------- 回覆縮排接在原訊息下 ----------
+  // 原訊息就在上面（中間只隔同一串的回覆）才縮排；回覆的回覆不再往右（最多一層）；卡片組內外各自算；不搬順序
+  function markKids(list) {
+    state.kids = new Set();
+    let box = null, ids = new Set();
+    for (const m of list) {
+      const c = effCard(m);
+      if (c !== box) { box = c; ids = new Set(); }
+      if (m.replyToMessageId && ids.has(m.replyToMessageId)) state.kids.add(m.messageId); else ids = new Set();
+      ids.add(m.messageId);
+    }
+  }
+  const isKid = m => !!state.kids?.has(m.messageId);
+  const kidSr = m => { const p = state.byId.get(m.replyToMessageId); return `<span class="sr-only">回覆 ${esc(p?.author.name || '')}：</span>`; };
+  // ---------- ：同一張卡的連續訊息收成一組 ----------
+  // 訊息的卡：自己的（cardId 或內文第一個卡號），沒有就沿用被回覆那則的卡
+  const effCard = m => { let x = m, guard = 0; while (x && guard++ < 4) { const c = msgCardOf(x); if (c) return c; x = x.replyToMessageId ? state.byId.get(x.replyToMessageId) : null; } return ''; };
+  const ST_DOT = { 待處理: 'todo', 進行中: 'run', 受阻: 'bad', 待確認: 'ok', 已完成: 'ok', 已封存: 'todo', 待整理: 'todo' };
+  function cardGroupHtml(cid, msgs) {
+    const c = work.cards.get(cid), key = msgs[0].messageId;
+    const ids = new Set(msgs.map(m => m.messageId));
+    const many = msgs.length > 4 && !state.grpOpen.has(key);
+    const shown = many ? msgs.slice(-3) : msgs;
+    if (many) for (const m of msgs.slice(0, -3)) state.grpHidden.set(m.messageId, key);
+    for (const m of shown) if (state.grpHidden.has(m.replyToMessageId)) state.kids?.delete(m.messageId); // 原訊息被收起的回覆不縮排（不然像接在組標題下）
+    const title = c ? cardTitle(c) : '';
+    return `<section class="cgrp" aria-label="${esc(`卡片 ${cid}${title ? ' ' + title : ''}，${msgs.length} 則訊息`)}">
+      <button type="button" class="cg-head" data-cap="${cid}"><span class="cg-dot ${c ? ST_DOT[c.status] || 'todo' : 'todo'}" aria-hidden="true"></span><b>${esc(ckey(cid))}</b><span class="cg-title">${esc(title)}</span><span class="cg-meta">${c ? esc(shownName(c.status)) + ' · ' : ''}${msgs.length} 則 ›</span></button>
+      ${many ? `<button type="button" class="cg-more" data-grp-open="${esc(key)}">展開較早 ${msgs.length - 3} 則</button>` : ''}
+      ${shown.map(m => groupMsgHtml(m, ids)).join('')}
+      <button type="button" class="cg-reply" data-grp-reply="${esc(msgs[msgs.length - 1].messageId)}">回覆這張卡…</button>
+    </section>`;
+  }
+  // 組內每則精簡：小頭像、名字、標籤、時間、要你回覆；AI 結論＋細節照原樣；不顯示角色行、卡片列、底部卡號
+  function groupMsgHtml(m, ids) {
+    const a = m.author, tag = tagOf(m.text), parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
+    const ai = aiParts(m);
+    const re = !m.replyToMessageId ? '' : isKid(m) ? kidSr(m) : parent && ids.has(parent.messageId)
+      ? `<button type="button" class="gm-re" data-jump="${esc(parent.messageId)}">↩ ${esc(shortOf(parent.author.name))}</button>`
+      : `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>`;
+    const cls = ['msg', 'gmsg', isMine(m) ? 'mine' : '', needReply(m) ? 'need-me' : '', isKid(m) ? 'kid' : ''].join(' ');
+    const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
+    const body = m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m, !!tag); // 名字旁已有標籤
+    return `<article class="${cls}" id="msg-${esc(m.messageId)}">
+      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time>${ask}${unansweredTag(m)}</div>
+      ${re}
+      ${body}
+      ${authHtml(m)}
+      <div class="msg-foot">
+        <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+        ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && !ai && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
+        ${threadToggle(m)}
+      </div>
+    </article>`;
+  }
+  // ---------- 看得出在回哪張卡 ----------
+  // 訊息的卡：用 cardId 關聯的卡，沒有就用內文第一個卡號
+  const msgCardOf = m => [...(state.msgCards.get(m.messageId) || [])][0] || cardIdOf(m.text);
+  function cardRefHtml(m, prevCard) {
+    const own = msgCardOf(m);
+    const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
+    const id = own || (parent && msgCardOf(parent));
+    if (!id) return '';
+    const c = work.cards.get(id); // 卡名從已載入的卡片清單拿，不多查伺服器；沒載到只顯示卡號
+    const title = c ? `<span class="cr-title">${esc(c.title)}</span>` : '';
+    if (!own) return `<button type="button" class="cardref cr-reply" data-cap="${id}" aria-label="${esc(`回覆 ${id} ${c?.title || ''}，打開卡片`)}"><span aria-hidden="true">↳</span> 回覆 <b>${esc(ckey(id))}</b>${title}</button>`;
+    if (own === prevCard) return `<button type="button" class="cardref cr-same" data-cap="${id}" aria-label="${esc(`同一張卡 ${ckey(id)}，打開卡片`)}">${esc(ckey(id))}</button>`; // 連續同一張卡只第一則完整
+    return `<button type="button" class="cardref" data-cap="${id}" aria-label="${esc(`${id} ${c?.title || ''} ${c?.status || ''}，打開卡片`)}"><span aria-hidden="true">🗂</span><b>${esc(ckey(id))}</b>${title}${c ? `<span class="cr-st">${esc(c.status)} ›</span>` : ''}</button>`;
+  }
+  // ---------- AI 訊息：白話結論在前、細節收合 ----------
+  // 去掉開頭的 [標籤]、【專案名】、交接的「卡號 卡名 → @誰：」；第一段（第一個空行前）當結論，沒有空行就前兩行
+  function aiParts(m) {
+    if (m.file || authorKind(m) !== 'ai') return null;
+    const tag = tagOf(m.text);
+    let t = String(m.text).replace(/^\s*\[[^\]\n]{1,40}\]\s*/, '').replace(/^\s*【[^】\n]{1,20}】\s*/, '');
+    t = t.replace(/^(?:C-\d{3,}|[A-Z]{2,5}-\d+)[^\n]{0,120}?→\s*@[^：:\n]{1,40}[：:]\s*/, ''); // 新訊息寫專案卡號
+    let head, rest;
+    const gap = t.search(/\n[ \t]*\n/);
+    if (gap >= 0) { head = t.slice(0, gap); rest = t.slice(gap).replace(/^\s+/, ''); }
+    else { const ls = t.split('\n'); head = ls.slice(0, 2).join('\n'); rest = ls.slice(2).join('\n'); }
+    return { tag, head: head.trim(), rest: rest.trim(), keep: /需確認|受阻/.test(tag) }; // 需確認的選項、受阻的原因不收
+  }
+  function aiTextHtml(m, p) {
+    const lead = (p.tag ? leadPill(p.tag) : '') + renderText(p.head);
+    if (!p.rest) return `<div class="msg-text ai-text"><div class="msg-lead plain">${lead}</div></div>`; // 只有一段：不必加粗
+    if (p.keep || state.open.has(m.messageId)) return `<div class="msg-text ai-text"><div class="msg-lead">${lead}</div><div class="msg-rest">${renderText(p.rest)}</div></div>`;
+    return `<div class="msg-text ai-text"><div class="msg-lead">${lead}</div><details class="msg-detail" data-detail="${esc(m.messageId)}"${state.expanded.has(m.messageId) ? ' open' : ''}><summary>細節</summary><div class="msg-rest">${renderText(p.rest)}</div></details></div>`;
+  }
+  // 長訊息預設折疊（超過 6 行或 400 字）
+  const isLong = t => t.split('\n').length > 6 || t.length > 400;
+  function textHtml(m, noLead = false) {
+    const clamp = isLong(m.text) && !state.expanded.has(m.messageId) && !state.open.has(m.messageId);
+    return `<div class="msg-text${clamp ? ' clamp' : ''}">${renderText(m.text, noLead ? 'strip' : true)}</div>`;
+  }
+  // 回覆串：已載入的直接回覆數，可收合
+  const repliesOf = id => state.messages.filter(x => x.replyToMessageId === id);
+  function threadToggle(m) {
+    const n = repliesOf(m.messageId).length;
+    if (!n) return '';
+    const closed = state.collapsed.has(m.messageId);
+    return `<button type="button" class="link thread" data-thread="${esc(m.messageId)}">${closed ? '▸' : '▾'} ${n} 則回覆${closed ? '（已收合）' : ''}</button>`;
+  }
+  // 祖先訊息被收合時，整串回覆都不顯示
+  function hiddenByThread(m) {
+    let p = m.replyToMessageId, guard = 0;
+    while (p && guard++ < 50) {
+      if (state.collapsed.has(p)) return true;
+      p = state.byId.get(p)?.replyToMessageId;
+    }
+    return false;
+  }
+  const tagOf = t => String(t).trimStart().match(/^\[([^\]\n]{1,40})\]/)?.[1] || '';
+  function related(m) {
+    const mine = myAiIds();
+    return isMine(m) || isToMe(m) || isReplyToMe(m) || mine.has(m.author.participantId)
+      || m.recipients.some(r => mine.has(r.participantId));
+  }
+  // ---------- 專案 ----------
+  // 專案清單來自伺服器（可新增、改名、封存）；PROJECTS 是未封存專案的 id，專案顯示名稱用 projName
+  const PROJECTS = [];
+  state.projectList = [];
+  state.projMeta = { adminId: null, adminName: '', crossRoleIds: [], leaders: {} };
+  const projName = id => state.projectList.find(p => p.id === id)?.name || id;
+  // ---------- 每個專案各自的人類角色 ----------
+  const ROLE_CHOICES = ['PO', 'PG', 'UX', 'QA', 'BA', 'SM', 'Sponsor', 'BU'];
+  // 某人在某專案的角色：人類看 projectRoles（不在任何專案的畫面＝不顯示）；AI 照舊
+  const roleIn = (p, pj) => {
+    if (!p) return '';
+    const q = state.participants.get(p.participantId) || p;
+    if (q.memberType !== 'human' || !q.projectRoles) return q.role || '';
+    return PROJECTS.includes(pj) ? q.projectRoles[pj] || '' : '';
+  };
+  // 不分專案的地方（名片、搜尋、沒有專案的訊息），管理員顯示「管理員」，不露出舊的跨專案角色
+  const roleNoPj = p => (p?.memberType === 'human' && p.participantId && p.participantId === state.projMeta.adminId ? '管理員' : p?.role || '');
+  // 管理員看得到、管得了所有專案，但在沒有專案角色的專案不算成員（名單、人數、交接、@ 選人都不列）
+  const ghostAdmin = (p, pj) => !!p && p.memberType === 'human' && !!p.participantId && p.participantId === state.projMeta.adminId && PROJECTS.includes(pj) && !(state.participants.get(p.participantId) || p).projectRoles?.[pj];
+  const memberIn = (p, pj) => (p?.projects || []).includes(pj) && !ghostAdmin(p, pj);
+  // ---------- 找人：成員與權限、@ 選人、我的 AI 共用 ----------
+  // 比對名字、代號（AB12）、角色名稱與代碼（PG），不分大小寫；篩選在網頁做，不加讀取
+  const findQ = q => (q || '').trim().toLowerCase();
+  const findHit = (p, q, pj) => !q || [p.name, p.shortCode, roleIn(p, pj), p.role, p.roleKey].some(v => String(v || '').toLowerCase().includes(q));
+  const markQ = (text, q) => {
+    const t = String(text ?? ''), i = q ? t.toLowerCase().indexOf(q) : -1;
+    return i < 0 ? esc(t) : `${esc(t.slice(0, i))}<mark>${esc(t.slice(i, i + q.length))}</mark>${esc(t.slice(i + q.length))}`;
+  };
+  // 篩選條件記在這台裝置（關掉再開還在）；搜尋字不記
+  const NO_FIND = { kind: '', role: '', proj: '' };
+  const findPrefs = place => { try { return { ...NO_FIND, ...JSON.parse(store.get('aigile-find:' + place) || '{}') }; } catch { return { ...NO_FIND }; } };
+  const saveFindPrefs = (place, f) => store.set('aigile-find:' + place, JSON.stringify({ kind: f.kind || '', role: f.role || '', proj: f.proj || '' }));
+  const findPass = (p, f, pj) => (!f.kind || p.memberType === f.kind) && (!f.role || roleIn(p, pj) === f.role) && (!f.proj || memberIn(p, f.proj));
+  // 只套用「畫面上看得到」的篩選：專案下拉沒顯示（專案檢視、只有一個專案）、角色不在選項裡、沒有人類／AI 按鈕時，
+  // 記住的條件不生效（人沒辦法清掉看不到的條件）。記住的值不刪，回到看得到的地方照樣還原
+  const findLive = (f, { roles = [], projs = null, kinds = true } = {}) => ({
+    kind: kinds ? f.kind : '', role: roles.includes(f.role) ? f.role : '', proj: projs && projs.includes(f.proj) ? f.proj : '',
+  });
+  const findOn = s => !!(findQ(s.q) || s.f.kind || s.f.role || s.f.proj);
+  const findRoles = (list, pj) => [...new Set(list.map(p => roleIn(p, pj)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  const finders = {};
+  const finder = (place, redraw) => { const st = finders[place] ||= { q: '', f: findPrefs(place), open: false }; st.redraw = redraw; return st; };
+  // 篩選列：搜尋框＋人類／AI＋（專案）＋角色＋「顯示 x／y」；手機把篩選收進「篩選 ▾」
+  function findBarHtml(place, { roles, projs = null, kinds = true, shown, total, unit = '個', ph = '找名字、代號、角色' }) {
+    const st = finders[place], f = findLive(st.f, { roles, projs, kinds }), on = !!(f.kind || f.role || f.proj);
+    const opt = (v, t, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
+    return `<div class="fb${st.open ? ' open' : ''}">
+      <input type="search" class="fb-q" id="fb-q-${place}" data-fb-q="${place}" placeholder="🔍 ${esc(ph)}" aria-label="搜尋${esc(ph)}" value="${esc(st.q)}" autocomplete="off">
+      <button type="button" class="btn small fb-more${on ? ' on' : ''}" data-fb-more="${place}" aria-expanded="${st.open}">篩選${on ? ' ·' : ''} ▾</button>
+      <div class="fb-f">
+        ${kinds ? `<div class="fb-kind" role="group" aria-label="人類或 AI">${[['', '全部'], ['human', '人類'], ['ai', 'AI']].map(([v, t]) => `<button type="button" class="chip${f.kind === v ? ' on' : ''}" data-fb-kind="${v}" data-fb="${place}" aria-pressed="${f.kind === v}">${t}</button>`).join('')}</div>` : ''}
+        ${projs ? `<select class="fb-sel" data-fb-proj="${place}" aria-label="專案">${opt('', '專案：全部', f.proj)}${projs.map(x => opt(x, projName(x), f.proj)).join('')}</select>` : ''}
+        <select class="fb-sel" data-fb-role="${place}" aria-label="角色">${opt('', '角色：全部', f.role)}${roles.map(r => opt(r, r, f.role)).join('')}</select>
+      </div>
+      <span class="fb-cnt" aria-live="polite">${shown === total ? `${total} ${unit}` : `顯示 ${shown}／${total}`}</span>${shown === total ? '' : `<button type="button" class="link small fb-clear" data-fb-clear="${place}">清除篩選</button>`}</div>`;
+  }
+  const findEmptyHtml = (place, none) => `<div class="fb-empty">${none ? '沒有符合的。' : ''}找不到？試試代號（AB12）或角色（測試、QA）<button type="button" class="link" data-fb-clear="${place}">清除篩選</button></div>`;
+  const findRedraw = (place, typing) => {
+    const st = finders[place];
+    st.redraw();
+    const q = document.getElementById('fb-q-' + place);
+    if (typing && q && document.activeElement !== q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  };
+  // 注音、倉頡、拼音還在選字時，搜尋框不重畫（重畫會打斷輸入法，變成一串ㄓㄨㄥ）；選完字再篩選一次
+  // 全站搜尋框都是 type="search"，在最外層攔一次就好；英文沒有組字，照舊每打一個字就篩
+  // 退回（我的 AI 打出「ㄘㄜˋㄕˋ」）：Windows 有的輸入法組字中送的 input 沒標 isComposing，
+  // 只看 isComposing 會漏 → 自己記 compositionstart／end，inputType＝insertCompositionText 也算組字中
+  const imeLast = new WeakMap(), imeOn = new WeakSet(), isSearchBox = t => t?.tagName === 'INPUT' && t.type === 'search';
+  const imeComposing = (e, t = e.target) => e.isComposing || imeOn.has(t) || e.inputType === 'insertCompositionText';
+  window.addEventListener('compositionstart', e => { if (isSearchBox(e.target)) imeOn.add(e.target); }, true);
+  window.addEventListener('input', e => {
+    if (!isSearchBox(e.target)) return;
+    if (imeComposing(e)) { e.stopImmediatePropagation(); return; }
+    imeLast.set(e.target, e.target.value);
+  }, true);
+  window.addEventListener('compositionend', e => {
+    const t = e.target;
+    if (!isSearchBox(t)) return;
+    imeOn.delete(t);
+    setTimeout(() => { if (t.isConnected && !imeOn.has(t) && imeLast.get(t) !== t.value) t.dispatchEvent(new Event('input', { bubbles: true })); }); // Chrome 選完字不會再送 input，補一次；Firefox 會送，就不重複
+  }, true);
+  // 篩選列重畫時不換掉搜尋框（換掉正在打字的輸入框會打斷輸入法）：只換篩選、筆數，搜尋框留著
+  function patchFindBar(box, html) {
+    const cur = box.querySelector(':scope > .fb'), q = cur?.querySelector(':scope > .fb-q');
+    const t = document.createElement('template'); t.innerHTML = html.trim();
+    const nu = t.content.firstElementChild?.classList.contains('fb') ? t.content.firstElementChild : null;
+    if (!cur || !q || !nu || q.id !== nu.querySelector('.fb-q')?.id) { box.innerHTML = html; return; }
+    cur.className = nu.className;
+    const v = nu.querySelector('.fb-q').getAttribute('value') || '';
+    if (q.value !== v && !imeOn.has(q)) q.value = v; // 「清除篩選」要清掉框裡的字；組字中不動
+    for (const c of [...cur.children]) if (c !== q) c.remove();
+    for (const c of [...nu.children]) if (!c.classList.contains('fb-q')) cur.appendChild(c);
+  }
+  document.addEventListener('input', e => { const pl = e.target.dataset?.fbQ; if (pl && finders[pl]) { finders[pl].q = e.target.value; findRedraw(pl, true); } });
+  document.addEventListener('change', e => {
+    const t = e.target, pl = t.dataset?.fbRole || t.dataset?.fbProj, st = pl && finders[pl];
+    if (!st) return;
+    st.f[t.dataset.fbRole ? 'role' : 'proj'] = t.value; saveFindPrefs(pl, st.f); findRedraw(pl);
+  });
+  document.addEventListener('click', e => {
+    const b = e.target.closest?.('[data-fb-kind],[data-fb-clear],[data-fb-more]');
+    const pl = b && (b.dataset.fbMore || b.dataset.fbClear || b.dataset.fb), st = pl && finders[pl];
+    if (!st) return;
+    if (b.dataset.fbMore) st.open = !st.open;
+    else if (b.dataset.fbClear) { st.q = ''; st.f = { ...NO_FIND }; saveFindPrefs(pl, st.f); }
+    else { st.f.kind = b.dataset.fbKind; saveFindPrefs(pl, st.f); }
+    findRedraw(pl);
+  });
+  function roleSelectHtml(value, attrs, { changed = false, label = '角色', pj = '', ai = true } = {}) {
+    const pr = pj ? projRoleDefs(pj).map(d => d.role).filter(r => !ROLE_CHOICES.includes(r)) : []; // 本專案角色
+    const custom = value && !ROLE_CHOICES.includes(value) && !pr.includes(value);
+    const tail = pj && ai ? (canMakeRole(pj) ? '<option value="__ai">＋ 跟 AI 討論新角色…</option>' : '<option value="__ai_no" disabled>新角色請 leader 建立</option>') : '';
+    return `<select class="role-sel${value ? '' : ' empty'}${changed ? ' chg' : ''}" ${attrs}${pj ? ` data-role-pj="${esc(pj)}"` : ''} aria-label="${esc(label)}">
+      <option value="" ${value ? '' : 'selected'}>未設定</option>${ROLE_CHOICES.map(r => `<option ${value === r ? 'selected' : ''}>${r}</option>`).join('')}
+      ${pr.length ? `<optgroup label="本專案角色">${pr.map(r => `<option ${value === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}</optgroup>` : ''}
+      ${custom ? `<option value="${esc(value)}" selected>${esc(value)}</option>` : ''}<option value="__other">其他（自己打）…</option>${tail}</select>`;
+  }
+  // 本專案角色（跟著專案清單一起拿，不另外查）；leader／管理員才能跟 AI 討論新角色
+  const projRoleDefs = (pj, all = false) => (state.projectList?.find(p => p.id === pj)?.roles || []).filter(d => all || d.status !== 'disabled');
+  const canMakeRole = pj => isAdmin() || myLeadProjects().includes(pj);
+  function askRoleAi(pj) {
+    const mine = [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled' && (p.projects || []).includes(pj));
+    if (!mine.length) return toast(`你在「${projName(pj)}」沒有自己的 AI；先到「我的 AI」新增一個，再跟它討論新角色。`);
+    return askAvatar(mine, '我想要一個新角色：', pj);
+  }
+  // 「其他」：跳一格輸入框，最多 10 字；只存在這個人這個專案
+  function askOtherRole(cur = '') {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: '其他角色', size: 'narrow', body: `<label class="field"><span class="field-label">角色名稱（最多 10 字）</span><input id="or-input" maxlength="10" value="${esc(ROLE_CHOICES.includes(cur) ? '' : cur)}"></label>`,
+        foot: '<button class="btn" type="button" data-or="0">取消</button><button class="btn primary" type="button" data-or="1">確定</button>' });
+      document.body.appendChild(host);
+      const input = host.querySelector('#or-input');
+      input.focus();
+      const done = ok => { const v = input.value.trim().slice(0, 10); host.remove(); resolve(ok && v ? v : null); };
+      host.addEventListener('click', e => { const b = e.target.closest('[data-or]'); if (b) done(b.dataset.or === '1'); else if (e.target.closest('[data-close]')) done(false); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+    });
+  }
+  // 選了「其他」就問名字；取消時把下拉還原
+  async function pickRole(sel, cur) {
+    if (sel.value === '__ai') { sel.value = cur || ''; askRoleAi(sel.dataset.rolePj); return null; }
+    if (sel.value !== '__other') return sel.value;
+    const v = await askOtherRole(cur);
+    if (v === null) { sel.value = cur || ''; return null; }
+    return v;
+  }
+  async function loadProjectList() {
+    const d = await api('/api/projects');
+    state.projectList = d.items;
+    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {}, join: d.join || {}}; // join // 、
+    document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
+    if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
+    if (state.me) drawMe(); // 知道誰是管理員後重畫名片
+    PROJECTS.length = 0;
+    PROJECTS.push(...state.projectList.filter(p => !p.archived).map(p => p.id));
+  }
+  const myProjects = () => (state.me?.projects || []).filter(p => PROJECTS.includes(p));
+  const singleProject = () => myProjects().length === 1;
+  // 目前檢視（兩層導覽）：hub＝第一層「我的專案」、專案 id＝第二層專案內、cross＝跨專案頻道。
+  // 每個人都有第一層（只屬一個專案、還沒有專案的人也一樣，至少有跨專案頻道卡）；所在位置記在網址（/p/平台/訊息、/cross/訊息）
+  state.view = 'hub';
+  const hasHub = () => true;
+  function projectView() {
+    const v = state.view;
+    return myProjects().includes(v) || v === 'cross' ? v : 'hub';
+  }
+  const projTag = p => (p ? `<span class="ptag" data-p="${esc(p)}">${esc(projName(p))}</span>` : '');
+  // 卡片標題：不再手打「[平台]」，舊卡的前綴顯示時去掉，改看專案標籤
+  // 開頭【X】一律不顯示；[X] 是專案名時不顯示（[需確認] 這類保留）
+  const cardTitle = c => {
+    const t = c.title || '';
+    const m = /^\s*【[^】\n]{1,20}】\s*/.exec(t) || /^\s*\[([^\]\n]{1,20})\]\s*/.exec(t);
+    const strip = m && (m[0].includes('【') || state.projectList.some(p => p.id === m[1] || p.name === m[1]));
+    return strip ? t.slice(m[0].length) || t : t;
+  };
+  // 卡片的專案標籤：專案內整頁都是同一專案，不顯示；第一層、跨專案頻道才顯示
+  const cardPTag = c => (myProjects().includes(projectView()) ? '' : projTag(c.project));
+  // 訊息：跨專案頻道只看「全部專案」的訊息；專案內只看該專案（單一專案成員沒有第一層，另外看得到跨專案頻道）
+  const msgInView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); };
+  const cardInView = c => { const v = projectView(); return v === 'hub' || (v !== 'cross' && c.project === v); };
+  const inView = p => { const v = projectView(); return v === 'hub' || (v === 'cross' ? !p : p === v); }; // 收件匣、文件用
+  const viewLabel = v => (v === 'hub' ? '總覽' : v === 'cross' ? '跨專案頻道' : projName(v)); // 第一層改叫「總覽」
+  // 各檢視「要你處理」件數：等你決定（決策卡、[需確認]）＋待審核的 AI 建議；hub＝全部
+  // 「要你處理」只有一個來源。數字（側欄、分頁標題、各專案）和總覽右側清單都從這裡算，不會一邊 4 件、一邊目前沒有
+  // 決策／[需確認]、AI 建議、等你驗收、要你回覆、私訊
+  function todoItems() {
+    const items = [];
+    for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId });
+    for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${ckey(g.card?.cardId || '')} 改為「${g.to}」`, key: 's:' + g.suggestionId });
+    for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
+    for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId });
+    for (const n of (work.notes || []).filter(x => x.dm)) items.push({ p: n.project ?? null, kind: n.sender?.system ? '通知' : '私訊', title: n.sender?.system ? `平台通知：${oneLine(dmGist(n.preview, true), 60)}` : `${n.sender?.name || ''} 回你了`, key: 'n:' + n.notificationId });
+    for (const j of work.joins || []) items.push({ p: myProjects().includes(j.project) ? j.project : null, kind: '申請', title: `${j.name} 申請加入${j.projectName}`, key: 'j:' + j.id });
+    return items.filter(x => !x.p || myProjects().includes(x.p));
+  }
+  function todoByView() {
+    const items = todoItems();
+    const n = { hub: items.length, cross: items.filter(x => !x.p).length };
+    for (const p of myProjects()) n[p] = items.filter(x => x.p === p).length;
+    return n;
+  }
+  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', releases: '版本紀錄' }; // 私訊整頁
+  const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases' }; // 第一層頁面（不分專案）：版本紀錄等
+  const isTop = p => p === 'myai' || p === 'releases' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
+  const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
+  const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
+  const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc(firstChar(projName(p)))}</span>`;
+  const projMembers = p => [...state.participants.values()].filter(x => x.status !== 'disabled' && memberIn(x, p)).length;
+  // 側欄頂端：「‹ 我的專案」＋專案名＋⇅（不必先回第一層就能切到別的專案）；只屬一個專案的人沒有「‹ 我的專案」與 ⇅
+  function drawProjSwitch() {
+    const v = projectView(), counts = todoByView();
+    document.querySelectorAll('[data-proj-only]').forEach(b => { b.hidden = v === 'hub'; });
+    document.querySelectorAll('[data-no-cross]').forEach(b => { b.hidden = v === 'hub' || v === 'cross'; });
+    const opts = [...myProjects(), 'cross'];
+    const badge = k => (counts[k] ? `<span class="ps-count" aria-label="要你處理 ${counts[k]} 件">${counts[k]}</span>` : '');
+    document.querySelectorAll('.proj-switch').forEach((el, i) => {
+      // 總覽時側欄直接列專案（側欄那份；手機選單照舊用卡片）
+      if (v === 'hub' && !el.classList.contains('sheet-proj')) {
+        const n = k => counts[k] ? `<span class="hs-n" aria-label="要你處理 ${counts[k]} 件">${counts[k] > 99 ? '99+' : counts[k]}</span>` : '';
+        const cur = state.page === 'hub';
+        el.innerHTML = `<nav class="hub-side" aria-label="總覽">
+          <button type="button" class="hs-item${cur ? ' on' : ''}" data-proj="hub"${cur ? ' aria-current="page"' : ''}><span class="hs-ico" aria-hidden="true">🏠</span><span class="hs-name">總覽</span></button>
+          <button type="button" class="hs-item" data-hub-todo-open><span class="hs-ico" aria-hidden="true">📥</span><span class="hs-name">要你處理</span>${n('hub')}</button>
+          <div class="hs-head">我的專案</div>
+          ${myProjects().map(p => `<button type="button" class="hs-item" data-proj="${esc(p)}" title="${esc(projName(p))}">${projIcon(p, 22)}<span class="hs-name">${esc(projName(p))}</span>${n(p)}</button>`).join('') || '<p class="muted small hs-empty">還沒有加入任何專案</p>'}
+          <button type="button" class="hs-item hs-muted" data-proj="cross">${projIcon('cross', 22)}<span class="hs-name">跨專案頻道</span>${n('cross')}</button>
+          <button type="button" class="hs-item hs-add" data-join-open><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">申請加入專案</span></button>
+          ${isAdmin() ? '<button type="button" class="hs-item hs-add" data-hub-newproj><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">新增專案</span></button>' : ''}
+        </nav>`;
+        return;
+      }
+      if (v === 'hub') { el.innerHTML = `<button type="button" class="ph-card is-hub" data-proj="hub" aria-label="我的專案，${myProjects().length} 個專案＋跨專案頻道"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span></button>`; return; } // 總覽不放數字（件數在「要你處理」）
+      const sub = v === 'cross' ? '所有專案都看得到' : `成員 ${projMembers(v)}`;
+      el.innerHTML = `
+        <div class="ph-card">${projIcon(v)}<span class="ph-name">${hasHub() ? '<button type="button" class="ph-back in-card" data-proj="hub">‹ 總覽</button>' : ''}<b>${esc(viewLabel(v))}</b>${hasHub() ? '' : `<span class="small">${esc(sub)}</span>`}</span>
+          ${hasHub() ? `<button type="button" class="ps-btn ph-swap" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}" aria-label="切換專案" title="切換專案">⇅</button>
+          <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${k === 'hub' ? '' : badge(k)}</li>`).join('')}</ul>` : ''}</div>`;
+    });
+    drawChrome();
+  }
+  // 剛被加進某專案、角色還沒設：進那個專案時頂端一行提示，按掉不再出現（管理員不掛角色，不提示）
+  function drawRoleBanner() {
+    const b = $('#role-banner');
+    if (!b) return;
+    const pj = projectView(), me = state.me;
+    const show = !!me && me.memberType === 'human' && !isAdmin() && myProjects().includes(pj) && !!me.projectRoles && !(me.projectRoles[pj]) && !store.get(`aigile-role-hint:${me.participantId}:${pj}`);
+    b.hidden = !show;
+    b.innerHTML = show ? `<span>你在 <b>${esc(projName(pj))}</b> 還沒設角色</span><button type="button" class="link" data-role-set>設定</button><button type="button" class="icon-btn" data-role-dismiss="${esc(pj)}" aria-label="不再提醒">×</button>` : '';
+  }
+  document.getElementById('role-banner')?.addEventListener('click', e => {
+    if (e.target.closest('[data-role-set]')) return openSettings({ focusRoles: true });
+    const d = e.target.closest('[data-role-dismiss]');
+    if (d) { store.set(`aigile-role-hint:${meId()}:${d.dataset.roleDismiss}`, '1'); drawRoleBanner(); }
+  });
+  // 頂端麵包屑「我的專案 ▸ 平台 ▸ 訊息」、手機頂欄「‹」與標題、第一層的「要你處理 N」、輸入框的「發到」
+  function drawChrome() {
+    drawRoleBanner();
+    const v = projectView(), page = PAGE_NAME[state.page] || '訊息', top = !!TOP_PAGES[state.page];
+    const home = !hasHub() ? '' : v === 'hub' && !top ? '<b aria-current="page">總覽</b>' : '<button type="button" class="crumb-link" data-proj="hub">總覽</button>';
+    const parts = top ? [home, `<b aria-current="page">${page}</b>`] : v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
+    $('#crumbs').innerHTML = parts.filter(Boolean).join('<span class="crumb-sep" aria-hidden="true">▸</span>');
+    $('#m-back').hidden = !hasHub() || (v === 'hub' && !top);
+    $('#m-title').innerHTML = top ? esc(page) : v === 'hub' ? '總覽' : `${esc(viewLabel(v))} · <span>${esc(page)}</span>`; // 頁名自成一段，英文介面才翻得到
+    const counts = todoByView(), here = counts[v] || 0; // 收件匣徽章＝所在專案的件數，切專案就跟著變
+    document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !here; b.textContent = here > 99 ? '99+' : here; });
+    const todo = $('#m-todo'), n = counts.hub, nb = todo.querySelector('.m-todo-n');
+    todo.hidden = !hasHub(); // 在手機選單裡，每頁都有（各專案彙總）
+    nb.hidden = !n; nb.textContent = n > 99 ? '99+' : n;
+    const mn = $('#menu-btn .menu-n'), mc = hasHub() ? n : here; // 選單鈕帶「要你處理」件數（按鈕收進選單後還看得到）
+    mn.hidden = !mc; mn.textContent = mc > 99 ? '99+' : mc;
+    $('#menu-btn').setAttribute('aria-label', mc ? `選單，${mc} 件要你處理` : '選單');
+    drawSendTo();
+    const ro = !!state.me && meRO();
+    document.body.classList.toggle('ro-here', ro);
+    const rn = $('#ro-note'); if (rn) rn.hidden = !ro;
+  }
+  // 發訊息的專案：固定是目前所在的專案，不能選；跨專案頻道發的是全部專案；回覆時跟著被回覆的訊息
+  function sendTarget() {
+    if (state.replyTo) return state.replyTo.project || 'all'; // 回覆跟著被回覆的訊息（起專案內只看得到該專案的訊息）
+    const v = projectView();
+    return v === 'cross' || v === 'hub' ? 'all' : v;
+  }
+  function drawSendTo() {
+    const el = $('#send-to');
+    if (!el) return;
+    drawMentionWarn();
+    const t = sendTarget();
+    const v = projectView(), base = v === 'cross' || v === 'hub' ? 'all' : v;
+    // 同一列的小字「發到 X」，太長省略，完整說明放 title
+    const name = t === 'all' ? '跨專案頻道' : projName(t);
+    const note = [t === 'all' ? '所有專案都看得到' : '', state.replyTo && t !== base ? '跟著被回覆的訊息' : ''].filter(Boolean).join('，');
+    el.innerHTML = `<span class="st-lead">發到</span> <b>${esc(name)}</b>${note ? `<span class="st-note">（${esc(note)}）</span>` : ''}`;
+    el.title = `發到 ${name}${note ? `（${note}）` : ''}`;
+  }
+  // 網址：/p/<專案代號>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
+  // 頁面用英文、專案用 API 代號（改名不壞、貼到 LINE／Slack 不會變一長串 %E…）；舊的中文頁名、專案名稱網址照樣能開，打開後換成新網址
+  const PAGE_BY_NAME = Object.fromEntries(Object.entries(PAGE_NAME).map(([k, t]) => [t, k]));
+  const PAGE_SLUG = { messages: 'messages', inbox: 'inbox', work: 'work', team: 'team', files: 'files' };
+  function parseRoute() {
+    const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
+    const page = x => (PAGE_SLUG[x] || x === 'dm' ? x : x === 'my-ai' ? 'myai' : PAGE_BY_NAME[x] || null); // /p/<專案>/my-ai
+    if (seg[0] === 'p' && seg[1]) { const p = state.projectList.find(x => x.slug === seg[1]) || state.projectList.find(x => x.id === seg[1]) || state.projectList.find(x => x.name === seg[1]); if (p && page(seg[2]) === 'dm') { state.dmAi = seg[3] || null; state.dmOpenOnBoot = true; } return { view: p ? p.id : null, page: p ? page(seg[2]) : null }; }
+    if (seg[0] === 'cross') return { view: 'cross', page: page(seg[1]) };
+    if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
+    if (seg[0] === 'members') return { view: null, page: 'perm' };
+    if (seg[0] === 'releases') return { view: null, page: 'releases' };
+    return { view: null, page: null };
+  }
+  function routePath() {
+    const v = projectView();
+    if (state.page === 'myai' && PROJECTS.includes(v)) return `/p/${encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/my-ai`;
+    if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
+    if (v === 'hub') return '/';
+    return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/${PAGE_SLUG[state.page] || 'messages'}`; // 網址英文名
+  }
+  function syncUrl(replace) {
+    const u = routePath();
+    let cur = location.pathname;
+    try { cur = decodeURIComponent(cur); } catch {}
+    if (cur === decodeURIComponent(u)) return;
+    history[replace ? 'replaceState' : 'pushState'](null, '', u);
+  }
+  // 切換所在：k＝hub／專案 id／cross；切專案時留在同一頁（工作頁在跨專案頻道沒有，改到訊息）
+  function setProjectView(k, page) {
+    if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); setProjectView(k, page); });
+    state.view = k;
+    if (state.replyTo) setReply(null);
+    drawProjSwitch();
+    syncFilterBar();
+    renderMessages(true);
+    const v = projectView();
+    return showPage(page || (v === 'hub' ? 'hub' : state.page === 'hub' ? 'messages' : state.page));
+  }
+  window.addEventListener('popstate', () => {
+    if (!state.me) return;
+    const r = parseRoute();
+    state.view = r.view || 'hub';
+    if (state.replyTo) setReply(null);
+    drawProjSwitch(); syncFilterBar(); renderMessages(true);
+    showPage(r.page || (projectView() === 'hub' ? 'hub' : 'messages'), { noHistory: true });
+  });
+  window.addEventListener('beforeunload', e => { if (state.page === 'perm' && permDirty()) { e.preventDefault(); e.returnValue = ''; } });
+  function psOpen(btn, open) {
+    const list = btn.parentElement.querySelector('.ps-list');
+    btn.setAttribute('aria-expanded', String(open));
+    list.hidden = !open;
+    if (open) (list.querySelector('[aria-selected="true"]') || list.firstElementChild).focus();
+  }
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('.ps-btn');
+    if (btn) return psOpen(btn, btn.getAttribute('aria-expanded') !== 'true');
+    const b = e.target.closest('[data-proj]');
+    document.querySelectorAll('.ps-btn[aria-expanded="true"]').forEach(x => psOpen(x, false));
+    if (b) { closeSheet(false); setProjectView(b.dataset.proj); }
+  });
+  document.addEventListener('keydown', e => {
+    const li = e.target.closest?.('.ps-list [data-proj]');
+    const btn = e.target.closest?.('.ps-btn');
+    if (btn && ['ArrowDown', 'ArrowUp'].includes(e.key)) { e.preventDefault(); psOpen(btn, true); return; }
+    if (!li) return;
+    const list = li.parentElement, items = [...list.children], i = items.indexOf(li);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const host = li.closest('.proj-switch'); setProjectView(li.dataset.proj); host?.querySelector('.ps-btn')?.focus(); } // 重畫後原本的清單已不在，從外框找新按鈕
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const b = list.parentElement.querySelector('.ps-btn'); psOpen(b, false); b.focus(); }
+    else if (e.key === 'Tab') psOpen(list.parentElement.querySelector('.ps-btn'), false);
+  });
+
+  function visible(m) {
+    const f = state.filter;
+    if (!msgInView(m.project)) return false;
+    if (f.scope === 'mine' && !(!isMine(m) && (isToMe(m) || isReplyToMe(m)))) return false;
+    if (f.scope === 'related' && !related(m)) return false;
+    if (f.member && m.author.participantId !== f.member) return false;
+    if (f.tag && !tagOf(m.text).includes(f.tag)) return false;
+    return !hiddenByThread(m);
+  }
+  const filtering = () => state.filter.scope !== 'all' || state.filter.member || state.filter.tag;
+  function syncFilterBar() {
+    const f = state.filter;
+    document.querySelectorAll('[data-scope]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === f.scope)));
+    document.querySelectorAll('[data-msg-view]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.msgView === 'slim') === slimMode())));
+    $('#f-tag').value = f.tag;
+    const sel = $('#f-member');
+    if (f.member && !inViewPerson(f.member)) f.member = ''; // 換專案時，篩選的成員不在這個專案就清掉
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
+    sel.value = f.member;
+    $('#f-clear').hidden = !filtering();
+    const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
+    const an = $('#f-ainow'); if (an) an.checked = aiNowOn();
+    drawAiNow();
+  }
+  // 範圍「全部／與我相關」已在手機頂部兩顆，篩選按鈕只算成員、標籤（「給我的」不在兩顆裡，仍算一個）
+  const filterCount = () => (state.filter.scope === 'mine' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
+  function setFilter(patch) {
+    Object.assign(state.filter, patch);
+    state.onlyMine = state.filter.scope === 'related';
+    store.set(FILTER_KEY, state.onlyMine ? '1' : '0');
+    syncFilterBar();
+    renderMessages(true);
+  }
+  // 手機版：把範圍、成員、標籤合成一個「篩選」底部面板
+  function filterSummary() {
+    const f = state.filter, p = f.member ? state.participants.get(f.member)?.name : '';
+    return [f.scope === 'mine' ? '給我的' : '', p || '', f.tag || ''].filter(Boolean).join(' · ');
+  }
+  function openFilterSheet() {
+    const f = state.filter;
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
+    const draft = { scope: f.scope, member: f.member, tag: f.tag, view: slimMode() ? 'slim' : 'full' };
+    const body = openModal('篩選', `
+      <div class="stack">
+        <div class="field"><span class="field-label" id="fs-scope">範圍</span>
+          <div class="seg-scope full" role="group" aria-labelledby="fs-scope" id="fs-scope-g"></div></div>
+        <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('')}</select></label>
+        <label>訊息類型<select id="fs-tag"><option value="">所有類型</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
+        <div class="field"><span class="field-label" id="fs-view">顯示</span>
+          <div class="seg-scope full" role="group" aria-labelledby="fs-view" id="fs-view-g"></div>
+          <span class="muted small">精簡：AI 訊息只露第一句，點了看全文。記在這台裝置。</span></div>
+        <label class="chk"><input type="checkbox" id="fs-ainow" ${aiNowOn() ? 'checked' : ''}> 顯示「AI 現況」（記在這台裝置）</label>
+      </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除</button><button class="btn primary grow" type="button" id="fs-apply">套用</button>' });
+    const draw = () => {
+      body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
+      body.querySelector('#fs-view-g').innerHTML = [['slim', '精簡'], ['full', '完整']].map(([k, t]) => `<button type="button" data-fs-view="${k}" aria-pressed="${draft.view === k}">${t}</button>`).join('');
+      body.querySelector('#fs-member').value = draft.member;
+      body.querySelector('#fs-tag').value = draft.tag;
+    };
+    draw();
+    body.addEventListener('click', e => {
+      const sc = e.target.closest('[data-fs-scope]'); if (sc) { draft.scope = sc.dataset.fsScope; draw(); }
+      const vw = e.target.closest('[data-fs-view]'); if (vw) { draft.view = vw.dataset.fsView; draw(); }
+    });
+    body.querySelector('#fs-member').onchange = e => { draft.member = e.target.value; };
+    body.querySelector('#fs-tag').onchange = e => { draft.tag = e.target.value; };
+    body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '' }); draw(); };
+    body.modal.querySelector('#fs-apply').onclick = () => {
+      closeModal();
+      if (draft.view !== (slimMode() ? 'slim' : 'full')) store.set(MSG_VIEW_KEY, draft.view);
+      setFilter({ scope: draft.scope, member: draft.member, tag: draft.tag });
+    };
+  }
+  $('#f-open').onclick = openFilterSheet;
+  document.querySelectorAll('[data-scope]').forEach(b => { b.onclick = () => setFilter({ scope: b.dataset.scope }); });
+  document.querySelectorAll('[data-msg-view]').forEach(b => { b.onclick = () => setView(b.dataset.msgView); });
+  $('#f-member').onchange = e => setFilter({ member: e.target.value });
+  $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
+  $('#f-clear').onclick = () => setFilter({ scope: 'all', member: '', tag: '' });
+
+  const nearBottom = () => { const el = $('#messages'); return el.scrollHeight - el.scrollTop - el.clientHeight < 120; };
+  const scrollBottom = () => { const el = $('#messages'); el.scrollTop = el.scrollHeight; };
+
+  // 訊息頁只放最近 12 小時（不足 20 則補到 20），往上可「載入更早」；跳到很舊的訊息時進入「前後文」模式
+  const WIN_H = 12, WIN_MIN = 20, WIN_MAX = 300, OLDER_HOLD_MS = 10 * 60_000;
+  const MOBILE_N = 10; // 手機打開訊息頁只放最新 10 則
+  const curOf = seq => 'cur_' + btoa(JSON.stringify({ s: seq })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const hm = iso => { const d = new Date(iso); return `${mmdd(iso)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  Object.assign(state, { hasOlder: false, winFrom: null, winExpanded: false, lastOlderAt: 0, ctx: null, newCount: 0, newMention: 0, firstNewId: null });
+  function setMessages(items) {
+    state.messages = items;
+    for (const m of items) state.byId.set(m.messageId, m);
+  }
+  const windowUrl = () => (narrowMq.matches ? `/api/messages?limit=${MOBILE_N}` : `/api/messages?limit=${WIN_MAX}&span=${WIN_H}&min=${WIN_MIN}`);
+  async function loadWindow(pre) {
+    const mobile = narrowMq.matches;
+    const d = await (pre || api(windowUrl())); // 開頁時先發出去的請求
+    state.mobileWin = mobile;
+    state.byId = state.byId || new Map();
+    setMessages(d.items);
+    state.nextCursor = state.nextCursor && !state.ctx ? state.nextCursor : d.nextCursor;
+    Object.assign(state, { hasOlder: d.hasMore, winFrom: d.from, winExpanded: false, winTruncated: d.hasMore && d.items.length >= WIN_MAX, ctx: null, newCount: 0, newMention: 0, firstNewId: null });
+    renderMessages(true); drawNewPill();
+  }
+  function headHtml(list) {
+    if (state.ctx) {
+      const c = state.ctx;
+      return `<div class="ctx-bar" role="status"><span>正在看 ${esc(hm(c.at))} 前後的訊息</span>
+        ${c.hasOlder ? '<button type="button" class="link small" id="ctx-older">再往前</button>' : '<span class="muted small">這是最早的訊息</span>'}
+        <button type="button" class="link small" id="ctx-latest">回到最新 ↓${c.pending ? `（${c.pending} 則新訊息）` : ''}</button></div>`;
+    }
+    const first = state.messages[0];
+    const top = state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">${state.mobileWin ? `↑ 載入更早 ${MOBILE_N} 則` : `↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）`}</button>`
+      : state.messages.length ? '<div class="msg-start muted small">這是最早的訊息</div>' : '';
+    const since = !first ? '' : state.mobileWin ? `從 ${hm(first.createdAt)} 起` : state.winExpanded || !state.winFrom ? `從 ${hm(first.createdAt)} 起`
+      : first.createdAt < state.winFrom ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時不足 ${WIN_MIN} 則，往前補）`
+      : state.winTruncated ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時還有更早的）`
+      : `最近 ${WIN_H} 小時 · 從 ${hm(first.createdAt)}`;
+    return top + (state.messages.length ? `<div class="win-divider"><span><span>${esc(since)}</span><span> · ${list.length} 則</span></span></div>` : '');
+  }
+  function renderMessages(toBottom) {
+    const list = state.messages.filter(visible);
+    $('#f-count').textContent = filtering() ? `符合 ${list.length} 則` : '';
+    const empty = filtering()
+      ? `${state.ctx ? '這段沒有符合篩選條件的訊息。' : `最近 ${WIN_H} 小時沒有符合的訊息`}${!state.ctx && state.hasOlder ? ' · <button type="button" class="link" id="load-older-empty">載入更早</button>' : ''}`
+      : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。';
+    const tail = state.ctx && state.ctx.hasNewer ? '<button type="button" class="load-older" id="ctx-newer">再往後</button>' : '';
+    $('#messages').innerHTML = headHtml(list) + (list.length ? listHtml(list) : `<div class="empty">${empty}</div>`) + tail;
+    const nl = state.firstNewId && document.getElementById('msg-' + state.firstNewId);
+    if (nl && state.newCount) nl.insertAdjacentHTML('beforebegin', `<div class="new-line" id="new-line"><span>以下 ${state.newCount} 則是新的</span></div>`);
+    syncScrollbar();
+    if (toBottom) scrollBottom();
+    drawLatestBtn();
+  }
+
+  // 載入更早：一次往前 12 小時、最多 100 則；那段沒訊息就自動往更早找；保留捲動位置
+  async function loadOlder() {
+    const box = $('#messages'), first = state.messages[0];
+    if (!first) return;
+    const prevHeight = box.scrollHeight, prevTop = box.scrollTop;
+    const d = await api(state.mobileWin ? `/api/messages?limit=${MOBILE_N}&before=${encodeURIComponent(curOf(first.sequence))}` : `/api/messages?limit=100&span=${WIN_H}&beforeId=${encodeURIComponent(first.messageId)}`);
+    const fresh = d.items.filter(m => !state.messages.some(x => x.messageId === m.messageId));
+    setMessages(fresh.concat(state.messages));
+    Object.assign(state, { hasOlder: d.hasMore, winExpanded: true, winTruncated: false, lastOlderAt: Date.now() });
+    renderMessages(false);
+    box.scrollTop = prevTop + (box.scrollHeight - prevHeight);
+  }
+  // 自動收起：只在人在最底下、且 10 分鐘內沒按過「載入更早」時，才移掉超過 12 小時的；最多保留 300 則。往上看時絕不刪
+  function trimWindow() {
+    if (state.ctx || !nearBottom() || Date.now() - state.lastOlderAt < OLDER_HOLD_MS) return;
+    const cutoff = new Date(Date.now() - WIN_H * 3600_000).toISOString();
+    let keep = state.messages.filter(m => m.createdAt >= cutoff);
+    if (keep.length < WIN_MIN) keep = state.messages.slice(-WIN_MIN);
+    if (state.mobileWin) keep = state.messages.slice(-MOBILE_N); // 手機在最底下時收回最新 10 則
+    if (keep.length > WIN_MAX) keep = keep.slice(-WIN_MAX);
+    if (keep.length === state.messages.length) return;
+    state.messages = keep;
+    Object.assign(state, { hasOlder: true, winExpanded: false, winFrom: cutoff });
+    renderMessages(true);
+  }
+  // 跳到不在畫面上的舊訊息：載入那則前後各 20 則並標黃
+  async function enterContext(id) {
+    const d = await api(`/api/messages/${encodeURIComponent(id)}/around?n=20`);
+    const target = d.items.find(m => m.messageId === id);
+    state.ctx = { id, at: target?.createdAt, olderCursor: d.olderCursor, hasOlder: d.hasOlder, newerCursor: d.newerCursor, hasNewer: d.hasNewer, pending: 0 };
+    setMessages(d.items);
+    Object.assign(state, { newCount: 0, newMention: 0, firstNewId: null });
+    if (filtering() || state.collapsed.size) { state.collapsed.clear(); Object.assign(state.filter, { scope: 'all', member: '', tag: '' }); state.onlyMine = false; syncFilterBar(); }
+    renderMessages(false); drawNewPill();
+    const el = document.getElementById('msg-' + id);
+    if (el) { el.classList.add('target'); scrollMsgTo(el, false); }
+  }
+  async function ctxMore(dir) {
+    const c = state.ctx, box = $('#messages');
+    if (!c) return;
+    if (dir === 'older') {
+      const prevHeight = box.scrollHeight, prevTop = box.scrollTop;
+      const d = await api(`/api/messages?limit=20&before=${encodeURIComponent(c.olderCursor)}`);
+      setMessages(d.items.concat(state.messages));
+      Object.assign(c, { olderCursor: d.olderCursor, hasOlder: d.hasMore });
+      renderMessages(false);
+      box.scrollTop = prevTop + (box.scrollHeight - prevHeight);
+    } else {
+      const d = await api(`/api/messages?limit=20&after=${encodeURIComponent(c.newerCursor)}`);
+      setMessages(state.messages.concat(d.items.filter(m => !state.messages.some(x => x.messageId === m.messageId))));
+      Object.assign(c, { newerCursor: d.nextCursor, hasNewer: d.hasMore });
+      const top = box.scrollTop; renderMessages(false); box.scrollTop = top;
+    }
+    const el = document.getElementById('msg-' + c.id); if (el) el.classList.add('target');
+  }
+  // 有新訊息但人不在底部：藍色膠囊「有 N 則新訊息 ↓」；到底自動消失
+  function drawNewPill() {
+    const p = $('#new-pill');
+    if (!p) return;
+    p.hidden = !state.newCount || !!state.ctx;
+    p.innerHTML = `<span class="np-long">有 ${state.newCount} 則新訊息${state.newMention ? `（${state.newMention} 則提到你）` : ''} ↓</span><span class="np-short" aria-hidden="true">↓${state.newCount}</span>`;
+    p.setAttribute('aria-label', `有 ${state.newCount} 則新訊息${state.newMention ? `，${state.newMention} 則提到你` : ''}，跳到最新`);
+    drawLatestBtn();
+  }
+  function clearNew() { if (!state.newCount) return; Object.assign(state, { newCount: 0, newMention: 0, firstNewId: null }); $('#new-line')?.remove(); drawNewPill(); }
+
+  function onNewMessage(m) {
+    if (state.byId.has(m.messageId) && (state.ctx || state.messages.some(x => x.messageId === m.messageId))) return;
+    if (state.ctx) { // 正在看舊訊息的前後文：新訊息先記數，回到最新時一起看
+      state.byId.set(m.messageId, m);
+      if (!isMine(m)) { state.ctx.pending++; const b = $('#ctx-latest'); if (b) b.textContent = `回到最新 ↓（${state.ctx.pending} 則新訊息）`; }
+      if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
+      return;
+    }
+    const stick = nearBottom() || isMine(m);
+    const parent = m.replyToMessageId && state.byId.get(m.replyToMessageId);
+    if (parent && /^\s*\[需確認\]/.test(parent.text) && (state.participants.get(m.author.participantId) || m.author).memberType === 'human') {
+      work.answered?.add(parent.messageId); updateTodoBadge(); if (state.page === 'inbox') setTimeout(renderWork, 1500); // 先看到「已回覆」，再從收件匣移走
+      loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox' || state.page === 'hub') renderWork(); }).catch(() => {}); // 回覆後收件匣移除
+    }
+    state.messages.push(m);
+    state.byId.set(m.messageId, m);
+    if (state.page === 'hub' && work.loaded) renderWork();
+    if (!stick && visible(m)) {
+      if (!state.newCount) state.firstNewId = m.messageId;
+      state.newCount++;
+      if (isToMe(m) || isReplyToMe(m)) state.newMention++;
+    }
+    if ((m.replyToMessageId && state.byId.has(m.replyToMessageId)) || (visible(m) && (isFlowLine(m) || effCard(m)))) {
+      const box = $('#messages'), top = box.scrollTop;
+      renderMessages(stick);
+      if (stick) trimWindow(); else box.scrollTop = top;
+      drawNewPill();
+      if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
+      return;
+    }
+    if (!visible(m)) return;
+    const box = $('#messages');
+    box.querySelector('.empty')?.remove();
+    if (!stick && state.firstNewId === m.messageId) box.insertAdjacentHTML('beforeend', `<div class="new-line" id="new-line"><span>以下 ${state.newCount} 則是新的</span></div>`);
+    else if (!stick) { const nl = $('#new-line'); if (nl) nl.firstElementChild.textContent = `以下 ${state.newCount} 則是新的`; }
+    box.insertAdjacentHTML('beforeend', messageHtml(m));
+    if (stick) { scrollBottom(); trimWindow(); }
+    drawNewPill();
+    if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
+  }
+  // 膠囊貼在輸入框上方：跟著輸入框高度
+  new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', (document.querySelector('.composer')?.offsetHeight || 110) + 'px')).observe(document.querySelector('.composer'));
+  // 捲到最底下：膠囊消失
+  $('#messages').addEventListener('scroll', () => { if (nearBottom()) clearNew(); }, { passive: true });
+
+  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (!t) return; quickState(t.dataset.qText).text = t.value; const sb = t.closest('[data-q-root]')?.querySelector('[data-q-send]'); if (sb && cardOfConfirm({ messageId: t.dataset.qText })) sb.disabled = !t.value.trim(); else if (sb) { const m = state.byId.get(t.dataset.qText), qs = m ? parseQuestions(m.text) : [], q = quickState(t.dataset.qText); if (qs.length === 1 && !q.sels[0]) { sb.disabled = !t.value.trim(); sb.textContent = t.value.trim() ? '送出想法' : '先選一個選項'; } } });
+  $('#page-work').addEventListener('click', e => { if (state.page === 'inbox') authClick(e); });
+  $('#page-work').addEventListener('input', e => { const t = state.page === 'inbox' && e.target.closest?.('[data-q-text]'); if (t) { quickState(t.dataset.qText).text = t.value; const sb = t.closest('[data-q-root]')?.querySelector('[data-q-send]'); if (sb) { const m = state.byId.get(t.dataset.qText), qs = m ? parseQuestions(m.text) : [], q = quickState(t.dataset.qText); if (qs.length === 1 && !q.sels[0]) { sb.disabled = !t.value.trim(); sb.textContent = t.value.trim() ? '送出想法' : '先選一個選項'; } } } });
+  $('#page-work').addEventListener('keydown', e => {
+    if (state.page !== 'inbox' || e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
+    e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
+  });
+  $('#messages').addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
+    e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
+  });
+  // 記住哪些「細節」打開了，重畫後維持
+  $('#messages').addEventListener('toggle', e => {
+    const d = e.target.closest?.('details[data-detail]');
+    if (!d) return;
+    if (d.open) state.expanded.add(d.dataset.detail); else state.expanded.delete(d.dataset.detail);
+  }, true);
+  $('#messages').addEventListener('click', e => {
+    const go = e.target.closest?.('[data-grp-open]');
+    if (go) { state.grpOpen.add(go.dataset.grpOpen); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; return; }
+    const gr = e.target.closest?.('[data-grp-reply]');
+    if (gr) { const m = state.byId.get(gr.dataset.grpReply); if (m) { setReply(m); input.focus(); } return; }
+    if (e.target.closest('#load-older, #load-older-empty')) return loadOlder().catch(err => toast(err.message));
+    if (e.target.closest('#ctx-older')) return ctxMore('older').catch(err => toast(err.message));
+    if (e.target.closest('#ctx-newer')) return ctxMore('newer').catch(err => toast(err.message));
+    if (e.target.closest('#ctx-latest')) return loadWindow().catch(err => toast(err.message));
+    const r = e.target.closest('[data-reply]');
+    if (r) return setReply(state.byId.get(r.dataset.reply));
+    const j = e.target.closest('[data-jump]');
+    if (j) return jumpTo(j.dataset.jump);
+    const cap = e.target.closest('[data-cap]');
+    if (cap) return openCard(cap.dataset.cap, cap);
+    const nc = e.target.closest('[data-newcard]');
+    if (nc) return openNewCard(null, state.byId.get(nc.dataset.newcard));
+    if (authClick(e)) return;
+    const sha = e.target.closest('[data-sha]');
+    if (sha) return copyText(sha.dataset.sha).then(ok => toast(ok ? '已複製完整 SHA' : '複製失敗'));
+    const op = e.target.closest('[data-open-msg]');
+    if (op) {
+      const id = op.dataset.openMsg, box = $('#messages'), top = box.scrollTop;
+      state.open.add(id); renderMessages(false); box.scrollTop = top;
+      document.getElementById('msg-' + id)?.querySelector('[data-fold]')?.focus({ preventScroll: true });
+      return;
+    }
+    const fold = e.target.closest('[data-fold]');
+    if (fold) {
+      const id = fold.dataset.fold, box = $('#messages'), top = box.scrollTop;
+      state.open.delete(id); renderMessages(false); box.scrollTop = top;
+      const el = document.getElementById('msg-' + id);
+      (el?.matches('button') ? el : el?.querySelector('button'))?.focus({ preventScroll: true });
+      return;
+    }
+    const ff = e.target.closest('[data-flow-fold]');
+    if (ff) {
+      const id = ff.dataset.flowFold, box = $('#messages'), top = box.scrollTop;
+      state.flowOpen.delete(id); renderMessages(false); box.scrollTop = top;
+      document.querySelector(`[data-flow-group="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+      return;
+    }
+    const fg = e.target.closest('[data-flow-group]');
+    if (fg) {
+      const id = fg.dataset.flowGroup, box = $('#messages'), top = box.scrollTop;
+      state.flowOpen.add(id); renderMessages(false); box.scrollTop = top;
+      document.getElementById('msg-' + id)?.focus({ preventScroll: true });
+      return;
+    }
+    const more = e.target.closest('[data-more]');
+    if (more) {
+      const id = more.dataset.more;
+      if (state.expanded.has(id)) state.expanded.delete(id); else state.expanded.add(id);
+      const el = document.getElementById('msg-' + id);
+      if (el) el.outerHTML = messageHtml(state.byId.get(id));
+      return;
+    }
+    const th = e.target.closest('[data-thread]');
+    if (th) {
+      const id = th.dataset.thread;
+      if (state.collapsed.has(id)) state.collapsed.delete(id); else state.collapsed.add(id);
+      const box = $('#messages'), top = box.scrollTop;
+      renderMessages(false);
+      box.scrollTop = top;
+    }
+  });
+
+  document.getElementById('new-pill')?.addEventListener('click', () => { scrollBottom(); clearNew(); });
+  document.getElementById('latest-btn')?.addEventListener('click', () => { const box = $('#messages'); box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }); $('#latest-btn').hidden = true; clearNew(); });
+  let latestRaf = 0;
+  $('#messages').addEventListener('scroll', () => { if (!latestRaf) latestRaf = requestAnimationFrame(() => { latestRaf = 0; drawLatestBtn(); }); }, { passive: true });
+  // App 畫面整頁固定不捲，只有訊息清單、卡片抽屜等內容區會捲；整頁被捲走就拉回來
+  // UX ：打字時（輸入框有焦點、鍵盤開著）iPhone Safari 會自己把整頁往上推讓輸入框露出來，這時不拉回，否則輸入框會被鍵盤蓋住；收起鍵盤或離開輸入框才拉回
+  const typingField = () => document.activeElement?.matches?.('input, textarea, select, [contenteditable="true"]');
+  const keyboardOpen = () => !!window.visualViewport && visualViewport.height < window.innerHeight * 0.85;
+  const pinPage = (force = false) => {
+    if ($('#app').hidden || !(window.scrollY || window.scrollX || document.documentElement.scrollTop || document.body.scrollTop || document.documentElement.scrollLeft || document.body.scrollLeft)) return; // 橫向也算
+    if (!force && typingField() && keyboardOpen()) return;
+    window.scrollTo(0, 0); document.documentElement.scrollTop = 0; document.body.scrollTop = 0; document.documentElement.scrollLeft = 0; document.body.scrollLeft = 0;
+  };
+  window.addEventListener('scroll', () => pinPage(), { passive: true });
+  window.visualViewport?.addEventListener('resize', () => setTimeout(() => { if (!keyboardOpen()) pinPage(true); }, 80));
+  document.addEventListener('focusout', () => setTimeout(() => { if (!typingField()) pinPage(true); }, 150));
+  if (window.visualViewport) { // 手機鍵盤高度，給固定在底部的卡片回覆框用
+    const kb = () => document.documentElement.style.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - visualViewport.height - visualViewport.offsetTop)) + 'px');
+    visualViewport.addEventListener('resize', kb); visualViewport.addEventListener('scroll', kb);
+    // 觸控裝置上 App 的高度與位置跟著 iPhone 回報的可見區走（--vvh／--vvt），鍵盤開時整個 App 縮到鍵盤上方，輸入框與送出鈕不會被蓋住；電腦不變
+    if (matchMedia('(pointer: coarse)').matches) {
+      const root = document.documentElement;
+      root.classList.add('vv-on');
+      let last = '';
+      const vv = () => {
+        const h = Math.round(visualViewport.height), t = Math.round(visualViewport.offsetTop), key = h + ',' + t;
+        if (key === last) return;
+        const grew = last && h < Number(last.split(',')[0]);
+        last = key;
+        root.style.setProperty('--vvh', h + 'px');
+        root.style.setProperty('--vvt', t + 'px');
+        // 鍵盤剛打開：把正在打字的框捲進它所在的清單可見處
+        if (grew && typingField()) { const el = document.activeElement; if (el.closest('#app')) requestAnimationFrame(() => el.scrollIntoView({ block: 'nearest' })); }
+      };
+      visualViewport.addEventListener('resize', vv); visualViewport.addEventListener('scroll', vv); vv();
+    }
+  }
+  narrowMq.addEventListener?.('change', () => { if (!store.get(MSG_VIEW_KEY) && state.me) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; syncFilterBar(); } });
+  async function jumpTo(id) {
+    const m0 = state.byId.get(id);
+    if (m0 && !msgInView(m0.project) && hasHub()) await setProjectView(m0.project && myProjects().includes(m0.project) ? m0.project : 'cross', 'messages');
+    let el = document.getElementById('msg-' + id);
+    if (state.byId.has(id) && (!el || el.matches('.flow-line, .slim'))) el = revealMsg(id) || el;
+    if (!el && state.byId.has(id) && (filtering() || state.collapsed.size)) {
+      state.collapsed.clear();
+      Object.assign(state.filter, { scope: 'all', member: '', tag: '' });
+      state.onlyMine = false; store.set(FILTER_KEY, '0');
+      syncFilterBar(); renderMessages(false);
+      el = document.getElementById('msg-' + id);
+    }
+    if (!el) {
+      try { await enterContext(id); } catch { toast('找不到原訊息'); }
+      return;
+    }
+    scrollMsgTo(el);
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  }
+
+  function setReply(m) {
+    state.replyTo = m || null;
+    $('#reply-bar').hidden = !m;
+    if (m) {
+      $('#reply-to-name').textContent = m.author.name;
+      $('#reply-to-preview').textContent = m.text.slice(0, 60);
+      $('#input').focus();
+    }
+    drawSendTo();
+  }
+  $('#reply-cancel').addEventListener('click', () => setReply(null));
+
+  // ---------- 輸入與 @提及 ----------
+  // @ 選單候選：不截斷，清單可捲動；所有人在最前，再來是跟我同專案的成員
+  // 專案內只列該專案的成員（跨專案角色本來就屬於每個專案），「所有人」寫成「所有人（平台）」；跨專案頻道列全部
+  const mentionScope = () => { const t = sendTarget(); return t === 'all' ? null : t; };
+  const inScope = (p, scope) => !scope || memberIn(p, scope);
+  // 最近 @ 過的人記在這台裝置（最多 10 位，選單用前 5 位）
+  const RECENT_AT = 'aigile-recent-at';
+  const recentAt = () => { try { return JSON.parse(store.get(RECENT_AT) || '[]'); } catch { return []; } };
+  const noteRecentAt = p => { if (p?.participantId && p.memberType !== 'all') store.set(RECENT_AT, JSON.stringify([p.participantId, ...recentAt().filter(x => x !== p.participantId)].slice(0, 10))); };
+  function mentionCandidates(raw) {
+    const q = findQ(raw), scope = mentionScope();
+    const mine = myProjects();
+    const near = p => (p.projects?.length ? p.projects : PROJECTS).some(x => mine.includes(x));
+    const people = [...state.participants.values()]
+      .filter(p => p.participantId !== meId() && p.status !== 'disabled' && inScope(p, scope) && !(scope && roOf(p.participantId, scope)) && findHit(p, q, scope || projectView())); // 唯讀的人不列；代號、角色代碼也算
+    const all = scope ? { ...ALL, label: `${ALL.name}（${projName(scope)}）`, role: `通知${projName(scope)}的所有成員` } : ALL;
+    const sorted = [...people.filter(near), ...people.filter(p => !near(p))];
+    const g = (list, grp) => list.map(p => ({ ...p, _grp: grp, _q: q }));
+    const recentIds = q ? [] : recentAt().filter(id => sorted.some(p => p.participantId === id)).slice(0, 5);
+    const recent = recentIds.map(id => sorted.find(p => p.participantId === id));
+    const rest = sorted.filter(p => !recentIds.includes(p.participantId));
+    const kind = k => rest.filter(p => p.memberType === k);
+    return [...(!q || ALL.name.includes(q) || all.role.includes(q) ? [{ ...all, _q: q }] : []), ...g(recent, '最近 @ 過'),
+      ...(q ? [...g(kind('ai'), 'AI'), ...g(kind('human'), '人類')] : [...g(kind('human'), '人類'), ...g(kind('ai'), 'AI')])];
+  }
+  // 選單一列：分組標題（不能選）＋名字（標黃）＋代號、角色
+  function mentionItemsHtml(items, index, pj) {
+    let last = null;
+    return items.map((p, i) => {
+      const head = p._grp && p._grp !== last ? `<li class="mention-grp" role="presentation">${esc(p._grp)}${p._q ? ` · 符合 ${items.filter(x => x._grp === p._grp).length}` : ''}</li>` : '';
+      last = p._grp || last;
+      const meta = p.memberType === 'all' ? esc(p.role || '') : [p.shortCode ? '#' + markQ(p.shortCode, p._q) : '', markQ(roleIn(p, pj), p._q) + (p._q && p.roleKey && p.roleKey !== roleIn(p, pj) && p.roleKey.toLowerCase().includes(p._q) ? ' (' + markQ(p.roleKey, p._q) + ')' : '')].filter(Boolean).join(' · ');
+      return `${head}<li role="option" data-i="${i}" aria-selected="${i === index}">
+        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${p.label ? esc(p.label) : markQ(p.name, p._q)}</b>
+        <span class="muted small">${meta}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}
+      </li>`;
+    }).join('') + (items.some(p => p._grp) ? '<li class="mention-grp mention-tip" role="presentation">↑↓ 選、Enter 選定、Esc 關；只列這個專案的人</li>' : '');
+  }
+  // 手打 @ 了不在這個專案的人：輸入框下方先提示，不用等送出才被擋
+  function outsideMentions(text, scope = mentionScope()) {
+    if (!scope) return [];
+    let scan = text;
+    const out = [];
+    for (const p of [...state.participants.values()].sort((a, b) => b.name.length - a.name.length)) {
+      const tag = '@' + p.name;
+      if (!scan.includes(tag)) continue;
+      if (p.participantId !== meId() && !inScope(p, scope)) out.push(p.name);
+      scan = scan.split(tag).join(' ');
+    }
+    return out;
+  }
+  const outsideText = (names, scope = mentionScope()) => (names.length ? `${names.join('、')} 不在${projName(scope)}專案，請到跨專案頻道找對方` : '');
+  function drawMentionWarn() {
+    const el = $('#mention-warn');
+    if (!el) return;
+    const t = outsideText(outsideMentions($('#input')?.value || ''));
+    el.textContent = t; el.hidden = !t;
+  }
+  // 鍵盤上下移動時，讓選中的那一列留在可視範圍
+  const scrollPicked = list => list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  const input = $('#input');
+  const sendBtn = $('#send');
+  const mentionList = $('#mention-list');
+  let mentionState = null;
+
+  // 訊息區有捲軸時，輸入區右邊多留同寬度，兩者左右邊界才會對齊
+  const syncScrollbar = () => { const m = $('#messages'); document.documentElement.style.setProperty('--sbw', (m.offsetWidth - m.clientWidth) + 'px'); };
+  new ResizeObserver(syncScrollbar).observe($('#messages')); window.addEventListener('resize', syncScrollbar);
+  function autoGrow() {
+    input.style.height = 'auto';
+    input.style.height = Math.max(44, Math.min(input.scrollHeight + 2, window.innerHeight * 0.4)) + 'px';
+  }
+
+  function updateMention() {
+    const pos = input.selectionStart;
+    const m = input.value.slice(0, pos).match(/@([^\s@]*)$/);
+    if (!m) return closeMention();
+    const items = mentionCandidates(m[1]);
+    if (!items.length) return closeMention();
+    mentionState = { start: pos - m[0].length, end: pos, items, index: 0 };
+    renderMention();
+  }
+  function renderMention() {
+    mentionList.innerHTML = mentionItemsHtml(mentionState.items, mentionState.index, mentionScope() || projectView());
+    mentionList.hidden = false;
+    scrollPicked(mentionList);
+  }
+  function closeMention() { mentionState = null; mentionList.hidden = true; }
+  function pickMention(i) {
+    const p = mentionState.items[i];
+    noteRecentAt(p);
+    const insert = '@' + p.name + ' ';
+    input.value = input.value.slice(0, mentionState.start) + insert + input.value.slice(mentionState.end);
+    const caret = mentionState.start + insert.length;
+    input.setSelectionRange(caret, caret);
+    closeMention();
+    input.focus();
+    onInput();
+  }
+  mentionList.addEventListener('mousedown', e => {
+    const li = e.target.closest('li[data-i]');
+    if (li) { e.preventDefault(); pickMention(Number(li.dataset.i)); }
+  });
+
+  // 類型小膠囊顯示目前選的類型；一般＝灰框，選了別的才變藍
+  function drawTagChip() {
+    const cur = leadTagOf(input.value) || '';
+    const b = $('#tag-btn');
+    b.textContent = `類型：${cur || '一般'} ▾`;
+    b.classList.toggle('on', !!cur);
+    b.setAttribute('aria-label', `訊息類型：${cur || '一般'}`);
+  }
+  function onInput() {
+    sendBtn.disabled = !input.value.trim();
+    drawTagChip();
+    autoGrow();
+    updateMention();
+    drawMentionWarn();
+    drawAskRow();
+  }
+  input.addEventListener('input', onInput);
+  input.addEventListener('click', updateMention);
+  input.addEventListener('blur', () => setTimeout(closeMention, 150));
+
+  const isDesktop = () => matchMedia('(hover: hover) and (pointer: fine)').matches;
+  input.addEventListener('keydown', e => {
+    if (e.isComposing || e.keyCode === 229) return; // 中文組字中，不處理
+    if (mentionState) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = mentionState.items.length;
+        mentionState.index = (mentionState.index + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+        return renderMention();
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mentionState.index); }
+      if (e.key === 'Escape') { e.preventDefault(); return closeMention(); }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && isDesktop()) { e.preventDefault(); send(); }
+  });
+  sendBtn.addEventListener('click', send);
+
+  // 正文中的 @名字 → 收件人（依出現順序）；@所有人 → audience: all
+  function mentionedIds(text) {
+    const hits = [];
+    let scan = text;
+    const people = [...state.participants.values()].sort((a, b) => b.name.length - a.name.length);
+    for (const p of people) {
+      const tag = '@' + p.name, at = scan.indexOf(tag);
+      if (at >= 0) {
+        if (p.participantId !== meId()) hits.push([at, p.participantId]);
+        scan = scan.split(tag).join(' '.repeat(tag.length)); // 保留長度，位置才準
+      }
+    }
+    return hits.sort((a, b) => a[0] - b[0]).map(h => h[1]);
+  }
+  const askPick = new Map(); // 使用者點過的「要回覆／知會」
+  const askOfId = (id, i) => (askPick.has(id) ? askPick.get(id) : i === 0);
+  // 回覆時，被回覆的人自動算收件人、排第一（預設要回覆）
+  const replyTarget = () => { const a = state.replyTo?.author?.participantId; return a && a !== meId() ? a : null; };
+  const withReply = ids => { const r = replyTarget(); return r ? [r, ...ids.filter(x => x !== r)] : ids; };
+  function resolveRecipients(text) {
+    if (text.includes('@' + ALL.name)) return { audience: 'all' };
+    const ids = withReply(mentionedIds(text));
+    if (!ids.length) return {};
+    return ids.length > 1 ? { recipientIds: ids, replyFrom: ids.filter(askOfId) } : { recipientIds: ids };
+  }
+  function drawAskRow() {
+    const row = $('#ask-row');
+    if (!row) return;
+    const text = input.value;
+    const ids = text.includes('@' + ALL.name) ? [] : withReply(mentionedIds(text));
+    for (const id of [...askPick.keys()]) if (!ids.includes(id)) askPick.delete(id);
+    row.hidden = ids.length < 2;
+    if (row.hidden) { row.innerHTML = ''; return; }
+    row.innerHTML = `<span class="muted small">誰要回覆：</span>${ids.map((id, i) => { const on = askOfId(id, i), name = state.participants.get(id)?.name || id;
+      return `<button type="button" class="ask-chip ${on ? 'ask' : 'fyi'}" data-ask-toggle="${esc(id)}" aria-pressed="${on}" aria-label="${esc(`${name}：${on ? '要回覆' : '知會'}，點一下切換`)}">${esc(name)} <b>${on ? '要回覆' : '知會'}</b></button>`; }).join('')}`;
+  }
+  $('#ask-row')?.addEventListener('click', e => {
+    const b = e.target.closest('[data-ask-toggle]');
+    if (!b) return;
+    const ids = withReply(mentionedIds(input.value)), id = b.dataset.askToggle;
+    askPick.set(id, !askOfId(id, ids.indexOf(id)));
+    drawAskRow();
+  });
+
+  // 沒動過專案選單：回覆時不帶（繼承），否則帶目前檢視的專案；動過就照選的
+  const sendProject = () => ({ project: sendTarget() });
+  // 收件匣、卡片抽屜的行內回覆也明確帶專案（兩邊成員沒帶會被伺服器擋下）：卡片的專案＞被回覆訊息的專案＞所在專案
+  async function msgProject(body) {
+    if (body.project) return body.project;
+    const card = body.cardId && work.cards.get(body.cardId);
+    if (card?.project) return card.project;
+    if (body.replyToMessageId) {
+      const m = state.byId.get(body.replyToMessageId) || await api(`/api/messages/${encodeURIComponent(body.replyToMessageId)}`).catch(() => null);
+      return m?.project || 'all';
+    }
+    const v = projectView();
+    return v === 'cross' || v === 'hub' ? 'all' : v;
+  }
+  const postMsg = async body => api('/api/messages', { method: 'POST', body: { ...body, project: await msgProject(body) } });
+  let sending = false;
+  let pendingRequestId = null; // 失敗重送時沿用同一個 requestId，避免重複發文
+  async function send() {
+    const text = input.value.trim();
+    if (!text || sending) return;
+    if (text.length > 2000) return toast(`訊息上限 2000 字（目前 ${text.length} 字）`);
+    sending = true; sendBtn.disabled = true;
+    pendingRequestId = pendingRequestId || newRequestId();
+    try {
+      const m = await api('/api/messages', {
+        method: 'POST',
+        body: { text, requestId: pendingRequestId, replyToMessageId: state.replyTo?.messageId, ...resolveRecipients(text), ...sendProject() },
+      });
+      pendingRequestId = null;
+      onNewMessage(m);
+      askPick.clear();
+      input.value = '';
+      setReply(null);
+      onInput();
+    } catch (err) {
+      if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'INVALID_REQUEST' || err.code === 'INVALID_ENCODING') pendingRequestId = null;
+      // 亂碼被擋時草稿留在輸入框，原因直接寫在框下（UX）
+      if (err.code === 'INVALID_ENCODING') { const e = $('#composer-error'); e.textContent = '訊息含亂碼字元（�），請確認編碼或刪掉那個字元後再送。'; e.hidden = false; }
+      else toast('送出失敗：' + err.message);
+    } finally {
+      sending = false;
+      sendBtn.disabled = !input.value.trim();
+    }
+  }
+  input.addEventListener('input', () => { pendingRequestId = null; $('#composer-error').hidden = true; });
+  // 手機版：打字時收起頂欄大小、警示與篩選列，鍵盤出現時訊息區才有空間
+  const typingMq = matchMedia('(max-width: 600px)');
+  input.addEventListener('focus', () => { if (typingMq.matches) document.body.classList.add('typing'); });
+  input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) document.body.classList.remove('typing'); }, 120));
+
+  // ---------- 對話框 ----------
+  // 共用外框：桌面置中、手機從底部滑出。size：''、'wide'、'form'、'narrow'
+  // actions：標頭 × 左邊的動作鈕；foot：底部按鈕（只有要做決定的彈窗才給）
+  let modalReturnFocus = null;
+  // 點灰底不關彈窗，也不讓焦點跑出彈窗（否則之後按 Esc 收不到）
+  const holdBackdrop = overlay => overlay.addEventListener('mousedown', e => { if (e.target === overlay) e.preventDefault(); });
+  function modalFrame({ title, sub = '', size = '', actions = '', foot = '', body = '' }) {
+    return `
+      <div class="overlay">
+        <div class="modal ${size}" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+          <div class="modal-head">
+            <div class="modal-titles"><h2 id="modal-title">${esc(title)}</h2>${sub ? `<p class="modal-sub">${sub}</p>` : ''}</div>
+            ${actions ? `<div class="modal-actions">${actions}</div>` : ''}
+            <button class="icon-btn modal-x" type="button" data-close aria-label="關閉">×</button>
+          </div>
+          <div class="modal-body">${body}</div>
+          ${foot ? `<div class="modal-foot">${foot}</div>` : ''}
+        </div>
+      </div>`;
+  }
+  // 在「團隊」頁時，團隊狀態／成員名單／我的 AI 這三個畫面直接畫在頁面的分頁區，不再跳對話框（第二版）
+  const TEAM_PANES = ['團隊狀態', '成員名單', '我的 AI'];
+  function openModal(title, bodyHtml, opts = {}) {
+    const pane = (state.page === 'team' && TEAM_PANES.includes(title) && $('#team-pane')) || (state.page === 'myai' && title === '我的 AI' && $('#myai-pane')) || (state.page === 'files' && title === '文件' && $('#files-pane')) || null;
+    if (pane) {
+      const sc = $('#page-work'), top = sc.scrollTop;
+      pane.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
+      sc.scrollTop = top;
+      const inner = pane.querySelector('.modal'), inBody = pane.querySelector('.modal-body');
+      inBody.modal = inner;
+      return inBody;
+    }
+    const root = $('#modal-root');
+    if (!root.firstElementChild) modalReturnFocus = document.activeElement;
+    root.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
+    const overlay = root.firstElementChild;
+    holdBackdrop(overlay);
+    overlay.addEventListener('click', e => {
+      if (e.target.closest('[data-close]')) closeModal(); // 點灰底不關，只能按 × 或 Esc
+    });
+    const modal = overlay.querySelector('.modal');
+    (modal.querySelector('.modal-body input:not([type=checkbox]), .modal-body select, .modal-body textarea') || modal.querySelector('.modal-x')).focus();
+    const body = overlay.querySelector('.modal-body');
+    body.modal = modal; // 給呼叫端取用標頭與底部按鈕
+    return body;
+  }
+  function closeModal() {
+    $('#modal-root').innerHTML = '';
+    if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
+    modalReturnFocus = null;
+  }
+  // 確認彈窗：疊在目前彈窗上；回傳 true／false
+  function confirmDialog({ title, message, confirmText = '確認', cancelText = '取消', danger = false, expectText = '', cancelPrimary = false }) {
+    return new Promise(resolve => {
+      const prev = document.activeElement;
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({
+        title, size: 'narrow',
+        body: `<div class="confirm-msg${danger ? ' danger' : ''}">${message}</div>${expectText ? `<label class="field">請輸入「${esc(expectText)}」確認<input type="text" data-expect autocomplete="off"></label>` : ''}`,
+        foot: `<button class="btn${cancelPrimary ? ' primary' : ''}" type="button" data-close>${esc(cancelText)}</button>
+               <button class="btn${danger ? ' danger' : cancelPrimary ? '' : ' primary'}" type="button" data-ok ${expectText ? 'disabled' : ''}>${esc(confirmText)}</button>`,
+      });
+      document.body.append(host);
+      const overlay = host.firstElementChild;
+      const done = ok => { host.remove(); if (prev?.isConnected) prev.focus(); resolve(ok); };
+      holdBackdrop(overlay);
+      overlay.addEventListener('click', e => {
+        if (e.target.closest('[data-ok]')) return done(true);
+        if (e.target.closest('[data-close]')) done(false);
+      });
+      overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+      const ex = overlay.querySelector('[data-expect]');
+      if (ex) { ex.addEventListener('input', () => { overlay.querySelector('[data-ok]').disabled = ex.value.trim() !== expectText; }); ex.focus(); } else overlay.querySelector(cancelPrimary ? '[data-close]:not(.modal-x)' : '[data-ok]').focus();
+    });
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !document.querySelector('.confirm-root') && $('#modal-root').firstElementChild) closeModal();
+  });
+  // 彈窗內 Tab 不跑出去
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const modal = document.querySelector('.confirm-root .modal') || $('#modal-root .modal');
+    if (!modal) return;
+    const f = [...modal.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+      .filter(el => !el.disabled && el.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    else if (!modal.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  });
+
+  // ---------- 頭像 ----------
+  // 圖片頭像：以版本號快取 blob URL，畫面上有 data-avimg 的頭像會自動補上圖片
+  const avatarUrls = new Map();
+  function avatarUrl(id, v) {
+    const key = `${id}:${v}`;
+    if (!avatarUrls.has(key)) {
+      avatarUrls.set(key, fetch(`/api/avatars/${encodeURIComponent(id)}?v=${v}`, { headers: { Authorization: `Bearer ${state.token}` } })
+        .then(r => (r.ok ? r.blob() : null)).then(b => (b ? URL.createObjectURL(b) : null)).catch(() => null));
+    }
+    return avatarUrls.get(key);
+  }
+  function hydrateAvatars(root = document) {
+    root.querySelectorAll?.('[data-avimg]:not([data-avdone])').forEach(el => {
+      el.setAttribute('data-avdone', '');
+      avatarUrl(el.dataset.avimg, el.dataset.v).then(url => {
+        if (url) { el.style.backgroundImage = `url("${url}")`; el.classList.add('img-on'); }
+      });
+    });
+  }
+  new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) { hydrateAvatars(n.parentElement || n); } })
+    .observe(document.body, { childList: true, subtree: true });
+
+  // 更換頭像彈窗（疊在目前彈窗上）：上傳圖片並裁切，或用文字／表情符號
+  // cur：{ imgUrl, text }；回傳 { kind: 'img', blob } | { kind: 'text', text, removeImg } | null（取消）
+  // aiRow：{ askLabel, prevPath }（退回①②）；按了回傳 { kind: 'ask' } 或 { kind: 'revert' }
+  function avatarDialog({ title, isAi, fallback, cur, aiRow }) {
+    return new Promise(resolve => {
+      const prev = document.activeElement;
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      const shape = isAi ? 'ai' : 'human';
+      host.innerHTML = modalFrame({
+        title, size: 'narrow',
+        body: `
+          <div class="av-previews">
+            <span class="av-prev big ${shape}" id="av-big"></span>
+            <div class="av-small"><span class="av-prev s32 ${shape}"></span><span class="muted small">訊息</span></div>
+            <div class="av-small"><span class="av-prev s24 ${shape}"></span><span class="muted small">清單</span></div>
+          </div>
+          ${aiRow ? `<div class="av-ai-row">${aiRow.askLabel ? `<button type="button" class="btn small" data-av-ask>🖼 ${esc(aiRow.askLabel)}</button>` : ''}<button type="button" class="link small" data-av-revert hidden>換回上一張</button></div>` : ''}
+          <div class="seg-scope full" role="group" aria-label="頭像類型">
+            <button type="button" data-mode="img">上傳圖片</button>
+            <button type="button" data-mode="text">文字／表情符號</button>
+          </div>
+          <div id="av-img-pane">
+            <input type="file" id="av-file" accept="image/png,image/jpeg,image/webp" hidden>
+            <button type="button" class="av-drop" id="av-drop">
+              <b>拖曳圖片到這裡，或點一下選擇檔案</b>
+              <span class="muted small">png、jpg、webp · 5 MB 以內 · 至少 128 × 128 px</span>
+            </button>
+            <div class="av-crop-wrap" id="av-crop-wrap" hidden>
+              <div class="av-crop" id="av-crop"><img id="av-img" alt="" draggable="false"><span class="av-mask ${shape}"></span></div>
+              <span class="muted small">拖曳圖片調整位置</span>
+              <label class="av-zoom">縮放<input type="range" id="av-zoom" min="1" max="3" step="0.01" value="1"></label>
+              <button type="button" class="btn small" id="av-repick">重新選擇</button>
+            </div>
+            <div class="warn-box red" id="av-err" role="alert" hidden></div>
+            <button type="button" class="link danger-text" id="av-remove" hidden>移除圖片，改回文字頭像</button>
+          </div>
+          <label id="av-text-pane" hidden>頭像文字
+            <input id="av-text" maxlength="16" placeholder="留白＝${esc(fallback)}" value="${esc(cur.text || '')}">
+            <span class="field-hint">最多 2 個字，可用表情符號。</span>
+          </label>
+          <p class="muted small">頭像會裁成正方形、縮成 256 × 256 px 後儲存，不會在 1 小時後刪除。請勿使用含客戶個資的圖片。</p>`,
+        foot: `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-ok>儲存</button>`,
+      });
+      document.body.append(host);
+      const $ = s => host.querySelector(s);
+      if (aiRow?.prevPath) api(aiRow.prevPath).then(d => { const b = $('[data-av-revert]'); if (b) b.hidden = !d.hasPrev; }).catch(() => {});
+      const st = { mode: cur.imgUrl || !cur.text ? 'img' : 'text', img: null, w: 0, h: 0, zoom: 1, ox: 0, oy: 0, removed: false };
+      const D = 200, BOX = 240;
+      const geom = () => {
+        const sc = D / Math.min(st.w, st.h) * st.zoom, W = st.w * sc, H = st.h * sc;
+        const mx = (W - D) / 2, my = (H - D) / 2;
+        st.ox = Math.max(-mx, Math.min(mx, st.ox)); st.oy = Math.max(-my, Math.min(my, st.oy));
+        return { sc, W, H, left: BOX / 2 - W / 2 + st.ox, top: BOX / 2 - H / 2 + st.oy };
+      };
+      const crop = type => {
+        const g = geom(), c = document.createElement('canvas');
+        c.width = c.height = 256;
+        const sx = (g.W / 2 - st.ox - D / 2) / g.sc, sy = (g.H / 2 - st.oy - D / 2) / g.sc, ss = D / g.sc;
+        c.getContext('2d').drawImage(st.img, sx, sy, ss, ss, 0, 0, 256, 256);
+        return type === 'url' ? c.toDataURL('image/webp', 0.9) : new Promise(r => c.toBlob(b => r(b), 'image/webp', 0.9));
+      };
+      // 合併同一輪的多次重畫（不用 requestAnimationFrame：背景分頁不會觸發）
+      let pending = 0;
+      const draw = () => {
+        clearTimeout(pending);
+        pending = setTimeout(() => {
+          host.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === st.mode)));
+          $('#av-img-pane').hidden = st.mode !== 'img';
+          $('#av-text-pane').hidden = st.mode !== 'text';
+          $('#av-drop').hidden = !!st.img;
+          $('#av-crop-wrap').hidden = !st.img;
+          $('#av-remove').hidden = !(st.mode === 'img' && cur.imgUrl && !st.removed && !st.img);
+          if (st.img) {
+            const g = geom(), im = $('#av-img');
+            Object.assign(im.style, { width: g.W + 'px', height: g.H + 'px', left: g.left + 'px', top: g.top + 'px' });
+          }
+          const url = st.mode === 'img' ? (st.img ? crop('url') : (!st.removed && cur.imgUrl) || '') : '';
+          const text = [...($('#av-text').value.trim() || fallback)].slice(0, 2).join('');
+          host.querySelectorAll('.av-prev').forEach(el => {
+            el.textContent = url ? '' : text;
+            el.style.backgroundImage = url ? `url("${url}")` : '';
+            el.classList.toggle('img-on', !!url);
+          });
+          $('[data-ok]').disabled = st.mode === 'img' && !st.img && (!cur.imgUrl || st.removed);
+        });
+      };
+      const err = msg => { $('#av-err').hidden = !msg; $('#av-err').textContent = msg || ''; };
+      const load = file => {
+        if (!file) return;
+        if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return err(`不支援「${file.name.split('.').pop()}」格式，請改用 png、jpg 或 webp。`);
+        if (file.size > 5 * 1024 * 1024) return err(`檔案 ${(file.size / 1048576).toFixed(1)} MB，超過 5 MB 上限。`);
+        const url = URL.createObjectURL(file), img = new Image();
+        img.onload = () => {
+          if (img.width < 128 || img.height < 128) { URL.revokeObjectURL(url); return err(`圖片只有 ${img.width} × ${img.height} px，至少需要 128 × 128 px。`); }
+          Object.assign(st, { img, w: img.width, h: img.height, zoom: 1, ox: 0, oy: 0 });
+          $('#av-img').src = url; $('#av-zoom').value = 1;
+          err(''); draw();
+        };
+        img.onerror = () => err('圖片無法讀取，檔案可能已損毀。');
+        img.src = url;
+      };
+      host.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => { st.mode = b.dataset.mode; err(''); draw(); }));
+      $('#av-drop').addEventListener('click', () => $('#av-file').click());
+      $('#av-repick').addEventListener('click', () => $('#av-file').click());
+      $('#av-file').addEventListener('change', e => { load(e.target.files[0]); e.target.value = ''; });
+      const drop = $('#av-drop');
+      drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+      drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+      drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); load(e.dataTransfer.files[0]); });
+      const area = $('#av-crop');
+      let drag = null;
+      area.addEventListener('pointerdown', e => { area.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, ox: st.ox, oy: st.oy }; });
+      area.addEventListener('pointermove', e => { if (!drag) return; st.ox = drag.ox + e.clientX - drag.x; st.oy = drag.oy + e.clientY - drag.y; draw(); });
+      const up = () => { drag = null; };
+      area.addEventListener('pointerup', up); area.addEventListener('pointercancel', up);
+      $('#av-zoom').addEventListener('input', e => { st.zoom = parseFloat(e.target.value); draw(); });
+      $('#av-text').addEventListener('input', draw);
+      $('#av-remove').addEventListener('click', () => { st.removed = true; st.mode = 'text'; draw(); });
+      const done = v => { host.remove(); if (prev?.isConnected) prev.focus(); resolve(v); };
+      const overlay = host.firstElementChild;
+      holdBackdrop(overlay);
+      overlay.addEventListener('click', async e => {
+        if (e.target.closest('[data-ok]')) {
+          const text = $('#av-text').value.trim();
+          if (st.mode === 'img' && st.img) return done({ kind: 'img', blob: await crop('blob'), url: crop('url'), text: cur.text || '' });
+          if (st.mode === 'img') return done({ kind: 'keep' });
+          return done({ kind: 'text', text, removeImg: !!cur.imgUrl });
+        }
+        if (e.target.closest('[data-av-ask]')) return done({ kind: 'ask' });
+        if (e.target.closest('[data-av-revert]')) return done({ kind: 'revert' });
+        if (e.target.closest('[data-close]')) done(null);
+      });
+      overlay.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
+      draw();
+      host.querySelector(`[data-mode="${st.mode}"]`).focus();
+    });
+  }
+
+  // 套用到自己
+  async function changeMyAvatar() {
+    const cur = { text: state.me.avatar || '', imgUrl: state.me.avatarImg ? await avatarUrl(meId(), state.me.avatarImg) : null };
+    const human = state.me.memberType === 'human';
+    const aiRow = human ? { askLabel: myAisForAvatar().length ? '請我的 AI 幫我做' : '', prevPath: '/api/me/avatar/prev' } : null;
+    const r = await avatarDialog({ title: '更換頭像', isAi: state.me.memberType === 'ai', fallback: firstChar(state.me.name, L('人', 'H')), cur, aiRow });
+    if (!r || r.kind === 'keep') return;
+    if (r.kind === 'ask') return askAvatar(myAisForAvatar(), '幫我做一個頭像：');
+    if (r.kind === 'revert') { try { await afterAvatar(await api('/api/me/avatar/revert', { method: 'POST' })); toast('已換回上一張頭像'); } catch (err) { toast(err.message); } return; }
+    try {
+      let me;
+      if (r.kind === 'img') {
+        const res = await fetch('/api/me/avatar', { method: 'PUT', headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': r.blob.type }, body: r.blob });
+        me = await res.json();
+        if (!res.ok) throw new Error(me?.error?.message || `HTTP ${res.status}`);
+      } else {
+        if (r.removeImg) await api('/api/me/avatar', { method: 'DELETE' });
+        me = await api('/api/me', { method: 'PATCH', body: { avatar: r.text } });
+      }
+      await afterAvatar(me);
+      toast('頭像已更新');
+    } catch (err) { toast(err.message); }
+  }
+  async function afterAvatar(me) {
+    Object.assign(state.me, { avatar: me.avatar, avatarImg: me.avatarImg });
+    drawMe();
+    await loadParticipants();
+    renderMessages(false);
+    document.querySelectorAll('#set-avatar').forEach(el => { el.innerHTML = avatar(state.me); });
+  }
+
+  // ---------- 工作卡片（第一階段） ----------
+  const CARD_ST = ['待整理', '待處理', '進行中', '待確認', '受阻', '已完成', '已封存'];
+  const PAGE_KEY = 'aigile-switch-page';
+  const VIEW_KEY = 'aigile-switch-work-view';
+  const work = {
+    cards: new Map(), since: null, loaded: false, lastSync: 0,
+    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
+    showArchived: false, openId: null, detail: null, editing: false, dragId: null,
+  };
+  const isMeRef = r => r && r.participantId === meId();
+  const closedSt = s => s === '已完成' || s === '已封存';
+  const stPill = s => `<span class="cst" data-st="${esc(s)}">${esc(s)}</span>`;
+  const NOTE = '人類紀錄'; // 人類記內容，AI 不主動看到（給卡號才讀）
+  const typeTag = c => (c.type !== '工作' && c.type !== NOTE ? `<span class="ctype" data-ty="${esc(c.type)}">${esc(c.type)}</span>` : '');
+  const cidHtml = c => `<span class="cid">${c.type === NOTE ? '<span aria-label="人類紀錄">🔒</span> ' : ''}${esc(c.cardId)}</span>`; // ；只顯示專案卡號
+  const mergedHtml = c => (c.mergedInto ? `<button type="button" class="merged-into" data-card="${esc(c.mergedInto)}">已整理 · 已整理到 ${esc(c.mergedInto)}</button>` : '');
+  // 人類紀錄只有「收集中」「已整理」兩種狀態
+  const noteStText = c => (c.status === '已完成' ? '已整理' : c.status === '已封存' ? '已封存' : '收集中');
+  const noteStPill = c => `<span class="cst" data-st="${esc(c.status)}">${noteStText(c)}</span>`;
+  const waitText = c => (c.waitFor ? `${isMeRef(c.waitFor) ? '等你' : '等 ' + c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || ''); // 「等你」不空格，人名前留空格
+  const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
+  const doneTitle = c => [c.done ? `完成：${c.done.by?.name || ''} ${shortTime(c.done.at)}` : '', c.verified ? `驗收：${c.verified.by?.name || ''} ${shortTime(c.verified.at)}` : ''].filter(Boolean).join(' · ');
+  const markHtml = c => (c.verified ? `<span class="cmark ok" title="${esc(doneTitle(c))}">✓ 已驗收</span>` : c.done ? `<span class="cmark wait" title="${esc(doneTitle(c))}">待驗收</span>` : '') + staleTag(c);
+  // 卡片瘦身：已完成＋已驗證滿 7 天由伺服器自動封存；未驗證不封存，超過 7 天標紅
+  const ARCHIVE_DAYS = 7, DAY_MS = 86400_000;
+  const archiveLeftMs = c => new Date(c.verified?.at || c.done?.at || c.updatedAt).getTime() + ARCHIVE_DAYS * DAY_MS - Date.now();
+  const pendingDays = c => Math.floor((Date.now() - new Date(c.done?.at || c.updatedAt).getTime()) / DAY_MS);
+  const mmdd = iso => { const d = new Date(iso); return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`; };
+  const doneTag = c => (c.status !== '已完成' ? '' : !c.verified
+    ? (pendingDays(c) > ARCHIVE_DAYS ? `<span class="pill-tag red">待驗證 ${pendingDays(c)} 天</span>` : '<span class="pill-tag yellow">待驗證</span>')
+    : archiveLeftMs(c) < DAY_MS ? '<span class="pill-tag grey">明天收起</span>' : '');
+  const archTag = c => (c.status === '已封存' ? `<span class="pill-tag grey">已封存 ${mmdd(c.updatedAt)}</span>` : '');
+  // 已封存的卡不預先載入：按「已封存」才分頁拿（每次 50 張）；數字來自伺服器 counts
+  work.archived = { count: 0, loaded: 0, hasMore: false, fetched: false, loading: false };
+  work.archSearch = { q: '', items: [], open: false, timer: null };
+  async function loadArchived(more = false) {
+    const a = work.archived;
+    if (a.loading) return;
+    a.loading = true;
+    try {
+      const d = await api(`/api/cards?status=${encodeURIComponent('已封存')}&limit=50&offset=${more ? a.loaded : 0}`);
+      for (const c of d.items) putCard(c);
+      a.loaded = (more ? a.loaded : 0) + d.items.length; a.hasMore = d.hasMore; a.fetched = true;
+    } finally { a.loading = false; }
+  }
+  const refreshArchivedCount = () => api('/api/cards?limit=1&counts=1').then(d => { work.archived.count = d.counts?.archived ?? work.archived.count; }).catch(() => {});
+  // 搜尋有字時一併搜已封存（另一組、預設收合）
+  function searchArchived() {
+    const q = work.q.trim(), sa = work.archSearch;
+    clearTimeout(sa.timer);
+    if (!q) { sa.q = ''; sa.items = []; return; }
+    sa.timer = setTimeout(async () => {
+      try {
+        const d = await api(`/api/cards?status=${encodeURIComponent('已封存')}&q=${encodeURIComponent(q)}&limit=50`);
+        if (work.q.trim() !== q) return;
+        sa.q = q; sa.items = d.items.filter(cardInView);
+        renderWork();
+      } catch {}
+    }, 300);
+  }
+  const shortTime = iso => fmtTime(iso).replace(/^\d{4}\//, '').replace(/(\d\d:\d\d):\d\d$/, '$1');
+  function ownerHtml(c) {
+    if (!c.owner) return '<span class="cowner none">未指派</span>';
+    const p = state.participants.get(c.owner.participantId) || c.owner;
+    return `<span class="cowner">${avatar(p)}<span>${esc(c.owner.name)}</span></span>`;
+  }
+
+  const optionsOf = c => (c.decision?.options?.length ? c.decision.options : ['同意']);
+  // 建議方案的文字剛好只對到一個選項，才算「建議」；對不到或對到多個回 -1，全部同一種樣式
+  const normRec = t => String(t || '').toLowerCase().replace(/[\s「」『』"'“”‘’。，、；;：:,.!！?？()（）]/g, '');
+  function recommendedIndex(rec, opts) {
+    const r = normRec(rec), head = normRec(String(rec || '').trim().split(/[\s，,。.:：、；;！!？?（(]/)[0]);
+    if (!r) return -1;
+    let hits = opts.map((o, i) => ({ i, t: normRec(o) })).filter(o => o.t && (o.t.length >= 2 ? r.includes(o.t) : r === o.t || head === o.t));
+    hits = hits.filter(h => !hits.some(o => o.t !== h.t && o.t.includes(h.t))); // 「上線」被「先不上線」包住：算後者
+    return hits.length === 1 ? hits[0].i : -1;
+  }
+  const REC_TAG = '<span class="rec-tag">建議</span>';
+  // 這張決策卡現在是在等「我」做決定
+  const decidingMe = c => c.type === '決策' && c.status === '待確認' && !c.decision?.result && c.decision?.decider?.participantId === meId() && isMeRef(c.waitFor);
+  // 「待確認」分兩種——決策卡＝等決定（黃）；AI 交給人類的卡＝等驗收（綠）
+  const verifyingMe = c => c.status === '待確認' && c.type !== '決策' && c.type !== NOTE && state.me?.memberType === 'human' && (isMeRef(c.waitFor) || (!c.waitFor && c.owner?.participantId === meId()));
+  function confirmPill(c) {
+    if (c.status !== '待確認' || c.type === NOTE) return '';
+    const dec = c.type === '決策', who = dec ? (c.decision?.decider || c.waitFor) : (c.waitFor || c.owner);
+    const mine = who?.participantId === meId(), act = dec ? '決定' : '驗收';
+    return `<span class="cfm-pill ${dec ? 'dec' : 'ver'}">${mine ? `等你${act}` : `等${who?.name ? ' ' + esc(who.name) + ' ' : ''}${act}`}</span>`;
+  }
+  // 驗收通過＝標已完成（人類完成即驗收）；退回＝填原因，卡回到交過來的 AI
+  // 收件匣裡驗收／退回：留在原位，該列原地淡出、下一列補上；數字（紅點、分頁標題）立刻更新
+  const verRow = id => (state.page === 'inbox' ? document.querySelector(`#page-work [data-ver-row="${CSS.escape(id)}"]`) : null);
+  const rowBusy = (row, on) => row?.querySelectorAll('button').forEach(b => { b.disabled = on; });
+  // 這張卡交給你驗收的通知一起標為已處理：原本卡還在「等你驗收」時藏著，驗收完就冒到上面「要你回覆」，整頁被往下推
+  function ackCardNotes(id) {
+    const ids = (work.notes || []).filter(n => !n.dm && [...(state.msgCards.get(n.messageId) || []), cardIdOf(n.preview || '')].includes(id)).map(n => n.notificationId);
+    if (!ids.length) return;
+    work.notes = work.notes.filter(n => !ids.includes(n.notificationId));
+    api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } }).then(refreshInboxCount).catch(() => {});
+  }
+  function fadeOutRow(row, id) {
+    ackCardNotes(id);
+    updateTodoBadge();
+    if (!row) return renderWork();
+    row.classList.add('fading');
+    setTimeout(renderWork, 250);
+  }
+  async function acceptCard(id) {
+    const row = verRow(id);
+    rowBusy(row, true);
+    const r = await patchCard(id, { status: '已完成' }, { render: !row });
+    if (!r) return rowBusy(row, false);
+    toast(`${id} 驗收通過`);
+    fadeOutRow(row, id);
+    loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox') renderWork(); }).catch(() => {});
+  }
+  async function rejectCard(id) {
+    const c = work.cards.get(id);
+    const reason = await promptReason(`退回 ${id}？`, '退回原因（會回覆到交接訊息，交過來的 AI 會收到）');
+    if (!reason) return;
+    try {
+      const r = await api(`/api/cards/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason, version: c?.version } });
+      work.cards.set(id, r);
+      fadeOutRow(verRow(id), id); // 原地淡出
+      if (work.openId === id) openCard(id);
+      toast(`已退回給 ${r.owner?.name || 'AI'}`);
+    } catch (err) { toast(err.message); }
+  }
+  function promptReason(title, label) {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title, size: 'narrow', body: `<label class="field"><span class="field-label">${esc(label)}</span><textarea autocomplete="off" autocorrect="on" id="rj-input" rows="3" maxlength="500"></textarea></label><p class="error" id="rj-err" role="alert"></p>`,
+        foot: '<button class="btn" type="button" data-rj="0">取消</button><button class="btn primary" type="button" data-rj="1">退回</button>' });
+      document.body.appendChild(host);
+      const input = host.querySelector('#rj-input');
+      input.focus();
+      const done = ok => { const v = input.value.trim(); if (ok && !v) { host.querySelector('#rj-err').textContent = '請寫退回原因'; return input.focus(); } host.remove(); resolve(ok ? v : null); };
+      holdBackdrop(host.firstElementChild);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-rj]'); if (b) done(b.dataset.rj === '1'); else if (e.target.closest('[data-close]')) done(false); });
+      host.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+    });
+  }
+  // [需確認] 訊息裡提到「正在等我決定的決策卡」→ 以決策卡為準，訊息不再單獨列出
+  const cardOfConfirm = d => {
+    const text = state.byId.get(d.messageId)?.text || d.title || '';
+    for (const id of cardRefsIn(text)) { const c = work.cards.get(id); if (c && (decidingMe(c) || (c.decision?.deferred && c.decision.decider?.participantId === meId()))) return c; }
+    return null;
+  };
+  work.note = null; // { id, kind: '不同意' | '要求補充', text }
+  // ---------- 行內輸入：待你處理清單與卡片抽屜共用同一個元件 ----------
+  // key 前綴：m:訊息編號（[需確認] 訊息）、c:卡號（決策卡）、s:建議編號、k:卡號（一般卡片）
+  work.drafts = {};      // key → 草稿，切換項目不遺失
+  work.openInl = null;   // 手機一次只展開一項
+  const narrowInl = () => matchMedia('(max-width: 600px)').matches;
+  const inlBtn = (key, act, label, { cls = '', need = false, primary = false, result = '' } = {}) =>
+    `<button type="button" class="btn small ${cls}" data-inl-act="${act}" data-inl="${esc(key)}" ${result ? `data-result="${esc(result)}"` : ''} data-need="${need ? 1 : 0}" ${primary ? 'data-primary="1"' : ''} ${need && !(work.drafts[key] || '').trim() ? 'disabled' : ''}>${label}</button>`;
+  const userText = (tpl, ...vals) => { const I = window.aigileI18n, t = (I?.lang === 'en' && I.tr(tpl)) || tpl; return `<span data-nt>${esc(t).replace(/\{(\d+)\}/g, (m, i) => esc(vals[i] ?? ''))}</span>`; }; // 固定的字照字典翻一次、使用者寫的照原文；整段不再給字典翻
+  const decOptBtns = (key, c) => { const ri = recommendedIndex(c.decision?.recommendation, optionsOf(c)); return optionsOf(c).map((o, i) => inlBtn(key, 'decide', `${userText('決定「{0}」', o)}${i === ri ? REC_TAG : ''}`, { cls: i === ri ? 'ok rec' : '', result: o })).join(''); };
+  function inlineHtml(key, kind, c) {
+    if (narrowInl() && work.openInl !== key) {
+      if (kind !== 'decision') return `<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">回覆…</button>`;
+      // 手機的決策卡：選項按鈕直接看得到，留言、不同意、要求補充、先擱著收在「其他回覆…」
+      return `<div class="inl" data-inl-root="${esc(key)}"><div class="inl-actions">${decOptBtns(key, c)}<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">其他回覆…</button></div><p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
+    }
+    let btns = '', hint = '想說什麼都可以寫在這裡（Ctrl+Enter 送出）';
+    if (kind === 'confirm') btns = inlBtn(key, 'send', '送出', { cls: 'primary', need: true, primary: true });
+    else if (kind === 'card') { const n = cardRecipients(key, c).length; btns = inlBtn(key, 'send', cardSendLabel(n), { cls: n ? 'primary' : 'quiet', need: true, primary: true }) + `<button type="button" class="btn small" data-inl-at="${esc(key)}">＠ 加人</button>`; }
+    else if (kind === 'sugg') {
+      hint = '想說明或留言給提案的 AI（Ctrl+Enter 留言）';
+      btns = inlBtn(key, 'sugg-note', '只留言', { need: true, primary: true }) + inlBtn(key, 'sugg-skip', '略過並附原因', { need: true });
+    } else if (kind === 'decision') {
+      hint = '說明可選填；不同意或要求補充一定要寫；先擱著可寫原因（Ctrl+Enter 只留言）';
+      btns = decOptBtns(key, c)
+        + inlBtn(key, 'opinion', '只留言，不決定', { need: true, primary: true })
+        + inlBtn(key, 'decide', '不同意', { need: true, result: '不同意' })
+        + inlBtn(key, 'decide', '要求補充', { need: true, result: '要求補充' })
+        + inlBtn(key, 'defer', '先擱著（暫緩）');
+    }
+    return `<div class="inl" data-inl-root="${esc(key)}">
+      <div class="inl-field"><textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${kind === 'card' ? '想說什麼都可以寫在這裡，打 @ 可以指定人（Ctrl+Enter 送出）' : hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
+        ${kind === 'card' ? '<ul class="mention-list" role="listbox" aria-label="選擇成員" hidden></ul>' : ''}</div>
+      ${kind === 'card' ? cardToHtml(key, c) : ''}
+      <div class="inl-actions">${btns}</div>
+      ${kind === 'decision' ? '<p class="muted small inl-note">留言會通知提案人；先擱著會移出收件匣，之後可在工作頁恢復。</p>' : ''}
+      <p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
+  }
+  const decisionActions = c => inlineHtml('c:' + c.cardId, 'decision', c);
+  // 卡片回覆的收件人
+  work.inlRm = {}; // key → 使用者按 × 移除的成員
+  const cardMembers = c => [...state.participants.values()].filter(p => p.status !== 'disabled' && memberIn(p, c.project));
+  const cardMentionCandidates = c => raw => { const q = raw.toLowerCase(); return cardMembers(c).map(p => ({ ...p, role: roleIn(p, c.project) })).filter(p => p.participantId !== meId() && (!q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q))); };
+  function cardRecipients(key, c) {
+    const text = work.drafts[key] || '', out = new Map();
+    const add = (id, why) => { if (id && id !== meId() && !out.has(id)) out.set(id, why); };
+    const members = cardMembers(c);
+    for (const tok of text.match(/@[^\s@]+/g) || []) {
+      const name = tok.slice(1).replace(/[，。、,.!?！？：:；;）)」]+$/, '');
+      const p = members.find(x => x.name === name);
+      if (p) add(p.participantId, '你 @ 的');
+    }
+    add(c.owner?.participantId, '負責人');
+    add(c.waitFor?.participantId, '等誰');
+    if (!c.owner) add(c.createdBy?.participantId, '建卡人');
+    const rm = work.inlRm[key] || new Set();
+    return [...out].filter(([id]) => !rm.has(id)).map(([id, why]) => ({ id, why, name: state.participants.get(id)?.name || '?' }));
+  }
+  function cardToHtml(key, c) {
+    const to = cardRecipients(key, c);
+    return `<div class="inl-to" data-inl-to="${esc(key)}"><span class="muted small">會通知：</span>${to.length
+      ? to.map(r => `<span class="to-chip"><b>${esc(r.name)}</b><span class="muted small">${esc(r.why)}</span><button type="button" class="to-x" data-inl-rm="${esc(r.id)}" data-inl="${esc(key)}" aria-label="不通知 ${esc(r.name)}">×</button></span>`).join('')
+      : `<span class="muted small">沒有人（${isMeRef(c.owner) ? '你是負責人' : c.owner ? '負責人已移除' : '沒有負責人'}，${c.waitFor ? '等誰已移除' : '也沒有等誰'}）</span>`}</div>`;
+  }
+  const cardSendLabel = n => (n ? `送出並通知 ${n} 人` : '只留紀錄，不通知');
+  function refreshCardTo(key) {
+    const c = work.cards.get(key.slice(2)), root = document.querySelector(`[data-inl-root="${CSS.escape(key)}"]`);
+    if (!c || !root) return;
+    root.querySelector('[data-inl-to]').outerHTML = cardToHtml(key, c);
+    const b = root.querySelector('[data-inl-act="send"]'), n = cardRecipients(key, c).length;
+    if (b && !b.textContent.includes('送出中')) { b.textContent = cardSendLabel(n); b.classList.toggle('primary', !!n); b.classList.toggle('quiet', !n); }
+  }
+
+  function inlineInput(e) {
+    const ta = e.target.closest?.('[data-inl-text]');
+    if (!ta) return false;
+    work.drafts[ta.dataset.inlText] = ta.value;
+    const root = ta.closest('.inl');
+    root.querySelectorAll('[data-need="1"]').forEach(b => { b.disabled = !ta.value.trim(); });
+    if (ta.dataset.inlText.startsWith('k:')) refreshCardTo(ta.dataset.inlText);
+    return true;
+  }
+  function inlineKey(e) {
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-inl-text]')) return;
+    e.preventDefault();
+    const b = e.target.closest('.inl')?.querySelector('[data-primary="1"]');
+    if (b && !b.disabled) b.click();
+  }
+  function inlineClick(e) {
+    const open = e.target.closest?.('[data-inl-open]');
+    if (open) {
+      work.openInl = open.dataset.inlOpen;
+      renderWork(); if (work.openId) renderDrawer(false);
+      const ta = document.querySelector(`[data-inl-text="${CSS.escape(work.openInl)}"]`);
+      if (ta) { ta.focus(); ta.scrollIntoView({ block: 'center' }); }
+      return true;
+    }
+    const rmb = e.target.closest?.('[data-inl-rm]');
+    if (rmb) { const k = rmb.dataset.inl; (work.inlRm[k] ||= new Set()).add(rmb.dataset.inlRm); refreshCardTo(k); return true; }
+    const at = e.target.closest?.('[data-inl-at]');
+    if (at) {
+      const ta = document.querySelector(`[data-inl-text="${CSS.escape(at.dataset.inlAt)}"]`);
+      if (ta) { const p = ta.selectionStart ?? ta.value.length, pre = ta.value.slice(0, p), sep = pre && !/\s$/.test(pre) ? ' ' : ''; ta.value = pre + sep + '@' + ta.value.slice(p); ta.focus(); const c2 = p + sep.length + 1; ta.setSelectionRange(c2, c2); ta.dispatchEvent(new Event('input', { bubbles: true })); ta.openMention?.(); }
+      return true;
+    }
+    const b = e.target.closest?.('[data-inl-act]');
+    if (!b) return false;
+    if (!b.disabled) inlineAct(b);
+    return true;
+  }
+  async function inlineAct(btn) {
+    const key = btn.dataset.inl, act = btn.dataset.inlAct, id = key.slice(2), root = btn.closest('.inl');
+    const text = (work.drafts[key] || '').trim();
+    const errEl = root.querySelector('[data-inl-err]');
+    const label = btn.innerHTML; // 按鈕裡可能有「建議」標籤
+    errEl.textContent = '';
+    root.querySelectorAll('button, textarea').forEach(x => { x.disabled = true; });
+    btn.textContent = '送出中…';
+    const post = body => postMsg({ requestId: newRequestId(), ...body });
+    const others = ids => [...new Set(ids)].filter(x => x && x !== meId());
+    try {
+      if (act === 'send' && key.startsWith('m:')) {
+        let m = state.byId.get(id); if (!m) m = await api(`/api/messages/${encodeURIComponent(id)}`);
+        await post({ text: `[回覆] ${text}`, replyToMessageId: id, recipientIds: others([m.author.participantId]) });
+      } else if (act === 'send') { // 一般卡片：照「會通知」名單——@ 的人＋負責人＋等誰（沒負責人改建卡人），可移除
+        const c = work.cards.get(id), to = c ? cardRecipients(key, c) : [];
+        await post({ text: `[回覆] ${id}：${text}`, cardId: id, recipientIds: to.map(r => r.id) });
+        delete work.inlRm[key];
+        work.sentTo = to.length ? `已送出，通知 ${to.map(r => r.name).join('、')}` : '已送出（只留紀錄，沒有通知任何人）';
+      } else if (act === 'opinion') { // 決策卡只送意見：給提案人，卡片狀態不變
+        const c = work.cards.get(id);
+        await post({ text: `[回覆] ${id}（決策意見）：${text}`, cardId: id, recipientIds: others([c?.decision?.proposer?.participantId]) });
+      } else if (act === 'decide') {
+        const c = work.cards.get(id), result = btn.dataset.result;
+        if (['不同意', '要求補充'].includes(result) && !text) throw new Error('請先寫說明');
+        const r = await api(`/api/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { result, note: text, version: c?.version } });
+        work.cards.set(id, r);
+        toast(result === '要求補充' ? `已請 ${r.waitFor?.name || '提案人'} 補充` : `已記錄決定：${result}`);
+      } else if (act === 'defer') {
+        const c = work.cards.get(id);
+        work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/defer`, { method: 'POST', body: { reason: text, version: c?.version } }));
+        toast('已暫緩，會從收件匣移出；要繼續請到「工作」按「恢復」');
+      } else if (act === 'sugg-note' || act === 'sugg-skip') {
+        const g = (work.sugg || []).find(x => x.suggestionId === id);
+        if (!g) throw new Error('這則建議已經被處理過了');
+        const what = g.kind === 'create' ? `建立卡片「${g.create.title}」` : `${ckey(g.card?.cardId || '')} 狀態改為「${g.to}」`;
+        if (act === 'sugg-skip') await api(`/api/suggestions/${encodeURIComponent(id)}/skip`, { method: 'POST', body: {} });
+        await post({ text: `[回覆] ${act === 'sugg-skip' ? '略過了你的建議' : '關於你的建議'}（${what}）：${text}`, ...(g.card?.cardId ? { cardId: g.card.cardId } : {}), recipientIds: others([g.from?.participantId]) });
+      }
+      delete work.drafts[key]; work.openInl = null;
+      if (act !== 'decide' && act !== 'defer') toast(work.sentTo || '已送出');
+      work.sentTo = null;
+      await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]);
+      updateTodoBadge(); renderWork();
+      if (work.openId) openCard(work.openId);
+    } catch (err) {
+      root.querySelectorAll('button, textarea').forEach(x => { x.disabled = false; });
+      root.querySelectorAll('[data-need="1"]').forEach(x => { x.disabled = !(work.drafts[key] || '').trim(); });
+      btn.innerHTML = label;
+      errEl.textContent = '送出失敗：' + err.message + '（內容還在，可以再試一次）';
+    }
+  }
+  function decisionBox(c) {
+    const d = c.decision;
+    return `<div class="dbox"><span class="small muted strong">建議方案</span>${d.recommendation ? `<span data-nt>${esc(d.recommendation)}</span>` : '<span>未提供</span>'}</div>
+      <dl class="dfields compact"><dt>提案人</dt><dd>${esc(d.proposer?.name || '—')}</dd><dt>決策者</dt><dd>${esc(d.decider?.name || '—')}</dd>
+        <dt>影響</dt><dd data-nt>${esc(d.impact || '—')}</dd><dt>決定後</dt><dd data-nt>${esc(d.afterNext || '—')}</dd></dl>`;
+  }
+  function decisionStatus(c) {
+    const d = c.decision;
+    if (d.result) return `<div class="dresult"><b>${userText('決定：{0}', d.result)}</b><span class="muted small">${esc(d.by?.name || '')} · ${shortTime(d.at)}${d.note ? ' · ' + esc(d.note) : ''}</span></div>`;
+    if (d.deferred) {
+      const mine = [d.decider?.participantId, d.proposer?.participantId].includes(meId());
+      return `<div class="dresult"><b>暫緩中</b><span class="muted small">${esc(c.blocker)}</span>${mine ? `<button type="button" class="btn small primary" data-resume="${esc(c.cardId)}">恢復</button>` : ''}</div>`;
+    }
+    if (decidingMe(c)) return decisionActions(c);
+    if (c.status !== '待確認') return '';
+    const who = c.waitFor?.name || d.decider?.name;
+    return `<p class="muted small">${c.waitFor && c.waitFor.participantId !== d.decider?.participantId ? `已請 ${esc(who)} 補充後，再回到 ${esc(d.decider?.name || '決策者')} 決定。` : `等 ${esc(who)} 決定。`}</p>`;
+  }
+
+  async function loadCards() {
+    const d = await api('/api/cards?limit=200&counts=1'); // 預設不載入已封存
+    work.cards = new Map(d.items.map(c => [c.cardId, c]));
+    work.archived = { count: d.counts?.archived ?? 0, loaded: 0, hasMore: false, fetched: false, loading: false };
+    work.since = d.nextSince;
+    work.loaded = true;
+    work.lastSync = Date.now();
+    drawAiNow(); // 卡片到了，「在做」才準
+    await loadSuggestions();
+  }
+  async function loadSuggestions() {
+    work.sugg = (await api('/api/suggestions?state=pending')).items;
+    updateTodoBadge();
+  }
+  // 增量同步：只讀上次之後有變動的卡片
+  async function syncCards() {
+    if (!work.loaded) return;
+    work.lastSync = Date.now();
+    const [d, sg] = await Promise.all([api('/api/cards?since=' + encodeURIComponent(work.since || '')), api('/api/suggestions?state=pending')]);
+    const suggChanged = JSON.stringify(sg.items.map(x => x.suggestionId)) !== JSON.stringify((work.sugg || []).map(x => x.suggestionId));
+    work.sugg = sg.items;
+    updateTodoBadge();
+    if (!d.items.length && !suggChanged) return;
+    const archMoved = d.items.some(c => c.status === '已封存' || work.cards.get(c.cardId)?.status === '已封存');
+    for (const c of d.items) putCard(c);
+    if (d.items.length) { work.since = d.nextSince; drawAiNow(); }
+    if (archMoved) await refreshArchivedCount(); // 有卡被封存或重新打開，已封存數字跟著更新
+    renderWork();
+    if (state.page === 'messages' && d.items.length) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
+    if (work.openId && d.items.some(c => c.cardId === work.openId) && !work.editing) openCard(work.openId);
+  }
+
+  // AI 建議區塊
+  function suggHtml(batch = false) {
+    const list = (work.sugg || []).filter(x => inView(x.project));
+    if (!list.length) return '';
+    for (const id of [...work.sel]) if (!list.some(g => g.suggestionId === id)) work.sel.delete(id);
+    const batchBar = batch ? `<div class="batch-bar" role="group" aria-label="批次處理"><span class="small">已選 <b>${work.sel.size}</b> 則</span><button type="button" class="btn small primary" data-batch="apply" ${work.sel.size ? '' : 'disabled'}>批次採用</button><button type="button" class="btn small" data-batch="skip" ${work.sel.size ? '' : 'disabled'}>批次略過</button><span class="muted small">逐則勾選後才能批次處理，不提供一鍵全部採用</span></div>` : '';
+    const what = g => (g.kind === 'create'
+      ? `建立${g.create.type}卡片「${esc(g.create.title)}」，負責人 ${esc(g.create.owner?.name || '未指派')}`
+      : `${esc(ckey(g.card?.cardId || ''))} ${esc(g.card?.title || '')} 狀態改為「${esc(g.to)}」${g.waitFor ? `，等 ${esc(g.waitFor.name)}` : ''}`);
+    return `<section class="wsugg"><div class="wsugg-head"><span class="wdot sg"></span><h3>AI 建議</h3><span class="wcount pur">${list.length}</span><span class="muted small">由你採用後才會建立或更新卡片</span></div>
+      ${batchBar}
+      ${list.map(g => `<div class="sugg-row${g.expired ? ' expired' : ''}" data-sugg-row="${esc(g.suggestionId)}">
+        ${batch ? `<label class="sugg-check"><input type="checkbox" data-sugg-check="${esc(g.suggestionId)}" ${work.sel.has(g.suggestionId) ? 'checked' : ''} aria-label="勾選這則建議"></label>` : ''}
+        <div class="sugg-main"><div class="sugg-top"><span class="sgk">${g.kind === 'create' ? '建立卡片' : '更新狀態'}</span>${g.expired ? '<span class="cmark stale" title="這張卡在建議之後已有變動，只能略過">已過期</span>' : ''}<span class="muted small">${esc(g.from?.name || '')}</span></div>
+          <b>${what(g)}</b><span class="small">${esc(g.why)}</span>
+          ${g.basisMessageId ? `<button type="button" class="link small" data-sugg-basis="${esc(g.basisMessageId)}">看依據訊息</button>` : ''}</div>
+        <div class="sugg-actions">
+          ${g.expired ? '' : `<button type="button" class="btn small primary" data-sugg-apply="${esc(g.suggestionId)}">採用</button>`}
+          ${g.kind === 'create' ? `<button type="button" class="btn small" data-sugg-edit="${esc(g.suggestionId)}">編輯後採用</button>` : ''}
+          <button type="button" class="link small" data-sugg-skip="${esc(g.suggestionId)}">略過</button></div>
+        ${inlineHtml('s:' + g.suggestionId, 'sugg', g)}
+      </div>`).join('')}</section>`;
+  }
+  async function suggAction(id, action, body) {
+    try {
+      const r = await api(`/api/suggestions/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: body || {} });
+      if (action === 'apply') { work.cards.set(r.cardId, r); toast(`已採用，${ckeyOf(r)} ${r.status}`); }
+      else toast('已略過建議');
+      await loadSuggestions();
+      renderWork();
+      return r;
+    } catch (err) {
+      toast(err.message);
+      if (err.code === 'NOT_PENDING') { await loadSuggestions().catch(() => {}); renderWork(); }
+      return null;
+    }
+  }
+
+  work.teamTab = 'status';
+  function renderTeamPage() {
+    const box = $('#page-work');
+    // 看板會在共用容器加 is-board（桌面版 overflow:hidden），切到團隊頁要清掉，否則滾輪捲不動
+    box.classList.remove('is-board');
+    // 同一個分頁重畫（例如切專案）時保留捲動位置，不跳回頂端
+    const keep = work.teamScrollTab === work.teamTab ? box.scrollTop : 0;
+    work.teamScrollTab = work.teamTab;
+    if (work.teamTab === 'ai') work.teamTab = 'status'; // 我的 AI 移到頭像選單
+    const tabs = [['status', '團隊狀態'], ['memory', 'AI 工作記憶'], ['members', '成員名單']];
+    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>團隊</h2></div>
+      <div class="seg-scope" role="group" aria-label="團隊分頁">${tabs.map(([k, t]) => `<button type="button" data-team-tab="${k}" aria-pressed="${work.teamTab === k}">${t}</button>`).join('')}</div></div>
+      <div id="team-pane" class="inline-pane"></div>`;
+    const done = ({ status: openTeam, memory: openTeamMemory, members: openMembers })[work.teamTab]();
+    if (keep) Promise.resolve(done).then(() => { box.scrollTop = keep; });
+    syncTeamNav();
+  }
+  // AI 工作記憶（獨立一個子項目）
+  async function openTeamMemory() {
+    await loadTeam();
+    const t = state.team;
+    if (!t) return toast('無法取得團隊狀態');
+    openModal('團隊狀態', `${aiStateHtml(t) || '<p class="muted">還沒有 AI。</p>'}`, { sub: 'AI 自己回報的目前任務與待辦，只在狀態改變時更新；依專案可見。' });
+    const pane = $('#team-pane'); if (pane) pane.querySelectorAll('.modal-head h2').forEach(h => { h.textContent = 'AI 工作記憶'; });
+  }
+  // 側欄與手機選單的「團隊」兩層選單：展開狀態記在瀏覽器，目前所在子項目有選取標示
+  const TEAM_NAV_KEY = 'aigile-switch-team-nav';
+  function syncTeamNav() {
+    const open = store.get(TEAM_NAV_KEY) === '1' || state.page === 'team';
+    document.querySelectorAll('[data-team-group]').forEach(g => {
+      g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(open));
+      g.querySelector('.chev').textContent = open ? '▾' : '▸';
+      g.querySelector('.nav-sub').hidden = !open;
+      g.querySelector('[data-team-toggle]').toggleAttribute('data-current', state.page === 'team');
+      g.querySelectorAll('[data-team-go]').forEach(b => { if (state.page === 'team' && b.dataset.teamGo === work.teamTab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    });
+  }
+  // 鍵盤：在子項目上用 ↑↓ 移動
+  document.addEventListener('keydown', e => {
+    if (!['ArrowUp', 'ArrowDown'].includes(e.key) || !e.target.closest?.('.nav-sub')) return;
+    e.preventDefault();
+    const items = [...e.target.closest('.nav-sub').querySelectorAll('button')], i = items.indexOf(e.target);
+    items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+  });
+  // 側欄與手機選單的「設定」兩層選單：進階設定／API 資訊／QR Code／登出，展開狀態記在瀏覽器
+  const SET_NAV_KEY = 'aigile-switch-set-nav';
+  function syncSetNav(open) {
+    document.querySelectorAll('[data-set-group]').forEach(g => {
+      g.querySelector('[data-set-toggle]').setAttribute('aria-expanded', String(open));
+      g.querySelector('.chev').textContent = open ? '▾' : '▸';
+      g.querySelector('.nav-sub').hidden = !open;
+    });
+  }
+  syncSetNav(store.get(SET_NAV_KEY) === '1');
+  document.addEventListener('click', e => {
+    const st = e.target.closest('[data-set-toggle]');
+    if (st) { const open = st.getAttribute('aria-expanded') !== 'true'; store.set(SET_NAV_KEY, open ? '1' : '0'); syncSetNav(open); }
+  });
+  document.addEventListener('click', e => {
+    const tg = e.target.closest('[data-team-toggle]');
+    if (tg) { const open = tg.getAttribute('aria-expanded') === 'true'; store.set(TEAM_NAV_KEY, open ? '0' : '1'); document.querySelectorAll('[data-team-group]').forEach(g => { g.querySelector('.nav-sub').hidden = open; g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(!open)); g.querySelector('.chev').textContent = open ? '▸' : '▾'; }); return; }
+    const go = e.target.closest('[data-team-go]');
+    if (go) { closeSheet(false); if (go.dataset.teamGo === 'ai') return goTop('myai'); work.teamTab = go.dataset.teamGo; store.set(TEAM_NAV_KEY, '1'); if (state.page === 'team') renderTeamPage(); else showPage('team'); }
+  });
+  function openTodoPage() { closeSheet(false); showPage('inbox'); }
+  document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
+  function showPage(page, { replace = false, noHistory = false } = {}) {
+    if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); showPage(page, { replace, noHistory }); }); // 有未儲存的變更先提醒
+    if (work.openId) closeCard();
+    const v = projectView();
+    if (page === 'dm') { page = 'messages'; setTimeout(() => dmPanel(true), 0); } // 私訊改面板，舊網址照樣打開
+    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
+    if (state.page !== 'team') work.teamScrollTab = null; // 離開團隊頁就不再保留捲動位置（UX），回來從頂端開始
+    if (state.page !== 'hub' && !TOP_PAGES[state.page]) store.set(PAGE_KEY, state.page);
+    if (!noHistory) syncUrl(replace);
+    drawChrome();
+    document.body.classList.toggle('at-hub', state.page === 'hub');
+    $('#page-messages').hidden = state.page !== 'messages';
+    $('#page-work').hidden = state.page === 'messages'; // 收件匣與工作共用同一個容器
+    document.querySelectorAll('[data-nav]').forEach(b => {
+      if (b.dataset.nav === state.page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
+    syncTeamNav();
+    if (state.page === 'work') {
+      return (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
+    } else if (state.page === 'team') {
+      renderTeamPage();
+    } else if (state.page === 'hub') {
+      return Promise.all([work.loaded ? null : loadCards(), loadTeam().catch(() => {})]).then(renderWork).catch(err => toast(err.message));
+    } else if (state.page === 'files') {
+      const box = $('#page-work'); box.classList.remove('is-board');
+      box.innerHTML = '<div id="files-pane" class="inline-pane"></div>';
+      return openFiles(); // 文件改成頁面，不再用彈窗擋住左側選單
+    } else if (state.page === 'myai') {
+      return renderMyAiPage();
+    } else if (state.page === 'releases') {
+      return renderReleasesPage();
+    } else if (state.page === 'perm') {
+      return renderPermPage();
+    } else if (state.page === 'inbox') {
+      return Promise.all([work.loaded ? null : loadCards(), loadNotes(), loadTeam().catch(() => {})]).then(loadConfirmMsgs).then(() => { updateTodoBadge(); renderWork(); }).catch(err => toast(err.message));
+    } else scrollBottom();
+    return Promise.resolve();
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-nav]');
+    if (!b) return;
+    closeSheet(false);
+    showPage(b.dataset.nav);
+    if (b.dataset.nav === 'messages') $('#input').focus();
+  });
+
+  function visibleCards() {
+    const q = work.q.trim().toLowerCase();
+    return [...work.cards.values()].filter(c =>
+      cardInView(c)
+      && (!work.type || c.type === work.type)
+      && (!work.owner || c.owner?.participantId === work.owner)
+      && (!q || [c.title, c.next, c.cardId, c.legacyId].some(v => (v || '').toLowerCase().includes(q))))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  // 看板放不下時顯示「還有 N 欄」；左右兩邊都有，點了捲到那一邊的底，捲到底就收起
+  function boardMore() {
+    const board = $('#page-work .board');
+    if (!board || !wide()) return;
+    const mk = side => { const b = document.createElement('button'); b.type = 'button'; b.className = 'board-more' + (side === 'left' ? ' left' : ''); return b; };
+    const rightBtn = mk('right'), leftBtn = mk('left');
+    board.parentElement.style.position = 'relative';
+    board.after(rightBtn, leftBtn);
+    const update = () => {
+      const cols = [...board.querySelectorAll('.bcol')], r = board.getBoundingClientRect();
+      const hiddenR = cols.filter(c => c.getBoundingClientRect().right > r.right + 2).length; // 被切到一部分也算
+      const hiddenL = cols.filter(c => c.getBoundingClientRect().left < r.left - 2).length;
+      rightBtn.hidden = board.scrollLeft + board.clientWidth >= board.scrollWidth - 4;
+      leftBtn.hidden = board.scrollLeft <= 4;
+      rightBtn.textContent = hiddenR ? `還有 ${hiddenR} 欄 →` : '→';
+      leftBtn.textContent = hiddenL ? `← 還有 ${hiddenL} 欄` : '←';
+      board.classList.toggle('has-more', !rightBtn.hidden);
+      board.classList.toggle('has-less', !leftBtn.hidden);
+      rightBtn.setAttribute('aria-label', '看板往右捲，看其他欄位');
+      leftBtn.setAttribute('aria-label', '看板往左捲，看其他欄位');
+    };
+    rightBtn.onclick = () => board.scrollTo({ left: board.scrollWidth, behavior: 'smooth' });
+    leftBtn.onclick = () => board.scrollTo({ left: 0, behavior: 'smooth' });
+    board.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update, { passive: true });
+    requestAnimationFrame(update);
+  }
+  // 從「我的專案」點進來的那一項，重畫後仍標著並捲到它
+  function applyFocusItem() {
+    const f = work.focusItem;
+    if (!f || Date.now() > f.until || state.page !== 'inbox') return false;
+    const el = document.querySelector('#page-work ' + f.sel);
+    if (!el) return false;
+    el.classList.add('focus-item');
+    if (!f.scrolled) { f.scrolled = true; el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); }
+    return true;
+  }
+  function renderWork() {
+    const box = $('#page-work');
+    if (state.page === 'perm') return drawPerm();
+    if (!['work', 'inbox', 'hub'].includes(state.page) || !work.loaded) return;
+    box.classList.remove('is-board');
+    // 收件匣、總覽重畫時留在原本的捲動位置
+    const keepTop = html => { const top = box.scrollTop; box.innerHTML = html; if (box.scrollTop !== top) box.scrollTop = top; };
+    if (state.page === 'inbox') { keepTop(inboxHtml()); applyFocusItem(); return; }
+    if (state.page === 'hub') { keepTop(hubHtml()); return; }
+    const all = visibleCards();
+    const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
+    const keep = document.activeElement?.id;
+    box.innerHTML = `
+      <div class="work-head">
+        <div class="work-title"><h2>工作</h2><span class="muted small">${all.filter(c => !closedSt(c.status)).length} 張未完成</span></div>
+        <div class="seg-scope" role="group" aria-label="檢視方式">
+          <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
+          <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
+        </div>
+        <button class="btn primary" type="button" id="card-new">＋ 新增卡片</button>
+      </div>
+      <div class="work-filters">
+        <input id="card-q" type="search" placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片" value="${esc(work.q)}">
+        <select id="card-owner" aria-label="負責人"><option value="">所有負責人</option>${people.map(p => `<option value="${esc(p.participantId)}" ${work.owner === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      </div>
+      ${work.type === NOTE && all.some(c => c.type === NOTE && !closedSt(c.status)) ? (() => { const ns = all.filter(c => c.type === NOTE && !closedSt(c.status)); return `<div class="note-ask"><span class="muted small">AI 不會主動看到人類紀錄；收集夠了可以一次請 AI 讀完整理。</span><button type="button" class="btn primary small" data-ask-ai="${esc(ns.map(c => c.cardId).join(','))}">請 AI 整理這 ${ns.length} 張</button></div>`; })() : ''}
+      ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
+    box.classList.toggle('is-board', work.view === 'B'); // 看板：高度＝頁面剩餘高度，欄內各自捲動
+    if (work.view === 'B') boardMore();
+    if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+  }
+
+  function overviewHtml(all) {
+    const decideMe = all.filter(decidingMe);
+    const waitMe = all.filter(c => isMeRef(c.waitFor) && !closedSt(c.status) && !decidingMe(c));
+    const blocked = all.filter(c => c.status === '受阻');
+    const done = all.filter(c => c.status === '已完成');
+    const myTodo = all.filter(c => isMeRef(c.owner) && c.status === '待整理' && !waitMe.includes(c));
+    const panel = (title, cls, list, empty, meta, extra = '', keep = false) => `
+      <section class="wpanel ${cls}${list.length ? ' has' : ''}${keep ? ' keep' : ''}">
+        <div class="wpanel-head"><span class="wdot"></span><b>${title}</b><span class="wcount">${list.length}</span></div>
+        ${list.length ? list.slice(0, 3).map(c => `<button type="button" class="wpanel-item" data-card="${esc(c.cardId)}"><span>${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(meta(c))}</span></button>`).join('')
+          : `<p class="muted small">${empty}</p>`}
+        ${list.length > 3 ? `<button type="button" class="link small" data-filter="${cls === 'done' ? '已完成' : cls === 'blocked' ? '受阻' : 'open'}">查看全部 ${list.length} 張</button>` : ''}
+        ${extra}
+      </section>`;
+    const chips = [['open', '未完成', all.filter(c => !closedSt(c.status)).length], ...CARD_ST.map(s => [s, s === '已完成' ? '已完成（7 天）' : s, s === '已封存' ? work.archived.count : all.filter(c => c.status === s).length])];
+    const listed = all.filter(c => (work.filter === 'open' ? !closedSt(c.status) : c.status === work.filter));
+    const archMore = work.filter === '已封存' && work.archived.hasMore ? `<button type="button" class="btn small" data-arch-more ${work.archived.loading ? 'disabled' : ''}>再載入 50 張</button>` : '';
+    const sa = work.archSearch, archHits = work.q.trim() && sa.q === work.q.trim() && work.filter !== '已封存' ? sa.items.filter(c => !listed.some(x => x.cardId === c.cardId)) : [];
+    const archGroup = archHits.length ? `<div class="arch-group"><button type="button" class="arch-group-head" data-arch-toggle aria-expanded="${sa.open}">已封存 ${archHits.length}（${sa.open ? '點一下收合' : '收合中，點開'}）${sa.open ? '▴' : '▾'}</button>
+        ${sa.open ? archHits.map(c => `<button type="button" class="crow arch" data-card="${esc(c.cardId)}">${cidHtml(c)}<span class="crow-main"><span class="crow-title">${cardPTag(c)} ${esc(cardTitle(c))}</span></span><span class="crow-st">${archTag(c)}</span></button>`).join('') : ''}</div>` : '';
+    const decSection = decisionSectionHtml(decideMe);
+    return `
+      ${decSection}
+      ${suggHtml()}
+      <div class="wpanels">
+        ${panel('要你處理', 'mine', waitMe, myTodo.length ? `有 ${myTodo.length} 張你負責的卡還在待整理，還不用動手。` : '目前沒有要你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`,
+          !waitMe.length && myTodo.length ? '<button type="button" class="link small" data-filter="待整理">看待整理的卡</button>' : '', !waitMe.length && myTodo.length > 0)}
+        ${panel('受阻', 'blocked', blocked, '沒有受阻的卡片。', c => waitText(c) || '未填寫阻塞原因')}
+        ${panel('最近完成（7 天）', 'done', done, '最近 7 天沒有完成的卡片。', c => `${c.verified ? (archiveLeftMs(c) < DAY_MS ? '已驗證 · 明天收起' : '已驗證') : pendingDays(c) > ARCHIVE_DAYS ? `待驗證 ${pendingDays(c)} 天` : '待驗證'} · ${c.done?.by?.name || ''} · ${shortTime(c.done?.at || c.updatedAt)}`,
+          work.archived.count ? `<button type="button" class="link small" data-filter="已封存">更早的 ${work.archived.count} 張已封存</button>` : '')}
+      </div>
+      <div class="wchips" role="group" aria-label="依狀態篩選">
+        ${chips.map(([v, label, n]) => `<button type="button" data-filter="${esc(v)}" aria-pressed="${work.filter === v}"${v === '已封存' ? ' class="dashed"' : ''}>${label}<span>${n}</span></button>`).join('')}
+      </div>
+      ${work.q.trim() ? '<p class="muted small">搜尋時一併找已封存</p>' : ''}
+      <div class="crows">
+        ${listed.length ? listed.map(c => `
+          <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" data-card="${esc(c.cardId)}">
+            ${cidHtml(c)}
+            <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}${c.claim ? ' · 正在做：' + esc(c.claim.by?.name || '') : ''}</span></span>
+            <span class="crow-st">${c.type === NOTE ? noteStPill(c) : c.status === '待確認' ? confirmPill(c) : stPill(c.status)}${ownerHtml(c)}</span>
+            <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
+            <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
+          </button>`).join('') : `<p class="muted">${work.filter === '已封存' && work.archived.loading ? '載入中…' : '沒有符合條件的卡片。'}</p>`}
+        ${archMore}
+      </div>
+      ${archGroup}`;
+  }
+
+  // 決策卡區塊（總覽與「待你處理」共用）
+  function decisionSectionHtml(decideMe) {
+    return decideMe.length ? `
+      <section class="wdecisions"><div class="wdec-head"><h3>等你決定</h3><span class="wcount ora">${decideMe.length}</span></div>
+        <div class="dgrid">${decideMe.map(c => `
+          <article class="dcard" data-dcard="${esc(c.cardId)}">
+            <div class="dcard-top"><span class="ctype" data-ty="決策">決策</span>${cidHtml(c)}<span class="grow"></span>
+              <button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
+            <h4 data-nt>${esc(c.decision.question)}</h4>
+            ${decisionActions(c)}
+            ${decisionBox(c)}
+          </article>`).join('')}</div></section>` : '';
+  }
+  document.addEventListener('click', e => { // 收件匣「等你驗收」
+    const ok = e.target.closest?.('[data-ver-ok]'), no = e.target.closest?.('[data-ver-no]'), rp = e.target.closest?.('[data-ver-report]');
+    if (ok) acceptCard(ok.dataset.verOk); else if (no) rejectCard(no.dataset.verNo);
+    else if (rp) { closeCard(); showPage('messages'); jumpTo(rp.dataset.verReport); } // 看回報＝跳到 AI 的 [完成]／交接訊息
+  });
+  // 等人驗收的卡，有回報就給「看回報」，沒有就灰色寫「AI 還沒交回報」（不要點進去是空的）
+  const reportBtn = c => (c.report ? `<button type="button" class="btn small" data-ver-report="${esc(c.report.messageId)}">看回報</button>` : '<span class="muted small ver-noreport">AI 還沒交回報</span>');
+  // ---------- 收件匣：要你處理＋給你知道的 ----------
+  work.notes = [];
+  async function loadNotes() {
+    work.notesAt = Date.now();
+    const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=50&order=desc'), api('/api/me/notices').catch(() => ({ items: [] })), loadJoins()]); // 待審申請（只有 leader／管理員讀）
+    const dmBefore = (work.notes || []).filter(n => n.dm).map(n => n.notificationId).join();
+    work.notes = a.items; work.sec = b.items;
+    if (b.items.some(n => n.kind === 'join_approved' && !n.readAt) && !work.joinReloaded) { // 申請被核准：重新整理就看得到專案
+      const me = await api('/api/me').catch(() => null);
+      if (me && (me.projects || []).some(p => !(state.me?.projects || []).includes(p))) { work.joinReloaded = true; toast('申請已核准，正在載入新專案…'); setTimeout(() => location.reload(), 800); }
+    }
+    if (dmVisible() && work.notes.filter(n => n.dm).map(n => n.notificationId).join() !== dmBefore) loadDmSummary(); // 有私訊通知才更新清單
+    work.notesMore = a.hasMore ? Math.max(0, (a.total || 0) - a.items.length) : 0; // 只顯示最新 50 則，其餘寫數字
+  }
+  // 安全通知（新裝置用帳密登入、主機救援）只存在本人帳號，不是群組訊息
+  work.sec = [];
+  const secDev = d => String(d || '').replace(/^[^·]+·\s*/, '');
+  function secHtml(n) {
+    const when = fmtDate(n.createdAt);
+    if (/^join_/.test(n.kind)) {
+      const [ico, hint, act] = n.kind === 'join_request' ? ['🙋', '核准或拒絕：', '<button type="button" class="btn small" data-join-review="">看申請</button>']
+        : n.kind === 'join_approved' ? ['✅', '側欄已經有這個專案。', ''] : ['📮', '可以改寫想做什麼，隨時再申請。', '<button type="button" class="btn small" data-join-open>再申請</button>'];
+      return `<div class="sec-note" id="sec-${esc(n.id)}"><span class="sec-ico" aria-hidden="true">${ico}</span>
+      <div class="sec-main"><span>${esc(n.detail)} · ${esc(when)}</span><span class="small">${hint}</span></div>
+      <div class="sec-acts">${act}<button type="button" class="btn small" data-sec-read="${esc(n.id)}" aria-label="${esc(n.detail)} 知道了">知道了</button></div></div>`;
+    }
+    const [text, hint] = n.kind === 'password_login' ? [`有新裝置用你的帳號密碼登入：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它並改密碼。']
+      : n.kind === 'rescue_login' ? [`有裝置用主機救援連結登入你的帳號：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並檢查誰有主機部署權限。']
+      : n.kind === 'login_code_read' ? [`有裝置讀取了你的登入碼：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並換一組登入碼（舊的會失效）。']
+      : [`主機產生了一次性救援登入連結（${n.detail}）· ${when}，15 分鐘內有效。`, '不是你或你的團隊？請檢查誰有主機部署權限。'];
+    return `<div class="sec-note" id="sec-${esc(n.id)}"><span class="sec-ico" aria-hidden="true">🔐</span>
+      <div class="sec-main"><span>${esc(text)}</span><span class="small">${esc(hint)}</span></div>
+      <div class="sec-acts">${n.kind === 'rescue_link' ? '' : '<button type="button" class="btn small" data-sec-devices>我的裝置</button>'}<button type="button" class="btn small" data-sec-read="${esc(n.id)}" aria-label="${esc(text)} 知道了">知道了</button></div></div>`;
+  }
+  document.addEventListener('click', async e => {
+    if (!e.target.closest?.('#page-work')) return;
+    if (e.target.closest('[data-sec-devices]')) return openDevices();
+    const r = e.target.closest('[data-sec-read]');
+    if (!r) return;
+    const id = r.dataset.secRead, backup = work.sec;
+    work.sec = work.sec.filter(n => n.id !== id);
+    renderWork();
+    try { await api('/api/me/notices/read', { method: 'POST', body: { ids: [id] } }); } catch (err) { work.sec = backup; renderWork(); toast(err.message); }
+  });
+  const ackNotes = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
+  // 按下畫面立即移除、背景一次送出（每 100 則一批、並行），失敗才還原
+  async function ackNotesNow(ids, msg) {
+    if (!ids.length) return;
+    const gone = new Set(ids), backup = work.notes;
+    work.notes = work.notes.filter(n => !gone.has(n.notificationId));
+    renderWork(); updateTodoBadge();
+    if (msg) toast(msg);
+    try {
+      const chunks = [];
+      for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100));
+      await Promise.all(chunks.map(ackNotes));
+    } catch (err) { work.notes = backup; renderWork(); toast('沒有標成已讀：' + err.message); }
+  }
+  // 「給你知道的」：同一則已經出現在「要你處理」的 [需確認]，不重複顯示
+  // 「要你回覆」只看通知（跟徽章同一個來源）；[需確認]、交接、等你驗收／決定的卡已在別區，不重複
+  const askNoteRaw = () => { const dup = new Set(legacyConfirms().map(d => d.messageId));
+    return (work.notes || []).filter(n => !n.dm && n.ask === true && !work.answered.has(n.messageId) && !dup.has(n.messageId) && !/^\s*\[(需確認|交接)\]/.test(n.preview || '') && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !askCardElsewhere(n)); };
+  const askCardElsewhere = n => [...(state.msgCards.get(n.messageId) || []), cardIdOf(n.preview || '')].filter(Boolean).some(id => { const c = work.cards.get(id); return c && (verifyingMe(c) || decidingMe(c)); });
+  const askNotes = () => askNoteRaw().filter(n => msgInView(n.project ?? null));
+  const dmNotes = () => (work.notes || []).filter(n => n.dm && msgInView(n.project ?? null));
+  const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !n.dm && n.ask !== true && msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
+  // 講已經決定完的決策卡的通知，不再列在「給你知道的」
+  const decidedCardNote = n => cardRefsIn(state.byId.get(n.messageId)?.text || n.preview || '').some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
+  function notesHtml() {
+    const list = noteList();
+    const reason = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
+    const sec = work.sec || [];
+    return `<section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>給你知道的</h3><span class="wcount">${list.length + sec.length}</span><span class="grow"></span>
+        ${list.length ? '<button type="button" class="btn small" data-note-ackall>全部標為已讀</button>' : ''}</div>
+      ${sec.map(secHtml).join('')}
+      ${list.length || sec.length ? list.map(n => {
+        const who = state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
+        return `<div class="sugg-row fyi-row" id="fyi-${esc(n.notificationId)}"><span class="ndot" aria-hidden="true"></span>${avatar(who)}
+          <button type="button" class="fyi-main" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}" aria-label="${esc(`未讀，${n.sender.name}，${fmtTime(n.createdAt)}：${n.preview}。查看`)}">
+            <span class="fyi-top"><b>${esc(n.sender.name)}</b>${n.ask === false ? '<span class="apill fyi me">知會你</span>' : n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></span>
+            <span class="fyi-text">${esc(n.preview.replace(/\s+/g, ' '))}</span></button>
+          <button type="button" class="fyi-read" data-note-ack="${esc(n.notificationId)}" aria-label="${esc(n.sender.name)} 這則標為已讀">已讀</button></div>`;
+      }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}
+      ${work.notesMore ? `<p class="muted small notes-more">只顯示最新 50 則，還有 ${work.notesMore} 則較舊的通知。</p>` : ''}</section>`;
+  }
+  // 第一層「我的專案」（取代今日總覽）：每個專案一張卡＋跨專案頻道卡；右欄「要你處理」依專案分組，只列不決定
+  function projStats(p) {
+    const today = new Date().toDateString();
+    const cs = [...work.cards.values()].filter(c => c.project === p);
+    return { done: cs.filter(c => c.status === '已完成' && c.done?.at && new Date(c.done.at).toDateString() === today).length, doing: cs.filter(c => c.status === '進行中').length,
+      blocked: cs.filter(c => c.status === '受阻').length, verify: cs.filter(c => c.status === '已完成' && !c.verified).length };
+  }
+  const lastMsgOf = p => { for (let i = state.messages.length - 1; i >= 0; i--) if ((state.messages[i].project || null) === p) return state.messages[i]; return null; };
+  const whenText = iso => { const d = new Date(iso); return d.toDateString() === new Date().toDateString() ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : hm(iso); };
+  const oneLine = (t, n) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n) + '…' : x; };
+  const greeting = () => { const h = new Date().getHours(); return h >= 5 && h < 11 ? '早安' : h >= 11 && h < 18 ? '午安' : '晚安'; };
+  // 問候只叫名字：三個中文字、第一個字是常見姓氏才去掉姓（「管理員」「測試員」這類不是人名的不截）
+  function hubHtml() {
+    const counts = todoByView();
+    const cards = myProjects().map(p => {
+      const n = projStats(p), m = lastMsgOf(p);
+      const st = (label, v, cls) => `<span class="hs${v && cls ? ' ' + cls : ''}${v ? '' : ' zero'}">${label}<b>${v}</b></span>`;
+      return `<button type="button" class="hub-card" style="--pc:${projColor(p)}" data-proj="${esc(p)}" aria-label="進入 ${esc(projName(p))}">
+        <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}${leadersOf(p).length ? ` · ★ leader：${esc(leadersOf(p).map(id => state.participants.get(id)?.name).filter(Boolean).join('、'))}` : ''}</span></span>${counts[p] ? `<span class="hc-todo">要你處理 ${counts[p]}</span>` : ''}</span>
+        <span class="hc-stats">${st('今日完成', n.done)}${st('進行中', n.doing)}${st('受阻', n.blocked, 'bad')}${st('待驗收', n.verify, 'warn')}</span>
+        <span class="hc-last">${m ? `最新：${esc(m.author.name)}「${esc(oneLine(m.text, 50))}」` : '最近 12 小時沒有新訊息'}</span>
+        <span class="hc-go">進入 ›</span></button>`;
+    }).join('');
+    const cm = lastMsgOf(null);
+    return `<div class="hub"><section class="hub-main">
+        <div class="work-head"><div class="work-title"><h2>${esc(greeting())}，<span data-nt>${esc(shownName(state.me?.name || ''))}</span></h2><span class="muted small"><span>${esc(new Date().toLocaleDateString(window.aigileI18n?.lang === 'en' ? 'en-US' : 'zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span>${counts.hub ? ` · ${counts.hub} 件要你處理` : ' · 沒有要你處理的事'}</span></div></div>
+        ${hubNewAiHtml()}${nextStepsHtml()}<div class="hub-grid">${cards || hubJoinHtml()}</div>
+        <button type="button" class="link hub-join" data-join-open>＋ 申請加入專案</button>
+        <button type="button" class="hub-card hub-cross" data-proj="cross" aria-label="進入跨專案頻道">${projIcon('cross', 44)}<span class="hc-name"><b>跨專案頻道</b><span class="small">規則公告、跨團隊協調。${cm ? `最新：${esc(cm.author.name)} ${whenText(cm.createdAt)}「${esc(oneLine(cm.text, 40))}」` : '最近 12 小時沒有新訊息'}</span></span><span class="hc-go">進入 ›</span></button>
+      </section>
+      <aside class="hub-todo" aria-label="要你處理">${hubTodoHtml()}</aside></div>`;
+  }
+  // 第一次設定引導按「全部略過」：主畫面提示接下來可以做的事，按「知道了」收起
+  const NEXT_KEY = () => 'aigile-next-steps:' + (state.me?.participantId || '');
+  function nextStepsHtml() {
+    if (!isAdmin() || store.get(NEXT_KEY()) !== '1') return '';
+    return `<section class="hub-next" aria-label="接下來可以做的事"><b>接下來可以做的事</b><p class="muted small">${BASE_TITLE === 'Aigile-Switch' ? '群組名稱還是預設的，可以先改掉；再建專案、邀請成員，或從舊站匯入備份。' : '可以建專案、邀請成員，或從舊站匯入備份。'}</p>
+      <div class="hn-acts"><button type="button" class="btn small primary" data-next="wizard">重新打開設定引導</button><button type="button" class="btn small" data-next="projects">群組名稱與專案</button><button type="button" class="btn small" data-next="invites">邀請成員</button><button type="button" class="btn small" data-next="system">匯入備份</button><span class="grow"></span><button type="button" class="link small" data-next="close">知道了</button></div></section>`;
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest?.('[data-next]');
+    if (!b) return;
+    const k = b.dataset.next;
+    if (k === 'close') { store.del(NEXT_KEY()); return renderWork(); }
+    if (k === 'wizard') { store.del(NEXT_KEY()); return openSetupWizard(); }
+    perm.tab = k; if (k === 'projects') perm.gs = null; goTop('perm');
+  });
+  // 自己建好、還沒接入的 AI：總覽寫出來並帶到我的 AI（剛建好時總覽原本完全看不到它）
+  // 管理員：匯入備份後還進不來的人也寫出來
+  function hubNewAiHtml() {
+    const relogin = [...state.participants.values()].filter(p => p.needsLogin);
+    const rl = relogin.length ? `<div class="hub-newai" role="status"><span>🔑 ${esc(relogin.map(p => p.name).join('、'))} 的登入不在備份裡，要重設登入才進得來。</span><button type="button" class="link small" data-go-perm>到成員與權限重設登入 ›</button></div>` : '';
+    const mine = (state.team?.members || []).filter(m => m.memberType === 'ai' && m.ownerParticipantId === state.me?.participantId && !m.lastSeenAt && !m.tokenExpired);
+    if (!mine.length) return rl;
+    return rl + `<div class="hub-newai" role="status"><span>🤖 你的 AI「${esc(mine.map(m => m.name).join('」「'))}」還沒接入：把接入設定貼給它，它才會開始工作。</span><button type="button" class="link small" data-go-myai>到我的 AI 複製接入設定 ›</button></div>`;
+  }
+  document.addEventListener('click', e => { if (e.target.closest?.('[data-go-myai]')) goTop('myai'); else if (e.target.closest?.('[data-go-perm]')) goTop('perm'); });
+  // 還沒有專案：主畫面直接列出可以申請的專案（一分鐘內不重抓）
+  const hubJoin = { items: null, at: 0, loading: false };
+  function hubJoinHtml() {
+    if (!hubJoin.loading && (!hubJoin.items || Date.now() - hubJoin.at > 60_000)) {
+      hubJoin.loading = true;
+      api('/api/join/projects').then(d => { hubJoin.items = d.items; }).catch(() => { hubJoin.items = hubJoin.items || []; })
+        .finally(() => { hubJoin.at = Date.now(); hubJoin.loading = false; if (state.page === 'hub') renderWork(); });
+    }
+    const list = hubJoin.items;
+    const row = p => `<div class="hub-join-row">${joinIcon(p)}<div class="jl-main"><b>${esc(p.name)}</b><div class="muted small">${joinMeta(p)}</div></div>${p.status === 'pending' ? '<span class="join-wait"><span class="pill-tag yellow">審核中</span><span class="muted small">核准後會自動更新</span></span>' : `<button type="button" class="btn primary small" data-join-open="${esc(p.id)}">申請加入</button>`}</div>`;
+    const rows = !list ? '<p class="muted small">載入可以申請的專案…</p>' : list.length ? list.map(row).join('') : '<p class="muted small">目前沒有開放申請的專案，請群組管理員把你加入專案。</p>';
+    return `<section class="hub-empty hub-joinable" aria-label="可以申請的專案"><p>你還沒有加入任何專案。下面是開放申請的專案，送出申請後由 leader 或管理員核准；核准後這裡就會出現專案。</p>${rows}</section>`;
+  }
+  const hubTodoItems = () => todoItems(); // 跟數字同一個來源
+  function hubTodoHtml(inModal = false) {
+    const items = hubTodoItems();
+    const groups = [...myProjects(), null].map(p => [p, items.filter(x => x.p === p)]).filter(([, l]) => l.length);
+    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg', 驗收: 'ver', 回覆: 'ask', 私訊: 'sg', 通知: 'sg', 申請: 'ver' };
+    return `${inModal ? '' : `<div class="ht-head"><h3>要你處理</h3>${items.length ? `<span class="ps-count">${items.length}</span>` : ''}<span class="grow"></span><span class="muted small">各專案彙總</span></div>`}
+      ${groups.length ? groups.map(([p, l]) => `<div class="ht-group">${esc(p ? projName(p) : '跨專案頻道')}</div>
+        ${l.map(x => `<button type="button" class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(p || 'cross')}"><span class="ht-tag ${cls[x.kind]}">${x.kind}</span><span class="ht-title">${esc(x.title)}</span><span class="ht-go" aria-hidden="true">›</span></button>`).join('')}`).join('')
+        : '<p class="muted small ht-empty">目前沒有要你處理的事。</p>'}
+      <p class="muted small ht-note">點一項＝進那個專案的收件匣並打開那一項；選項、回覆都在專案裡做，這裡只列、不在這裡決定。</p>`;
+  }
+  // 點一項：進那個專案的收件匣，捲到那一項並閃一下（決策卡不在收件匣時直接打開卡片）
+  document.addEventListener('click', async e => {
+    const r = e.target.closest('[data-hub-todo]');
+    if (!r) return;
+    if (r.closest('.modal')) closeModal();
+    const key = r.dataset.hubTodo, id = key.slice(2);
+    if (key[0] === 'j') return openJoinReview(work.joins.find(j => j.id === id)?.project || '');
+    await setProjectView(r.dataset.hubProj, 'inbox');
+    work.focusItem = { sel: key[0] === 'n' ? `#fyi-${CSS.escape(id)}` : `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row', v: 'data-ver-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
+    if (!applyFocusItem() && key[0] === 'c') openCard(id);
+  });
+  $('#m-todo').addEventListener('click', () => { closeSheet(false); openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }); });
+  // 總覽側欄「要你處理」捲到右邊清單（窄畫面沒有右欄就開視窗）；「＋ 新增專案」
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('[data-hub-todo-open]')) {
+      const go = () => { const t = document.querySelector('.hub-todo'); if (t && t.offsetParent) { t.scrollIntoView({ behavior: 'smooth', block: 'start' }); t.classList.add('flash'); setTimeout(() => t.classList.remove('flash'), 1400); } else openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }); };
+      return state.page === 'hub' ? go() : Promise.resolve(setProjectView('hub')).then(() => setTimeout(go, 50));
+    }
+    if (e.target.closest?.('[data-hub-newproj]')) return openNewProject();
+  });
+  function inboxHtml() {
+    const all = [...work.cards.values()].filter(cardInView);
+    const open = todoByView()[projectView()] || 0;
+    return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你處理` : '沒有要你處理的事'}</span></div></div>
+      <div class="inbox-block-title">要你處理</div>
+      ${todoHtml(all)}
+      ${noteList().length || work.sec?.length ? `<div class="inbox-block-title">給你知道的</div>
+      ${notesHtml()}` : ''}`;
+  }
+
+  // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議
+  const legacyConfirms = () => (state.team?.decisions || []).filter(d => !d.cardId && !cardOfConfirm(d) && inView(d.project) && !work.answered.has(d.messageId));
+  function updateTodoBadge() {
+    drawDmSide();
+    const counts = todoByView(), n = counts[projectView()] || 0, total = counts.hub; // 收件匣徽章＝所在專案；分頁標題＝全部
+    document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
+    if (document.querySelector('.ps-btn[aria-expanded="false"]') || !document.querySelector('.ps-btn')) drawProjSwitch(); // 下拉的件數跟著更新（開著時不重畫）
+    document.title = (total ? `(${total > 99 ? '99+' : total}) ` : '') + BASE_TITLE;
+    if (state.page === 'hub' && work.loaded) renderWork();
+  }
+  function todoHtml(all) {
+    const decideMe = all.filter(decidingMe);
+    const confirms = legacyConfirms();
+    const sg = (work.sugg || []).filter(x => inView(x.project));
+    const verifyMe = all.filter(verifyingMe);
+    const asks = askNotes(), dms = dmNotes();
+    const joins = (work.joins || []).filter(j => projectView() === 'hub' || j.project === projectView());
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length) return '<section class="wpanel"><p class="muted">目前沒有要你處理的事。</p></section>';
+    const askSection = asks.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>要你回覆</h3><span class="wcount ora">${asks.length}</span><span class="muted small">別人指定要你回覆的訊息；回覆了或按「不用回」就移走</span></div>
+        ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
+          <div class="sugg-main"><b><span class="apill ask me">要你回覆</span> ${esc(n.sender.name)}</b><span class="muted small">${esc(oneLine(n.preview, 80))} · ${agoText(n.createdAt)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">到訊息回覆</button>
+            <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">不用回</button></div>
+        </div>`).join('')}</section>` : '';
+    const verSection = verifyMe.length ? `
+      <section class="wsugg wverify"><div class="wsugg-head"><span class="wdot ok"></span><h3>等你驗收</h3><span class="wcount ok">${verifyMe.length}</span><span class="muted small">AI 做完交給你的卡：看過沒問題按「驗收通過」，要改按「退回」</span></div>
+        ${verifyMe.map(c => `<div class="sugg-row ver-row" data-ver-row="${esc(c.cardId)}">
+          <div class="sugg-main"><b>${cidHtml(c)} ${cardPTag(c)} ${esc(cardTitle(c))}</b><span class="muted small">${c.next ? '下一步：' + esc(c.next) + ' · ' : ''}${agoText(c.updatedAt)}交來</span></div>
+          <div class="sugg-actions">${reportBtn(c)}<button type="button" class="btn small primary" data-ver-ok="${esc(c.cardId)}">驗收通過</button><button type="button" class="btn small" data-ver-no="${esc(c.cardId)}">退回…</button><button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
+        </div>`).join('')}</section>` : '';
+    const confSection = confirms.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>[需確認] 訊息</h3><span class="wcount ora">${confirms.length}</span><span class="muted small">等你回答的問題，可以直接在這裡選；要看前後文按「到訊息處理」</span></div>
+        ${confirms.map(d => { const cm = state.byId.get(d.messageId), quick = cm ? authHtml(cm, { inbox: true }) : ''; return `<div class="sugg-row conf-row" data-conf-row="${esc(d.messageId)}">
+          <div class="sugg-main"><b>${esc(d.title || '（無標題）')}</b><span class="muted small">${esc(d.author?.name || '')} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-todo-jump="${esc(d.messageId)}">到訊息處理</button>
+            <button type="button" class="link small" data-todo-resolve="${esc(d.messageId)}" title="已經決定了，從這裡移出">已處理</button></div>
+          ${cm ? `<div class="conf-text">${esc(cm.text.replace(/^\s*\[需確認\]\s*/, ''))}</div>` : ''}
+          ${quick || inlineHtml('m:' + d.messageId, 'confirm', d)}
+        </div>`; }).join('')}</section>` : '';
+    const dmSection = dms.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dms.length}</span><span class="muted small">只有你看得到</span></div>
+        ${dms.map(n => `<div class="sugg-row" id="fyi-${esc(n.notificationId)}"><div class="sugg-main"><b>${n.sender.system ? '平台通知' : `${esc(n.sender.name)} 回你了`}</b><span class="muted small">${esc(oneLine(n.sender.system ? dmGist(n.preview, true) : String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${agoText(n.createdAt)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}">打開私訊</button></div></div>`).join('')}</section>` : '';
+    const joinSection = joins.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>待審申請</h3><span class="wcount ora">${joins.length}</span><span class="muted small">同仁申請加入專案，要你核准或拒絕</span></div>
+        ${joins.map(j => `<div class="sugg-row" data-join-row="${esc(j.id)}"><div class="sugg-main"><b>${esc(j.name)} 申請加入${esc(j.projectName)}</b><span class="muted small">${j.note ? `「${esc(oneLine(j.note, 60))}」` : '沒寫原因'} · ${agoText(j.createdAt)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-join-review="${esc(j.project)}">審核</button></div></div>`).join('')}</section>` : '';
+    return dmSection + joinSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
+  }
+
+  const wide = () => matchMedia('(min-width: 900px)').matches;
+  function boardHtml(all) {
+    const BOARD_ORDER = ['待整理', '待處理', '進行中', '受阻', '待確認', '已完成', '已封存']; // 受阻提前到第三欄（待整理有卡才顯示）
+    const cols = wide() ? BOARD_ORDER.filter(s => (s !== '已封存' || work.showArchived) && (s !== '待整理' || all.some(c => c.status === '待整理'))) : [work.mCol];
+    const tile = c => `
+      <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
+        <div class="ctile-top">${cidHtml(c)}${typeTag(c)}${confirmPill(c)}${c.type === NOTE ? (c.mergedInto ? '' : noteStPill(c)) : c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
+        <b class="ctile-title">${cardPTag(c)} ${esc(cardTitle(c))}</b>
+        ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
+        ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
+        <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
+        ${mergedHtml(c)}
+      </div>`;
+    const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}">${cidHtml(c)}<span class="cmini-t">${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
+    const archFoot = work.archived.count ? `<button type="button" class="bfoot" data-show-archived>更早完成的 ${work.archived.count} 張已收進「已封存」· 查看</button>` : '';
+    const colBody = (st, list) => {
+      if (st === '已完成') {
+        const pend = list.filter(c => !c.verified), ver = list.filter(c => c.verified);
+        return `${pend.length ? `<div class="bsub warn">待驗證 ${pend.length}（不會自動收起）</div>${pend.map(tile).join('')}` : ''}
+          ${ver.length ? `<div class="bsub ok">已驗證 ${ver.length}（精簡一行，點開看詳情）</div>${ver.map(mini).join('')}` : ''}
+          ${!pend.length && !ver.length ? '<p class="muted small bempty">最近 7 天沒有完成的卡</p>' : ''}${archFoot}`;
+      }
+      if (st === '已封存') return (list.length ? list.map(tile).join('') : `<p class="muted small bempty">${work.archived.loading ? '載入中…' : '沒有已封存的卡片'}</p>`)
+        + (work.archived.hasMore ? `<button type="button" class="bfoot" data-arch-more>再載入 50 張</button>` : '');
+      return list.length ? list.map(tile).join('') : `<p class="muted small bempty">${wide() ? '拖曳卡片到這裡' : '這個狀態沒有卡片'}</p>`;
+    };
+    const mLabel = st => (st === '已完成' ? '已完成（7 天）' : st);
+    return `
+      ${wide() ? `<div class="board-tools"><span class="muted small">拖曳卡片到其他欄可以改狀態</span><span class="grow"></span><span class="muted small">已封存 ${work.archived.count} 張（完成滿 7 天自動收起）</span><button type="button" class="link small" id="toggle-archived">${work.showArchived ? '隱藏已封存' : '顯示已封存'}</button></div>`
+        : `<div class="wchips" role="group" aria-label="狀態">${BOARD_ORDER.map(st => `<button type="button" data-mcol="${esc(st)}" aria-pressed="${work.mCol === st}"${st === '已封存' ? ' class="dashed"' : ''}>${mLabel(st)}<span>${st === '已封存' ? work.archived.count : all.filter(c => c.status === st).length}</span></button>`).join('')}</div>`}
+      <div class="board">
+        ${cols.map(s => {
+          const list = all.filter(c => c.status === s);
+          return `<section class="bcol" data-col="${esc(s)}" aria-label="${esc(s)}">
+            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(s)}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount${s === '受阻' && list.length ? ' bad' : ''}">${s === '已封存' ? work.archived.count : list.length}</span></div>
+            <div class="bcol-list">${colBody(s, list)}</div>
+          </section>`;
+        }).join('')}
+      </div>`;
+  }
+
+  // 互動
+  const workBox = $('#page-work');
+  workBox.addEventListener('input', decisionInput);
+  workBox.addEventListener('keydown', inlineKey);
+  workBox.addEventListener('click', async e => {
+    if (decisionClick(e)) return;
+    const t = e.target;
+    const v = t.closest('[data-view]');
+    if (v) { work.view = v.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
+    const f = t.closest('[data-filter]');
+    if (f) {
+      work.filter = f.dataset.filter; work.view = 'A';
+      if (work.filter === '已封存' && !work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      return renderWork();
+    }
+    if (t.closest('[data-arch-more]')) { await loadArchived(true).catch(err => toast(err.message)); return renderWork(); }
+    if (t.closest('[data-arch-toggle]')) { work.archSearch.open = !work.archSearch.open; return renderWork(); }
+    if (t.closest('[data-show-archived]')) {
+      if (wide()) work.showArchived = true; else work.mCol = '已封存';
+      if (!work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      renderWork();
+      return workBox.querySelector('[data-col="已封存"]')?.scrollIntoView({ inline: 'end', block: 'nearest' });
+    }
+    if (t.closest('[data-goto-inbox]')) { showPage('inbox'); return; }
+    const tt = t.closest('[data-team-tab]');
+    if (tt) { work.teamTab = tt.dataset.teamTab; renderTeamPage(); return; }
+    const ng = t.closest('[data-note-goto]');
+    if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
+    const na = t.closest('[data-note-ack]');
+    if (na) { // 點了這列先淡出再移除
+      const row = document.getElementById('fyi-' + na.dataset.noteAck);
+      if (row) { row.classList.add('fading'); setTimeout(() => ackNotesNow([na.dataset.noteAck]), 220); return; }
+      return ackNotesNow([na.dataset.noteAck]);
+    }
+    if (t.closest('[data-note-ackall]')) return ackNotesNow(noteList().map(n => n.notificationId), '已全部標為已讀');
+    const tj = t.closest('[data-todo-jump]');
+    if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
+    const tr = t.closest('[data-todo-resolve]');
+    if (tr) {
+      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); toast('已從收件匣移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
+      return;
+    }
+    const bt = t.closest('[data-batch]');
+    if (bt && work.sel.size) {
+      const ids = [...work.sel], action = bt.dataset.batch;
+      const ok = await confirmDialog({ title: action === 'apply' ? '批次採用' : '批次略過', message: action === 'apply' ? `確定採用已勾選的 ${ids.length} 則 AI 建議？卡片會依建議建立或更新，提案的 AI 會收到一則合併通知。` : `確定略過已勾選的 ${ids.length} 則 AI 建議？`, confirmText: action === 'apply' ? '採用' : '略過' });
+      if (!ok) return;
+      try {
+        const r = await api('/api/suggestions/batch', { method: 'POST', body: { ids, action } });
+        work.sel.clear();
+        const nExp = r.results.filter(x => x.error === 'EXPIRED').length;
+        toast(`已${action === 'apply' ? '採用' : '略過'} ${r.done} 則${nExp ? `，${nExp} 則已過期（卡片有變動）被跳過，請改為略過` : ''}${r.failed - nExp > 0 ? `，${r.failed - nExp} 則失敗（可能已被處理）` : ''}`);
+        await loadCards(); renderWork();
+      } catch (err) { toast(err.message); }
+      return;
+    }
+    const sa = t.closest('[data-sugg-apply]');
+    if (sa) return void suggAction(sa.dataset.suggApply, 'apply');
+    const ss = t.closest('[data-sugg-skip]');
+    if (ss) return void suggAction(ss.dataset.suggSkip, 'skip');
+    const se = t.closest('[data-sugg-edit]');
+    if (se) return openNewCard((work.sugg || []).find(x => x.suggestionId === se.dataset.suggEdit));
+    const sb = t.closest('[data-sugg-basis]');
+    if (sb) { const id = sb.dataset.suggBasis; showPage('messages'); return void jumpTo(id); }
+    const mc = t.closest('[data-mcol]');
+    if (mc) {
+      work.mCol = mc.dataset.mcol;
+      if (work.mCol === '已封存' && !work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      return renderWork();
+    }
+    if (t.closest('#toggle-archived')) {
+      work.showArchived = !work.showArchived;
+      if (work.showArchived && !work.archived.fetched) { renderWork(); await loadArchived().catch(err => toast(err.message)); }
+      return renderWork();
+    }
+    if (t.closest('#card-new')) return openNewCard();
+    const ask = t.closest('[data-ask-ai]');
+    if (ask) {
+      const ids = ask.dataset.askAi.split(',');
+      const pj = work.cards.get(ids[0])?.project;
+      if (pj && projectView() !== pj && myProjects().includes(pj)) await setProjectView(pj, 'messages'); else showPage('messages');
+      const inp = $('#input');
+      inp.value = `@ 請整理以下人類紀錄：${ids.join('、')}。內容相近的整理成一張新卡並回覆我；原本的卡標已完成，並註明已整理到哪張。`;
+      inp.focus(); inp.setSelectionRange(1, 1);
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      return toast('選一個 AI，確認內容後送出');
+    }
+    const c = t.closest('[data-card]');
+    if (c) openCard(c.dataset.card);
+  });
+  workBox.addEventListener('keydown', e => {
+    const c = e.target.closest?.('.ctile');
+    if (c && e.key === 'Enter') openCard(c.dataset.card);
+  });
+  workBox.addEventListener('input', e => { if (e.target.id === 'card-q') { work.q = e.target.value; searchArchived(); renderWork(); } });
+  workBox.addEventListener('change', e => {
+    if (e.target.id === 'card-owner') { work.owner = e.target.value; renderWork(); }
+    if (e.target.id === 'card-type') { work.type = e.target.value; renderWork(); }
+  });
+  workBox.addEventListener('change', e => {
+    const c = e.target.closest?.('[data-sugg-check]');
+    if (!c) return;
+    if (c.checked) work.sel.add(c.dataset.suggCheck); else work.sel.delete(c.dataset.suggCheck);
+    renderWork();
+  });
+  // 看板拖曳（桌面）
+  workBox.addEventListener('dragstart', e => {
+    const c = e.target.closest?.('.ctile, .cmini');
+    if (!c) return;
+    work.dragId = c.dataset.card;
+    e.dataTransfer.setData('text/plain', c.dataset.card);
+    e.dataTransfer.effectAllowed = 'move';
+    c.classList.add('dragging');
+  });
+  workBox.addEventListener('dragend', () => { work.dragId = null; workBox.querySelectorAll('.bcol.over').forEach(x => x.classList.remove('over')); });
+  // 拖卡片時靠近看板（或頁面）邊緣自動捲動，才拖得到畫面外的欄位
+  function dragAutoScroll(e) {
+    const board = workBox.querySelector('.board');
+    if (board) {
+      const r = board.getBoundingClientRect(), edge = 80;
+      if (e.clientX < r.left + edge) board.scrollLeft -= 24;
+      else if (e.clientX > r.right - edge) board.scrollLeft += 24;
+      if (e.clientY < r.top + 50) board.scrollTop -= 16;
+      else if (e.clientY > r.bottom - 50) board.scrollTop += 16;
+    }
+    const w = workBox.getBoundingClientRect();
+    if (e.clientY < w.top + 40) workBox.scrollTop -= 16;
+    else if (e.clientY > w.bottom - 40) workBox.scrollTop += 16;
+  }
+  workBox.addEventListener('dragover', e => {
+    if (work.dragId) dragAutoScroll(e);
+    const col = e.target.closest?.('.bcol');
+    if (!col || !work.dragId) return;
+    e.preventDefault();
+    workBox.querySelectorAll('.bcol.over').forEach(x => x !== col && x.classList.remove('over'));
+    col.classList.add('over');
+  });
+  workBox.addEventListener('drop', e => {
+    const col = e.target.closest?.('.bcol');
+    if (!col) return;
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/plain');
+    col.classList.remove('over');
+    const c = work.cards.get(id);
+    if (c && c.status !== col.dataset.col) patchCard(id, { status: col.dataset.col });
+  });
+
+  async function decideCard(id, result, note) {
+    const c = work.cards.get(id);
+    try {
+      const r = await api(`/api/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { result, note, version: c?.version } });
+      work.cards.set(id, r);
+      work.note = null;
+      renderWork();
+      if (work.openId === id) openCard(id);
+      toast(result === '要求補充' ? `已請 ${r.waitFor?.name || '提案人'} 補充` : `已記錄決定：${result}`);
+    } catch (err) {
+      toast(err.message);
+      if (err.code === 'CONFLICT') { await syncCards().catch(() => {}); }
+    }
+  }
+  function decisionClick(e) {
+    if (inlineClick(e)) return true;
+    const t = e.target;
+    const dc = t.closest('[data-decide]');
+    if (dc) { decideCard(dc.dataset.decide, dc.dataset.result, ''); return true; }
+    const rsm = t.closest('[data-resume]');
+    if (rsm) {
+      const id = rsm.dataset.resume; rsm.disabled = true;
+      api(`/api/cards/${encodeURIComponent(id)}/resume`, { method: 'POST', body: {} }).then(async r => { work.cards.set(id, r); toast('已恢復，回到待確認'); await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]); updateTodoBadge(); renderWork(); if (work.openId) openCard(work.openId); }).catch(err => { rsm.disabled = false; toast(err.message); });
+      return true;
+    }
+    const open = t.closest('[data-note-open]');
+    if (open) { work.note = { id: open.dataset.noteOpen, kind: open.dataset.kind, text: '' }; refreshDecisionUi(); return true; }
+    if (t.closest('[data-note-cancel]')) { work.note = null; refreshDecisionUi(); return true; }
+    const sub = t.closest('[data-note-submit]');
+    if (sub && work.note?.text.trim()) { decideCard(sub.dataset.noteSubmit, work.note.kind, work.note.text.trim()); return true; }
+    return false;
+  }
+  function decisionInput(e) {
+    if (inlineInput(e)) return;
+    if (!e.target.matches?.('[data-note-text]') || !work.note) return;
+    work.note.text = e.target.value;
+    const btn = e.target.closest('.dcard, .drawer')?.querySelector('[data-note-submit]');
+    if (btn) btn.disabled = !work.note.text.trim();
+  }
+  function refreshDecisionUi() {
+    renderWork();
+    if (work.openId && work.detail) renderDrawer(false);
+    const ta = document.querySelector('[data-note-text]');
+    if (ta) { ta.focus(); }
+  }
+  async function patchCard(id, body, { render = true } = {}) {
+    const c = work.cards.get(id);
+    try {
+      const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: c?.version } });
+      putCard(r);
+      if (render) renderWork(); // 收件匣驗收時由呼叫端先淡出再重畫
+      if (work.openId === id) { work.openId = r.cardId; openCard(r.cardId); } // 改專案會換號
+      return r;
+    } catch (err) {
+      toast(err.message);
+      if (err.code === 'CONFLICT') { await syncCards().catch(() => {}); if (work.openId === id) openCard(id); }
+      return null;
+    }
+  }
+
+  // 卡片詳情（桌面右側抽屜、手機底部滑出）
+  async function openCard(id, trigger) {
+    let d;
+    try { d = await api(`/api/cards/${encodeURIComponent(id)}`); } catch (err) { return toast(err.code === 'CARD_FORBIDDEN' ? `${id} 屬於其他專案，你沒有權限查看` : err.code === 'NOT_FOUND' ? `找不到 ${id}，可能輸入錯誤或已刪除` : err.message); }
+    if (trigger) work.returnFocus = trigger;
+    rememberLinks(d);
+    // 相關訊息不在目前載入範圍的先抓回來，抽屜才看得到內容（不插進訊息串）
+    const missMsgs = (d.messageIds || []).filter(mid => !state.byId.has(mid)).slice(0, 20);
+    if (missMsgs.length) await Promise.all(missMsgs.map(mid => api(`/api/messages/${encodeURIComponent(mid)}`).then(m => { state.byId.set(mid, m); }).catch(() => {})));
+    id = d.cardId || id; // 點舊的 C-xxx 也存成專案卡號
+    putCard({ ...d, log: undefined, messageIds: undefined });
+    const reopen = work.openId === id && $('#card-drawer');
+    work.openId = id; work.detail = d;
+    if (!reopen) work.editing = false;
+    renderDrawer(!reopen);
+  }
+  const canHandover = d => d.type !== '決策' && !closedSt(d.status) && d.owner && (state.me.memberType === 'human' || d.owner.participantId === meId());
+  // 交接歷程：從紀錄裡「交接 A → B：說明」整理成 PO → UX → PG
+  // ---------- 卡片動作看得懂 ----------
+  // 最近一次交接是誰交來的（紀錄新的在前）
+  // 上一棒交接四欄（做到哪、改了什麼、下一步、注意），卡片詳情最上面
+  const handHtml = h => {
+    if (!h) return '';
+    const rows = [['做到哪', h.progress], ['改了什麼', h.changes], ['下一步', h.nextStep], ['注意', h.caution], ['說明', h.note]].filter(([, v]) => v);
+    return `<div class="group-title">上一棒交接 · ${esc(h.from?.name || '')} → ${esc(h.to?.name || '')} · ${esc(shortTime(h.at))}</div>
+          <dl class="dfields">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  };
+  const prevHandName = d => { for (const l of d.log || []) { const m = /^交接 (.+?) → (.+?)：/.exec(l.text); if (m) return m[1]; } return ''; };
+  // 短名：名字很長的 AI 用代號（AB12），其他照原名
+  const shortOf = name => name; // 一律顯示名字、不顯示代碼；太長的由 CSS 截斷加…，滑過看全名
+  const actBtn = (act, label, desc, pri = false) => `<button type="button" class="act-btn${pri ? ' pri' : ''}" data-act="${act}"><b>${label}</b><span>${esc(desc)}</span></button>`;
+  // 「現在要你處理」：依情況只露 1～2 顆大按鈕；不是你的卡不顯示
+  function nowActsHtml(d) {
+    const prev = prevHandName(d);
+    let acts = '';
+    if (verifyingMe(d)) acts = actBtn('ver-ok', '驗收通過', '確認做好了，這張卡結案', true) + actBtn('ver-no', '退回…', `有問題，寫原因退回給 ${prev ? shortOf(prev) : '上一棒'}`);
+    else if (ownsOpen(d)) acts = actBtn('done', '標為已完成', '你自己做完了', true) + (canHandover(d) ? actBtn('handover', '交接…', '換人負責') : '');
+    return acts ? `<section class="now-acts" aria-label="現在要你處理"><b class="now-title">現在要你處理</b>${acts}</section>` : '';
+  }
+  const ownsOpen = d => d.type !== '決策' && isMeRef(d.owner) && !closedSt(d.status) && d.status !== '待確認';
+  // 「⋯ 其他動作」：每項一句說明；人類畫面不再有「標為已驗證」（人類按驗收通過就同時完成＋驗證）
+  function moreActsHtml(d, mine) {
+    const items = [];
+    const own = !verifyingMe(d) && ownsOpen(d);
+    if (!own && !verifyingMe(d) && !closedSt(d.status) && d.type !== '決策') items.push(actBtn('done', '標為已完成', '你自己做完了'));
+    if (!own && canHandover(d)) items.push(actBtn('handover', '交接…', '換人負責（例如交給 PG 做、交給 UX 驗）'));
+    if (d.status === '已完成' && !d.verified && !mine && state.me?.memberType === 'human') items.push(actBtn('verify', '驗收通過', '確認做好了，這張卡結案'));
+    if (d.status === '已完成') items.push(actBtn('reopen', '重新打開', '還沒好，改回待處理再做'));
+    if (!work.editing) items.push(actBtn('edit', '編輯', '改標題、原因、完成條件'));
+    items.push(`<label class="act-btn act-sel"><b>改狀態</b><span>直接改成其他狀態</span><select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>`);
+    items.push(actBtn('copy-id', '複製卡號', '貼到訊息裡'));
+    if (state.page === 'messages') items.push(actBtn('open-work', '在工作頁開啟', '在看板上看這張卡'));
+    return `<details class="more-acts"><summary>⋯ 其他動作</summary><div class="more-list">${items.join('')}</div></details>`;
+  }
+  // 「今天 14:46」「昨天 09:10」「10/16 14:46」
+  function dayTime(iso) {
+    const t = new Date(iso), now = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    return t.toDateString() === now.toDateString() ? '今天 ' + hm : t.toDateString() === y.toDateString() ? '昨天 ' + hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`;
+  }
+  // 「發生了什麼」：同人同秒的多筆合成一句；交接寫成「A 把這張交給 B 驗收／做」，備註收合、版號抽出放小字
+  function happenedHtml(d) {
+    const groups = [];
+    for (const l0 of d.log || []) {
+      const l = { ...l0, text: String(l0.text).replace(/\bC-\d{3,}\b/g, cardIdNorm) }; // 舊紀錄的 C-xxx 顯示成專案卡號
+      const k = (l.by?.participantId || l.by?.name || '') + '|' + String(l.at).slice(0, 19);
+      const g = groups[groups.length - 1];
+      if (g && g.k === k && !/^建立卡片/.test(l.text) && !g.items.some(t => /^建立卡片/.test(t))) g.items.push(l.text); else groups.push({ k, by: l.by, at: l.at, items: [l.text] }); // 建卡永遠單獨一句
+    }
+    const line = g => {
+      const ho = g.items.map(t => /^交接 (.+?) → (.+?)：([\s\S]*)$/.exec(t)).find(Boolean);
+      let icon = '•', cls = '', body, note = '', ver = '';
+      if (g.items.some(t => /人類完成即驗收|驗收通過/.test(t))) { icon = '✓'; cls = 'ok'; body = '驗收通過，這張卡結案了'; }
+      else if (ho) {
+        icon = '⇢'; cls = 'ho';
+        note = ho[3].replace(/（狀態[^（）]*）\s*$/, '').trim();
+        ver = (note.match(/v\d+\.\d+\.\d+/) || [''])[0];
+        body = `把這張交給 <b>${esc(shortOf(ho[2]))}</b> ${/等 .+ 驗收/.test(ho[3]) ? '驗收' : '做'}`;
+      }
+      else if (g.items.some(t => /^建立卡片/.test(t))) { icon = '＋'; body = '建了這張卡'; }
+      else if (g.items.some(t => /^退回/.test(t))) { icon = '↩'; cls = 'bad'; body = esc(g.items.find(t => /^退回/.test(t))); }
+      else if (g.items.some(t => /^標為已完成/.test(t))) { icon = '✓'; body = '標為已完成'; }
+      else body = g.items.map(t => esc(t.replace(/^狀態 (.+?) → (.+)$/, '把狀態從「$1」改成「$2」').replace(/^.+? 認領了這張卡片$/, '認領了這張卡'))).join('，');
+      const who = g.by ? shortOf(g.by.name || '') : '系統';
+      return `<li class="lg ${cls}"><span class="lg-ic" aria-hidden="true">${icon}</span><div class="lg-main"><span><b>${esc(who)}</b> ${body}</span><span class="muted small">${dayTime(g.at)}${ver ? ' · ' + esc(ver) : ''}</span>${note ? `<details class="lg-note"><summary>看交接說明</summary><p>${esc(note)}</p></details>` : ''}</div></li>`;
+    };
+    const all = work.logAll, list = all ? groups : groups.slice(0, 5);
+    return `<div class="group-title">發生了什麼</div><ol class="happened">${list.map(line).join('')}</ol>${groups.length > 5 ? `<button type="button" class="link small" data-act="log-all">${all ? '只看最近 5 句' : `看全部 ${groups.length} 筆`}</button>` : ''}`;
+  }
+  function handoverChain(d) {
+    const hs = [...(d.log || [])].reverse().map(l => /^交接 (.+?) → (.+?)：/.exec(l.text)).filter(Boolean);
+    if (!hs.length) return '';
+    const names = [hs[0][1], ...hs.map(m => m[2])];
+    return `<div class="handover-chain"><span class="muted small">交接歷程</span> ${names.map(n => `<b>${esc(shortOf(n))}</b>`).join(' → ')}</div>`;
+  }
+  function openHandover() {
+    const d = work.detail;
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && memberIn(p, d.project));
+    const body = openModal('交接卡片', `
+      <form id="handover-form" class="stack">
+        <div class="info-box">${esc(ckeyOf(d))} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
+        <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
+        <label>交接說明（必填）<textarea autocomplete="off" autocorrect="on" name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
+        <p class="muted small">說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。</p>
+        <p class="error" id="handover-error" role="alert"></p>
+      </form>`, { size: 'form', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="handover-form">確認交接</button>' });
+    body.querySelector('#handover-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        const c = await api(`/api/cards/${encodeURIComponent(d.cardId)}/handover`, { method: 'POST', body: { toId: f.toId.value, note: f.note.value.trim(), version: d.version } });
+        work.cards.set(c.cardId, { ...c, log: undefined, messageIds: undefined });
+        closeModal();
+        toast(`已交接給 ${c.owner?.name}`);
+        renderWork();
+        openCard(c.cardId);
+      } catch (err) { body.querySelector('#handover-error').textContent = err.message; }
+    });
+  }
+  // 「可能過時」：抽屜裡一鍵跳到最新相關訊息（抽屜不在工作頁容器內，所以掛在 document）
+  document.addEventListener('click', e => {
+    const sj = e.target.closest?.('[data-stale-jump]');
+    if (sj) { const id = sj.dataset.staleJump; closeCard(); showPage('messages'); jumpTo(id); }
+  });
+  function closeCard() {
+    $('#card-drawer')?.remove();
+    document.body.classList.remove('drawer-docked');
+    work.openId = null; work.detail = null; work.editing = false;
+    const back = work.returnFocus; work.returnFocus = null;
+    if (back?.isConnected) back.focus(); // 回到原本點的膠囊
+  }
+  // 負責人、等誰只列該專案的成員（決策者不限）；目前值不在專案內也保留，才看得出原本是誰
+  const projPeople = project => [...state.participants.values()].filter(p => p.status !== 'disabled' && (!project || memberIn(p, project)));
+  function peopleOpts(project, cur, none) {
+    const list = projPeople(project), extra = cur && !list.some(p => p.participantId === cur) && state.participants.get(cur);
+    return `<option value="">${none}</option>` + [...list, ...(extra ? [extra] : [])].map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(p.name)}${roleIn(p, project) ? '（' + esc(roleIn(p, project)) + '）' : ''}${p === extra ? '（不在此專案）' : ''}</option>`).join('');
+  }
+  // 卡片表單換專案時，負責人、等誰跟著換清單；原本選的人不在新專案就清掉
+  document.addEventListener('change', e => {
+    const sel = e.target;
+    if (sel.name !== 'project' || !sel.form?.ownerId) return;
+    for (const [n, none] of [['ownerId', '未指派'], ['waitForId', '不用等人']]) {
+      const s = sel.form[n];
+      if (!s) continue;
+      const cur = s.value, keep = projPeople(sel.value).some(p => p.participantId === cur);
+      s.innerHTML = peopleOpts(sel.value, keep ? cur : '', none);
+    }
+  });
+  // 在訊息頁的桌面版，抽屜與訊息並排（不遮住訊息）；手機與工作頁維持原本的遮罩／底部面板
+  const dockedMode = () => state.page === 'messages' && matchMedia('(min-width: 900px)').matches;
+  function renderDrawer(focus) {
+    const d = work.detail;
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const opts = (cur, none) => `<option value="">${none}</option>` + people.map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+    const mine = d.done && isMeRef(d.done.by);
+    const msgs = (d.messageIds || []).map(mid => {
+      const m = state.byId.get(mid);
+      if (!m) return `<div class="dmsg"><span class="muted small">訊息載入中…</span></div>`;
+      const open = work.openMsgs?.has(mid), long = m.text.length > 120;
+      return `<div class="dmsg${open ? ' open' : ''}"><button type="button" class="dmsg-main" data-dmsg-toggle="${esc(mid)}" aria-expanded="${!!open}"><b>${esc(m.author.name)}</b> <span class="muted small">${shortTime(m.createdAt)}</span><span class="dmsg-text">${esc(open || !long ? m.text : m.text.slice(0, 120) + '…')}</span></button><button type="button" class="link small dmsg-go" data-jump-msg="${esc(mid)}">到訊息</button></div>`;
+    }).join('');
+    let host = $('#card-drawer');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'card-drawer';
+      host.className = 'drawer-root';
+      document.body.append(host);
+      host.addEventListener('click', e => { if (!decisionClick(e)) drawerClick(e); });
+      host.addEventListener('input', decisionInput);
+      host.addEventListener('keydown', inlineKey);
+      host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
+      host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
+    }
+    const docked = dockedMode();
+    host.classList.toggle('docked', docked);
+    document.body.classList.toggle('drawer-docked', docked);
+    host.innerHTML = `
+      ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
+      <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
+        <div class="drawer-head">
+          <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
+            <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span></div>
+          <button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button>
+        </div>
+        <div class="drawer-body">
+          ${d.type === NOTE ? `${d.mergedInto ? `<div class="merged-line">${mergedHtml(d)}</div>` : ''}<div class="lockbar"><span aria-hidden="true">🔒</span><span>AI 不會主動看到這張卡。下面的紀錄只存在卡片上，<b>不會發到群組</b>；你給 AI 卡號，它才讀得到卡片和紀錄。</span></div>` : ''}
+          ${d.mergedFrom?.length ? `<div class="merged-line">整理自 ${d.mergedFrom.map(x => `<button type="button" class="merged-into" data-card="${esc(x)}">🔒${esc(x)}</button>`).join('、')}</div>` : ''}
+          <div class="drawer-status">
+            ${d.type === NOTE ? `<span class="dst" id="note-st-l">狀態</span><div class="seg-scope note-st" role="group" aria-labelledby="note-st-l">${[['進行中', '收集中'], ['已完成', '已整理']].map(([v, t]) => `<button type="button" data-act="note-st" data-st="${v}" aria-pressed="${(d.status === '已完成') === (v === '已完成')}">${t}</button>`).join('')}</div>` : `
+            <span class="cst-pill" data-st="${esc(d.status)}">${esc(verifyingMe(d) ? '等你驗收' : d.status)}</span><span class="muted small">負責：${esc(d.owner?.name || '未指派')}${prevHandName(d) ? ` · ${esc(shortOf(prevHandName(d)))} 交來` : ''}</span>`}
+            ${d.type === NOTE && canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
+          </div>
+          ${d.type === NOTE ? '' : `<div class="rel-line" data-rel-card="${esc(d.cardId)}"></div>`}
+          ${d.type === NOTE ? '' : nowActsHtml(d) + moreActsHtml(d, mine)}
+          ${d.status === '已封存' ? (() => {
+            const sys = (d.log || []).find(l => /^系統自動封存/.test(l.text));
+            const why = sys ? `${mmdd(sys.at)} 系統自動封存（${mmdd(d.verified?.at || d.done?.at || sys.at)} 驗證完成，滿 ${ARCHIVE_DAYS} 天）。` : `${mmdd(d.updatedAt)} 已封存。`;
+            return `<div class="arch-note" role="status">${why}內容和紀錄都還在，只是不在看板與 AI 預設查詢裡。
+              <div class="row"><button class="btn small" type="button" data-act="reopen">重新打開（改回待處理）</button></div>
+              <span class="muted small">重新打開後照一般卡片流程；再次完成＋驗證後重新計 ${ARCHIVE_DAYS} 天。</span></div>`;
+          })() : ''}
+          ${d.status === '已完成' && doneTag(d) && d.verified ? `<div class="dmarks">${doneTag(d)}<span class="muted small">${d.verified ? '已驗證：明天會自動收進已封存' : pendingDays(d) > ARCHIVE_DAYS ? '超過 7 天沒驗證，請驗證或退回' : '待驗證的卡不會自動收起'}</span></div>` : ''}
+          ${(d.done || d.verified) && d.type !== NOTE ? `<div class="dmarks">
+            ${d.verified ? `<span class="cmark ok-bg" title="${esc(doneTitle(d))}">✓ 已完成</span><span class="muted small">${esc(doneTitle(d))}</span>` : d.done ? `<span class="cmark wait" title="${esc(doneTitle(d))}">已完成 · 待驗收</span><span class="muted small">${esc(doneTitle(d))}</span>` : ''}
+            ${mine && !d.verified ? '<span class="muted small">你是完成者，需由其他人或其他 AI 驗證。</span>' : ''}
+          </div>` : ''}
+          ${d.staleHint ? `<div class="stale-note" role="status"><b>可能過時</b><span class="small">卡片最後更新 ${esc(shortTime(d.staleHint.lastUpdatedAt))}，但之後 ${esc(shortTime(d.staleHint.latestMessageAt))} 有新的相關訊息。</span>${d.staleHint.latestMessageId ? `<button type="button" class="link small" data-stale-jump="${esc(d.staleHint.latestMessageId)}">看最新訊息</button>` : ''}</div>` : ''}
+          ${d.type === NOTE ? handoverChain(d) : ''}
+          ${d.type === '決策' && d.decision ? `<section class="ddecision"><h3>決策</h3><p class="dq" data-nt>${esc(d.decision.question)}</p>${decisionBox(d)}${decisionStatus(d)}</section>` : ''}
+          ${work.editing ? `
+          <form id="card-edit" class="stack">
+            <label>標題<input name="title" required maxlength="100" value="${esc(d.title)}"></label>
+            ${d.type === '決策' ? '' : `<label>類型<select name="type">${['工作', '阻塞', NOTE].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`}
+            ${d.type === '決策' && !d.decision?.result ? `
+            <label>決策問題<input name="question" required maxlength="200" value="${esc(d.decision.question)}"></label>
+            <label>建議方案<textarea autocomplete="off" autocorrect="on" name="recommendation" rows="2" maxlength="500">${esc(d.decision.recommendation)}</textarea></label>
+            <label>選項<textarea autocomplete="off" autocorrect="on" name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」">${esc((d.decision.options || []).join('\n'))}</textarea></label>
+            <label>影響<input name="impact" maxlength="200" value="${esc(d.decision.impact)}"></label>
+            <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
+            <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
+            <label>專案<select name="project">${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
+            <label>${d.type === NOTE ? '內容' : '原因'}<textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
+            <label>負責人<select name="ownerId">${peopleOpts(d.project, d.owner?.participantId, '未指派')}</select></label>
+            <label>下一步<textarea autocomplete="off" autocorrect="on" name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
+            <label>阻塞<input name="blocker" maxlength="300" value="${esc(d.blocker)}"></label>
+            <label>等誰<select name="waitForId">${peopleOpts(d.project, d.waitFor?.participantId, '不用等人')}</select></label>
+            <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
+            <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
+          </form>` : `
+          ${handHtml(d.handover)}
+          <dl class="dfields">
+            <dt>專案</dt><dd>${esc(projName(d.project) || '')}</dd>
+            <dt>${d.type === NOTE ? '內容' : '原因'}</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
+            <dt>負責人</dt><dd>${ownerHtml(d)}</dd>
+            ${d.claim ? `<dt>正在做</dt><dd>${esc(d.claim.by?.name || '')} · ${esc(shortTime(d.claim.at))} 起</dd>` : ''}
+            <dt>下一步</dt><dd class="${d.next ? '' : 'muted'}">${esc(d.next || '未填寫')}</dd>
+            <dt>阻塞與等誰</dt><dd class="${waitText(d) ? '' : 'muted'}">${esc(waitText(d) || '沒有阻塞')}</dd>
+            <dt>完成條件</dt><dd class="${d.criteria ? '' : 'muted'}">${esc(d.criteria || '未填寫')}</dd>
+          </dl>
+          ${d.type === NOTE ? '<div><button class="btn small" type="button" data-act="edit">編輯</button></div>' : ''}`}
+          <div class="group-title">相關訊息 · ${(d.messageIds || []).length}${(d.messageIds || []).length ? ` <button type="button" class="link small" data-ver-report="${esc(d.report?.messageId || d.messageIds[d.messageIds.length - 1])}">${d.report ? '看回報' : '看訊息串'}</button>` : ''}</div>
+          ${msgs || '<p class="muted small">還沒有關聯訊息。</p>'}
+          ${d.type === NOTE ? `<div class="group-title">紀錄 · ${(d.notes || []).length}</div>
+            <div class="note-list">${(d.notes || []).map(n => `<div class="note-entry"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${esc(shortTime(n.at))}</span><div>${esc(n.text)}</div></div>`).join('') || '<p class="muted small">還沒有紀錄。</p>'}</div>
+            <div class="note-add"><textarea autocomplete="off" autocorrect="on" id="note-text" rows="2" maxlength="1000" placeholder="寫一筆紀錄（只存卡上，不發群組）" aria-label="寫一筆紀錄"></textarea><button type="button" class="btn primary" data-act="add-note">記下</button></div>`
+          : !narrowMq.matches && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
+          ${d.type === NOTE ? `<div class="group-title">變更紀錄</div>
+          <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol>` : happenedHtml(d)}
+        </div>
+        ${state.page === 'messages' && d.type === NOTE ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
+        ${narrowMq.matches && d.type !== NOTE && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="drawer-compose" aria-label="想法與回覆">${inlineHtml('k:' + d.cardId, 'card', d)}</div>` : ''}
+      </aside>`;
+    const humanOnlySel = isNote => host.querySelectorAll('#card-edit select[name="ownerId"], #card-edit select[name="waitForId"]').forEach(sel => { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai && !o.selected; } });
+    humanOnlySel(d.type === NOTE);
+    host.querySelector('#card-edit select[name="type"]')?.addEventListener('change', ev => humanOnlySel(ev.target.value === NOTE));
+    host.querySelector('#card-edit')?.addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target));
+      for (const k of Object.keys(data)) data[k] = data[k].trim();
+      const d0 = work.detail;
+      if (data.type && d0 && data.type !== d0.type) { // 改類型要確認
+        const isAi = id => id && state.participants.get(id)?.memberType === 'ai';
+        if (data.type === NOTE) {
+          const who = [data.ownerId, data.waitForId].find(isAi);
+          if (who) return toast(`${state.participants.get(who).name} 是 AI：請先改成人類負責人（等誰也是），才能改成人類紀錄。`);
+          if (!await confirmDialog({ title: '改成人類紀錄？', confirmText: '改成人類紀錄', message: '改成人類紀錄後，AI 不會再主動看到這張卡。<br><span class="warn-text">但之前發到群組的相關訊息還在，AI 看過的收不回來。</span>' })) return;
+        } else if (d0.type === NOTE) {
+          let pub = true;
+          const onChg = ev => { if (ev.target.id === 'pub-notes') pub = ev.target.checked; };
+          document.addEventListener('change', onChg);
+          const ok = await confirmDialog({ title: `改成${data.type}卡？`, confirmText: `改成${data.type}卡`, message: `改成${data.type}卡後，<b>AI 會主動看到、也會收到通知</b>：標題、內容、狀態，以及 ${(d0.notes || []).length} 筆紀錄。確定嗎？<label class="chk pub-notes"><input type="checkbox" id="pub-notes" checked> 紀錄一起公開（不勾＝紀錄刪掉，只公開卡片本身）</label>` });
+          document.removeEventListener('change', onChg);
+          if (!ok) return;
+          data.publishNotes = pub;
+        }
+      }
+      if (await patchCard(work.openId, data)) { work.editing = false; openCard(work.openId); toast('已儲存'); }
+    });
+    host.querySelectorAll('[data-inl-text^="k:"]').forEach(ta => { const c = work.cards.get(ta.dataset.inlText.slice(2)); const list = ta.parentElement.querySelector('.mention-list'); if (c && list) attachMention(ta, list, { candidates: cardMentionCandidates(c) }); });
+    if (focus) host.querySelector('.modal-x').focus();
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && work.openId && document.body.classList.contains('drawer-docked') && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root') && !document.querySelector('#tag-menu:not([hidden])')) closeCard();
+  });
+  async function drawerClick(e) {
+    if (e.target.closest('[data-close-drawer]')) return closeCard();
+    const mg = e.target.closest('.merged-into[data-card]'); // 已整理到／整理自 的卡號
+    if (mg) return openCard(mg.dataset.card);
+    const tg = e.target.closest('[data-dmsg-toggle]');
+    if (tg) { work.openMsgs = work.openMsgs || new Set(); const id = tg.dataset.dmsgToggle; if (work.openMsgs.has(id)) work.openMsgs.delete(id); else work.openMsgs.add(id); return renderDrawer(false); }
+    const j = e.target.closest('[data-jump-msg]');
+    if (j) { const id = j.dataset.jumpMsg; if (!(state.page === 'messages' && dockedMode())) { closeCard(); showPage('messages'); } return jumpTo(id); }
+    const a = e.target.closest('[data-act]');
+    if (!a) return;
+    const id = work.openId;
+    if (a.dataset.act === 'open-work') { work.returnFocus = null; closeCard(); showPage('work'); return openCard(id); }
+    if (a.dataset.act === 'copy-id') return copyText(id).then(ok => toast(ok ? `已複製 ${id}` : '複製失敗'));
+    if (a.dataset.act === 'handover') return openHandover();
+    if (a.dataset.act === 'log-all') { work.logAll = !work.logAll; return renderDrawer(false); }
+    if (a.dataset.act === 'add-note') {
+      const ta = $('#note-text'), t = ta?.value.trim();
+      if (!t) return ta?.focus();
+      try { const r = await api(`/api/cards/${encodeURIComponent(id)}/notes`, { method: 'POST', body: { text: t } }); work.detail.notes = r.notes; renderDrawer(false); $('#note-text')?.focus(); toast('已記下（只存卡上）'); } catch (err) { toast(err.message); }
+      return;
+    }
+    if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
+    else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
+    else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
+    else if (a.dataset.act === 'ver-ok') acceptCard(id);
+    else if (a.dataset.act === 'ver-no') rejectCard(id);
+    else if (a.dataset.act === 'note-st') { if (a.getAttribute('aria-pressed') !== 'true') await patchCard(id, { status: a.dataset.st }); } // 已整理不必填去處
+    else if (a.dataset.act === 'reopen') { await patchCard(id, { status: '待處理' }); refreshArchivedCount().then(renderWork); }
+    else if (a.dataset.act === 'verify') {
+      try {
+        work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/verify`, { method: 'POST' }));
+        renderWork(); openCard(id); toast('已標為已驗證');
+      } catch (err) { toast(err.message); }
+    }
+  }
+
+  // 新增卡片
+  function openNewCard(sg, srcMsg) {
+    const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const p0 = singleProject() ? myProjects()[0] : [sg?.project, srcMsg?.project, projectView()].find(x => myProjects().includes(x)) || '';
+    const opts = none => (p0 ? peopleOpts(p0, '', none) : `<option value="">${none}</option>`); // 先選專案才列人
+    const inProjNew = !!p0 && myProjects().includes(projectView()) && (!srcMsg?.project || srcMsg.project === projectView()) && (!sg?.project || sg.project === projectView()); // 在專案內建卡，專案就是本專案
+    const body = openModal(sg ? '編輯後採用建議' : srcMsg ? '從訊息建立卡片' : '新增卡片', `
+      <form id="card-new-form" class="stack">
+        ${srcMsg ? `<div class="info-box">來源訊息「${esc(srcMsg.author.name)} · ${shortTime(srcMsg.createdAt)}」會自動關聯到這張卡，無法移除。</div>` : ''}
+        ${sg ? `<div class="warn-box">${esc(sg.from?.name || 'AI')} 的建議：${esc(sg.why)}</div>` : ''}
+        <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
+        ${inProjNew ? `<p class="muted small nc-proj">建在「${esc(projName(p0))}」</p>` : ''}
+        <label ${inProjNew ? 'hidden' : ''}>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${esc(p)}" ${(inProjNew ? p0 : srcMsg?.project || projectView()) === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
+        <label>負責人<select name="ownerId">${opts('未指派')}</select></label>
+        <div class="field"><span class="field-label" id="nt-label">類型</span>
+          <div class="seg-scope full" role="group" aria-labelledby="nt-label">
+            <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button><button type="button" data-nt="人類紀錄" aria-pressed="false">🔒 人類紀錄</button>
+          </div><input type="hidden" name="type" value="工作"></div>
+        <div class="lockbar" id="nc-note" hidden><span aria-hidden="true">🔒</span><span><b>AI 不會主動看到</b>：不出現在 AI 的看板、卡片清單、團隊狀態，也不發通知或群組訊息。你在訊息裡給 AI 卡號叫它看，它才讀得到（只能讀、不能改）。</span></div>
+        <details id="nc-more" ${sg || srcMsg || store.get('aigile-switch-nc-more') === '1' ? 'open' : ''}><summary>更多欄位 ▾（原因、狀態、下一步、完成條件、等誰）</summary><div class="stack nc-more-body">
+        <div id="nc-decision" class="stack" hidden>
+          <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
+          <label>建議方案<textarea autocomplete="off" autocorrect="on" name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
+          <label>選項<textarea autocomplete="off" autocorrect="on" name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」"></textarea>
+            <span class="field-hint">決策者另外一定能選「不同意」「要求補充」。</span></label>
+          <div class="two-col">
+            <label>影響<input name="impact" maxlength="200" placeholder="例如：UX、PG"></label>
+            <label>決策者<select name="deciderId">${people.filter(p => p.memberType === 'human').map(p => `<option value="${esc(p.participantId)}" ${p.participantId === meId() ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+          </div>
+          <label>決定後<input name="afterNext" maxlength="300" placeholder="決定後下一步是什麼"></label>
+        </div>
+        <label><span class="nc-reason-l">原因</span><textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
+        <label>狀態<select name="status">${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
+        <label>下一步<textarea autocomplete="off" autocorrect="on" name="next" rows="2" maxlength="300"></textarea></label>
+        <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500"></textarea></label>
+        <label>等誰<select name="waitForId">${opts('不用等人')}</select></label>
+        </div></details>
+        <p class="muted small">卡片內容所有成員都看得到，請勿填入內部路徑、程式碼或客戶個資。</p>
+        <p class="error" id="card-new-error" role="alert"></p>
+      </form>`, {
+      size: 'form',
+      foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="card-new-form">建立卡片</button>',
+    });
+    const form = body.querySelector('#card-new-form');
+    body.querySelector('#nc-more').addEventListener('toggle', e => store.set('aigile-switch-nc-more', e.target.open ? '1' : '0')); // 展開狀態記在瀏覽器
+    body.querySelectorAll('[data-nt]').forEach(b => b.addEventListener('click', () => {
+      form.type.value = b.dataset.nt;
+      body.querySelectorAll('[data-nt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      const t = b.dataset.nt;
+      form.status.disabled = t !== '工作' && t !== NOTE; // 阻塞固定為受阻、決策固定為待確認
+      // 人類紀錄——「原因」改叫「內容」並展開；負責人、等誰只列人類；預設進行中
+      const isNote = t === NOTE;
+      body.querySelector('#nc-note').hidden = !isNote;
+      body.querySelector('.nc-reason-l').textContent = isNote ? '內容' : '原因';
+      if (isNote) { body.querySelector('#nc-more').open = true; form.status.value = '進行中'; }
+      form.status.closest('label').hidden = isNote; // 人類紀錄建立時一律「收集中」
+      for (const sel of [form.ownerId, form.waitForId]) { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai; o.disabled = isNote && ai; } if (sel.selectedOptions[0]?.disabled) sel.value = ''; }
+      body.modal.querySelector('button[type="submit"]').textContent = isNote ? '建立人類紀錄' : '建立卡片';
+      body.querySelector('#nc-decision').hidden = t !== '決策';
+      if (t === '決策') body.querySelector('#nc-more').open = true; // 選「決策」自動展開決策欄位
+      form.waitForId.closest('label').hidden = t === '決策'; // 決策卡固定等決策者
+      for (const k of ['next', 'criteria']) form[k].closest('label').hidden = t === '決策';
+    }));
+    if (sg) { // 預填建議內容；決策類型與狀態不適用
+      const c = sg.create;
+      body.querySelector('[data-nt="決策"]').hidden = true;
+      form.title.value = c.title; form.reason.value = c.reason || ''; form.next.value = c.next || ''; form.criteria.value = c.criteria || '';
+      if (c.owner) form.ownerId.value = c.owner.participantId;
+      if (c.waitFor) form.waitForId.value = c.waitFor.participantId;
+      form.status.closest('label').hidden = true; form.status.disabled = true;
+      if (c.type === '阻塞') body.querySelector('[data-nt="阻塞"]').click();
+    }
+    if (srcMsg) {
+      const plain = srcMsg.text.replace(/^\s*\[[^\]\n]{1,40}\]\s?/, '').trim();
+      form.title.value = plain.split('\n')[0].slice(0, 100);
+      form.reason.value = plain.slice(0, 500);
+    }
+    const requestId = 'web_' + (crypto.randomUUID?.() || Date.now() + Math.random());
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      for (const k of Object.keys(data)) data[k] = data[k].trim();
+      data.project = form.project.value; // 單一專案成員的欄位是 disabled，FormData 不會帶
+      if (form.status.disabled) delete data.status;
+      if (data.type !== '決策') for (const k of ['question', 'recommendation', 'options', 'impact', 'deciderId', 'afterNext']) delete data[k];
+      else { delete data.waitForId; if (!data.options) data.options = []; else data.options = data.options.split('\n'); }
+      if (!data.ownerId) delete data.ownerId;
+      if (!data.waitForId) delete data.waitForId;
+      try {
+        const c = sg ? await api(`/api/suggestions/${encodeURIComponent(sg.suggestionId)}/apply`, { method: 'POST', body: { title: data.title, reason: data.reason, ownerId: data.ownerId ?? null, next: data.next, criteria: data.criteria, type: data.type, project: data.project, waitForId: data.waitForId ?? null } })
+          : await api('/api/cards', { method: 'POST', body: { ...data, requestId, ...(srcMsg ? { messageIds: [srcMsg.messageId] } : {}) } });
+        if (sg) await loadSuggestions();
+        work.cards.set(c.cardId, c);
+        closeModal();
+        if (srcMsg) rememberLinks({ cardId: c.cardId, messageIds: [srcMsg.messageId] });
+        renderWork();
+        if (srcMsg) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
+        actionToast(`已建立 ${ckeyOf(c)} ·`, '打開', () => openCard(c.cardId));
+        flashCard(c.cardId);
+      } catch (err) { body.querySelector('#card-new-error').textContent = err.message; }
+    });
+  }
+
+  // 新卡捲到看得到的地方並閃一下（看板、工作總覽、清單）
+  function flashCard(id) {
+    requestAnimationFrame(() => {
+      const el = [...document.querySelectorAll(`#page-work [data-card="${CSS.escape(id)}"]`)].find(x => x.offsetParent && x.matches('.ctile, .crow, .cmini, .wpanel-item'));
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+    });
+  }
+
+  // ---------- 訊息上的授權列：只給該 AI 的所屬人類；純前端判斷，送出的就是一般的 [回覆] 訊息 ----------
+  const SHA40 = /\b[0-9a-f]{40}\b/g;
+  const authPending = new Map(); // messageId → { text, requestId, busy, error }
+  const poRole = r => ((state.participants.get(r.author.participantId) || r.author).roleKey) === 'PO';
+  const myAiMsg = m => state.me?.memberType === 'human' && !m.file && (() => {
+    const a = state.participants.get(m.author.participantId);
+    return !!a && a.memberType === 'ai' && a.ownerParticipantId === meId();
+  })();
+  function authText(m, kind, sha) {
+    if (kind === 'push') return `[回覆] 同意 push：${sha}`;
+    if (kind === 'commit') return `[回覆] 同意 commit（針對第 ${m.sequence} 則），請附完整 40 碼 SHA`;
+    return kind === 'ok' ? '[回覆] 同意照辦' : '[回覆] 暫緩處理';
+  }
+  const authBtn = (m, kind, label, sha, plain) => `<button type="button" class="btn auth-btn${plain ? ' plain' : ''}" data-auth="${kind}" data-asha="${sha || ''}" data-amsg="${esc(m.messageId)}">${label}</button>`;
+  function authConfirm(m, p) {
+    return `<div class="auth-confirm" role="group" aria-label="確認送出">
+      <b>你將以自己的名義送出：</b>
+      <div class="auth-text">${esc(p.text)}<span class="muted small">回覆 ${esc(m.author.name)} 那則；收件人 ${esc(m.author.name)}</span></div>
+      ${p.text.includes('push') ? '<span class="muted small">授權只綁這個 SHA 與這一次；下次 push 需重新授權。</span>' : ''}
+      ${p.error ? `<p class="error" role="alert">送出失敗：${esc(p.error)}　可按「重試」。</p>` : ''}
+      <div class="row"><button type="button" class="btn primary" data-auth-send="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>${p.error ? '重試' : '確認送出'}</button>
+      <button type="button" class="btn" data-auth-cancel="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>取消</button></div></div>`;
+  }
+  // ---------- ：[需確認] 快捷列——選項按鈕＋想法輸入框 ----------
+  const quickMap = new Map(); // 訊息編號 → { sel, text, noOpts, busy, error }
+  const quickState = id => { if (!quickMap.has(id)) quickMap.set(id, { sels: {}, text: '', busy: false, error: '' }); return quickMap.get(id); };
+  const OPT_LETTER = /^\s*(?:[（(]([A-F])[）)]|([A-F])\s*[.、:：）)])\s*(\S.*)$/;
+  const OPT_CIRCLE = /^\s*([①②③④⑤⑥])\s*(\S.*)$/;
+  // [需確認] 的選項解析，跟伺服器 src/questions.js 同一份規則（questions-test 會比對）
+  // 看過「選項：」或「問題N：」之後，緊接 2～6 行 A.～F.／①～⑥ 就是選項；回傳 [{ no, title, opts: [{ key, label }], named }]
+  const OPT_HEAD = /^\s*選項\s*[:：]\s*$/;
+  const Q_HEAD = /^\s*問題\s*(\d+)\s*[:：]\s*(.*)$/;
+  function parseQuestions(text) {
+    const lines = String(text).split('\n'), out = [];
+    let lastQ = null, lastEnd = -1, cue = null; // cue：上一組選項之後看過的提示（'opt'＝選項：、'q'＝問題N：）
+    for (let i = 0; i < lines.length; i++) {
+      const qh = Q_HEAD.exec(lines[i]);
+      if (qh) { lastQ = { no: Number(qh[1]), title: qh[2].trim(), at: i }; if (cue !== 'opt') cue = 'q'; continue; }
+      if (OPT_HEAD.test(lines[i])) { cue = 'opt'; continue; }
+      if (!cue) continue;
+      const opts = [];
+      let j = i;
+      for (; j < lines.length && opts.length < 7; j++) {
+        const a = OPT_LETTER.exec(lines[j]), c = OPT_CIRCLE.exec(lines[j]);
+        if (a) opts.push({ key: a[1] || a[2], label: a[3].trim() });
+        else if (c) opts.push({ key: c[1], label: c[2].trim() });
+        else break;
+      }
+      if (!opts.length) continue;
+      if (cue === 'q') { // 只有「問題N：」提示：這題後面（下一個「問題N：」之前）還有「選項：」就跳過這組
+        let k = j, later = false;
+        for (; k < lines.length && !Q_HEAD.test(lines[k]); k++) if (OPT_HEAD.test(lines[k])) { later = true; break; }
+        if (later) { i = j - 1; continue; }
+      }
+      const keys = opts.map(o => o.key);
+      if (opts.length >= 2 && opts.length <= 6 && new Set(keys).size === keys.length) {
+        const q = lastQ && lastQ.at > lastEnd ? lastQ : null;
+        out.push({ no: q ? q.no : out.length + 1, title: q ? q.title : '', opts, named: !!q });
+        lastEnd = j - 1;
+        cue = null;
+      }
+      i = j - 1;
+    }
+    return out;
+  }
+  // 這題建議哪個——「建議：A」那行（認代號或選項文字），或選項後面寫（我建議）；只對到一個才算，否則 null
+  const REC_LINE = /^\s*(?:我的)?建議(?:方案)?\s*[:：]\s*(\S.*)$/;
+  const REC_MARK = /\s*[（(]\s*我?建議\s*[)）]/;
+  function questionRecs(text, qs) {
+    const lines = String(text).split('\n');
+    return qs.map(qq => {
+      let seg = lines;
+      if (qs.length > 1) { // 多題：只看這題「問題N：」到下一個「問題N：」之間
+        const st = qq.named ? lines.findIndex(l => Number(Q_HEAD.exec(l)?.[1]) === qq.no) : -1;
+        if (st < 0) return null;
+        const en = lines.findIndex((l, k) => k > st && Q_HEAD.test(l));
+        seg = lines.slice(st, en < 0 ? undefined : en);
+      }
+      const keys = new Set(qq.opts.filter(o => REC_MARK.test(o.label)).map(o => o.key));
+      for (const l of seg) {
+        const r = REC_LINE.exec(l)?.[1]; if (!r) continue;
+        const k = /^(?:選\s*)?([A-Fa-f①-⑥])(?=$|[^A-Za-z0-9])/.exec(r.trim())?.[1]?.toUpperCase();
+        const byKey = k && qq.opts.find(o => o.key === k);
+        const i = byKey ? -1 : recommendedIndex(r, qq.opts.map(o => o.label.replace(REC_MARK, '')));
+        if (byKey) keys.add(byKey.key); else if (i >= 0) keys.add(qq.opts[i].key);
+      }
+      return keys.size === 1 ? [...keys][0] : null;
+    });
+  }
+  function quickHtml(m) {
+    const q = quickState(m.messageId);
+    const dcard = cardOfConfirm({ messageId: m.messageId });
+    if (dcard?.decision.deferred) return `<div class="auth-row quick" data-q-root="${esc(m.messageId)}"><p class="small muted">決策卡 ${esc(ckeyOf(dcard))} 暫緩中。要繼續請到「工作」打開決策卡按「恢復」。</p></div>`;
+    if (dcard) { // 這則在講一張等我決定的決策卡：只送意見，或暫緩；選項與「同意」到決策卡上按
+      const id = esc(m.messageId);
+      return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(ckeyOf(dcard))} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
+      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
+        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>先擱著（暫緩）</button></div>
+      <p class="muted small inl-note">留言會通知提案人；先擱著會移出收件匣，之後可在工作頁恢復。</p>
+      ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
+    }
+    const qs = parseQuestions(m.text);
+    const id = esc(m.messageId);
+    const missing = qs.filter((_, i) => !q.sels[i]).length, picked = qs.length - missing;
+    const textOnly = qs.length === 1 && missing && q.text.trim(); // 只有一題時，不選選項也能直接送出想法
+    const sendLabel = !qs.length ? '同意照辦' : textOnly ? '送出想法' : missing ? (qs.length === 1 ? '先選一個選項' : `還有 ${missing} 題未選`) : qs.length > 1 ? `送出 ${qs.length} 題回覆` : `選 ${esc(q.sels[0])} 並送出`;
+    const recs = questionRecs(m.text, qs);
+    const qBlock = (qq, i) => {
+      const long = qq.opts.some(o => o.label.length > 16);
+      const head = qs.length > 1 || qq.named ? `<div class="q-title" id="qt-${id}-${i}">問題${qq.no}${qq.title ? '　' + esc(qq.title) : ''}${picked && !q.sels[i] ? ' <span class="pill-tag yellow">未選</span>' : ''}</div>` : '';
+      return `<div class="q-group" role="radiogroup" ${head ? `aria-labelledby="qt-${id}-${i}"` : 'aria-label="選項"'}>${head}
+        <div class="q-opts${long ? ' vertical' : ''}">${qq.opts.map(o => `<button type="button" class="btn q-opt${recs[i] === o.key ? ' rec' : ''}" role="radio" aria-checked="${q.sels[i] === o.key}" data-q-opt="${esc(o.key)}" data-qi="${i}" data-qm="${id}"><b>${esc(o.key)}</b><span data-nt>${esc(recs[i] === o.key ? o.label.replace(REC_MARK, '') : o.label)}</span>${recs[i] === o.key ? REC_TAG : ''}</button>`).join('')}</div></div>`;
+    };
+    return `<div class="auth-row quick" data-q-root="${id}">
+      ${qs.map(qBlock).join('')}
+      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <div class="inl-actions">
+        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || (missing && !textOnly) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
+        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button>
+      </div>
+      ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
+  }
+  async function quickSend(id, kind) {
+    const m = state.byId.get(id), q = quickState(id);
+    if (!m || q.busy) return;
+    const dcard = cardOfConfirm({ messageId: id });
+    if (dcard) {
+      if (kind === 'send' && !q.text.trim()) return;
+      q.busy = true; q.error = ''; refreshMsg(id);
+      try {
+        if (kind === 'hold') work.cards.set(dcard.cardId, await api(`/api/cards/${encodeURIComponent(dcard.cardId)}/defer`, { method: 'POST', body: { reason: q.text.trim(), version: dcard.version } }));
+        else onNewMessage(await postMsg({ text: `[回覆] ${dcard.cardId}（決策意見）：${q.text.trim()}`, requestId: newRequestId(), replyToMessageId: id, cardId: dcard.cardId, recipientIds: [m.author.participantId] }));
+        quickMap.delete(id); refreshMsg(id);
+        toast(kind === 'hold' ? '已暫緩，決策卡已移出收件匣' : '已送出');
+        await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]); updateTodoBadge();
+      } catch (err) { q.busy = false; q.error = err.message; refreshMsg(id); }
+      return;
+    }
+    const qs = parseQuestions(m.text);
+    const textOnly = kind === 'send' && qs.length === 1 && !q.sels[0] && q.text.trim();
+    if (kind === 'send' && !textOnly && qs.some((_, i) => !q.sels[i])) return;
+    const picks = qs.length === 1 && !qs[0].named ? `選 ${q.sels[0]}` : qs.map((qq, i) => `問題${qq.no} 選 ${q.sels[i]}`).join('；');
+    const head = kind === 'hold' ? '暫緩處理' : qs.length ? picks : '同意照辦';
+    const text = textOnly ? `[回覆] ${q.text.trim()}` : `[回覆] ${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
+    q.busy = true; q.error = ''; refreshMsg(id);
+    try {
+      const r = await postMsg({ text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] });
+      quickMap.delete(id);
+      if (state.page === 'inbox') { // 收件匣裡回答：該項立刻淡出移走
+        work.answered.add(id);
+        const row = document.querySelector(`#page-work [data-conf-row="${CSS.escape(id)}"]`);
+        if (row) row.classList.add('fading');
+        setTimeout(() => { renderWork(); updateTodoBadge(); }, 250);
+        onNewMessage(r);
+        const t = $('#toast');
+        t.innerHTML = '已回覆 <button type="button" class="link toast-undo" id="toast-go">到訊息看</button>';
+        t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 5000);
+        t.querySelector('#toast-go').onclick = () => { t.hidden = true; showPage('messages'); jumpTo(r.messageId); };
+      } else { onNewMessage(r); refreshMsg(id); toast('已送出'); }
+      loadTeam().then(() => { updateTodoBadge(); if (state.page === 'inbox') renderWork(); }).catch(() => {});
+    } catch (err) {
+      q.busy = false; q.error = err.message; refreshMsg(id);
+    }
+  }
+  function quickClick(e) {
+    const t = e.target;
+    const opt = t.closest?.('[data-q-opt]');
+    if (opt) { const q = quickState(opt.dataset.qm), i = Number(opt.dataset.qi); q.sels[i] = q.sels[i] === opt.dataset.qOpt ? undefined : opt.dataset.qOpt; refreshMsg(opt.dataset.qm); return true; }
+    const send = t.closest?.('[data-q-send]');
+    if (send) { if (!send.disabled) quickSend(send.dataset.qm, 'send'); return true; }
+    const hold = t.closest?.('[data-q-hold]');
+    if (hold) { if (!hold.disabled) quickSend(hold.dataset.qm, 'hold'); return true; }
+    return false;
+  }
+
+  function authHtml(m, { inbox = false } = {}) {
+    const owner = myAiMsg(m);
+    const fromOther = m.author.participantId !== state.me?.participantId; // AI 或其他同仁發的都給選項按鈕，自己發的不用
+    if (!owner && !(state.me?.memberType === 'human' && !m.file && fromOther && (inbox || isToMe(m)) && /^\s*\[需確認\]/.test(m.text))) return '';
+    const text = m.text, mineR = repliesOf(m.messageId).filter(isMine);
+    const pend = authPending.get(m.messageId);
+    const rows = [];
+    // Push 授權列只給「程式開發（PG）AI 發的 [需確認]」；[完成]／[進度]／[通知] 就算含完整 SHA 也不顯示（事後會被誤按成再授權一次）
+    const authorPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG';
+    const pushAsk = owner && authorPG && /^\s*\[需確認\]/.test(text);
+    const shas = pushAsk ? [...new Set(text.match(SHA40) || [])] : [];
+    for (const sha of shas) {
+      const sent = mineR.find(r => r.text.includes('同意 push：' + sha));
+      if (sent) rows.push(`<div class="auth-row sent"><b>已授權 Push · ${shortTime(sent.createdAt)}</b><span class="muted small">僅限 ${sha.slice(0, 7)}…${sha.slice(-4)}</span></div>`);
+      else if (pend && pend.key === 'push:' + sha) rows.push(authConfirm(m, pend));
+      else rows.push(`<div class="auth-row"><span class="auth-title">授權此 SHA（${sha.slice(0, 7)}…${sha.slice(-4)}）</span>${authBtn(m, 'push', '同意 Push', sha)}</div>`);
+    }
+    if (pushAsk && !shas.length && /push/i.test(text) &&/\b(?=[0-9a-f]*\d)[0-9a-f]{7,39}\b/.test(text) && !mineR.some(r => /同意 push/.test(r.text))) {
+      rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
+    }
+    if (!shas.length && /^\s*\[需確認\]/.test(text)) {
+      // 任何人類回覆都算已處理（和伺服器收件匣規則一致），選項區收起；自己的回覆優先顯示
+      const humanR = repliesOf(m.messageId).filter(r => (state.participants.get(r.author.participantId) || r.author).memberType === 'human');
+      const sent = humanR.find(isMine) || humanR[0];
+      const answered = sent || repliesOf(m.messageId).some(r => !isMine(r) && poRole(r));
+      const isPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG'; // Commit 授權只給程式開發 AI 的 [需確認]
+      const hasCommit = owner && isPG && /commit/i.test(text);
+      if (sent) rows.push(answeredHtml(m, sent));
+      else if (pend && pend.key === 'need') rows.push(authConfirm(m, pend));
+      else if (!answered) rows.push(hasCommit
+        ? `<div class="auth-row"><span class="auth-title">授權 Commit</span>${authBtn(m, 'commit', '同意 Commit')}</div>`
+        : quickHtml(m));
+    }
+    return rows.length ? `<div class="auth-box">${rows.join('')}</div>` : '';
+  }
+  // 回覆裡寫了「選 A」「A」「問題1 選 B」就標出已選的選項
+  function answerPicks(qs, body) {
+    const t = body.trim(), picks = {};
+    for (const x of t.matchAll(/問題\s*(\d+)\s*[:：]?\s*選?\s*([A-F①-⑥])/g)) {
+      const i = qs.findIndex(q => q.no === Number(x[1]));
+      if (i >= 0 && qs[i].opts.some(o => o.key === x[2])) picks[i] = x[2];
+    }
+    if (qs.length === 1 && !picks[0]) { const x = /^(?:選\s*)?([A-F①-⑥])(?![A-Za-z0-9])/.exec(t); if (x && qs[0].opts.some(o => o.key === x[1])) picks[0] = x[1]; }
+    return picks;
+  }
+  function answeredHtml(m, r) {
+    const body = r.text.replace(/^\s*\[回覆\]\s*/, '');
+    const qs = parseQuestions(m.text), picks = answerPicks(qs, body);
+    const chosen = qs.map((qq, i) => { const o = picks[i] && qq.opts.find(x => x.key === picks[i]); return o ? `<span class="ans-pick">${qs.length > 1 ? `問題${qq.no} ` : ''}<b>${esc(o.key)}</b> ${esc(o.label)}<span class="ans-tag">已選</span></span>` : ''; }).join('');
+    return `<div class="auth-row sent answered"><button type="button" class="ans-jump" data-jump="${esc(r.messageId)}" title="跳到這則回覆"><b>已回覆：</b><span class="ans-text">${esc(oneLine(body, 60))}</span><span class="muted small">· ${esc(r.author.name)} · ${esc(shortTime(r.createdAt))}</span></button>${chosen ? `<div class="ans-picks">${chosen}</div>` : ''}</div>`;
+  }
+  // 收件匣要顯示 [需確認] 的完整題目與選項，原文不在目前載入範圍的先抓回來（只放進 byId，不插進訊息串）
+  async function loadConfirmMsgs() {
+    const miss = legacyConfirms().map(d => d.messageId).filter(id => id && !state.byId.has(id)).slice(0, 20);
+    await Promise.all(miss.map(id => api(`/api/messages/${encodeURIComponent(id)}`).then(m => { state.byId.set(id, m); }).catch(() => {})));
+  }
+  function refreshMsg(id) {
+    if (state.page === 'inbox' && document.querySelector(`#page-work [data-q-root="${CSS.escape(id)}"], #page-work [data-conf-row="${CSS.escape(id)}"]`)) { // 收件匣裡的選項區：重畫收件匣、保留捲動位置
+      const box = $('#page-work'), top = box.scrollTop, keep = document.activeElement?.dataset?.qText;
+      renderWork(); box.scrollTop = top;
+      if (keep) { const t = box.querySelector(`[data-q-text="${CSS.escape(keep)}"]`); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
+    }
+    const el = document.getElementById('msg-' + id);
+    if (el && state.byId.has(id)) el.outerHTML = messageHtml(state.byId.get(id));
+    document.getElementById('msg-' + id)?.querySelector('[data-auth-send]')?.focus();
+  }
+  function authClick(e) {
+    if (quickClick(e)) return true;
+    const go = e.target.closest('[data-auth]');
+    if (go) {
+      const m = state.byId.get(go.dataset.amsg);
+      if (!m) return true;
+      const kind = go.dataset.auth, sha = go.dataset.asha;
+      authPending.set(m.messageId, { key: kind === 'push' ? 'push:' + sha : 'need', text: authText(m, kind, sha), requestId: newRequestId() });
+      refreshMsg(m.messageId);
+      return true;
+    }
+    const cancel = e.target.closest('[data-auth-cancel]');
+    if (cancel) {
+      const id = cancel.dataset.authCancel;
+      authPending.delete(id); refreshMsg(id);
+      document.getElementById('msg-' + id)?.querySelector('[data-auth]')?.focus();
+      return true;
+    }
+    const send = e.target.closest('[data-auth-send]');
+    if (send) {
+      const id = send.dataset.authSend, m = state.byId.get(id), p = authPending.get(id);
+      if (!m || !p || p.busy) return true;
+      p.busy = true; p.error = ''; refreshMsg(id);
+      postMsg({ text: p.text, requestId: p.requestId, replyToMessageId: id, recipientIds: [m.author.participantId] })
+        .then(r => { authPending.delete(id); onNewMessage(r); refreshMsg(id); toast('已送出授權'); })
+        .catch(err => {
+          p.busy = false; p.error = err.message;
+          if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'INVALID_REQUEST') p.requestId = newRequestId();
+          refreshMsg(id);
+        });
+      return true;
+    }
+    return false;
+  }
+  // 這則訊息建過的卡（本機記住；也會在開啟卡片時補上）
+  state.msgCards = new Map();
+  function linkedCapsules(m) {
+    const ids = state.msgCards.get(m.messageId);
+    return ids?.size ? `<span class="linked">${[...ids].map(capsuleHtml).join(' ')}</span>` : '';
+  }
+  function rememberLinks(card) {
+    for (const mid of card.messageIds || []) {
+      if (!state.msgCards.has(mid)) state.msgCards.set(mid, new Set());
+      state.msgCards.get(mid).add(card.cardId);
+    }
+  }
+
+  // ---------- 輸入框標籤選單----------
+  // 人類常用的放上面，每項附一句白話；「一般訊息」＝不加類型
+  const TAGS = [['', '不加類型'], ['需確認', '要對方做決定'], ['回覆', '回應別人的問題'], ['接單', '我開始做了'], ['進度', '做到哪了'], ['受阻', '卡住了，需要幫忙'], ['完成', '做好了，請驗收'], ['通知', '讓大家知道一件事'], ['交接', '交給下一位接手']];
+  const tagMenu = $('#tag-menu');
+  let tagIdx = null; // null＝關閉
+  const leadTagOf = v => (v.match(/^\s*\[([^\]\n]{1,40})\]/) || [])[1];
+  function openTagMenu() {
+    const cur = TAGS.findIndex(t => t[0] === (leadTagOf(input.value) || ''));
+    tagIdx = cur >= 0 ? cur : 0;
+    renderTagMenu();
+  }
+  function renderTagMenu() {
+    const cur = leadTagOf(input.value) || '';
+    tagMenu.innerHTML = TAGS.map(([t, hint], i) => `
+      <li role="option" data-i="${i}" aria-selected="${cur === t}" class="${i === tagIdx ? 'active' : ''}"><b>${t ? `[${t}]` : '一般訊息'}</b><span class="muted small">${hint}${cur === t ? '（目前）' : ''}</span></li>`).join('');
+    tagMenu.hidden = false;
+    $('#tag-btn').setAttribute('aria-expanded', 'true');
+  }
+  function closeTagMenu() { tagIdx = null; tagMenu.hidden = true; $('#tag-btn').setAttribute('aria-expanded', 'false'); }
+  function pickTag(i) {
+    let v = input.value;
+    v = v.replace(/^\s*\[[^\]\n]{0,40}\]?\s?/, ''); // 已有標籤（或只打了一半）就取代
+    input.value = (TAGS[i][0] ? `[${TAGS[i][0]}] ` : '') + v;
+    closeTagMenu();
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    pendingRequestId = null;
+    onInput();
+  }
+  tagMenu.addEventListener('mousedown', e => {
+    const li = e.target.closest('li');
+    if (li) { e.preventDefault(); pickTag(Number(li.dataset.i)); }
+  });
+  $('#tag-btn').addEventListener('mousedown', e => e.preventDefault());
+  $('#tag-btn').addEventListener('click', () => { if (tagIdx === null) { input.focus(); openTagMenu(); } else closeTagMenu(); });
+  input.addEventListener('blur', () => setTimeout(closeTagMenu, 150));
+  input.addEventListener('input', () => { if (input.value === '[' && tagIdx === null) openTagMenu(); else if (tagIdx !== null && !input.value.startsWith('[') && input.value !== '') closeTagMenu(); });
+  input.addEventListener('keydown', e => {
+    if (tagIdx === null || e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopImmediatePropagation();
+      tagIdx = (tagIdx + (e.key === 'ArrowDown' ? 1 : TAGS.length - 1)) % TAGS.length;
+      return renderTagMenu();
+    }
+    if (e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); return pickTag(tagIdx); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeTagMenu(); }
+  }, true);
+
+  // 團隊：第一版先把四個既有畫面收進同一個入口（第二版再整合成一頁）
+  function openTeamHub() {
+    const body = openModal('團隊', `<div class="stack">
+      <button type="button" class="btn hub-btn" data-hub="team-status"><b>團隊狀態</b><span class="muted small">每位成員目前在做什麼、誰在線、有沒有人卡住</span></button>
+      <button type="button" class="btn hub-btn" data-hub="members"><b>成員名單</b><span class="muted small">誰在群組、誰在線</span></button>
+      <button type="button" class="btn hub-btn" data-hub="my-ai"><b>我的 AI</b><span class="muted small">管理我名下的 AI、重發 Token</span></button></div>`, { size: 'narrow' });
+    body.addEventListener('click', e => {
+      const b = e.target.closest('[data-hub]'); if (!b) return;
+      closeModal();
+      ({ 'team-status': openTeam, members: openMembers, 'my-ai': openMyAi })[b.dataset.hub]();
+    });
+  }
+  const openers = { team: openTeamHub, members: openMembers, 'my-ai': () => goTop('myai'), inbox: openInbox, files: () => showPage('files'), api: openApi, settings: openSettings, qr: openQr, 'proj-admin': () => goTop('perm') }; // 專案管理併入「成員與權限」
+  document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => { closeSheet(false); openers[b.dataset.open](); }));
+  // 手機選單（底部滑出）
+  const sheet = $('#sheet');
+  function openSheet() { sheet.hidden = false; $('#menu-btn').setAttribute('aria-expanded', 'true'); sheet.querySelector('.sheet-panel > button:not([hidden])')?.focus(); }
+  function closeSheet(refocus = true) {
+    if (sheet.hidden) return;
+    sheet.hidden = true; $('#menu-btn').setAttribute('aria-expanded', 'false');
+    if (refocus) $('#menu-btn').focus();
+  }
+  $('#menu-btn').addEventListener('click', openSheet);
+  sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
+  sheet.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+  $('#side-brand').addEventListener('click', () => { if (hasHub()) { closeSheet(false); setProjectView('hub'); } else showPage('messages'); }); // 整列回我的專案
+
+  // 工作記憶裡的讀取位置 →「讀到：第 N 則・卡片到 10/17 20:30」
+  const curSeq = c => { try { const b = String(c).slice(4).replace(/-/g, '+').replace(/_/g, '/'); const s = JSON.parse(atob(b + '==='.slice((b.length + 3) % 4))).s; return Number.isInteger(s) && s >= 0 ? s : null; } catch { return null; } }; // 只顯示整數（不是整數＝不顯示，不放進 HTML）
+  const posLine = st => { const n = st?.messagesCursor ? curSeq(st.messagesCursor) : null, c = st?.cardsSince; return n == null && !c ? '' : `<br><span class="muted small astate-pos">讀到：${[n != null ? `第 ${n} 則` : '', c ? `卡片到 ${fmtDate(c)}` : ''].filter(Boolean).join('・')}</span>`; };
+  // ---------- 團隊狀態 ----------
+  const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定', todo: '待處理' };
+  // 「等你決定」：訊息型的所有人都看；決策卡只給指定的決策者看
+  work.answered = new Set(); // 已經有人類回覆的 [需確認]，不等團隊狀態快取（約 1 分鐘）就先移走
+  const myDecisions = t => t.decisions.filter(d => ((!d.cardId && !cardOfConfirm(d)) || d.deciderId === meId()) && !(d.messageId && work.answered.has(d.messageId)));
+  const agoText = iso => {
+    if (!iso) return '從未上線';
+    const min = Math.floor((Date.now() - new Date(iso)) / 60000);
+    if (min < 1) return '剛剛';
+    if (min < 60) return `${min} 分鐘前`;
+    if (min < 1440) return `${Math.floor(min / 60)} 小時前`;
+    return `${Math.floor(min / 1440)} 天前`;
+  };
+  // 連線健康度：green 正常、yellow 可能斷線或 Token 快到期、red Token 已過期、grey 人類離線
+  function health(mb) {
+    if (mb.tokenExpired) return { cls: 'red', text: 'Token 已過期' };
+    if (mb.memberType === 'ai' && mb.stale) return { cls: 'yellow', text: mb.lastSeenAt ? '可能斷線' : '尚未連線' };
+    if (mb.tokenExpiringSoon) return { cls: 'yellow', text: 'Token 快到期' };
+    if (mb.memberType === 'human' && !mb.isOnline) return { cls: 'grey', text: '離線' };
+    if (mb.memberType === 'ai' && mb.standby) return { cls: 'green', text: '待命中' };
+    return { cls: 'green', text: '正常' };
+  }
+
+  // 團隊狀態「尚未回應的指派」：只有 AI，同一個 AI 合併一列，展開看各則訊息
+  function unansweredByAi(list) {
+    if (!list.length) return '';
+    const by = new Map();
+    for (const u of list) by.set(u.participantId, [...(by.get(u.participantId) || []), u]);
+    const groups = [...by.values()].map(items => items.sort((a, b) => String(a.since).localeCompare(String(b.since))))
+      .sort((a, b) => String(a[0].since).localeCompare(String(b[0].since)));
+    return `<div class="group-title">尚未回應的指派 · ${groups.length} 個 AI</div>
+      ${groups.map(items => `<details class="note-card red unans">
+        <summary class="note-main"><span><b>${esc(items[0].name)}</b> <span class="red-text">· ${items.length} 則 · 最久 ${agoText(items[0].since).replace('前', '')}</span></span></summary>
+        <ul class="unans-list">${items.map(u => `<li><span class="muted small">已等 ${agoText(u.since).replace('前', '')}</span> <button type="button" class="link small" data-jump-team="${esc(u.messageId)}">查看訊息</button></li>`).join('')}</ul>
+      </details>`).join('')}`;
+  }
+  function unansweredTag(m) {
+    const who = state.unansweredByMsg.get(m.messageId);
+    return who?.length ? `<span class="tag unanswered" title="指派超過 ${state.team?.unansweredMinutes || 20} 分鐘仍未讀取">尚未回應：${who.map(esc).join('、')}</span>` : '';
+  }
+
+  async function loadTeam() {
+    try {
+      const t = await api('/api/team-status');
+      state.team = t;
+      const before = JSON.stringify([...state.unansweredByMsg]);
+      const map = new Map();
+      for (const u of t.unanswered) map.set(u.messageId, [...(map.get(u.messageId) || []), u.name]);
+      state.unansweredByMsg = map;
+      if (JSON.stringify([...map]) !== before) {
+        const box = $('#messages');
+        const keep = box.scrollTop;
+        const atBottom = nearBottom();
+        renderMessages(atBottom);
+        if (!atBottom) box.scrollTop = keep;
+      }
+      renderTeamBar();
+    } catch {}
+  }
+
+  // ---------- 哪個 AI 正在作業 ----------
+  // 在做：先看該 AI 負責、狀態「進行中」的卡；沒有才看最後的 [接單]／[進度]，超過 2 小時沒動靜改回待命
+  // 待命：watcher 在線（或最近有呼叫）；離線：都沒有。資料全來自已載入的團隊狀態與卡片，不多查伺服器
+  const AINOW_KEY = 'aigile-switch-ainow';
+  const aiNowOn = () => store.get(AINOW_KEY) !== '0';
+  const WORK_FRESH_MS = 2 * 3600_000;
+  function aiNowOf(mb) {
+    // Token 過期的連不上（就算留著舊的待命心跳）；從沒連線過的是「還沒接入」：兩種都不算在做事或待命，跟我的 AI、紅條同一個說法
+    if (mb.tokenExpired) return { kind: 'off', why: 'expired' };
+    if (!mb.lastSeenAt) return { kind: 'off', why: 'new' };
+    const pv = projectView(), inProj = PROJECTS.includes(pv);
+    const card = [...(work.cards?.values() || [])].filter(c => c.owner?.participantId === mb.participantId && c.status === '進行中' && (!inProj || c.project === pv))
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+    if (card) return { kind: 'work', cardId: card.cardId, title: card.title };
+    const s = mb.status;
+    const sc = s && (s.cardId || cardIdOf(s.title)), scard = sc && work.cards?.get(sc);
+    if (s && s.state === 'working' && s.source !== 'card' && Date.now() - Date.parse(s.at) < WORK_FRESH_MS && !(sc && (!scard || closedSt(scard.status)))) return { kind: 'work', cardId: sc, title: s.title }; // 掛的卡已結案或沒載到（例如已封存）就不算在做
+    if (mb.standby || mb.isOnline) return { kind: 'idle' };
+    return { kind: 'off' };
+  }
+  function aiNowList() {
+    if (!state.team) return [];
+    const pv = projectView(), rank = { work: 0, idle: 1, off: 2 };
+    return state.team.members
+      .filter(mb => mb.memberType === 'ai' && inViewPerson(mb.participantId) && (!PROJECTS.includes(pv) || (mb.projects || state.participants.get(mb.participantId)?.projects || []).includes(pv)))
+      .map(mb => ({ mb, now: aiNowOf(mb) }))
+      .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
+  }
+  const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}` : x.now.kind === 'idle' ? '待命' : x.now.why === 'expired' ? 'Token 已過期' : x.now.why === 'new' ? '還沒接入' : '離線');
+  const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${esc(aiNowText(x))}</span></button>`;
+  function drawAiNow() {
+    drawDmSide();
+    const el = $('#ai-now');
+    if (!el) return;
+    const list = aiNowList();
+    drawPresence(list);
+    el.hidden = !aiNowOn() || !list.length || projectView() === 'hub';
+    if (el.hidden) { el.innerHTML = ''; return; }
+    const n = list.filter(x => x.now.kind === 'work').length;
+    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(x => aiNowBtn(x)).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
+      <button type="button" class="an-chip" data-ainow-sheet><span class="an-dot ${n ? 'work' : 'idle'}" aria-hidden="true"></span>${n ? `${n} 個 AI 在做事` : 'AI 都沒在做事'} <span aria-hidden="true">›</span></button>`;
+  }
+  // ---------- 私訊自己的 AI ----------
+  // 只有本人與他名下的 AI 看得到；專案沒開就整區不出現。資料只在打開對話時讀
+  const dmOn = pj => !!state.projectList.find(p => p.id === pj)?.dm?.on;
+  const dmVisible = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && dmOn(projectView());
+  const isMyAi = p => p && p.memberType === 'ai' && p.ownerParticipantId === meId();
+  const myAisHere = () => [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled' && (p.projects || []).includes(projectView()));
+  const aiKind = id => { const mb = state.team?.members.find(m => m.participantId === id); return mb ? aiNowOf(mb).kind : 'off'; };
+  const dmUnread = id => (work.notes || []).filter(n => n.dm && n.sender.participantId === id).length;
+  // 這個專案可以看到私訊入口（有自己名下、在這專案的 AI）；沒開時入口淡色，點了說明怎麼開（退回）
+  const dmEntry = () => state.me?.memberType === 'human' && PROJECTS.includes(projectView()) && myAisHere().length > 0 && !meRO(); // 唯讀沒有私訊
+  const dmWhyNot = () => !PROJECTS.includes(projectView()) ? '私訊在專案裡：先進入一個專案' : meRO() ? '你在這個專案是唯讀，沒有私訊' : '這個專案還沒有你的 AI，私訊不了';
+  async function dmEnable() {
+    const pv = projectView(), can = isAdmin() || myLeadProjects().includes(pv);
+    if (!can) {
+      const who = leadersOf(pv).map(id => state.participants.get(id)?.name).filter(Boolean);
+      return confirmDialog({ title: '私訊還沒開放', confirmText: '知道了', cancelText: '關閉', message: `「<b>${esc(projName(pv))}</b>」還沒開放私訊自己的 AI。請專案 leader${who.length ? ` <b>${esc(who.join('、'))}</b>` : ''}或群組管理員 <b>${esc(state.projMeta.adminName || '')}</b> 打開。` });
+    }
+    const ok = await confirmDialog({ title: '打開私訊？', confirmText: '打開私訊', message: `打開後，「<b>${esc(projName(pv))}</b>」的成員可以在網頁、手機直接跟自己名下的 AI 講話。內容只有雙方看得到，你也看不到內容和數量。<br><span class="muted small">定案的事仍要寫回卡片。私訊存在平台資料庫，系統維護者技術上仍讀得到。之後可以在「成員與權限 → 專案 → ⋯」關掉。</span>` });
+    if (!ok) return;
+    try {
+      await api(`/api/projects/${encodeURIComponent(pv)}/dm`, { method: 'PUT', body: { on: true } });
+      await loadProjectList();
+      drawAiNow();
+      toast('已開放私訊');
+      document.querySelectorAll('[data-dm-toggle]').forEach(el => { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1600); });
+    } catch (err) { toast(err.message); }
+  }
+  function drawDmSide() {
+    const entry = dmEntry(), on = entry && dmVisible(), ais = on ? myAisHere() : [];
+    const n = ais.reduce((t, a) => t + dmUnread(a.participantId), 0);
+    document.querySelectorAll('[data-dm-toggle]').forEach(b => {
+      // 手機上方列的私訊每頁都在（人類）；這裡不能私訊就淡色，點了說明原因
+      const fixed = b.classList.contains('dm-top-btn');
+      b.hidden = fixed ? state.me?.memberType !== 'human' : !entry;
+      if (fixed) b.classList.toggle('off', !entry);
+      const bd = b.querySelector('.badge'); bd.hidden = !n; bd.textContent = n > 99 ? '99+' : n;
+      b.setAttribute('aria-label', n ? `私訊，${n} 則未讀` : '私訊');
+    });
+    if (!state.dmBooted && entry) { // 重新整理後：面板原本開著就照樣打開（舊的私訊網址也會打開）
+      state.dmBooted = true;
+      const s = store.get(DMP_KEY);
+      if (state.dmOpenOnBoot || s) { if (!state.dmAi && s && s !== '-') state.dmAi = s; state.dmOpenOnBoot = false; dmPanel(true); }
+    }
+    if (dmIsOpen()) {
+      if (!entry) dmPanel(false);
+      else if (dm.aiId && !ais.some(a => a.participantId === dm.aiId)) { state.dmAi = null; renderDmPanel(); } // 換到沒有這個 AI 的專案
+      else if (!state.dmAi) drawDmList(ais);
+    }
+    if (on && !(state.dmSumAt || {})[projectView()]) loadDmSummary();
+  }
+  // 清單的最後一句：每個專案開頁查一次；之後只在有私訊通知或打開對話時更新
+  async function loadDmSummary() {
+    state.dmSumAt = { ...(state.dmSumAt || {}), [projectView()]: Date.now() };
+    try { const d = await api('/api/dm/summary'); state.dmSummary = new Map(d.items.map(x => [x.aiId, x])); drawDmSide(); } catch {}
+  }
+  const dm = { aiId: null, after: 0, items: [], canSend: true, reason: '', timer: null, wb: null, waitUntil: 0 };
+  // 頭像提案卡：現在 → 新的；只有被產圖的本人能按「套用為頭像」「不要」
+  const apUrls = new Map();
+  const apImg = id => { if (!apUrls.has(id)) apUrls.set(id, fetch(`/api/avatar-proposals/${encodeURIComponent(id)}/image`, { headers: { Authorization: `Bearer ${state.token}` } }).then(r => (r.ok ? r.blob() : null)).then(b => (b ? URL.createObjectURL(b) : null)).catch(() => null)); return apUrls.get(id); };
+  const AP_LABEL = { applied: '✓ 已套用為頭像', skipped: '已略過，圖已刪掉', expired: '已過期（24 小時沒處理），圖已刪掉' };
+  function apCard(d) {
+    const p = d.proposal, note = d.text.replace(/^\[頭像提案 [^\]]+\]\s*/, '');
+    const pending = p.status === 'pending', canAct = pending && state.me?.memberType === 'human';
+    const who = p.forSelf ? (state.participants.get(d.from.participantId) || { ...d.from, memberType: 'ai' }) : state.me;
+    return `<div class="ap-card${pending ? '' : ' done'}"><b>🖼 ${p.forSelf ? `${esc(d.from.name)} 自己的頭像提案` : '頭像提案'}</b>${note ? `<div class="ap-note">${esc(note)}</div>` : ''}
+      ${pending ? `<div class="ap-row"><span class="ap-av" title="現在">${avatar(who)}</span><span aria-hidden="true">→</span><span class="avatar ${p.forSelf ? 'ai' : 'human'} ap-new" data-ap-img="${esc(p.proposalId)}" role="img" aria-label="新的頭像"></span></div>` : ''}
+      ${canAct ? `<div class="ap-acts"><button type="button" class="btn small primary" data-ap-apply="${esc(p.proposalId)}">套用為頭像</button><button type="button" class="btn small" data-ap-skip="${esc(p.proposalId)}">不要</button><span class="muted small">${esc(fmtTime(p.expiresAt))} 前有效</span></div>` : `<span class="muted small">${AP_LABEL[p.status] || ''}</span>`}</div>`;
+  }
+  // 退回④：今天只寫時分；同一人連續幾則只在最後一則寫時間
+  const dmTime = iso => { const t = new Date(iso), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; return t.toDateString() === new Date().toDateString() ? hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`; };
+  // 角色提案卡：名稱、代碼、五題可以直接改字；只有該專案 leader／管理員能按「建立角色」
+  const RP_FIELDS = [['role', '名稱', 10], ['key', '代碼', 4], ['duties', '主要職責'], ['style', '溝通風格'], ['autonomy', '可自主處理'], ['mustConfirm', '要先問人'], ['handoff', '完成與交接']];
+  const RP_LABEL = { skipped: '已略過', expired: '已過期（24 小時沒處理）' };
+  dm.rpEdit = {};
+  function rpCard(d) {
+    const p = d.roleProposal, ed = dm.rpEdit[p.proposalId] || {}, v = k => ed[k] ?? p.draft[k] ?? '';
+    const edit = p.canCreate, pending = p.status === 'pending', human = state.me?.memberType === 'human';
+    const field = ([k, t, max]) => edit
+      ? `<label class="rp-f"><span>${t}</span>${max ? `<input data-rp-f="${k}" maxlength="${max}" value="${esc(v(k))}"${k === 'key' ? ' autocapitalize="characters"' : ''}>` : `<textarea data-rp-f="${k}" rows="2" maxlength="1000">${esc(v(k))}</textarea>`}</label>`
+      : `<div class="rp-f"><span>${t}</span><b>${esc(v(k))}</b></div>`;
+    const acts = edit ? `<div class="ap-acts"><button type="button" class="btn small primary" data-rp-create="${esc(p.proposalId)}">建立角色</button><button type="button" class="btn small" data-rp-skip="${esc(p.proposalId)}">不要</button><span class="muted small">${esc(fmtTime(p.expiresAt))} 前有效</span></div>`
+      : pending && human ? `<div class="ap-acts"><span class="muted small">只有「${esc(p.projectName)}」的 leader／管理員能按「建立角色」</span><button type="button" class="btn small" data-rp-skip="${esc(p.proposalId)}">不要</button></div>`
+      : p.status === 'created' ? `<span class="muted small">✓ 已建立「${esc(p.draft.role)}」（${esc(p.createdKey || p.draft.key)}），在${esc(p.projectName)}的角色選單</span>` : `<span class="muted small">${RP_LABEL[p.status] || ''}</span>`;
+    return `<div class="rp-card${pending ? '' : ' done'}" data-rp-card="${esc(p.proposalId)}"><div class="rp-head">🧩 角色提案 · 只用在「${esc(p.projectName)}」</div>
+      <div class="rp-body">${RP_FIELDS.map(field).join('')}</div>${pending && p.conflict ? `<p class="rp-conflict" role="alert">⚠ ${esc(p.conflict)}</p>` : ''}${acts}</div>`;
+  }
+  function dmBubble(d, next) {
+    const showT = !next || next.from.participantId !== d.from.participantId || !!next.proposal || !!d.proposal || !!next.roleProposal || !!d.roleProposal;
+    if (d.roleProposal) return `<div class="dm-b ai rp-wrap" id="dm-${esc(d.dmId)}">${rpCard(d)}</div><div class="dm-t">${dmTime(d.createdAt)}</div>`;
+    if (d.proposal) return `<div class="dm-b ai" id="dm-${esc(d.dmId)}">${apCard(d)}</div><div class="dm-t">${dmTime(d.createdAt)}</div>`;
+    const mine = d.from.participantId === meId();
+    const cards = mine ? [] : cardRefsIn(d.text);
+    const wb = dm.wb && dm.wb.id === d.dmId;
+    return `<div class="dm-b ${mine ? 'me' : 'ai'}" id="dm-${esc(d.dmId)}">${mine ? '' : `<div class="dm-name"><b>${esc(d.from.name)}</b></div>`}<div class="dm-text">${renderText(d.text)}</div>
+      ${cards.map(c => `<button type="button" class="dm-wb" data-dm-wb="${esc(d.dmId)}" data-card-id="${c}">↗ 寫回 ${c}</button>`).join(' ')}
+      ${wb ? `<div class="dm-wb-box"><label class="small">寫回 ${esc(dm.wb.card)} 的留言（發到群組時標「來自私訊」，可以先改字）<textarea id="dm-wb-text" rows="3" maxlength="1900">${esc(d.text)}</textarea></label>
+        <div class="row end"><button type="button" class="btn small" data-dm-wb-cancel>取消</button><button type="button" class="btn small primary" data-dm-wb-go>寫回</button></div></div>` : ''}
+      </div>${showT ? `<div class="dm-t ${mine ? 'me' : ''}">${dmTime(d.createdAt)}</div>` : ''}`;
+  }
+  function drawDm() {
+    const list = $('#dm-list');
+    if (!list) return false;
+    const near = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+    const focus = document.activeElement?.closest?.('[data-rp-f]') ? { id: document.activeElement.closest('[data-rp-card]').dataset.rpCard, f: document.activeElement.dataset.rpF, s: document.activeElement.selectionStart } : null;
+    list.innerHTML = dm.items.map((d, i) => dmBubble(d, dm.items[i + 1])).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
+    const mb = state.team?.members.find(m => m.participantId === dm.aiId), now = mb ? aiNowOf(mb) : { kind: 'off' };
+    $('#dm-status').textContent = now.kind === 'work' ? `在做${now.cardId ? ' ' + ckey(now.cardId) : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '待命，有新私訊會叫醒它' : '目前離線，上線後會看到';
+    const ta = $('#dm-input'), sb = $('#dm-send');
+    ta.disabled = sb.disabled = !dm.canSend;
+    $('#dm-note').textContent = dm.canSend ? '' : dm.reason;
+    if (near && !focus) list.scrollTop = list.scrollHeight;
+    if (focus) { const el = list.querySelector(`[data-rp-card="${CSS.escape(focus.id)}"] [data-rp-f="${focus.f}"]`); if (el) { el.focus(); try { el.setSelectionRange(focus.s, focus.s); } catch {} } }
+    list.querySelectorAll('[data-ap-img]').forEach(el => apImg(el.dataset.apImg).then(u => { if (u) { el.style.backgroundImage = `url("${u}")`; el.classList.add('img-on'); } }));
+    return true;
+  }
+  // 清單的最後一句跟著目前對話更新（不另外查）；未處理的頭像提案寫「🖼 有頭像提案」
+  function dmSumFromItems() {
+    const last = dm.items[dm.items.length - 1];
+    if (!last) return false;
+    if (!state.dmSummary) state.dmSummary = new Map();
+    const pend = last.proposal?.status === 'pending';
+    state.dmSummary.set(dm.aiId, { aiId: dm.aiId, fromMe: last.from.participantId === meId(), fromSystem: last.from.participantId === 'system', text: last.roleProposal ? (last.roleProposal.status === 'pending' ? '🧩 有角色提案' : '🧩 角色提案（已處理）') : last.proposal ? (pend ? '🖼 有頭像提案' : '🖼 頭像提案（已處理）') : String(last.text).slice(0, 80), proposalPending: pend, createdAt: last.createdAt });
+    return true;
+  }
+  // 退回①：同時只跑一個（開頁、計時器、送出後都會叫），換對話就作廢舊的；依 dmId 去重
+  function dmLoad() {
+    if (dm.loading && dm.loading.aiId === dm.aiId) return dm.loading.p;
+    const aiId = dm.aiId, gen = dm.gen;
+    const p = dmLoadOnce(aiId, gen).finally(() => { if (dm.loading?.p === p) dm.loading = null; });
+    dm.loading = { aiId, p };
+    return p;
+  }
+  async function dmLoadOnce(aiId, gen) {
+    const d = await api(`/api/dm?aiId=${encodeURIComponent(aiId)}&after=${dm.after}`);
+    if (gen !== dm.gen || aiId !== dm.aiId) return { items: [] }; // 這段對話已經換掉或重畫了
+    const seen = new Set(dm.items.map(x => x.dmId));
+    d.items = d.items.filter(x => !seen.has(x.dmId));
+    dm.items.push(...d.items); dm.after = Math.max(dm.after, d.nextAfter || 0); dm.canSend = d.canSend; dm.reason = d.reason || '';
+    if (dmSumFromItems() && d.items.length) drawDmSide();
+    const before = (work.notes || []).length;
+    work.notes = (work.notes || []).filter(n => !(n.dm && n.sender.participantId === dm.aiId)); // 伺服器已標已讀
+    if (work.notes.length !== before) { updateTodoBadge(); drawDmSide(); }
+    return d;
+  }
+  // 私訊在右側面板打開（每頁都能開、可一直開著；手機全螢幕）；重新整理後照樣開著
+  const DMP_KEY = 'aigile-switch-dm-panel';
+  const dmIsOpen = () => !!$('#dm-panel') && !$('#dm-panel').hidden;
+  function dmPanel(open) {
+    const el = $('#dm-panel');
+    if (!el) return;
+    if (open && !dmEntry()) open = false;
+    el.hidden = !open;
+    document.body.classList.toggle('dm-open', open);
+    document.querySelectorAll('[data-dm-toggle]').forEach(b => b.setAttribute('aria-expanded', String(open)));
+    if (!open) {
+      store.set(DMP_KEY, '');
+      clearInterval(dm.timer); dm.gen = (dm.gen || 0) + 1; dm.loading = null; dm.aiId = null; // 關掉就停，不再看新私訊
+      const box = $('#dm-box'); box.innerHTML = ''; box.dataset.h = '';
+      return;
+    }
+    const tb = document.querySelector('.topbar'); // 桌面：面板接在頂欄下面；手機頂欄不顯示＝全螢幕
+    document.documentElement.style.setProperty('--dmp-top', `${tb && tb.offsetParent ? Math.round(tb.getBoundingClientRect().bottom) : 0}px`);
+    return renderDmPanel();
+  }
+  function openDm(aiId) {
+    if (document.querySelector('#modal-root .modal')) closeModal();
+    state.dmAi = aiId || null;
+    return dmPanel(true);
+  }
+  const dmSum = () => state.dmSummary || new Map();
+  const dmSorted = ais => [...ais].sort((a, b) => String(dmSum().get(b.participantId)?.createdAt || '').localeCompare(String(dmSum().get(a.participantId)?.createdAt || '')));
+  const dmPreview = id => { const s = dmSum().get(id); return s ? (s.fromSystem ? '平台通知：' + dmGist(s.text, true) : (s.fromMe ? '你：' : '') + dmGist(s.text)) : '還沒有私訊'; };
+  // 清單：有對話的（含未讀）最多 3 個，其他收進「＋ 私訊其他 AI（n）」；沒開私訊就說明怎麼開
+  function dmListHtml(ais) {
+    if (!dmVisible()) return `<div class="dm-empty-page"><p class="muted">「${esc(projName(projectView()))}」還沒開放私訊自己的 AI。</p><button type="button" class="btn" data-dm-enable>看怎麼打開</button></div>`;
+    if (!ais.length) return '<div class="dm-empty-page"><p class="muted">你在這個專案沒有自己的 AI。</p></div>';
+    const sorted = dmSorted(ais), has = a => dmSum().has(a.participantId) || dmUnread(a.participantId);
+    let top = sorted.filter(has).slice(0, 3);
+    if (!top.length) top = sorted.slice(0, 3);
+    const rest = sorted.filter(a => !top.includes(a));
+    const row = a => { const u = dmUnread(a.participantId);
+      return `<button type="button" class="dm-row" data-dm-open="${esc(a.participantId)}">${avatar(a)}<span class="dm-row-main"><b>${esc(a.name)}</b><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; };
+    return `<div class="dm-listpage"><p class="muted small dm-lp-note">只有你和自己的 AI 看得到。</p>${top.map(row).join('')}${rest.length ? `<button type="button" class="dm-row dm-more" data-dm-more aria-expanded="${state.dmMore ? 'true' : 'false'}">${state.dmMore ? '－ 收起' : `＋ 私訊其他 AI（${rest.length}）`}</button>${state.dmMore ? rest.map(row).join('') : ''}` : ''}</div>`;
+  }
+  function drawDmList(ais) {
+    const box = $('#dm-box'), h = dmListHtml(ais);
+    if (box && box.dataset.h !== h) { box.dataset.h = h; box.innerHTML = h; }
+  }
+  async function renderDmPanel() {
+    const box = $('#dm-box');
+    if (!box) return;
+    clearInterval(dm.timer);
+    const ais = dmVisible() ? myAisHere() : [];
+    const ai = state.dmAi && ais.find(a => a.participantId === state.dmAi);
+    store.set(DMP_KEY, ai ? ai.participantId : '-');
+    if (!ai) { state.dmAi = null; dm.gen = (dm.gen || 0) + 1; dm.loading = null; dm.aiId = null; drawDmList(ais); return drawDmSide(); }
+    const gen = (dm.gen || 0) + 1; // 重畫一次就作廢上一次還沒回來的載入與計時器
+    Object.assign(dm, { aiId: ai.participantId, after: 0, items: [], wb: null, gen, loading: null });
+    box.dataset.h = '';
+    box.innerHTML = `<div class="dm-page">
+      <div class="dm-top"><button type="button" class="icon-btn dm-back" data-dm-back aria-label="回私訊清單">‹</button>${avatar(ai)}<div class="dm-who"><b>${esc(ai.name)}</b><span class="muted small">🔒 只有你和它看得到 · <span id="dm-status" role="status"></span></span><span class="muted small dm-tip">定案的事請寫回卡片，團隊才看得到</span></div></div>
+      <div class="dm-list" id="dm-list" aria-live="polite"></div>
+      <div class="dm-comp"><textarea id="dm-input" rows="2" maxlength="2000" placeholder="${esc(`私訊 ${ai.name}…`)}" aria-label="私訊內容"></textarea><button class="btn primary send" type="button" id="dm-send">送出</button></div>
+      <p class="muted small" id="dm-note"></p></div>`;
+    try { await dmLoad(); } catch (err) { return toast(err.message); }
+    if (gen !== dm.gen) return; // 期間又重畫了，交給新的那次
+    drawDm(); const l0 = $('#dm-list');
+    if (l0) { // 直接開網址時頁面可能還沒顯示（高度 0）：等它有高度再捲到最新；使用者自己往上捲就不再拉回
+      l0.scrollTop = l0.scrollHeight; let stick = true;
+      l0.addEventListener('scroll', () => { stick = l0.scrollHeight - l0.scrollTop - l0.clientHeight < 80; }, { passive: true });
+      if (window.ResizeObserver) new ResizeObserver(() => { if (stick) l0.scrollTop = l0.scrollHeight; }).observe(l0);
+    }
+    if (isDesktop()) $('#dm-input')?.focus();
+    if (state.dmPrefill) { const ta = $('#dm-input'); if (ta && dm.canSend) { ta.value = state.dmPrefill; ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } state.dmPrefill = null; } // 從更換頭像來的預填
+    drawDmSide();
+    // 對話開著才每 10 秒看一次新私訊；關掉就停
+    clearInterval(dm.timer); // 只留一個計時器
+    dm.timer = setInterval(async () => { if (gen !== dm.gen) return; if (!$('#dm-list')) return clearInterval(dm.timer); if (document.hidden) return; try { const d = await dmLoad(); if (d.items.length) drawDm(); } catch {} }, 10_000);
+  }
+  document.addEventListener('input', e => {
+    const f = e.target.closest?.('[data-rp-f]');
+    if (!f) return;
+    const id = f.closest('[data-rp-card]').dataset.rpCard;
+    if (f.dataset.rpF === 'key') { const s = f.selectionStart; f.value = f.value.toUpperCase(); f.setSelectionRange(s, s); }
+    (dm.rpEdit[id] = dm.rpEdit[id] || {})[f.dataset.rpF] = f.value;
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !dmIsOpen() || !e.target.closest?.('#dm-panel') || document.querySelector('#modal-root .modal, .confirm-root')) return;
+    e.preventDefault(); dmPanel(false); document.querySelector('[data-dm-toggle]:not([hidden])')?.focus();
+  });
+  async function dmSend() {
+    const ta = $('#dm-input'), text = ta.value.trim();
+    if (!text || !dm.canSend) return;
+    $('#dm-send').disabled = true;
+    try {
+      await api('/api/dm', { method: 'POST', body: { aiId: dm.aiId, text, requestId: newRequestId(), project: projectView() } });
+      dm.waitUntil = Date.now() + 30 * 60_000; // 等它回：30 分鐘內收件匣每分鐘看一次
+      ta.value = '';
+      if (dm.loading) await dm.loading.p.catch(() => {}); // 還在跑的那次可能沒包含剛送的，等它跑完再載一次
+      await dmLoad(); drawDm();
+      const l = $('#dm-list'); if (l) l.scrollTop = l.scrollHeight;
+    } catch (err) { toast(err.message); } finally { const sb = $('#dm-send'); if (sb) sb.disabled = !dm.canSend; }
+  }
+  document.addEventListener('click', async e => {
+    const o = e.target.closest?.('[data-dm-open]');
+    if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen); }
+    if (e.target.closest?.('[data-dm-more]')) { state.dmMore = !state.dmMore; return drawDmList(dmVisible() ? myAisHere() : []); }
+    if (e.target.closest?.('[data-dm-toggle]')) {
+      if (e.target.closest('#sheet')) closeSheet(false);
+      if (!dmEntry() && !dmIsOpen()) return toast(dmWhyNot()); // 手機上方列的私訊每頁都在
+      return dmPanel(!dmIsOpen());
+    }
+    if (e.target.closest?.('[data-dm-close]')) { dmPanel(false); return document.querySelector('[data-dm-toggle]:not([hidden])')?.focus(); }
+    const en = e.target.closest?.('[data-dm-enable]');
+    if (en) { if (en.closest('#sheet')) closeSheet(false); if (en.closest('#modal-root')) closeModal(); return dmEnable(); }
+    if (e.target.closest?.('#dm-send')) return dmSend();
+    if (e.target.closest?.('[data-dm-back]')) { state.dmAi = null; return renderDmPanel(); }
+    const w = e.target.closest?.('[data-dm-wb]');
+    if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }
+    if (e.target.closest?.('[data-dm-wb-cancel]')) { dm.wb = null; return drawDm(); }
+    const rp = e.target.closest?.('[data-rp-create], [data-rp-skip]');
+    if (rp) {
+      const create = !!rp.dataset.rpCreate, id = rp.dataset.rpCreate || rp.dataset.rpSkip;
+      const card = rp.closest('[data-rp-card]'), body = {};
+      if (create) card.querySelectorAll('[data-rp-f]').forEach(f => { body[f.dataset.rpF] = f.value.trim(); });
+      rp.disabled = true;
+      try {
+        const r = await api(`/api/role-proposals/${encodeURIComponent(id)}/${create ? 'create' : 'skip'}`, { method: 'POST', body });
+        for (const it of dm.items) if (it.roleProposal?.proposalId === id) it.roleProposal = r.proposal;
+        delete dm.rpEdit[id];
+        if (dmSumFromItems()) drawDmSide();
+        if (create) { await loadProjectList(); toast(`已建立「${r.proposal.draft.role}」，只在${r.proposal.projectName}的角色選單`); } else toast('已略過');
+        drawDm();
+      } catch (err) { rp.disabled = false; toast(err.message); }
+      return;
+    }
+    const ap = e.target.closest?.('[data-ap-apply], [data-ap-skip]');
+    if (ap) {
+      const apply = !!ap.dataset.apApply, id = ap.dataset.apApply || ap.dataset.apSkip;
+      ap.disabled = true;
+      try {
+        const r = await api(`/api/avatar-proposals/${encodeURIComponent(id)}/${apply ? 'apply' : 'skip'}`, { method: 'POST' });
+        for (const it of dm.items) if (it.proposal?.proposalId === id) it.proposal = r.proposal;
+        if (dmSumFromItems()) drawDmSide();
+        if (apply && r.ai) { await loadParticipants(); renderMessages(false); drawDmSide(); const top = document.querySelector('.dm-top .avatar'); if (top) top.outerHTML = avatar(state.participants.get(r.ai.participantId) || r.ai); toast(`已換成 ${r.ai.name} 的新頭像；我的 AI › 編輯 › 頭像可以換回上一張`); }
+        else if (apply) { await afterAvatar(r.me); toast('已換成新頭像；更換頭像裡可以換回上一張'); } else toast('已略過，圖已刪掉');
+        drawDm();
+      } catch (err) { ap.disabled = false; toast(err.message); }
+      return;
+    }
+    if (e.target.closest?.('[data-dm-wb-go]')) {
+      const t = $('#dm-wb-text')?.value.trim(), c = dm.wb?.card;
+      if (!t || !c) return;
+      try { await postMsg({ text: `[回覆] ${c}（來自私訊）：${t}`, cardId: c, requestId: newRequestId() }); toast(`已寫回 ${c}`); dm.wb = null; drawDm(); } catch (err) { toast(err.message); }
+    }
+  });
+  document.addEventListener('keydown', e => { if (e.target.id === 'dm-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); dmSend(); } }); // 跟群組一樣：Enter 送出、Shift+Enter 換行
+  // 側欄人數拆開：人類 N 在線 · AI N 在做事、N 待命
+  function drawPresence(list) {
+    if (!state.team) return;
+    const humans = [...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled' && p.isOnline).length;
+    const w = list.filter(x => x.now.kind === 'work').length, i = list.filter(x => x.now.kind === 'idle').length;
+    const nw = list.filter(x => x.now.why === 'new').length; // 建好還沒接入的也寫出來（不然剛建好的 AI 在總覽看不到）
+    document.querySelectorAll('.sb-presence-text').forEach(el => { el.innerHTML = `<span class="nw">人類 ${humans} 在線</span><br><span class="nw">AI ${w} 在做事、</span><span class="nw">${nw ? `${i} 待命、` : `${i} 待命`}</span>${nw ? `<span class="nw">${nw} 還沒接入</span>` : ''}`; });
+  }
+  function openAiNowSheet() {
+    const list = aiNowList();
+    openModal('AI 現況', `<div class="an-sheet">${list.map(x => aiNowBtn(x)).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
+  }
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('[data-ainow-sheet]')) return openAiNowSheet();
+    const a = e.target.closest?.('[data-ainow]'), t = e.target.closest?.('[data-ainow-team]');
+    if (!a && !t) return;
+    if (a?.closest('.modal')) closeModal();
+    work.teamTab = 'status';
+    showPage('team');
+    if (!a) return;
+    const id = a.dataset.ainow, until = Date.now() + 3000;
+    const seek = () => { const row = document.querySelector(`.tm-row[data-tm-id="${CSS.escape(id)}"]`); if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1600); } else if (Date.now() < until) setTimeout(seek, 150); };
+    seek();
+  });
+  document.addEventListener('change', e => {
+    if (e.target.id !== 'f-ainow' && e.target.id !== 'fs-ainow') return;
+    store.set(AINOW_KEY, e.target.checked ? '1' : '0');
+    drawAiNow();
+  });
+  function renderTeamBar() {
+    const t = state.team;
+    const bar = $('#team-bar');
+    if (!t) { bar.hidden = true; return; }
+    const chips = t.members.map(mb => {
+      const h = health(mb);
+      const st = mb.status ? STATE_LABEL[mb.status.state] : '';
+      const tip = [mb.name, h.text, `最後上線 ${agoText(mb.lastSeenAt)}`, mb.status ? `${st}：${mb.status.title}` : '', mb.pendingCount ? `待處理通知 ${mb.pendingCount}` : ''].filter(Boolean).join('\n');
+      return `<button type="button" class="chip h-${h.cls}" data-team title="${esc(tip)}">
+        <span class="dot"></span><b>${esc(mb.name)}</b>
+        ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
+        <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
+      </button>`;
+    }).join('');
+    const mdec = myDecisions(t);
+    updateTodoBadge();
+    // 收件匣開著時，團隊狀態更新（例如新的 [需確認]）也要反映；正在輸入時不重畫，避免失去焦點
+    if (state.page === 'inbox' && work.loaded && !document.activeElement?.matches?.('[data-inl-text]')) renderWork();
+    const dec = '';
+    bar.innerHTML = dec + chips;
+    bar.hidden = false;
+    drawAiNow();
+    // 側欄「團隊」「設定」的紅點拿掉（受阻看今日總覽與工作頁，Token 問題看頂端警示列）
+  }
+  for (const el of [$('#team-bar')]) el.addEventListener('click', e => { if (e.target.closest('[data-team]')) openTeam(); });
+
+  // AI 工作記憶：AI 自己回報的目前任務與待辦；只在狀態改變時更新，依專案可見
+  const stagePill = st => {
+    const k = /受阻|卡住/.test(st) ? 'red' : /待確認|等/.test(st) ? 'amber' : 'blue';
+    return `<span class="spill spill-${k}">${esc(st)}</span>`;
+  };
+  // 專案內的團隊頁只列本專案的人；跨專案頻道、第一層列全部
+  const inViewPerson = id => { const v = projectView(); return v === 'hub' || v === 'cross' || memberIn(state.participants.get(id), v); };
+  function aiStateHtml(t) {
+    const ais = t.members.filter(m => m.memberType === 'ai' && inViewPerson(m.participantId));
+    if (!ais.length) return '';
+    const WAKE = { watcher: 'watcher（被 @ 才醒）', cron: '定時輪詢', manual: '手動' };
+    const rows = ais.map(m => {
+      const s = m.aiState;
+      const head = `<b>${esc(m.name)}</b> <span class="muted small">${esc(m.role || '')}</span>`;
+      if (!s) return `<div class="astate empty"><div>${head}<br><span class="small muted">○ 尚未同步</span></div><div class="muted small">此 AI 尚未回報工作狀態。可在群組請它同步，或看它負責的卡片。</div></div>`;
+      const ct = s.currentTask;
+      const sync = `${m.stale ? '◐ 可能離線' : '● 在線'} · ${agoText(s.updatedAt)}同步`;
+      return `<details class="astate${ct ? ' on' : ''}"><summary>
+        <div>${head}<br><span class="small ${m.stale ? 'warn-text' : 'ok-text'}">${sync}</span></div>
+        <div>${ct ? `${ct.stage ? stagePill(ct.stage) : ''} <span>${esc(ct.title)}</span>${ct.cardId ? ` <button type="button" class="link small" data-open-card="${esc(ct.cardId)}">${esc(ckey(ct.cardId))}</button>` : ''}` : '<span class="muted">目前沒有進行中的任務</span>'}${posLine(s)}${m.stale ? '<br><span class="small warn-text">以下是最後同步的狀態，可能已變動。</span>' : ''}</div>
+        <span class="muted small">待辦 ${s.backlog?.length || 0}</span></summary>
+        <div class="astate-detail">
+          <div class="small"><b>待辦（${s.backlog?.length || 0}）</b></div>
+          ${(s.backlog || []).map(b => `<div class="astate-item">${esc(b.title)}${b.trigger ? `<br><span class="muted small">觸發：${esc(b.trigger)}</span>` : ''}</div>`).join('') || '<p class="muted small">沒有待辦。</p>'}
+          <p class="muted small">最後同步 ${shortTime(s.updatedAt)}${s.wakeMode ? ` · 喚醒方式：${esc(WAKE[s.wakeMode] || s.wakeMode)}` : ''} · 僅在狀態改變時更新。</p>
+        </div></details>`;
+    }).join('');
+    return `<div class="group-title">AI 工作記憶 · ${ais.filter(m => m.aiState).length}／${ais.length} 已同步</div><div class="astates">${rows}</div>`;
+  }
+
+  async function openTeam() {
+    await loadTeam();
+    const t = state.team;
+    if (!t) return toast('無法取得團隊狀態');
+    const pv = projectView();
+    const rows = t.members.filter(mb => inViewPerson(mb.participantId)).map(mb => {
+      const h = health(mb);
+      const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
+      return `<div class="tm-row" data-tm-id="${esc(mb.participantId)}">
+        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small">${esc(roleIn(mb, pv))}${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
+        <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
+        <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
+        <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `待處理 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '待處理 0'}</div>
+        <div class="tm-token small ${tokenCls}">${mb.memberType === 'ai' ? `Token ${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' 已過期' : mb.tokenExpiringSoon ? ' 快到期' : ''}` : ''}</div>
+      </div>`;
+    }).join('');
+    const body = openModal('團隊狀態', `
+      <details class="help"><summary>狀態怎麼判斷？</summary>
+        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；AI 被指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」，同一個 AI 合併一列（人類不列，請看收件匣）。</p>
+      </details>
+      <p class="muted small">要你決定、確認或採用的事都在<button type="button" class="link" data-goto-inbox>收件匣</button>，這裡只看團隊狀況。</p>
+      ${unansweredByAi(t.unanswered)}
+      <div class="group-title">成員</div>
+      <div class="tm-list">${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
+    body.addEventListener('click', async e => {
+      const oc = e.target.closest('[data-open-card]');
+      if (oc) { closeModal(); showPage('work'); openCard(oc.dataset.openCard); return; }
+      const j = e.target.closest('[data-jump-team]');
+      if (j) { closeModal(); jumpTo(j.dataset.jumpTeam); return; }
+      const r = e.target.closest('[data-resolve]');
+      if (r) {
+        r.disabled = true;
+        try {
+          await api(`/api/decisions/${encodeURIComponent(r.dataset.resolve)}/resolve`, { method: 'POST' });
+          toast('已從收件匣移出');
+          openTeam();
+        } catch (err) { r.disabled = false; toast(err.message); }
+      }
+    });
+  }
+
+  // 成員名單：分「近期活躍」「離線／閒置」兩組
+  const avatarDot = p => `<span class="avatar-wrap">${avatar(p)}<span class="presence-dot ${p.isOnline ? 'on' : ''}" aria-label="${p.isOnline ? '近期活躍' : '離線或閒置'}"></span></span>`;
+  async function openMembers() {
+    const items = (await loadParticipants()).filter(p => inViewPerson(p.participantId));
+    const online = items.filter(p => p.isOnline).length;
+    const body = openModal('成員名單', `
+      <input id="member-q" type="search" placeholder="搜尋姓名、角色或代碼" aria-label="搜尋成員">
+      <div id="member-list"></div>`, { sub: `${items.length} 人 · 近期活躍 ${online} · 燈號是 30 秒內的活動估計，不是即時連線。` });
+    const row = p => {
+      const self = p.participantId === meId();
+      const line2 = p.memberType === 'ai'
+        ? ['AI', p.ownerName ? `所屬 ${p.ownerName}` : '', p.ownerDisabled ? '主人已停用' : ''].filter(Boolean).join(' · ')
+        : '人類';
+      return `<div class="mem-row">
+        ${avatarDot(p)}
+        <div class="mem-main">
+          <div class="mem-name"><b title="代號（AI 用來找你）：${esc(p.shortCode)}">${esc(p.name)}</b>${myProjects().includes(projectView()) ? leaderTag(p.participantId, projectView()) : ''}<span class="muted small">${esc(roleIn(p, projectView()))}</span></div>
+          <div class="muted small">${esc(line2)}</div>
+          ${p.duties ? `<div class="mem-duty muted small">${esc(p.duties)}</div>` : ''}
+        </div>
+        ${self ? '<span class="self">本人</span>' : `<button class="btn small" type="button" data-mention="${esc(p.name)}">@ 提及</button>`}
+      </div>`;
+    };
+    const draw = () => {
+      const q = body.querySelector('#member-q').value.trim().toLowerCase();
+      const list = items
+        .filter(p => !q || [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(q)))
+        .sort((a, b) => (a.participantId === meId() ? -1 : b.participantId === meId() ? 1 : 0) || (a.memberType === b.memberType ? 0 : a.memberType === 'human' ? -1 : 1));
+      const on = list.filter(p => p.isOnline), off = list.filter(p => !p.isOnline);
+      body.querySelector('#member-list').innerHTML = list.length
+        ? (on.length ? `<div class="group-title">近期活躍 · ${on.length}</div>${on.map(row).join('')}` : '')
+          + (off.length ? `<div class="group-title">離線／閒置 · ${off.length}</div>${off.map(row).join('')}` : '')
+        : '<p class="muted">找不到符合的成員。</p>';
+    };
+    body.querySelector('#member-q').addEventListener('input', draw);
+    body.addEventListener('click', e => {
+      const b = e.target.closest('[data-mention]');
+      if (!b) return;
+      const tag = '@' + b.dataset.mention + ' ';
+      input.value = (input.value && !/\s$/.test(input.value) ? input.value + ' ' : input.value) + tag;
+      closeModal();
+      input.focus();
+      onInput();
+    });
+    draw();
+  }
+
+  // 我的 AI
+  async function loadRoles() {
+    if (!state.roles) state.roles = await api('/api/roles');
+    return state.roles;
+  }
+
+  // 第一層「我的 AI」頁：名下所有 AI，不分專案
+  // ---------- 版本紀錄（版本、上線時間、卡片、commit）與 3 張流程圖 ----------
+  // 資料是部署時產生的靜態檔 /releases.json、/flows.md，打開才讀，不碰資料庫
+  const rel = { data: null, flows: null, tab: 'list', q: '', back: null, hit: '' };
+  async function loadReleases() {
+    if (!rel.data) rel.data = await api('/api/releases').catch(() => null); // 退回：要登入
+    return rel.data;
+  }
+  function openReleases(ver = '') {
+    if (state.page !== 'releases') rel.back = { view: state.view, page: state.page };
+    rel.hit = ver ? String(ver).replace(/^v/, '') : '';
+    if (ver) { rel.tab = 'list'; rel.q = ''; }
+    return state.page === 'releases' ? drawReleases() : goTop('releases');
+  }
+  async function renderReleasesPage() {
+    const box = $('#page-work');
+    box.classList.remove('is-board');
+    box.innerHTML = '<p class="muted">載入中…</p>';
+    if (!rel.hit && location.hash.startsWith('#v')) rel.hit = location.hash.slice(2);
+    await loadReleases();
+    if (rel.tab === 'flows' && rel.flows === null) rel.flows = await fetch('/api/flows', { headers: { Authorization: `Bearer ${state.token}` } }).then(r => (r.ok ? r.text() : '')).catch(() => '');
+    drawReleases();
+  }
+  const relTime = iso => { const t = new Date(iso); return `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
+  // 很小的 Markdown 顯示：標題、清單、程式碼區塊、表格、粗體、行內程式碼
+  function mdHtml(md) {
+    const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+    const out = []; let code = null, list = false, table = null;
+    const flush = () => { if (list) { out.push('</ul>'); list = false; } if (table) { out.push(`<div class="md-table"><table>${table.map((r, i) => `<tr>${r.map(c => (i ? `<td>${inline(c)}</td>` : `<th>${inline(c)}</th>`)).join('')}</tr>`).join('')}</table></div>`); table = null; } };
+    for (const line of String(md).split('\n')) {
+      if (line.startsWith('```')) { if (code) { out.push(`<pre class="md-pre">${esc(code.join('\n'))}</pre>`); code = null; } else { flush(); code = []; } continue; }
+      if (code) { code.push(line); continue; }
+      if (/^\|/.test(line)) { if (/^\|[-| ]+\|$/.test(line)) continue; (table = table || []).push(line.slice(1, -1).split('|').map(c => c.trim())); continue; }
+      if (/^\s*- /.test(line)) { if (!list) { flush(); out.push('<ul>'); list = true; } out.push(`<li>${inline(line.replace(/^\s*- /, ''))}</li>`); continue; }
+      flush();
+      const h = /^(#{1,3}) (.*)$/.exec(line);
+      if (h) out.push(`<h${h[1].length + 1} id="${esc(h[2].replace(/\s+/g, ''))}">${inline(h[2])}</h${h[1].length + 1}>`);
+      else if (line.trim() === '---') out.push('<hr>');
+      else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+    }
+    flush();
+    return out.join('');
+  }
+  function drawReleases() {
+    const box = $('#page-work');
+    if (state.page !== 'releases') return;
+    const d = rel.data;
+    const tabs = `<div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>`;
+    const head = `<button type="button" class="link page-back" data-rel-back>‹ 返回</button><div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">目前 v${esc(APP_VERSION)}${d ? ` · ${d.items.length} 個版本` : ''} · 修 bug 要附重現測試；改動前寫影響哪張流程圖的哪一段</span></div>${tabs}</div>`;
+    if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
+    if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
+    const q = rel.q.trim().toLowerCase().replace(/^v/, '');
+    const list = d.items.filter(r => !q || r.version.includes(q) || r.cards.some(c => c.toLowerCase() === q || c.toLowerCase().startsWith(q)) || r.commits.some(c => c.title.toLowerCase().includes(q) || c.sha.startsWith(q)));
+    const row = r => `<article class="rel-item${rel.hit === r.version ? ' hit' : ''}" id="v${esc(r.version)}">
+      <div class="rel-head"><b>v${esc(r.version)}</b><span class="muted small">${esc(relTime(r.at))}${r.deployedAt ? ' 上線' : '（commit 時間）'}</span>${r.cards.map(c => `<button type="button" class="cid-chip" data-card="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      ${r.fixes.map(f => `<div class="rel-inc fix">🩹 修正 ${esc(f.cause)}（<button type="button" class="link small" data-rel-ver="${esc(f.causeVersion)}">v${esc(f.causeVersion)}</button>）造成的問題：${esc(f.note)}${f.flow ? `（流程 ${esc(f.flow)}）` : ''}</div>`).join('')}
+      ${r.causes.map(c => `<div class="rel-inc cause">⚠ 這版造成的問題，由 ${esc(c.fix)}（<button type="button" class="link small" data-rel-ver="${esc(c.fixVersion)}">v${esc(c.fixVersion)}</button>）修好：${esc(c.note)}</div>`).join('')}
+      <ul class="rel-commits">${r.commits.map(c => `<li><code>${esc(c.sha)}</code> ${esc(c.title)}</li>`).join('')}</ul></article>`;
+    box.innerHTML = head + `<div class="work-filters"><input id="rel-q" type="search" placeholder="找版本、卡號或關鍵字（例：MAIN-12、0.62、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}"></div>
+      ${d.incidents?.length && !q ? `<section class="wpanel rel-incidents"><b>事故對照</b>${d.incidents.map(i => `<div class="small">${esc(i.fix)}（v${esc(i.fixVersion)}）← ${esc(i.cause)}（<button type="button" class="link small" data-rel-ver="${esc(i.causeVersion)}">v${esc(i.causeVersion)}</button>）：${esc(i.note)}${i.flow ? `（${esc(i.flow)}）` : ''}</div>`).join('')}</section>` : ''}
+      <section class="rel-list">${list.map(row).join('') || '<p class="muted">找不到符合的版本。</p>'}</section>`;
+    if (rel.hit) { const el = document.getElementById('v' + rel.hit); if (el) setTimeout(() => el.scrollIntoView({ block: 'center' }), 0); }
+  }
+  // 卡片抽屜：這張卡在哪幾版上線
+  async function fillRelLines(root = document) {
+    const els = root.querySelectorAll?.('[data-rel-card]:not([data-filled])');
+    if (!els?.length) return;
+    const d = await loadReleases();
+    for (const el of els) {
+      el.dataset.filled = '1';
+      const vs = (d?.items || []).filter(r => r.cards.includes(el.dataset.relCard)).map(r => r.version);
+      el.innerHTML = vs.length ? `<span class="muted small">上線版本：</span>${vs.slice(0, 6).map(v => `<button type="button" class="link small" data-rel-ver="${esc(v)}">v${esc(v)}</button>`).join(' ')}${vs.length > 6 ? ` <span class="muted small">等 ${vs.length} 版</span>` : ''}` : '';
+    }
+  }
+  new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1 && (n.matches?.('[data-rel-card]') || n.querySelector?.('[data-rel-card]'))) fillRelLines(n.parentElement || n); })
+    .observe(document.body, { childList: true, subtree: true });
+  document.addEventListener('click', e => {
+    const v = e.target.closest?.('[data-rel-ver]');
+    if (v) { if (document.querySelector('.drawer')) closeCard(); return openReleases(v.dataset.relVer); }
+    const t = e.target.closest?.('[data-rel-tab]');
+    if (t) { rel.tab = t.dataset.relTab; return renderReleasesPage(); }
+    if (e.target.closest?.('[data-rel-back]')) { const b = rel.back; rel.back = null; return b && b.page !== 'releases' ? (b.view && b.view !== state.view ? setProjectView(b.view, b.page) : showPage(b.page)) : setProjectView('hub'); }
+  });
+  document.addEventListener('input', e => { if (e.target.id === 'rel-q') { rel.q = e.target.value; rel.hit = ''; drawReleases(); const q = $('#rel-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); } });
+
+  async function renderMyAiPage() {
+    const box = $('#page-work');
+    box.classList.remove('is-board');
+    box.innerHTML = '<div id="myai-pane" class="inline-pane myai-page"></div>';
+    // 先畫出頁面，專案清單與 AI 清單同時抓（原本一支等完才抓下一支，中間整塊空白）
+    await openMyAi(loadProjectList().catch(() => {}));
+  }
+  // 我的 AI（UX 稿 v75）：一列一個 AI、只露一顆主按鈕、其他收進 ⋯；點一列展開「接入／技能／設定」
+  // 自動待命、對話接續改成每個 AI 自己的選項（只影響這個 AI 接下來複製的設定；複製內容不變）
+  const maWarn = ai => ai.status === 'active' && ['expired', '2h', '24h'].includes(tokenLevel(ai.expiresAt));
+  const maNeedsYou = ai => maWarn(ai) || (ai.status === 'active' && ai.skillsWaiting > 0);
+  const maState = ai => ai.status !== 'active' ? ['off', '已停用']
+    : tokenLevel(ai.expiresAt) === 'expired' ? ['bad', 'Token 已過期'] // 過期的連不上，不能顯示在線
+    : ai.isOnline ? ['on', '在線'] : ai.standby ? ['standby', '待命中']
+    : ai.lastSeenAt && Date.now() - Date.parse(ai.lastSeenAt) < 24 * 3600_000 ? ['idle', '閒置'] : ['', '離線'];
+  const maWhen = t => { const d = new Date(t), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); return (d.toDateString() === new Date().toDateString() ? '今天 ' : mmdd(t) + ' ') + hm; };
+  const maAvatar = ai => ai.avatar || ai.imgUrl || ai.avatarImg ? avatar(ai)
+    : avatar({ ...ai, avatar: /^[A-Za-z]{2,4}$/.test(ai.roleKey || '') ? ai.roleKey.toUpperCase() : [...(ai.name || 'AI')][0] });
+  const maRank = ai => ai.status !== 'active' ? 4 : maNeedsYou(ai) ? 0 : ai.isOnline || ai.standby ? 1 : 2;
+  function myAiRowHtml(ai, tab, menu, q = '') {
+    const id = esc(ai.participantId), active = ai.status === 'active', level = tokenLevel(ai.expiresAt);
+    const [stCls, stText] = maState(ai), pjs = state.projMeta.crossRoleIds.includes(ai.participantId) ? null : (ai.projects || []).filter(p => PROJECTS.includes(p));
+    const pjTags = pjs === null ? '<span class="ptag ptag-all">跨專案角色</span>' : pjs.slice(0, 2).map(projTag).join('') + (pjs.length > 2 ? `<span class="ptag">+${pjs.length - 2}</span>` : '');
+    const tokTxt = !active || level === 'expired' ? '' // 過期：狀態那裡已寫「Token 已過期」，旁邊是重發 Token
+      : maWarn(ai) ? `<span class="pill-tag yellow">Token ${esc(maWhen(ai.expiresAt))} 到期</span>` : `<span class="muted small ma-tok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>`;
+    const main = !active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
+      : maWarn(ai) ? `<button class="btn warn" type="button" data-act="reissue" data-id="${id}">重發<span class="ma-long"> Token</span></button>`
+      : `<button class="btn ma-copy" type="button" data-act="copy" data-id="${id}">複製接入設定</button>`;
+    const menuHtml = menu ? `<div class="ma-menu" role="menu">
+        <button type="button" role="menuitem" data-act="edit" data-id="${id}">✏️ 編輯名稱、角色、專案</button>
+        ${active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
+        <button type="button" role="menuitem" data-act="reissue" data-id="${id}">🔑 重發 Token</button>
+        ${level !== 'expired' ? `<button type="button" role="menuitem" data-act="token" data-id="${id}">📋 只複製 Token</button>` : ''}
+        <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : `<hr><button type="button" role="menuitem" data-act="enable" data-id="${id}">▶ 重新啟用</button>`}
+        <button type="button" role="menuitem" class="danger-text" data-act="delete" data-id="${id}">🗑 刪除這個 AI</button>
+      </div>` : '';
+    return `<div class="ma-item${tab ? ' open' : ''}" data-ma="${id}">
+      <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
+        ${maAvatar(ai)}
+        <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
+          <div class="ma-meta">${[markQ(ai.role || '', q)].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}</div></div>
+        <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
+      </div>
+      ${tab ? myAiPanelHtml(ai, tab) : ''}
+    </div>`;
+  }
+  // 每個 AI 的接入選項（預設：對話接續依環境、自動待命勾選）
+  const maOpts = new Map();
+  const maOpt = ai => maOpts.get(ai.participantId) || { convo: '', auto: true };
+  function myAiPanelHtml(ai, tab) {
+    const id = esc(ai.participantId), active = ai.status === 'active', o = maOpt(ai);
+    const tabs = [['conn', '接入'], ['skills', `技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}`], ['set', '設定']].filter(([k]) => active || k === 'set');
+    const t = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
+    const convoLabel = v => v ? CONVO_OPTS.find(x => x[0] === v)[1] : '太長才換新（建議）';
+    const body = t === 'conn' ? `
+        <label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
+        <p class="ma-hint">${esc(CONVO_HINT[o.convo || ''])}</p>
+        <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>
+        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="copy" data-id="${id}">完整接入設定</button><button class="btn" type="button" data-act="short" data-id="${id}" title="貼長設定會當掉的工具用：只有幾行，AI 自己去讀完整設定">短版（已接過）</button><button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button></span></div>
+        <p class="ma-hint">上面兩個選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這個 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
+      : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
+      : `<dl class="ma-dl">
+          <dt>主要職責</dt><dd>${esc(ai.duties)}</dd><dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
+          <dt>可自主處理的事項</dt><dd>${esc(ai.autonomy)}</dd><dt>必須確認的事項</dt><dd>${esc(ai.mustConfirm)}</dd><dt>完成與交接條件</dt><dd>${esc(ai.handoff)}</dd>
+        </dl>
+        ${grantsBlock(ai, active)}
+        <div class="row"><button class="btn small" type="button" data-act="edit" data-id="${id}">編輯</button><span class="muted small">#${esc(ai.shortCode || '')} · 版本 v${ai.version} · 更新 ${esc(fmtTime(ai.updatedAt))}</span></div>`;
+    return `<div class="ma-panel">
+      <div class="ma-ptop"><b class="ma-ptitle">${esc(ai.name)}</b><button type="button" class="modal-x" data-act="row" data-id="${id}" aria-label="收合">×</button></div>
+      <div class="ma-tabs" role="tablist">${tabs.map(([k, l]) => `<button type="button" role="tab" data-act="tab" data-tab="${k}" data-id="${id}" aria-selected="${k === t}">${esc(l)}</button>`).join('')}</div>
+      ${body}
+    </div>`;
+  }
+  function maPlaceMenu(root) {
+    const m = root.querySelector('.ma-menu'), btn = m?.parentElement.querySelector('.ma-more');
+    if (!m || !btn) return;
+    const r = btn.getBoundingClientRect(), h = m.offsetHeight, below = innerHeight - r.bottom - 8;
+    Object.assign(m.style, { position: 'fixed', right: Math.max(8, innerWidth - r.right) + 'px', left: 'auto',
+      top: (below >= h || r.top < h + 12 ? Math.min(r.bottom + 4, innerHeight - h - 8) : r.top - h - 4) + 'px' });
+  }
+  async function openMyAi(waitFor = null) {
+    const body = openModal('我的 AI', `
+      <div class="ma-head"><span class="ma-sum" id="ma-sum">載入中…</span><span class="grow"></span>
+        ${inProjectView() ? '<button type="button" class="btn ghost" id="ma-all">看全部 AI</button>' : ''}
+        <button type="button" class="btn ghost" id="ma-skills">技能庫 ›</button>
+        <button class="btn primary" type="button" id="ai-new">＋ 新增 AI</button></div>
+      <div id="ma-sync"></div>
+      <div id="ma-find"></div>
+      <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: inProjectView() ? `你在「${esc(projName(projectView()))}」的 AI；新增和新角色都用這個專案。點一列看接入、技能、設定。` : '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
+    let items = [];
+    const scope = inProjectView() ? projectView() : null;
+    const open = new Map(); // AI id → 展開的分頁
+    let menuFor = null;
+    const fs = finder('myai', () => drawList());
+    const useFind = () => items.length >= 6;
+    const fq = () => (useFind() ? findQ(fs.q) : '');
+    const row = id => { const ai = items.find(x => x.participantId === id); const el = body.querySelector(`[data-ma="${CSS.escape(id)}"]`); if (ai && el) { el.outerHTML = myAiRowHtml(ai, open.get(id), menuFor === id, fq()); if (open.get(id) === 'skills') loadSkills(ai); } };
+    function drawList() {
+      if (!body.isConnected) return;
+      const pjs = scope ? null : PROJECTS.filter(p => items.some(a => (a.projects || []).includes(p)));
+      const opts = { roles: findRoles(items), projs: pjs && pjs.length > 1 ? pjs : null, kinds: false }; // 專案檢視不顯示專案下拉，記住的專案就不套用
+      const q = fq(), f = useFind() ? findLive(fs.f, opts) : NO_FIND;
+      const list = items.filter(a => findHit(a, q) && findPass(a, f)).sort((a, b) => maRank(a) - maRank(b));
+      patchFindBar(body.querySelector('#ma-find'), useFind() ? findBarHtml('myai', { ...opts, shown: list.length, total: items.length }) : '');
+      const act = items.filter(a => a.status === 'active');
+      // 過期、快到期分開寫；過期的不算在線
+      const exp = act.filter(a => tokenLevel(a.expiresAt) === 'expired').length, soon = act.filter(maWarn).length - exp;
+      const on = act.filter(a => a.isOnline && tokenLevel(a.expiresAt) !== 'expired').length, sw = act.filter(a => a.skillsWaiting > 0).length;
+      body.querySelector('#ma-sum').innerHTML = `${scope ? `<b>${esc(projName(scope))}</b> 的 AI · ` : ''}${items.length} 隻 · ${on} 在線${exp ? ` · <span class="error">Token 已過期 ${exp} 隻</span>` : ''}${soon ? ` · <span class="warn-text">Token 快到期 ${soon} 隻</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 隻有技能等你允許</span>` : ''}`;
+      body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId, q)).join('')
+        : items.length ? findEmptyHtml('myai', true) : '<p class="muted">還沒有 AI。按「＋ 新增 AI」選一個角色範例開始。</p>';
+      for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
+    }
+    async function draw() {
+      items = (await Promise.all([api('/api/my-ais'), waitFor]))[0].items; waitFor = null;
+      state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
+      if (scope) items = items.filter(a => (a.projects || []).includes(scope) || state.projMeta.crossRoleIds.includes(a.participantId));
+      drawList();
+      drawSync();
+    }
+    // 有技能要同步的 AI 才顯示這一條
+    let syncIds = [], syExpired = 0, syWait = [];
+    async function drawSync() {
+      const el = body.querySelector('#ma-sync');
+      if (!el) return;
+      try {
+        const shown = new Set(items.map(a => a.participantId));
+        const all = (await api('/api/skill-sync')).items.filter(a => a.needs && shown.has(a.aiId));
+        syncIds = all.filter(syNeeds).map(a => a.aiId); // 已通知（離線等上線）、Token 過期的不算「要同步」
+        syExpired = all.filter(a => a.tokenExpired).length;
+        syWait = all.filter(a => !a.tokenExpired && SY_PENDING.includes(a.sync.state));
+      } catch { syncIds = []; syExpired = 0; syWait = []; }
+      if (!body.isConnected) return;
+      // 都通知過：不直接消失（主人會以為裝好了），灰色寫「N 隻已通知，等上線」，全部裝好才消失；Token 過期的要動手，留「看清單」
+      const waitTxt = syWait.length ? `${syWait.length} 隻已通知，${syWait.some(a => a.sync.state === 'offline') ? '等上線' : '同步中'}` : '';
+      const expTxt = syExpired ? `${syExpired} 隻 AI 的 Token 已過期，重發後才會同步技能` : '';
+      el.innerHTML = syncIds.length ? `<div class="sy-banner" role="status">🧩 <b>${syncIds.length} 隻 AI 有技能要同步</b><span class="grow"></span><button type="button" class="btn small primary" data-sy-banner>全部同步</button></div>`
+        : waitTxt || expTxt ? `<div class="sy-banner${expTxt ? '' : ' wait'}" role="status">🧩 <span>${[waitTxt && `<span class="sy-wait-txt">${waitTxt}</span>`, expTxt && `<b>${expTxt}</b>`].filter(Boolean).join(' · ')}</span>${expTxt ? '<span class="grow"></span><button type="button" class="btn small" data-sy-banner>看清單</button>' : ''}</div>` : '';
+    }
+    body.querySelector('#ma-sync').addEventListener('click', e => { if (e.target.closest('[data-sy-banner]')) openSkillSync({ run: syncIds.length ? syncIds : null, onDone: drawSync }); });
+    if (new URLSearchParams(location.search).get('sync') === '1') {
+      history.replaceState(history.state, '', location.pathname);
+      openSkillSync({ onDone: drawSync });
+    }
+    // 技能分頁：展開才讀（不加清單的讀取）
+    async function loadSkills(ai) {
+      const box = body.querySelector(`[data-ma-skills="${CSS.escape(ai.participantId)}"]`);
+      if (box) await drawAiSkills(box, ai, n => { if (ai.skillsWaiting !== n) { ai.skillsWaiting = n; drawList(); } });
+    }
+    body.querySelector('#ai-new').onclick = () => openAiForm(null);
+    body.querySelector('#ma-all')?.addEventListener('click', () => setProjectView('hub', 'myai'));
+    body.querySelector('#ma-skills').onclick = () => {
+      if (isAdmin() || myLeadProjects().length) { perm.tab = 'skills'; skv.data = null; goTop('perm'); } else openSkillsView('');
+    };
+    const closeMenu = e => { if (menuFor && !e.target.closest('.ma-menu,[data-act="menu"]')) { const id = menuFor; menuFor = null; row(id); } };
+    document.addEventListener('click', closeMenu, true);
+    const dropMenu = () => { if (!body.isConnected) { removeEventListener('scroll', dropMenu, true); removeEventListener('resize', dropMenu); return; } if (menuFor) { const m = menuFor; menuFor = null; row(m); } };
+    addEventListener('scroll', e => { if (!e.target.closest?.('.ma-menu')) dropMenu(); }, true); addEventListener('resize', dropMenu);
+    body.addEventListener('change', e => {
+      const c = e.target.dataset.maConvo, a = e.target.dataset.maAuto;
+      if (c) { const ai = items.find(x => x.participantId === c); maOpts.set(c, { ...maOpt(ai), convo: e.target.value }); row(c); }
+      if (a) { const ai = items.find(x => x.participantId === a); maOpts.set(a, { ...maOpt(ai), auto: e.target.checked }); }
+    });
+    body.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('ma-row')) { e.preventDefault(); e.target.click(); } });
+    body.addEventListener('click', async e => {
+      if (!body.isConnected) return document.removeEventListener('click', closeMenu, true);
+      const b = e.target.closest('[data-act]');
+      if (!b || (b.dataset.act === 'row' && e.target.closest('button:not([data-act="row"]),a,input,select,label,.ma-menu'))) return;
+      const ai = items.find(x => x.participantId === b.dataset.id);
+      if (!ai) return;
+      const id = ai.participantId;
+      try {
+        if (b.dataset.act === 'row') { if (open.has(id)) open.delete(id); else open.set(id, ai.status === 'active' ? (ai.skillsWaiting ? 'skills' : 'conn') : 'set'); menuFor = null; return row(id); }
+        if (b.dataset.act === 'menu') { menuFor = menuFor === id ? null : id; row(id); maPlaceMenu(body); return body.querySelector('.ma-menu [role=menuitem]')?.focus(); }
+        if (menuFor) { const m = menuFor; menuFor = null; row(m); }
+        if (b.dataset.act === 'tab') { open.set(id, b.dataset.tab); return row(id); }
+        if (b.dataset.act === 'copy') { // 平台只存 Token 雜湊：完整接入設定一律附一組新 Token（舊的失效）
+          if (ai.lastSeenAt && !await confirmDialog({ title: '換一組 Token 並複製接入設定？', confirmText: '換新並複製',
+            message: `平台不保存 Token 原文，所以完整接入設定會附<b>一組新 Token</b>：<b>${esc(ai.name)}</b> 現在用的會立刻失效，要把這份新設定貼給它。` })) return;
+          const { text } = await api(onboardingUrl(ai));
+          loadParticipants().catch(() => {});
+          toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
+        } else if (b.dataset.act === 'short') { // 3～4 行、不含 Token，連結 15 分鐘、只能讀一次；AI 讀連結時拿到新 Token
+          if (ai.lastSeenAt && !await confirmDialog({ title: '複製短版接入？', confirmText: '複製',
+            message: `AI 讀這個連結時會拿到<b>一組新 Token</b>（平台不保存 Token 原文）：<b>${esc(ai.name)}</b> 現在用的會在那時失效。` })) return;
+          const o = maOpt(ai);
+          const r = await api(`/api/my-ais/${encodeURIComponent(id)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!o.auto, ...(o.convo ? { convo: o.convo } : {}) } });
+          toast((await copyText(shortOnboardingText(ai, r))) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
+        } else if (b.dataset.act === 'token') { // 看不到原本的 Token：要複製就重發
+          if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發',
+            message: `平台不保存 Token 原文；要複製就重發一組：<b>${esc(ai.name)}</b> 目前的 Token 會立即失效，需要把新 Token 換給它。` })) return;
+          const r = await api(`/api/my-ais/${id}/reissue`, { method: 'POST' });
+          loadParticipants().catch(() => {});
+          openTokenOnly(r);
+        } else if (b.dataset.act === 'edit') {
+          openAiForm(ai);
+        } else if (b.dataset.act === 'grants') {
+          openGrants(ai, draw);
+        } else if (b.dataset.act === 'reissue') {
+          if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發',
+            message: `重發後，<b>${esc(ai.name)}</b> 目前的 Token 會立即失效，需要把新 Token 換給它。` })) return;
+          const r = await api(`/api/my-ais/${id}/reissue`, { method: 'POST' });
+          loadParticipants().catch(() => {});
+          openTokenOnly(r);
+        } else if (b.dataset.act === 'disable') {
+          if (!await confirmDialog({ title: '停用 AI？', confirmText: '停用', danger: true,
+            message: `停用後 <b>${esc(ai.name)}</b> 的 Token 會立即失效，它將無法再讀寫群組，之後可以重新啟用。` })) return;
+          await api(`/api/my-ais/${id}/disable`, { method: 'POST' });
+          await draw();
+        } else if (b.dataset.act === 'delete') {
+          if (!await confirmDialog({ title: '永久刪除 AI？', confirmText: '永久刪除', danger: true, expectText: ai.name,
+            message: `<b>${esc(ai.name)}</b> 的 Token 會立即失效，從成員名單、@ 選單、團隊狀態消失，<b>不可復原</b>。它發過的訊息與卡片紀錄會保留並標「（已刪除）」；它負責且未完成的卡片會變成未指派。` })) return;
+          const r = await api(`/api/my-ais/${id}/delete`, { method: 'POST', body: { confirmName: ai.name } });
+          toast(r.unassignedCards.length ? `已刪除；${r.unassignedCards.join('、')} 變成未指派` : '已刪除');
+          loadParticipants().catch(() => {});
+          await draw();
+        } else if (b.dataset.act === 'enable') {
+          await api(`/api/my-ais/${id}/enable`, { method: 'POST' });
+          await draw();
+        }
+      } catch (err) { toast(err.message); }
+    });
+    await draw();
+  }
+  // 短版接入：終端機下載到 .aigile/<代號>/setup.md、核對身分、接完刪掉（內容跟原本一樣）
+  // tool：'codex'／'claude'／'other'；沒給＝不知道用哪個工具，Codex 的網路說明照樣寫
+  function shortOnboardingText(ai, r, tool = '') {
+    const dir = `.aigile/${r.agent || 'AI'}`, codex = !tool || tool === 'codex';
+    // Codex 沒開網路時連規格都下載不到，所以開網路的說明要寫在這段貼上的文字裡
+    return `你是「${ai.name}」，${state.me.name} 在 Aigile 協作群組的 AI（${ai.role || 'AI'}）。以下是 ${state.me.name} 交代的接入步驟：
+${codex ? `0. ${tool ? '' : '如果你是 Codex：'}預設沙盒不能連網。~/.codex/config.toml 要有這兩行（改完重開 Codex，不用開完全權限）：
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write] 底下 network_access = true
+（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'）
+` : ''}1. 在終端機執行下載（一定要執行，會覆蓋舊檔；「只能下載一次」說的是這個連結，不是叫你沿用資料夾裡已經有的檔案。15 分鐘內有效；Windows PowerShell 請把 curl 換成 curl.exe）：
+curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
+2. 讀 ${dir}/setup.md：開頭寫的身分必須是「${ai.name}」，不是就停下來告訴 ${state.me.name}（讀到別的 AI 的檔）。是就照裡面的步驟接入。
+3. 接好後 Token 存在 ${dir}/.token，然後刪掉 ${dir}/setup.md（裡面有 Token）。這個檔不要進 git、不要貼到群組。
+${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒（Connection refused），就是 Codex 沒開網路，不是代理或公司網路問題。請停下來，把第 0 步原文告訴 ${state.me.name}：「請在 ~/.codex/config.toml 開 network_access 後重開 Codex」，不要說成代理問題、不要換別的寫法重試。開了網路仍連不到，才告訴 ${state.me.name} 改用「複製完整接入設定」。` : `下載失敗時：把錯誤原文告訴 ${state.me.name}，不要換別的寫法重試；連不到網址就請他確認你這台電腦開得了這個網站。`}
+檔案內容寫「已失效」，就請 ${state.me.name} 在網頁「我的 AI」重按「短版（已接過）」。這段文字與連結都不要貼到群組。`;
+  }
+
+  // 「允許 AI 自動啟動待命」預設勾選；勾選才在接入設定寫明已同意，沒勾照舊先問
+  // 對話接續方式寫進接入設定；預設「太長才換新」
+  // 對話接續：沒選就用預設「太長才換新」
+  const CONVO_OPTS = [['', '預設：太長才換新（建議）'], ['auto', '太長才換新'], ['fresh', '每次叫醒開新對話'], ['keep', '一直接續同一個對話']];
+  const CONVO_HINT = {
+    '': '太長＝同一個對話叫醒滿 10 次（喚醒腳本會數），滿了自動開新對話：省用量，平常也看得到過程。',
+    auto: '太長＝同一個對話叫醒滿 10 次（喚醒腳本會數），滿了自動開新對話：省用量，平常也看得到過程。',
+    fresh: '最省用量。注意：Claude Code 選這個會在背景另開對話，你在畫面上看不到它在做什麼。',
+    keep: '對話越長，每次叫醒越貴；只在需要一路看紀錄時用。',
+  };
+  const onboardingUrl = ai => { const o = maOpt(ai); return `/api/my-ais/${ai.participantId}/onboarding?${new URLSearchParams({ ...(o.convo ? { convo: o.convo } : {}), ...(o.auto ? { autoStandby: '1' } : {}) })}`; };
+
+  // 重發後：只需把新 Token 換進 AI 的環境，不用重讀整份接入設定
+  function openTokenOnly(ai, created = false) {
+    const body = openModal(created ? '已建立 AI' : '已重發 Token', `
+      <p>${created ? `已建立 ${esc(ai.name)}。` : `${esc(ai.name)} 的舊 Token 已立即失效。`}新 Token 到期：<b>${fmtTime(ai.expiresAt)}</b></p>
+      <p class="warn-box">Token 只有現在看得到：平台不保存原文，關掉這個視窗後要再複製就得重發。</p>
+      <p class="notice">已接入的 AI：把新 Token 換進它的 Token 檔或環境變數（例如 <code>.token</code>、<code>AIGILE_TOKEN</code>）即可，不必重讀整份設定。也可以直接貼給它：「Token 已更新為 ……，請替換後繼續輪詢」。第一次接入或 AI 已忘記設定時，才用「複製完整接入設定」。</p>`, {
+      size: 'narrow',
+      foot: `<button class="btn" type="button" id="tok-full">複製完整接入設定</button>
+             <button class="btn primary" type="button" id="tok-copy">只複製 Token</button>`,
+    });
+    const m = body.modal;
+    m.querySelector('#tok-copy').onclick = async () => toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
+    m.querySelector('#tok-full').onclick = async () => { // 帶剛拿到的 Token，不再換一組
+      const o = maOpt(ai);
+      const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`, { method: 'POST', body: { token: ai.token, autoStandby: !!o.auto, ...(o.convo ? { convo: o.convo } : {}) } });
+      toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
+    };
+  }
+
+  // ---------- 角色技能庫 ----------
+  const SK_ST = { pending: ['等上架核准', 'yellow'], published: ['已上架', 'green'], rejected: ['已退回', 'red'], removed: ['已下架', 'grey'], superseded: ['舊版', 'grey'] };
+  // 跟伺服器 src/skills.js 同一套：任何一層叫 scripts、或腳本副檔名＝腳本；會執行的＝腳本副檔名且不在測試資料夾
+  const SK_EXT = /\.(sh|bash|zsh|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|php|lua|go|exe|dll|so)$/i;
+  const skScript = p => p.split('/').slice(0, -1).includes('scripts') || SK_EXT.test(p);
+  const skRuns = p => SK_EXT.test(p) && !/(^|\/)(tests?|__tests__|fixtures?|corpus|testdata|snapshots?)\/|\.(test|spec)\.[a-z]+$/i.test(p);
+  // 腳本的一行用途：檔案開頭第一行註解（跳過 #!、空行）
+  const skPurpose = text => {
+    for (const l of String(text || '').split('\n').slice(0, 20)) {
+      const t = l.trim();
+      if (!t || t.startsWith('#!') || /^['"]use strict/.test(t)) continue;
+      const m = /^(?:\/\/+|#+|\/\*+|\*+|--|"""|''')\s*(.*?)\s*(?:\*\/)?$/.exec(t);
+      if (m && m[1] && !/^[-=*#/ ]+$/.test(m[1])) return m[1].slice(0, 80);
+      if (!m) return '';
+    }
+    return '';
+  };
+  // 文字檔回 { path, text }；不是文字的回 { path, binary: 位元組數 }（技能包略過並列出，單一技能擋）
+  const skText = (buf, path) => { try { const text = new TextDecoder('utf-8', { fatal: true }).decode(buf); return text.includes('\u0000') ? { path, binary: buf.length } : { path, text }; } catch { return { path, binary: buf.length }; } };
+  const skSkip = p => p.split('/').some(s => (s.startsWith('.') && s !== '.claude-plugin') || s === '__MACOSX'); // .git、.DS_Store、Mac 壓縮的附檔（技能包的 .claude-plugin 要留）
+  // 讀 zip（只要 stored／deflate，用瀏覽器內建解壓）
+  async function skReadZip(file) {
+    const buf = new Uint8Array(await file.arrayBuffer()), dv = new DataView(buf.buffer);
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error('不是 zip 檔');
+    const n = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('zip 目錄壞了');
+      const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+      const name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nlen));
+      p += 46 + nlen + xlen + clen;
+      if (name.endsWith('/') || skSkip(name)) continue;
+      const start = off + 30 + dv.getUint16(off + 26, true) + dv.getUint16(off + 28, true), raw = buf.subarray(start, start + csize);
+      let data;
+      if (method === 0) data = raw;
+      else if (method === 8) data = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      else throw new Error(`${name} 用了不支援的壓縮方式`);
+      out.push(skText(data, name));
+    }
+    return out;
+  }
+  async function skReadFolder(fileList) {
+    const out = [];
+    for (const f of fileList) { const p = f.webkitRelativePath || f.name; if (!skSkip(p)) out.push(skText(new Uint8Array(await f.arrayBuffer()), p)); }
+    return out;
+  }
+  // 選資料夾或 zip 時外面常多一層（my-skill/SKILL.md）：所有檔案同一個最上層資料夾就拿掉
+  const skStrip = files => { const tops = new Set(files.map(f => f.path.split('/')[0])); return tops.size === 1 && files.every(f => f.path.includes('/')) && !files.some(f => f.path === 'SKILL.md' || f.path.startsWith('.claude-plugin/')) ? files.map(f => ({ ...f, path: f.path.split('/').slice(1).join('/') })) : files; };
+  // 逐行差異（LCS）；太大就不比，只給全文
+  function skDiff(a, b) {
+    const x = a.split('\n'), y = b.split('\n');
+    if (x.length * y.length > 4e6) return null;
+    const m = x.length, n = y.length, t = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+    for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) t[i][j] = x[i] === y[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+    const out = []; let i = 0, j = 0;
+    while (i < m && j < n) { if (x[i] === y[j]) { out.push([' ', x[i]]); i++; j++; } else if (t[i + 1][j] >= t[i][j + 1]) out.push(['-', x[i++]]); else out.push(['+', y[j++]]); }
+    while (i < m) out.push(['-', x[i++]]); while (j < n) out.push(['+', y[j++]]);
+    return out;
+  }
+  // 上傳前先在瀏覽器看一遍：名稱、檔案、腳本數、檢查結果（伺服器還會再檢查一次）
+  // 最上層有 .claude-plugin/plugin.json＝技能包：名稱看 plugin.json；非文字檔略過並列出；腳本分「會執行的」與「測試資料」
+  function skPreview(all) {
+    const files = all.filter(f => typeof f.text === 'string'), binary = all.filter(f => typeof f.text !== 'string');
+    const size = files.reduce((a, f) => a + new TextEncoder().encode(f.text).length, 0);
+    const keyish = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bsk-[A-Za-z0-9_-]{20,}|\bghp_[A-Za-z0-9]{30,}/;
+    const base = { files, size, scripts: files.filter(f => skScript(f.path)), keys: files.filter(f => keyish.test(f.text)).map(f => f.path) };
+    const pj = files.find(f => f.path === '.claude-plugin/plugin.json');
+    if (pj) {
+      let meta = null; try { meta = JSON.parse(pj.text); } catch {}
+      const skills = files.filter(f => /^skills\/[^/]+\/SKILL\.md$/.test(f.path)).map(f => f.path.split('/')[1]);
+      const runs = base.scripts.filter(f => skRuns(f.path)).map(f => ({ path: f.path, purpose: skPurpose(f.text) }));
+      return { ...base, pack: true, name: typeof meta?.name === 'string' ? meta.name : '', description: String(meta?.description || ''), metaOk: !!meta, hasSkill: skills.length > 0, skills,
+        agents: files.filter(f => /^agents\/[^/]+\.md$/.test(f.path)).length, runs, testData: base.scripts.length - runs.length, skipped: binary.map(f => f.path), binary: [] };
+    }
+    const sk = files.find(f => f.path === 'SKILL.md'), fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(sk?.text || '')?.[1] || '';
+    const val = k => (new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(fm)?.[1] || '').replace(/^["']|["']$/g, '').trim();
+    return { ...base, name: val('name'), description: val('description'), hasSkill: !!sk, binary: binary.map(f => f.path) };
+  }
+  const SK_LIMIT = v => (v?.pack ? { bytes: 5 * 1048576, files: 800, label: '5 MB', count: '800 個檔' } : { bytes: 1048576, files: 100, label: '1 MB', count: '100 個檔' });
+  // 技能包的檔案區：數量摘要、會執行的腳本（一行用途＋全文／差異）、其他檔收起來（打開才畫）
+  function skPackFilesHtml(s) {
+    const runs = s.files.filter(f => skRuns(f.path)), others = s.files.length - runs.length, gone = s.previous ? s.previous.files.filter(o => !s.files.some(f => f.path === o.path)) : [];
+    return `<div class="sk-sec"><b class="sk-h">技能包內容</b><p class="small">技能 ${s.pack?.skills ?? 0} 個${s.pack?.agents ? `、agent ${s.pack.agents} 個` : ''} · 文字 ${s.files.length} 個檔 · 會執行的腳本 ${runs.length} 個 · 測試資料 ${Math.max(0, s.scripts - runs.length)} 個（不會執行）</p></div>
+      <div class="sk-sec"><b class="sk-h">會執行的腳本${s.previous ? `（跟 v${s.previous.version} 比較）` : ''}</b>${runs.length ? runs.map(f => `<div class="sk-run"><span class="muted small">${esc(skPurpose(f.text) || '（檔案開頭沒有說明）')}</span>${skFileHtml(f, s.previous)}</div>`).join('') : '<p class="muted small">沒有</p>'}</div>
+      <div class="sk-sec"><details class="sk-more-files" data-sk-lazy><summary>其他 ${others} 個檔（說明、測試資料）</summary><div class="sk-lazy"></div></details>
+        ${gone.map(o => `<p class="small"><code>${esc(o.path)}</code> <span class="pill-tag red">刪除</span></p>`).join('')}</div>`;
+  }
+  const skFileHtml = (f, prev) => {
+    const old = prev?.files.find(o => o.path === f.path);
+    const tag = !prev ? '' : !old ? '<span class="pill-tag green">新增</span>' : old.text === f.text ? '<span class="pill-tag grey">沒變</span>' : '<span class="pill-tag yellow">有改</span>';
+    const d = old && old.text !== f.text ? skDiff(old.text, f.text) : null;
+    const body = d ? d.map(([k, l]) => `<span class="sk-${k === '+' ? 'add' : k === '-' ? 'del' : 'same'}">${esc(k + ' ' + l)}</span>`).join('\n') : esc(f.text);
+    const kb = (new TextEncoder().encode(f.text).length / 1024).toFixed(1);
+    return `<details class="sk-file"${skScript(f.path) && (!prev || (old && old.text !== f.text) || !old) ? ' open' : ''}><summary><span class="sk-fn">${skScript(f.path) ? '⚙️' : '📄'} <code>${esc(f.path)}</code>${skScript(f.path) ? ' <span class="pill-tag purple">腳本</span>' : ''} ${tag}</span><span class="muted small">${kb} KB · 看全文</span></summary><pre class="sk-pre">${body}</pre></details>`;
+  };
+  // 發給誰的標籤：所有 AI／每個角色一個／「指定 N 隻 AI」（滑過看名字）
+  const skRoleTags = s => (s.aiIds?.length ? `<span class="pill-tag blue" title="${esc((s.ais || []).map(a => a.name).join('、'))}">指定 ${s.aiIds.length} 隻 AI</span>` : s.roles?.length ? s.roles.map(r => `<span class="pill-tag blue">${esc(skRoleLabel(s.project, r))}</span>`).join(' ') : '<span class="pill-tag grey">所有 AI</span>');
+  const skKindTag = s => (s.kind === 'pack' ? `<span class="pill-tag blue">技能包 · ${s.pack?.skills ?? 0} 個技能</span> ` : '') + (s.hasScripts ? `<span class="pill-tag purple">含腳本 ${s.scripts}</span>` : '<span class="pill-tag grey">純文字</span>');
+  const SK_ICON_BG = ['#e0f2fe', '#ede9fe', '#fef3c7', '#fee2e2', '#dcfce7', '#fce7f3'];
+  const skIcon = s => `<span class="sk-ic" style="background:${SK_ICON_BG[[...s.name].reduce((a, c) => a + c.charCodeAt(0), 0) % SK_ICON_BG.length]}" aria-hidden="true">${esc(s.name[0].toUpperCase())}</span>`;
+  const skBody = text => (text || '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
+
+  // 技能分頁的狀態（成員與權限 › 技能，或我的 AI 頁打開的同一個畫面）
+  const skv = { data: null, loading: false, filter: '', q: '', rules: false, redraw: null, modal: false };
+  async function skLoad() {
+    if (skv.loading) return;
+    skv.loading = true;
+    try { skv.data = await api('/api/skills'); } catch (e) { toast(e.message); } finally { skv.loading = false; }
+    skv.redraw?.();
+  }
+  const skCount = () => (skv.data ? skv.data.items.filter(s => s.status !== 'removed' && s.status !== 'rejected').length : 0);
+  function skillsViewHtml() {
+    const d = skv.data;
+    if (!d) { if (!skv.loading) setTimeout(skLoad); return '<p class="muted small sk-pad">載入中…</p>'; }
+    const pjs = d.projects, live = s => s.status !== 'removed';
+    const q = skv.q.trim().toLowerCase();
+    const shown = d.items.filter(s => live(s) && (!skv.filter || s.project === skv.filter) && (!q || (s.name + ' ' + s.description).toLowerCase().includes(q)));
+    const chip = (v, label, n) => `<button type="button" class="sk-chip" data-skf="${esc(v)}" aria-pressed="${skv.filter === v}">${esc(label)} <span class="sk-n">${n}</span></button>`;
+    const MAX_CHIPS = 4, first = pjs.slice(0, MAX_CHIPS), more = pjs.slice(MAX_CHIPS);
+    const upPj = (skv.filter && pjs.find(p => p.id === skv.filter && p.canUpload)) || pjs.find(p => p.canUpload);
+    const review = d.items.filter(s => s.canReview && (!skv.filter || s.project === skv.filter));
+    const emptyPjs = pjs.filter(p => (!skv.filter || p.id === skv.filter) && !q && !d.items.some(s => s.project === p.id && live(s)) && p.canUpload);
+    const card = s => {
+      const ins = s.install, t = ins?.target || 0;
+      const ok = t ? Math.round(ins.installed / t * 100) : 0, wait = t ? Math.round(ins.waitingOwner / t * 100) : 0;
+      const pj = pjs.find(p => p.id === s.project);
+      const foot = s.status === 'pending' ? `上架後才會發給 AI<span class="sk-go">${s.canReview ? '看腳本並核准 ›' : '看內容 ›'}</span>`
+        : s.status === 'rejected' ? `已退回${s.reviewNote ? '：' + esc(s.reviewNote) : ''}<span class="sk-go">看內容 ›</span>`
+        : `已裝 ${ins?.installed ?? 0}／${t} 台${ins?.waitingOwner ? ` · <span class="warn-text">${ins.waitingOwner} 台等主人允許</span>` : ''}<span class="sk-go">看內容 ›</span>`;
+      return `<button type="button" class="sk-card" data-skc="${esc(s.skillId)}">
+        <span class="sk-ct">${skIcon(s)}<span class="sk-tt"><b class="sk-nm">${esc(s.name)}</b><span class="muted small">v${s.version} · ${esc(s.uploadedBy.name)} · ${esc(mmdd(s.uploadedAt))}</span></span><span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || esc(s.status)}</span></span>
+        <span class="sk-ds">${esc(s.description)}</span>
+        <span class="sk-tags"><span class="pill-tag grey">${esc(pj?.name || projName(s.project))}</span> ${skRoleTags(s)} ${skKindTag(s)}</span>
+        <span class="sk-meter" aria-hidden="true"><i style="width:${ok}%" class="ok"></i><i style="width:${wait}%" class="wait"></i></span>
+        <span class="sk-foot">${foot}</span>
+      </button>`;
+    };
+    return `<div class="sk-view">
+      <div class="sk-bar" role="group" aria-label="依專案篩選">
+        ${chip('', '全部', skCount())}${first.map(p => chip(p.id, p.name, p.count)).join('')}
+        ${more.length ? `<select class="sk-more" aria-label="更多專案"><option value="">更多 ▾</option>${more.map(p => `<option value="${esc(p.id)}"${skv.filter === p.id ? ' selected' : ''}>${esc(p.name)}（${p.count}）</option>`).join('')}</select>` : ''}
+        <span class="grow"></span>
+        <input type="search" class="sk-q" placeholder="找技能名稱或說明" aria-label="找技能" value="${esc(skv.q)}">
+        ${upPj ? `<button type="button" class="btn primary" data-skup="${esc(upPj.id)}">＋ 上傳技能</button>` : ''}
+      </div>
+      <p class="sk-rule">技能＝給 AI 的做事方法（SKILL.md，可附腳本）。含腳本的要核准、每台 AI 主人允許才會裝。<button type="button" class="link small" data-skrule aria-expanded="${skv.rules}">完整規則</button></p>
+      ${skv.rules ? `<div class="sk-rules small">• 專案成員都能上傳（資料夾或 zip，最上層要有 SKILL.md 寫 name、description；1 MB 內、只收文字、擋金鑰）。<br>• 只有說明文件的直接上架；含腳本的：leader／管理員上傳的直接上架，其他成員上傳的要 leader／管理員看過全文與差異才核准。<br>• 技能只發給該專案、指定角色的 AI；含腳本的要該 AI 的主人在「我的 AI › 技能」允許那一版。<br>• 同步全手動：主人按「同步」或 AI 重跑接入檢查才下載安裝；AI 不會自己去查。新版、下架由平台私訊主人。<br>• 執行技能裡的腳本照 AI 工具本身的權限，不另外問。</div>` : ''}
+      ${review.length ? `<div class="sk-alert" role="status">⏳ <b>${review.length} 個技能等你核准上架</b>：${review.slice(0, 2).map(s => `${esc(s.uploadedBy.name)} 上傳的 ${esc(s.name)} v${s.version}（含腳本 ${s.scripts} 個）`).join('、')}${review.length > 2 ? '…' : ''}<span class="grow"></span><button type="button" class="btn small" data-skc="${esc(review[0].skillId)}">看腳本並核准</button></div>` : ''}
+      <div class="sk-grid">
+        ${shown.map(card).join('')}
+        ${emptyPjs.map(p => `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>把團隊的做事方法寫成 SKILL.md，該角色的 AI 就照同一套做。</span><button type="button" class="btn small" data-skup="${esc(p.id)}">＋ 上傳到${esc(p.name)}</button></div>`).join('')}
+        ${!shown.length && !emptyPjs.length ? `<p class="muted">${q ? '沒有符合的技能。' : '目前沒有技能。'}</p>` : ''}
+      </div>
+    </div>`;
+  }
+  // 我的 AI 頁的入口（一般成員進不了成員與權限）：同一個畫面放在彈窗
+  function openSkillsView(pj = '') {
+    skv.filter = pj; skv.data = null; skv.modal = true;
+    const body = openModal('技能', '', { size: 'wide', sub: '所有成員都看得到自己專案的技能；AI 的主人在「我的 AI › 技能」同步後才會裝到 AI 的電腦。' });
+    skv.redraw = () => { if (body.isConnected) body.innerHTML = skillsViewHtml(); };
+    skv.redraw();
+  }
+  // 右側抽屜：說明、檔案（腳本全文）、裝到哪些 AI、版本、核准／上傳新版本／下架
+  async function skOpenDrawer(id) {
+    document.querySelector('.sk-drawer-wrap')?.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'sk-drawer-wrap';
+    wrap.innerHTML = '<aside class="sk-drawer" role="dialog" aria-modal="true" aria-label="技能內容"><p class="muted small sk-pad">載入中…</p></aside>';
+    document.body.appendChild(wrap);
+    const box = wrap.querySelector('.sk-drawer'), close = () => { wrap.remove(); document.removeEventListener('keydown', esc1, true); };
+    const esc1 = e => { if (e.key === 'Escape' && !document.querySelector('.confirm-root')) { e.stopPropagation(); close(); } };
+    document.addEventListener('keydown', esc1, true);
+    wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
+    const draw = async () => {
+      const s = await api(`/api/skills/${encodeURIComponent(id)}`);
+      const pj = skv.data?.projects.find(p => p.id === s.project);
+      const dot = { installed: ['ok', '已裝'], waiting: ['wait', '等主人允許'], not_synced: ['', '還沒同步'] };
+      box.innerHTML = `<div class="sk-dh">${skIcon(s)}<span class="sk-tt"><b class="sk-nm">${esc(s.name)}</b><span class="muted small">${esc(pj?.name || projName(s.project))} · ${esc(skToText(s))} · v${s.version}</span></span><span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || ''}</span><button type="button" class="modal-x" data-skx aria-label="關閉">×</button></div>
+        <div class="sk-sec"><b class="sk-h">${s.kind === 'pack' ? '說明（plugin.json）' : '說明（SKILL.md）'}</b>${esc(s.description)}${skBody(s.files.find(f => f.path === 'SKILL.md')?.text) ? `<div class="sk-skill">${esc(skBody(s.files.find(f => f.path === 'SKILL.md').text)).slice(0, 1200)}</div>` : ''}</div>
+        ${s.kind === 'pack' ? skPackFilesHtml(s) : `<div class="sk-sec"><b class="sk-h">檔案${s.previous ? `（跟 v${s.previous.version} 比較）` : ''}</b>${s.files.map(f => skFileHtml(f, s.previous)).join('')}
+          ${s.previous ? s.previous.files.filter(o => !s.files.some(f => f.path === o.path)).map(o => `<p class="small"><code>${esc(o.path)}</code> <span class="pill-tag red">刪除</span></p>`).join('') : ''}</div>`}
+        ${['published', 'pending'].includes(s.status) ? `<div class="sk-sec" id="sk-to-sec"><b class="sk-h">發給誰</b><div class="sk-to-sum">${esc(skToText(s))}${s.ais?.length ? `：${s.ais.map(a => esc(a.name) + (a.gone ? '（已不在專案，不會再發）' : '')).join('、')}` : ''}${s.canManage && skv.data?.projects.some(p => p.id === s.project) ? ' <button type="button" class="link small" data-skto>改</button>' : ''}</div></div>` : ''}
+        ${s.status === 'published' ? `<div class="sk-sec"><b class="sk-h">裝到哪些 AI</b>${s.installs.length ? s.installs.map(a => `<div class="sk-ai"><span class="sk-dot ${dot[a.state][0]}" aria-hidden="true"></span>${esc(a.name)}（${esc(a.owner)}）· ${a.state === 'waiting' && a.mine ? '等你允許' : dot[a.state][1]}${a.state === 'installed' ? ` v${s.version}` : ''}${a.state === 'waiting' && a.mine ? `<button type="button" class="link small sk-push" data-skallow="${esc(a.aiId)}">允許並同步</button>` : ''}</div>`).join('') : '<p class="muted small">這個專案沒有符合發給誰的 AI。</p>'}</div>` : ''}
+        <div class="sk-sec"><b class="sk-h">版本</b>v${s.version} · ${esc(fmtTime(s.uploadedAt))} ${esc(s.uploadedBy.name)}上傳${s.reviewedBy ? `，${esc(s.reviewedBy.name)}核准` : s.status === 'published' ? '（直接上架）' : ''}${s.reviewNote ? ` · 審核：${esc(s.reviewNote)}` : ''}</div>
+        ${s.canReview ? `<div class="sk-sec"><label class="field">審核說明（退回必填）<input id="sk-note" maxlength="300"></label><div class="row"><button type="button" class="btn danger" data-skno>退回（寫原因）</button><button type="button" class="btn primary" data-skok>看過全文與差異，核准上架</button></div></div>` : ''}
+        <div class="sk-actions">${pj?.canUpload ? `<button type="button" class="btn" data-skup="${esc(s.project)}">上傳新版本</button>` : ''}${s.canManage && ['published', 'pending'].includes(s.status) ? `<button type="button" class="btn danger-outline" data-skrm>下架</button>` : ''}</div>`;
+      // 技能包的其他檔（說明、測試資料）打開才畫，幾百個檔不一次塞進畫面
+      box.querySelector('[data-sk-lazy]')?.addEventListener('toggle', e => { const d = e.currentTarget, el = d.querySelector('.sk-lazy'); if (d.open && !el.childElementCount) el.innerHTML = s.files.filter(f => !skRuns(f.path)).map(f => skFileHtml(f, s.previous)).join(''); });
+      return s;
+    };
+    let s, toPick = null;
+    try { s = await draw(); } catch (e) { box.innerHTML = `<p class="error sk-pad">${esc(e.message)}</p>`; return; }
+    box.addEventListener('click', async e => {
+      // 改發給誰：在抽屜裡展開選擇器，存了就生效（不用重傳、不升版本）
+      const ed = box.querySelector('#sk-to-edit');
+      if (toPick && ed && toPick.click(e, ed)) { box.querySelector('[data-sktosave]').disabled = !toPick.valid(); return; }
+      const t = e.target.closest('[data-skx],[data-skok],[data-skno],[data-skrm],[data-skallow],[data-skup],[data-skto],[data-sktosave],[data-sktocancel]');
+      if (!t) return;
+      try {
+        if (t.hasAttribute('data-skx')) return close();
+        if (t.hasAttribute('data-skto')) {
+          toPick = skTargetPicker(() => s.project, s);
+          box.querySelector('#sk-to-sec').innerHTML = `<b class="sk-h">發給誰</b><div class="sk-to" id="sk-to-edit">${toPick.html()}</div>
+            <div class="row"><button type="button" class="btn" data-sktocancel>取消</button><button type="button" class="btn primary" data-sktosave ${toPick.valid() ? '' : 'disabled'}>儲存</button></div><p class="muted small">存了就生效：新加入的 AI 主人會收到通知，被拿掉的同步後移除。</p>`;
+          return box.querySelector('#sk-to-edit [aria-checked="true"]')?.focus();
+        }
+        if (t.hasAttribute('data-sktocancel')) { toPick = null; s = await draw(); return box.querySelector('[data-skto]')?.focus(); }
+        if (t.hasAttribute('data-sktosave')) {
+          t.disabled = true; t.textContent = '儲存中…';
+          try { await api(`/api/projects/${encodeURIComponent(s.project)}/skills/${encodeURIComponent(s.name)}/target`, { method: 'PUT', body: toPick.body() }); }
+          catch (err) { t.disabled = false; t.textContent = '儲存'; throw err; }
+          toPick = null; toast('已改發給誰，已通知受影響的 AI 主人'); s = await draw(); box.querySelector('[data-skto]')?.focus(); return skLoad();
+        }
+        if (t.dataset.skup) { close(); return skOpenUpload(t.dataset.skup); }
+        if (t.dataset.skallow) {
+          if (!await confirmDialog({ title: '允許含腳本的技能？', message: '允許後會請 AI 同步，把這一版的腳本放進它的技能資料夾；執行時照它工具本身的權限。新版要重新允許。', confirmText: '允許並同步' })) return;
+          await api(`/api/my-ais/${encodeURIComponent(t.dataset.skallow)}/skills/${encodeURIComponent(id)}`, { method: 'PUT', body: { allow: true } });
+          await api(`/api/my-ais/${encodeURIComponent(t.dataset.skallow)}/skills/sync`, { method: 'POST' });
+          toast('已允許，已私訊 AI 請它同步'); s = await draw(); return skLoad();
+        }
+        if (t.hasAttribute('data-skrm')) {
+          if (!await confirmDialog({ title: '下架技能？', message: `「${esc(s.name)}」下架後，主人按「同步」時會從 AI 的技能資料夾移除。`, confirmText: '下架', danger: true })) return;
+          await api(`/api/projects/${encodeURIComponent(s.project)}/skills/${encodeURIComponent(s.name)}/remove`, { method: 'POST' });
+          toast('已下架，已通知各 AI 的主人'); close(); return skLoad();
+        }
+        const action = t.hasAttribute('data-skok') ? 'approve' : 'reject', note = box.querySelector('#sk-note')?.value.trim() || '';
+        if (action === 'reject' && !note) return toast('退回要寫原因');
+        await api(`/api/skills/${encodeURIComponent(id)}/review`, { method: 'POST', body: { action, note } });
+        toast(action === 'approve' ? '已核准上架，已通知各 AI 的主人' : '已退回'); s = await draw(); skLoad();
+      } catch (err) { toast(err.message); }
+    });
+    box.querySelector('[data-skx]')?.focus();
+  }
+  // 發給誰：所有 AI／指定角色（平台角色＋專案自訂角色，專案裡有 AI 在用的排前面）／指定 AI。上傳第 3 步與「改發給誰」共用
+  // pjOf：目前的專案；init：技能現在的 { roles, aiIds }
+  const skPjInfo = pj => skv.data?.projects.find(p => p.id === pj) || {};
+  const skRoleLabel = (pj, k) => skPjInfo(pj).roles?.find(o => o.key === k)?.label || k;
+  function skToText(s) {
+    if (s.aiIds?.length) return `指定 ${s.aiIds.length} 隻 AI`;
+    return s.roles?.length ? s.roles.map(k => skRoleLabel(s.project, k)).join('、') : '所有 AI';
+  }
+  function skTargetPicker(pjOf, init = {}) {
+    const st = { mode: init.aiIds?.length ? 'ais' : init.roles?.length ? 'roles' : 'all', roles: new Set(init.roles || []), ais: new Set(init.aiIds || []), more: false };
+    const info = () => skPjInfo(pjOf());
+    const keepAis = () => { const ok = new Set((info().ais || []).map(a => a.participantId)); for (const id of [...st.ais]) if (!ok.has(id)) st.ais.delete(id); }; // 已不在專案的 AI 拿掉（平台也不會再發給它）
+    keepAis();
+    const valid = () => st.mode === 'all' || (st.mode === 'roles' ? st.roles.size > 0 : st.ais.size > 0);
+    const n = () => { const ais = info().ais || []; return st.mode === 'all' ? ais.length : st.mode === 'roles' ? ais.filter(a => st.roles.has(a.roleKey)).length : ais.filter(a => st.ais.has(a.participantId)).length; };
+    const html = () => {
+      const p = info(), ais = p.ais || [], opts = p.roles || [], used = new Set(ais.map(a => a.roleKey));
+      const main = opts.filter(o => used.has(o.key) || st.roles.has(o.key)), rest = opts.filter(o => !main.includes(o));
+      const legacy = [...st.roles].filter(k => !opts.some(o => o.key === k)).map(k => ({ key: k, label: k })); // 舊資料的角色（例如 BU）
+      const roleBtn = o => `<button type="button" class="sk-up-role" data-skrole="${esc(o.key)}" aria-pressed="${st.roles.has(o.key)}"${o.name && o.name !== o.label ? ` title="${esc(o.name)}"` : ''}>${esc(o.label)}</button>`;
+      const mode = (k, t) => `<button type="button" class="sk-to-mode" role="radio" aria-checked="${st.mode === k}" data-sk-mode="${k}">${t}</button>`;
+      return `<div class="sk-to-modes" role="radiogroup" aria-label="發給誰">${mode('all', '所有 AI')}${mode('roles', '指定角色')}${mode('ais', '指定 AI')}</div>
+        ${st.mode === 'roles' ? `<div class="sk-up-roles" role="group" aria-label="角色">${[...main, ...legacy].map(roleBtn).join('')}${rest.length ? (st.more ? rest.map(roleBtn).join('') : `<button type="button" class="link small sk-to-more" data-sk-more>更多角色（${rest.length}）</button>`) : ''}</div>` : ''}
+        ${st.mode === 'ais' ? (ais.length ? `<div class="sk-to-ais" role="group" aria-label="AI">${ais.map(a => `<button type="button" class="sk-to-ai" data-sk-ai="${esc(a.participantId)}" aria-pressed="${st.ais.has(a.participantId)}"><b>${esc(a.name)}</b><span class="muted small">${esc(a.roleKey ? skRoleLabel(pjOf(), a.roleKey) : '—')}${a.owner ? ' · ' + esc(a.owner) : ''}</span></button>`).join('')}</div>` : '<p class="muted small">這個專案還沒有 AI。</p>') : ''}
+        <p class="field-hint sk-to-n" aria-live="polite">${!valid() ? (st.mode === 'roles' ? '先選角色。' : '先選 AI。') : `會裝到 ${n()} 隻 AI。`}</p>`;
+    };
+    // 點了選擇器裡的東西：改狀態、重畫、焦點留在同一顆
+    const click = (e, el) => {
+      const t = e.target.closest('[data-sk-mode],[data-skrole],[data-sk-ai],[data-sk-more]');
+      if (!t || !el.contains(t)) return false;
+      const flip = (set, k) => (set.has(k) ? set.delete(k) : set.add(k));
+      let focus = t.dataset.skMode ? `[data-sk-mode="${t.dataset.skMode}"]` : t.dataset.skrole ? `[data-skrole="${CSS.escape(t.dataset.skrole)}"]` : t.dataset.skAi ? `[data-sk-ai="${CSS.escape(t.dataset.skAi)}"]` : null;
+      if (t.dataset.skMode) st.mode = t.dataset.skMode;
+      else if (t.dataset.skrole) flip(st.roles, t.dataset.skrole);
+      else if (t.dataset.skAi) flip(st.ais, t.dataset.skAi);
+      const k = el.querySelectorAll('.sk-up-role').length; // 展開「更多角色」：焦點到第一個新出現的
+      if (!focus) st.more = true;
+      el.innerHTML = html();
+      (focus ? el.querySelector(focus) : el.querySelectorAll('.sk-up-role')[k])?.focus();
+      return true;
+    };
+    const body = () => (st.mode === 'ais' ? { aiIds: [...st.ais] } : { roles: st.mode === 'roles' ? [...st.roles] : [] });
+    return { html, click, body, valid, onProject: keepAis };
+  }
+  // 上傳彈窗：1 上傳到 → 2 檔案（卡片＋檢查標籤）→ 3 發給誰＋會裝到幾隻；底部固定一列說明與按鈕
+  function skOpenUpload(pj) {
+    const pjs = (skv.data?.projects || []).filter(p => p.canUpload);
+    let files = null, target = pj || pjs[0]?.id || '', busy = false;
+    const pick = skTargetPicker(() => target);
+    const body = openModal('上傳技能', `<label class="field sk-up-step">1. 上傳到<select id="sk-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+      <div class="sk-up-sec"><b class="sk-up-step">2. 檔案</b><div id="sk-up-file"></div><p class="field-hint">資料夾或 zip，最上層要有 SKILL.md；1 MB 內、只收文字檔。<br>技能包（Claude Code 外掛）：最上層要有 .claude-plugin/plugin.json；文字 5 MB、800 個檔內，圖片等非文字檔會略過。會寫使用者層級設定（~/.claude 等）的技能可以留在包裡，但 AI 不要執行。</p></div>
+      <div class="sk-up-sec"><b class="sk-up-step">3. 發給誰</b><div class="sk-to" id="sk-to">${pick.html()}</div></div>`,
+      { size: 'sk-up', sub: '上架後，選到的 AI 會收到。', foot: '<p class="error" id="sk-err" role="alert"></p><div class="sk-up-bar"><span class="sk-up-note" id="sk-up-note"></span><button type="button" class="btn" data-skcancel>取消</button><button type="button" class="btn primary" data-sksend disabled>上架</button></div>' });
+    const modal = body.modal, foot = modal.querySelector('.modal-foot');
+    foot.classList.add('sk-up-foot');
+    let pvf = null, pvc = null; // 技能包幾百個檔：同一批檔只算一次
+    const pv = () => { if (!files) return null; if (pvf !== files) { pvf = files; pvc = skPreview(files); } return pvc; };
+    const lim = v => SK_LIMIT(v);
+    const bad = v => !v || !v.hasSkill || !v.name || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(v.name) || (!v.pack && !v.description) || v.size > lim(v).bytes || v.files.length > lim(v).files || v.keys.length || v.binary.length;
+    const direct = v => !v?.scripts.length || !!pjs.find(x => x.id === target)?.canManage;
+    const tag = (ok, text) => `<span class="sk-up-tag ${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(text)}</span>`;
+    const drawFile = () => {
+      const el = body.querySelector('#sk-up-file'), v = pv();
+      if (!v) { el.innerHTML = '<div class="sk-up-pick"><label class="btn">選資料夾<input type="file" id="sk-dir" webkitdirectory multiple hidden></label><label class="btn">選 zip<input type="file" id="sk-zip" accept=".zip,application/zip" hidden></label></div>'; return; }
+      if (v.pack) return drawPack(el, v);
+      const tags = [
+        v.hasSkill ? tag(true, '有 SKILL.md') : tag(false, '最上層要有 SKILL.md'),
+        ...(v.binary.length ? [tag(false, `${v.binary.join('、')} 不是文字檔（技能只收文字）`)] : []),
+        ...(v.hasSkill && !v.name ? [tag(false, 'SKILL.md 沒寫 name')] : []),
+        ...(v.hasSkill && !v.description ? [tag(false, 'SKILL.md 沒寫 description')] : []),
+        ...(v.size > 1048576 ? [tag(false, '超過 1 MB')] : []),
+        ...(v.files.length > 100 ? [tag(false, '超過 100 個檔')] : []),
+        v.scripts.length ? `<span class="sk-up-tag warn" title="${esc(v.scripts.map(f => f.path).join('、'))}">含腳本 ${v.scripts.length} 個：${esc(v.scripts.map(f => f.path).join('、'))}</span>` : tag(true, '純文字，沒有腳本'),
+        v.keys.length ? tag(false, `${v.keys.join('、')} 裡有像金鑰的內容，請拿掉`) : tag(true, '沒看到 Token／金鑰')];
+      el.innerHTML = `<div class="sk-up-card"><div class="sk-up-head"><b class="sk-up-name">${esc(v.name || '（SKILL.md 沒寫 name）')}</b><button type="button" class="link" data-skrepick>重新選</button></div>
+        <div class="sk-up-meta">讀自 SKILL.md · ${v.files.length} 個檔 · ${Math.max(1, Math.round(v.size / 1024))} KB</div><div class="sk-up-tags">${tags.join('')}</div></div>`;
+    };
+    // 技能包卡片：技能與 agent 數、腳本分「會執行的」（列檔名＋一行用途）與「測試資料」、略過的非文字檔
+    const drawPack = (el, v) => {
+      const mb = (v.size / 1048576).toFixed(2);
+      const tags = [
+        v.metaOk && v.name ? tag(true, '有 .claude-plugin/plugin.json') : tag(false, 'plugin.json 要是 JSON，寫 name'),
+        ...(v.name && !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(v.name) ? [tag(false, `name「${v.name}」只能用小寫英數與連字號`)] : []),
+        v.skills.length ? tag(true, `技能 ${v.skills.length} 個${v.agents ? `、agent ${v.agents} 個` : ''}`) : tag(false, 'skills/ 底下要有技能（skills/<名稱>/SKILL.md）'),
+        ...(v.size > lim(v).bytes ? [tag(false, '文字超過 5 MB')] : []),
+        ...(v.files.length > lim(v).files ? [tag(false, '超過 800 個檔')] : []),
+        v.runs.length ? `<span class="sk-up-tag warn">會執行的腳本 ${v.runs.length} 個</span>` : tag(true, '沒有會執行的腳本'),
+        ...(v.testData ? [`<span class="sk-up-tag">測試資料 ${v.testData} 個（不會執行）</span>`] : []),
+        ...(v.skipped.length ? [`<span class="sk-up-tag" title="${esc(v.skipped.join('、'))}">略過非文字檔 ${v.skipped.length} 個</span>`] : []),
+        v.keys.length ? tag(false, `${v.keys.join('、')} 裡有像金鑰的內容，請拿掉`) : tag(true, '沒看到 Token／金鑰')];
+      el.innerHTML = `<div class="sk-up-card"><div class="sk-up-head"><b class="sk-up-name">${esc(v.name || '（plugin.json 沒寫 name）')}</b> <span class="pill-tag blue">技能包</span><button type="button" class="link" data-skrepick>重新選</button></div>
+        <div class="sk-up-meta">讀自 .claude-plugin/plugin.json · 文字 ${v.files.length} 個檔 · ${mb} MB</div><div class="sk-up-tags">${tags.join('')}</div>
+        ${v.runs.length ? `<details class="sk-runs" open><summary>會執行的腳本 ${v.runs.length} 個（檔名＋一行用途）</summary><ul>${v.runs.map(x => `<li><code>${esc(x.path)}</code><span class="muted">${esc(x.purpose || '（檔案開頭沒有說明）')}</span></li>`).join('')}</ul></details>` : ''}
+        ${v.skipped.length ? `<p class="muted small sk-skip">略過（不是文字檔，不會上傳）：${esc(v.skipped.join('、'))}</p>` : ''}</div>`;
+    };
+    const drawFoot = () => {
+      const v = pv(), go = foot.querySelector('[data-sksend]');
+      foot.querySelector('#sk-up-note').textContent = !v ? '先選檔案' : bad(v) ? '檢查沒過，改好再重新選' : !pick.valid() ? '先選要發給誰' : !v.scripts.length ? '純文字，按下就上架' : direct(v) ? '含腳本，你能直接上架；每台電腦還要 AI 主人允許才裝' : '含腳本，要管理員核准';
+      go.textContent = busy ? (v && !direct(v) ? '送出中…' : '上架中…') : v && !direct(v) ? '送出核准' : '上架';
+      go.disabled = busy || bad(v) || !pick.valid();
+    };
+    const err = t => { foot.querySelector('#sk-err').textContent = t; };
+    body.addEventListener('change', async e => {
+      try {
+        if (e.target.id === 'sk-pj') { target = e.target.value; pick.onProject(); body.querySelector('#sk-to').innerHTML = pick.html(); return drawFoot(); }
+        if (e.target.id === 'sk-dir' && e.target.files.length) files = skStrip(await skReadFolder(e.target.files));
+        else if (e.target.id === 'sk-zip' && e.target.files[0]) files = skStrip(await skReadZip(e.target.files[0]));
+        else return;
+        err(''); drawFile(); drawFoot();
+      } catch (ex) { err(ex.message); }
+    });
+    modal.addEventListener('click', async e => {
+      if (pick.click(e, body.querySelector('#sk-to'))) return drawFoot();
+      if (e.target.closest('[data-skrepick]')) { files = null; err(''); drawFile(); drawFoot(); return body.querySelector('#sk-dir')?.closest('label').focus(); }
+      if (e.target.closest('[data-skcancel]')) { closeModal(); if (skv.modal) openSkillsView(skv.filter); return; }
+      if (!e.target.closest('[data-sksend]') || busy) return;
+      busy = true; err(''); drawFoot();
+      try {
+        const r = await api(`/api/projects/${encodeURIComponent(target)}/skills`, { method: 'POST', body: { files: pv().files, ...pick.body() } }); // 只送文字檔（技能包的圖片等略過）
+        if (r.status === 'published') { foot.remove(); return skUploaded(body, r); }
+        toast(`「${r.name}」含腳本，等 leader 或管理員核准`);
+        closeModal(); if (skv.modal) openSkillsView(skv.filter); else skLoad();
+      } catch (ex) { busy = false; err(ex.message); drawFoot(); }
+    });
+    drawFile(); drawFoot();
+  }
+  // 上傳成功：你名下會用到這個技能的 AI 一鍵全部同步
+  async function skUploaded(body, r) {
+    skLoad();
+    body.innerHTML = `<p class="sk-ok">✓「${esc(r.name)}」第 ${r.version} 版已上架，已通知各 AI 的主人（每位主人一則）。</p><div id="sk-up-sync"><p class="muted small">看你的 AI 有沒有用到…</p></div>
+      <div class="row"><button type="button" class="btn" data-sk-fin>完成</button></div>`;
+    const fin = () => { closeModal(); if (skv.modal) openSkillsView(skv.filter); };
+    body.querySelector('[data-sk-fin]').onclick = fin;
+    let ids = [];
+    try { ids = (await api('/api/skill-sync')).items.filter(a => a.skills.some(s => s.skillId === r.skillId) && a.needs).map(a => a.aiId); } catch {}
+    const el = body.querySelector('#sk-up-sync');
+    if (!el) return;
+    el.innerHTML = ids.length ? `<div class="sy-banner">🧩 <b>你有 ${ids.length} 隻 AI 會用到</b><span class="grow"></span><button type="button" class="btn small primary" data-sk-upsync>全部同步</button></div>` : '<p class="muted small">你名下沒有要裝這個技能的 AI。</p>';
+    el.querySelector('[data-sk-upsync]')?.addEventListener('click', () => openSkillSync({ run: ids, skillId: r.skillId }));
+  }
+  // 技能畫面的事件（成員與權限分頁與我的 AI 彈窗共用）
+  document.addEventListener('click', e => {
+    const lib = e.target.closest('[data-skills-lib]');
+    if (lib) return openSkillsView(lib.dataset.skillsLib);
+    if (!e.target.closest('.sk-view')) return;
+    const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), rule = e.target.closest('[data-skrule]');
+    if (f) { skv.filter = f.dataset.skf; skv.redraw?.(); }
+    else if (c) skOpenDrawer(c.dataset.skc);
+    else if (up) skOpenUpload(up.dataset.skup);
+    else if (rule) { skv.rules = !skv.rules; skv.redraw?.(); }
+  });
+  document.addEventListener('change', e => { if (e.target.closest?.('.sk-more')) { skv.filter = e.target.value; skv.redraw?.(); } });
+  document.addEventListener('input', e => {
+    if (!e.target.classList?.contains('sk-q')) return;
+    skv.q = e.target.value; const pos = e.target.selectionStart;
+    skv.redraw?.();
+    const q = document.querySelector('.sk-q'); if (q) { q.focus(); q.setSelectionRange(pos, pos); }
+  });
+  // 我的 AI › 技能：含腳本的這一版要主人允許；「同步」私訊 AI 請它跑一次接入檢查（只同步技能）
+  async function openAiSkills(ai) {
+    const body = openModal(`技能 · ${ai.name}`, '<p class="muted small">載入中…</p>', { sub: '只有你按「同步」或 AI 重跑接入檢查時才會下載安裝；AI 不會自己去查、不會自己更新。', size: 'narrow' });
+    await drawAiSkills(body, ai);
+  }
+  async function drawAiSkills(body, ai, onCount = null) {
+    const draw = async () => {
+      const { items, removed = [] } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills`);
+      if (!body.isConnected) return;
+      body.innerHTML = `${items.length ? items.map(s => `
+        <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b>${s.kind === 'pack' ? ' <span class="pill-tag blue">技能包</span>' : ''} <span class="muted small">${esc(projName(s.project))} · 第 ${s.version} 版 · ${s.to === 'ais' ? '指定給這隻' : s.to === 'roles' ? '發給 ' + esc(s.roles.map(k => skRoleLabel(s.project, k)).join('、')) : '所有 AI'}</span>${s.hasScripts ? ` <span class="pill-tag purple">含腳本 ${s.scripts}</span>` : ''}
+          <div class="muted small">${esc(s.description)} · SHA-256 ${esc(s.sha256.slice(0, 4))}…${esc(s.sha256.slice(-3))}</div>${s.state ? `<div class="small">${skMarkHtml(s)}${s.why ? ` <span class="muted">${esc(s.why)}</span>` : ''}</div>` : ''}</div>
+          ${s.hasScripts ? `<div class="row"><button type="button" class="btn small" data-sk-look="${esc(s.skillId)}">看腳本</button>${s.allowed ? `<button type="button" class="btn small" data-sk-revoke="${esc(s.skillId)}">收回允許</button>` : `<button type="button" class="btn small primary" data-sk-allow="${esc(s.skillId)}">允許並同步到這台</button>`}</div>` : '<span class="muted small">純文字，會安裝</span>'}</div>`).join('')
+        : '<p class="muted">這個 AI 所屬的專案還沒有發給它的技能。</p>'}
+        ${removed.length ? `<p class="small">● 已下架、同步後會移除：${esc(removed.join('、'))}</p>` : ''}
+        ${items.some(s => s.kind === 'pack') ? `<p class="small sk-pack-note">🧩 技能包要帶參數啟動 Claude Code 才會載入：<code>claude --plugin-dir "&lt;AI 的工作資料夾&gt;\\.aigile\\${esc((ai.roleKey && ai.roleKey !== 'custom' ? ai.roleKey : 'AI') + '_' + (ai.shortCode || ''))}\\plugins"</code>。同步完 AI 會印出完整路徑；新裝或更新後要重開對話。Codex 先不支援。</p>` : ''}
+        <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能），進度顯示在同步清單。只有你按「同步」或 AI 重跑接入檢查時才會安裝。</span></div>`;
+      onCount?.(items.filter(s => s.hasScripts && !s.allowed).length);
+    };
+    if (body.dataset.bound) return draw().catch(e => { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; });
+    body.dataset.bound = '1';
+    body.addEventListener('click', async e => {
+      const t = e.target.closest('[data-sk-sync],[data-sk-allow],[data-sk-revoke],[data-sk-look]');
+      if (!t) return;
+      try {
+        if (t.dataset.skLook) return skOpenDrawer(t.dataset.skLook);
+        if (t.dataset.skAllow) {
+          if (!await confirmDialog({ title: '允許含腳本的技能？', message: '允許後會請 AI 同步，把這一版的腳本放進它的技能資料夾；執行時照它工具本身的權限。新版要重新允許。', confirmText: '允許並同步' })) return;
+          await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/${encodeURIComponent(t.dataset.skAllow)}`, { method: 'PUT', body: { allow: true } });
+          await draw(); return openSkillSync({ run: [ai.participantId], onDone: () => draw().catch(() => {}) });
+        }
+        if (t.dataset.skRevoke) {
+          await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills/${encodeURIComponent(t.dataset.skRevoke)}`, { method: 'PUT', body: { allow: false } });
+          toast('已收回，按「同步」後會從 AI 的電腦移除'); return draw();
+        }
+        await openSkillSync({ run: [ai.participantId], onDone: () => draw().catch(() => {}) });
+      } catch (err) { toast(err.message); }
+    });
+    try { await draw(); } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+  }
+  // ---------- 技能同步清單：全部同步、每隻 AI 一列看進度 ----------
+  const SY_ST = { waiting: ['等叫醒', 'wait'], running: ['同步中…', 'run'], done: ['✓ 已裝好', 'ok'], failed: ['✗ 失敗', 'bad'], offline: ['離線（上線後會自動補）', 'off'], noreply: ['10 分鐘沒回應', 'bad'] };
+  const SK_MARK = { latest: ['✓', '最新', 'ok'], new: ['●', '有新版', 'new'], fix: ['⚠', '要處理', 'fix'] };
+  const skMarkHtml = s => `<span class="sk-mk ${SK_MARK[s.state]?.[2] || ''}">${SK_MARK[s.state]?.[0] || ''} ${SK_MARK[s.state]?.[1] || ''}</span>`;
+  // 叫醒過、還在等的（離線的上線後自動補）不再算「要同步」；Token 過期的叫不醒，另外列
+  const SY_PENDING = ['waiting', 'running', 'offline'];
+  const syNeeds = a => a.needs && !a.tokenExpired && ![...SY_PENDING, 'noreply'].includes(a.sync.state); // 沒回應的在該列「再叫一次」
+  const SY_SUM = [['done', '已裝好'], ['running', '同步中'], ['waiting', '叫醒中'], ['offline', '離線（上線後自動補）'], ['noreply', '沒回應'], ['failed', '失敗']];
+  const SY_END = ['done', 'failed', 'idle']; // 離線、10 分鐘沒回應的繼續看（上線後會自動補），清單最多看 15 分鐘
+  // opts.run：要馬上同步的 AI（含腳本的先列出一次允許）；opts.skillId：只列用到這個技能的 AI；opts.onDone：清單關掉或跑完後通知
+  async function openSkillSync({ run = null, skillId = null, onDone = null } = {}) {
+    const body = openModal('技能同步', '<p class="muted small">載入中…</p>', { size: 'narrow', sub: '每隻 AI 一列。按「全部同步」會私訊叫醒每隻 AI，結果自動顯示在這裡；只有失敗才另外私訊你。' });
+    let items = [], step = 'list', pairs = [], runIds = [], timer = 0, until = 0;
+    const load = async () => {
+      items = (await api('/api/skill-sync')).items.filter(a => (skillId ? a.skills.some(s => s.skillId === skillId) : a.skills.length || a.removed.length));
+    };
+    let sending = false;
+    const needs = () => items.filter(syNeeds);
+    // 已通知：叫醒過還在等的，加上這次叫過、已有結果的；Token 過期的不算
+    const notified = () => items.filter(a => !a.tokenExpired && (SY_PENDING.includes(a.sync.state) || a.sync.state === 'noreply' || (runIds.includes(a.aiId) && ['done', 'failed'].includes(a.sync.state))));
+    const stText = a => {
+      const st = a.sync.state;
+      if (a.tokenExpired && a.needs) return `<span class="sy-st bad">Token 已過期，重發後才會同步 <button type="button" class="link small" data-sy-reissue="${esc(a.aiId)}">重發 Token</button></span>`;
+      if (SY_ST[st] && (st !== 'done' || runIds.includes(a.aiId) || a.needs)) {
+        const v = skillId && st === 'done' ? a.skills.find(s => s.skillId === skillId) : null;
+        const label = st === 'offline' && a.sync.requestedAt ? `離線 · 已通知 ${maWhen(a.sync.requestedAt).replace(/^今天 /, '')}，上線後自動裝` : SY_ST[st][0]; // 看得出是剛通知還是很久以前
+        return `<span class="sy-st ${SY_ST[st][1]}">${label}${v ? ` v${v.version}` : ''}${st === 'noreply' || st === 'failed' ? ` <button type="button" class="link small" data-sy-again="${esc(a.aiId)}">再叫一次</button>` : ''}</span>`;
+      }
+      const fix = a.skills.some(s => s.state === 'fix');
+      return `<span class="sy-st ${a.needs ? (fix ? 'fix' : 'new') : 'ok'}">${a.needs ? (fix ? '⚠ 要處理' : '● 有新版') : '✓ 最新'}</span>`;
+    };
+    const rowHtml = a => `<div class="sy-row" data-sy="${esc(a.aiId)}">
+        <div class="sy-main"><b>${esc(a.name)}</b>
+          <span class="sy-sk">${a.skills.map(s => `<span title="${esc(s.why)}">${esc(s.name)} v${s.version} ${skMarkHtml(s)}</span>`).join('')}${a.removed.length ? `<span>要移除：${esc(a.removed.join('、'))}</span>` : ''}</span>
+          ${a.sync.state === 'failed' && a.sync.lastLine ? `<span class="sy-why error">${esc(a.sync.lastLine)}</span>` : ''}
+          ${a.skills.filter(s => s.state === 'fix').slice(0, 1).map(s => `<span class="sy-why warn-text">⚠ ${esc(s.why)}</span>`).join('')}
+        </div>${stText(a)}</div>`;
+    const draw = () => {
+      if (!body.isConnected) return;
+      if (step === 'allow') {
+        body.innerHTML = `<p><b>這幾個技能含腳本，要你允許才會裝</b>（預設全勾，取消勾選的這次不裝）：</p>
+          <div class="sy-allow">${pairs.map((p, i) => `<label class="check"><input type="checkbox" data-sy-pair="${i}" checked> ${esc(p.skill.name)} 第 ${p.skill.version} 版（腳本 ${p.skill.scripts} 個）→ ${esc(p.ai.name)} <button type="button" class="link small" data-sk-look="${esc(p.skill.skillId)}">看腳本</button></label>`).join('')}</div>
+          <p class="muted small">允許後腳本會放進 AI 的技能資料夾，執行時照它工具本身的權限。新版要重新允許。</p>
+          <div class="row"><button type="button" class="btn" data-sy-cancel>取消</button><button type="button" class="btn primary" data-sy-go>允許並同步</button></div>`;
+        return;
+      }
+      // 頂部寫結果（已通知幾隻、各在哪一步）；按鈕：叫醒中… → 全部同步（N 隻）／已通知 N 隻（等上線）
+      const n = needs().length, nf = notified(), wait = nf.filter(a => SY_PENDING.includes(a.sync.state)), exp = items.filter(a => a.tokenExpired && a.needs).length;
+      const sum = SY_SUM.map(([k, t]) => [nf.filter(a => a.sync.state === k).length, t]).filter(([c]) => c).map(([c, t]) => `${c} 隻${t}`).join('、');
+      const parts = [n ? `<b>${n} 隻要同步</b>` : '', nf.length ? `<span data-sy-sum>已通知 ${nf.length} 隻：${sum}</span>` : '', exp ? `<span class="error">${exp} 隻 Token 已過期</span>` : ''].filter(Boolean);
+      const btn = sending ? '<button type="button" class="btn primary" data-sy-all disabled>叫醒中…</button>'
+        : n ? `<button type="button" class="btn primary" data-sy-all>全部同步（${n} 隻）</button>`
+        : wait.length ? `<button type="button" class="btn" data-sy-wait disabled>已通知 ${wait.length} 隻（${wait.some(a => a.sync.state === 'offline') ? '等上線' : '同步中'}）</button>` : '';
+      body.innerHTML = `${items.length ? `<div class="sy-top"><span class="muted small sy-sum" role="status">${items.length} 隻 AI · ${parts.length ? parts.join(' · ') : '都是最新'}</span><span class="grow"></span>${btn}</div>
+        <div class="sy-list">${items.map(rowHtml).join('')}</div>` : '<p class="muted">你的 AI 目前沒有要裝的技能。</p>'}`;
+    };
+    const poll = () => {
+      clearTimeout(timer);
+      if (!body.isConnected) return onDone?.();
+      if (Date.now() > until || items.filter(a => runIds.includes(a.aiId)).every(a => SY_END.includes(a.sync.state))) return onDone?.();
+      // 只讀這次在跑的幾隻（少讀幾列），合併回清單
+      timer = setTimeout(async () => {
+        try { for (const x of (await api('/api/skill-sync?ids=' + encodeURIComponent(runIds.join(',')))).items) { const i = items.findIndex(a => a.aiId === x.aiId); if (i >= 0) items[i] = x; } draw(); } catch {}
+        poll();
+      }, 4000);
+    };
+    const send = async (ids, allow = []) => {
+      sending = true; if (step === 'list') draw(); // 按下去立刻看得到
+      let r;
+      try { r = await api('/api/skill-sync', { method: 'POST', body: { aiIds: ids, allow } }); } finally { sending = false; }
+      runIds = [...new Set([...runIds, ...ids])];
+      for (const x of r.items) { const i = items.findIndex(a => a.aiId === x.aiId); if (i >= 0) items[i] = x; else items.push(x); }
+      step = 'list'; until = Date.now() + 15 * 60_000; draw(); poll();
+    };
+    // 開始同步：含腳本還沒允許的先列出來一次允許
+    const start = async ids => {
+      const ais = items.filter(a => ids.includes(a.aiId));
+      pairs = ais.flatMap(ai => ai.skills.filter(s => s.hasScripts && !s.allowed).map(skill => ({ ai, skill })));
+      if (pairs.length) { runIds = ids; step = 'allow'; return draw(); }
+      await send(ids);
+    };
+    body.addEventListener('click', async e => {
+      const t = e.target.closest('[data-sy-all],[data-sy-again],[data-sy-go],[data-sy-cancel],[data-sk-look],[data-sy-reissue]');
+      if (!t) return;
+      try {
+        if (t.dataset.skLook) { e.preventDefault(); return skOpenDrawer(t.dataset.skLook); }
+        if (t.dataset.syReissue) { // Token 過期的，重發後把新 Token 換給它，再按同步
+          const a = items.find(x => x.aiId === t.dataset.syReissue);
+          if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發', message: `重發後，<b>${esc(a?.name || '')}</b> 目前的 Token 會立即失效，需要把新 Token 換給它；換好後再按同步。` })) return;
+          const r = await api(`/api/my-ais/${encodeURIComponent(t.dataset.syReissue)}/reissue`, { method: 'POST' });
+          loadParticipants().catch(() => {}); onDone?.();
+          return openTokenOnly(r);
+        }
+        if (t.hasAttribute('data-sy-all')) return sending ? undefined : await start(needs().map(a => a.aiId));
+        if (t.dataset.syAgain) return await send([t.dataset.syAgain]);
+        if (t.hasAttribute('data-sy-cancel')) { step = 'list'; runIds = []; return draw(); }
+        if (t.hasAttribute('data-sy-go')) {
+          t.disabled = true;
+          const allow = [...body.querySelectorAll('[data-sy-pair]')].filter(c => c.checked).map(c => ({ aiId: pairs[+c.dataset.syPair].ai.aiId, skillId: pairs[+c.dataset.syPair].skill.skillId }));
+          return await send(runIds, allow);
+        }
+      } catch (err) { toast(err.message); t.disabled = false; draw(); }
+    });
+    try { await load(); } catch (e) { body.innerHTML = `<p class="error">${esc(e.message)}</p>`; return; }
+    const ids = run ? items.filter(a => run.includes(a.aiId)).map(a => a.aiId) : [];
+    if (ids.length) { try { await start(ids); } catch (e) { toast(e.message); draw(); } } else draw();
+  }
+
+  // 成員與權限 › 技能分頁
+  function permSkillsHtml() {
+    skv.modal = false;
+    skv.redraw = () => { if (state.page === 'perm' && perm.tab === 'skills') drawPerm(); };
+    return skillsViewHtml();
+  }
+
+  // ---------- 長期授權（只有「部署到正式環境」） ----------
+  const twYmd = ms => new Date(ms + 8 * 3600_000).toISOString().slice(0, 10).replace(/-/g, '/');
+  function quarterEnd(now = Date.now()) { const tw = new Date(now + 8 * 3600_000), next = Math.floor(tw.getUTCMonth() / 3) * 3 + 3; return Date.UTC(tw.getUTCFullYear(), next, 1) - 8 * 3600_000 - 1; }
+  function grantsBlock(ai, active) {
+    const g = ai.grants || { items: [] };
+    const body = !ai.grantable
+      ? '<p class="muted small">部署、遷移、git 一律每次在本機問，不開放長期授權。</p>'
+      : g.items.length ? `<p class="small">${g.items.map(i => esc(i.label)).join('、')}<span class="muted">（${g.until ? `到 ${twYmd(Date.parse(g.until))}` : '不限期'}）</span></p>`
+      : '<p class="muted small">沒有。部署、遷移、git 都每次在本機問你。</p>';
+    return `<div class="ai-grants${ai.grantable ? '' : ' off'}"><div class="ai-grants-head"><b>長期授權</b>${active && ai.grantable ? `<button class="btn small" type="button" data-act="grants" data-id="${esc(ai.participantId)}">設定</button>` : ''}</div>${body}</div>`;
+  }
+  async function openGrants(ai, redraw) {
+    let g;
+    try { g = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/grants`); } catch (err) { return toast(err.message); }
+    const cur = g.items.map(i => i.key), q = quarterEnd(), d30 = Date.now() + 30 * 86_400_000;
+    const sel = cur.length && !g.until ? 'none' : 'quarter';
+    const body = openModal(`長期授權 · ${ai.name}`, `<form id="gr-form" class="stack">
+        <p class="muted small">勾了的事，AI 不用每次在本機問你；沒勾的照舊先問。只有你（所屬人類）能改。</p>
+        <fieldset class="gr-items"><legend class="field-label">可以長期授權的事</legend>
+          ${g.choices.map(c => `<label class="gr-ck"><input type="checkbox" name="items" value="${esc(c.key)}" ${cur.includes(c.key) ? 'checked' : ''}><span>${esc(c.label)}${c.note ? `<small>${esc(c.note)}</small>` : ''}</span></label>`).join('')}
+        </fieldset>
+        <label class="field">有效到<select name="until">
+            <option value="quarter" ${sel === 'quarter' ? 'selected' : ''}>本季底（${twYmd(q)}）</option>
+            <option value="30d">30 天（到 ${twYmd(d30)}）</option>
+            <option value="none" ${sel === 'none' ? 'selected' : ''}>不限</option></select>
+          <span class="field-hint">到期自動失效，AI 回到每次都問。${cur.length ? `目前：${g.until ? `到 ${twYmd(Date.parse(g.until))}` : '不限期'}` : ''}</span></label>
+        <div class="warn-box small gr-never">固定每次都問：${esc(g.alwaysAsk)}。<br>不能長期授權：${esc(g.never)}。</div>
+        <p class="error" id="gr-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="gr-form">儲存</button>' });
+    body.querySelector('#gr-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = e.target, items = [...f.querySelectorAll('[name=items]:checked')].map(x => x.value);
+      try {
+        await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/grants`, { method: 'PUT', body: { items, until: f.until.value } });
+        closeModal();
+        toast('已儲存長期授權');
+        await redraw?.();
+        const pj = (ai.projects || []).filter(p => PROJECTS.includes(p));
+        askNotifyAis([ai], '[通知] 你的長期授權已更新，請重新讀 GET /api/me（grants）。', pj.length === 1 ? pj[0] : 'all');
+      } catch (err) { body.querySelector('#gr-err').textContent = err.message; }
+    });
+  }
+  // 改了程式庫或長期授權後，問要不要通知相關 AI（只寫「已更新，請重讀 /api/me」）
+  async function askNotifyAis(ais, text, project) {
+    const list = ais.filter(Boolean);
+    if (!list.length) return;
+    const names = list.map(a => a.name).join('、');
+    if (!await confirmDialog({ title: '要不要通知相關 AI？', confirmText: '通知', cancelText: '不用',
+      message: `已接入的 AI 不會自動知道這次的修改。要發一則訊息給 <b>${esc(names)}</b> 嗎？<br><span class="muted small">內容：${esc(text)}</span>` })) return;
+    try {
+      await api('/api/messages', { method: 'POST', body: { text, recipientIds: list.map(a => a.participantId), project, requestId: newRequestId() } });
+      toast(`已通知 ${names}`);
+    } catch (err) { toast('沒有通知成功：' + err.message); }
+  }
+  // 專案程式庫連結（管理員、該專案 leader）
+  function repoLine(p, canEdit, { code = true } = {}) {
+    const r = p.repo;
+    return `<div class="pm-repo small">${code ? `<span>API 代號：<b>${esc(p.id)}</b></span>` : ''}<span class="pm-repo-url">${r ? `程式庫：<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>${r.branch ? `（分支 ${esc(r.branch)}）` : ''}` : '<span class="muted">還沒有程式庫連結</span>'}</span>${canEdit ? `<button type="button" class="link small" data-pm-repo="${esc(p.id)}">程式庫設定</button>` : ''}</div>`;
+  }
+  function openRepoEditor(pj) {
+    const p = state.projectList.find(x => x.id === pj);
+    if (!p) return;
+    const r = p.repo || {};
+    const body = openModal(`程式庫設定 · ${p.name}`, `<form id="repo-form" class="stack">
+        <p class="small">專案名稱 <b>${esc(p.name)}</b><br><span class="muted">API 代號：<b>${esc(p.id)}</b>（AI 發訊息、查卡片用這個，不能改）</span></p>
+        <label class="field">程式庫連結（選填）<input name="url" maxlength="300" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/帳號/專案" value="${esc(r.url || '')}"></label>
+        <label class="field">分支（選填）<input name="branch" maxlength="100" autocomplete="off" spellcheck="false" placeholder="main" value="${esc(r.branch || '')}"></label>
+        <ul class="muted small repo-hints"><li>只放連結，不放帳號密碼或 Token；網址含帳密或 token 會被擋下。</li><li>改了之後，這個專案 AI 的接入設定下次複製就會帶上；已接入的 AI 不會自動知道，存檔後可以通知它們。</li><li>只有管理員和這個專案的 leader 能改。</li></ul>
+        <p class="error" id="repo-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="repo-form">儲存</button>' });
+    body.querySelector('#repo-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        await api(`/api/projects/${encodeURIComponent(pj)}/repo`, { method: 'PUT', body: { url: f.url.value.trim(), branch: f.branch.value.trim() } });
+        closeModal();
+        await loadProjectList().catch(() => {});
+        drawPerm();
+        toast('已儲存程式庫設定');
+        const ais = [...state.participants.values()].filter(x => x.memberType === 'ai' && !x.deleted && (x.projects || []).includes(pj));
+        askNotifyAis(ais, `[通知] 專案「${p.name}」（API 代號 ${p.id}）的程式庫設定已更新，請重新讀 GET /api/me（repos）。`, pj);
+      } catch (err) { body.querySelector('#repo-err').textContent = err.message; }
+    });
+  }
+
+  // 角色範本：常用的排前面，其餘收進「其他角色」群組（只是選單分組，角色定義不變；既有成員的角色照常顯示已選）
+  const COMMON_ROLES = ['PO', 'SM', 'BA', 'UX', 'PG', 'QA', 'TRY', 'custom'];
+  function roleOptionsHtml(roles) {
+    const opt = r => `<option value="${esc(r.key)}">${esc(r.option)}</option>`;
+    const builtIn = roles.filter(r => !r.project);
+    const common = COMMON_ROLES.map(k => builtIn.find(r => r.key === k)).filter(Boolean);
+    const other = builtIn.filter(r => !COMMON_ROLES.includes(r.key));
+    // 本專案角色分組；最後「＋ 跟 AI 討論新角色…」（leader／管理員）
+    const pjs = [...new Set(roles.filter(r => r.project).map(r => r.project))];
+    const mine = pjs.map(pj => `<optgroup label="本專案角色（${esc(projName(pj))}）">${roles.filter(r => r.project === pj).map(opt).join('')}</optgroup>`).join('');
+    const tail = myProjects().some(canMakeRole) ? '<option value="__ai">＋ 跟 AI 討論新角色…</option>' : '<option value="__ai_no" disabled>新角色請 leader 建立</option>';
+    return common.map(opt).join('') + (other.length ? `<optgroup label="其他角色">${other.map(opt).join('')}</optgroup>` : '') + mine + tail;
+  }
+  // 新角色建在哪個專案——看表單勾的所屬專案（沒勾或勾的不能建就看全部能建的）；在專案裡用那個專案；
+  // 只剩一個就用它，兩個以上回 null 讓人選（原本默默用第一個＝平台）
+  const roleAiPjs = (checked = []) => { const can = myProjects().filter(canMakeRole), pick = checked.filter(p => can.includes(p)); return pick.length ? pick : can; };
+  const roleAiPj = (checked = []) => { const c = roleAiPjs(checked), pv = projectView(); return c.includes(pv) ? pv : c.length === 1 ? c[0] : null; };
+  function pickRoleAiPj(pjs) {
+    if (!pjs.length) return Promise.resolve(null);
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: '新角色要建在哪個專案？', size: 'narrow',
+        body: `<p class="muted small">新角色只屬於一個專案，只有那個專案的成員能選。</p><div class="proj-row">${pjs.map(p => `<button class="btn" type="button" data-rp="${esc(p)}">${esc(projName(p))}</button>`).join('')}</div>`,
+        foot: '<button class="btn" type="button" data-close>取消</button>' });
+      document.body.appendChild(host);
+      const done = v => { host.remove(); document.removeEventListener('keydown', esc_, true); resolve(v); };
+      const esc_ = e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+      document.addEventListener('keydown', esc_, true);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-rp]'); if (b) done(b.dataset.rp); else if (e.target.closest('[data-close]')) done(null); });
+    });
+  }
+  // AI 屬於哪些專案（新增、編輯都能勾）；只列自己在的專案，不在的灰掉寫原因；跨專案角色固定在所有專案
+  function aiProjField(ai) {
+    const cross = ai && state.projMeta.crossRoleIds.includes(ai.participantId);
+    const has = p => (ai ? (ai.projects || []).includes(p) : myProjects().length === 1 || p === projectView()); // 在專案裡新增預設這個專案
+    const boxes = PROJECTS.map(p => myProjects().includes(p)
+      ? `<label class="chk"><input type="checkbox" name="proj" value="${esc(p)}" ${has(p) ? 'checked' : ''} ${cross ? 'disabled' : ''}> ${esc(projName(p))}</label>`
+      : `<label class="chk off"><input type="checkbox" disabled> ${esc(projName(p))}<span class="muted small">（你不在這個專案）</span></label>`).join('');
+    return `<div class="field"><span class="field-label">所屬專案（至少選一個）</span>
+      <div class="proj-row new-ai-proj">${myProjects().length ? boxes : '<span class="muted small">你還沒有加入任何專案，請群組管理員把你加入專案。</span>'}</div>
+      <span class="field-hint">${cross ? '這個 AI 是跨專案角色，固定在所有專案（由管理員在「成員與權限」設定）。' : '改了專案，這個 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
+  }
+  async function openAiForm(ai) {
+    const { items: baseRoles, fields } = await loadRoles();
+    const editing = !!ai;
+    // 加上自己所在專案的本專案角色（AI 已在用、但停用的也列出，免得選單空掉）
+    const pjRole = (d, pj) => ({ ...d, option: `${d.key}：${d.role}${d.status === 'disabled' ? '（已停用）' : ''}`, suffix: `${d.role}助手`, project: pj, projects: [pj] });
+    const roles = [...baseRoles, ...myProjects().flatMap(pj => projRoleDefs(pj, true).filter(d => d.status !== 'disabled' || (editing && ai.roleKey === d.key)).map(d => pjRole(d, pj)))];
+    const body = openModal(editing ? '編輯 AI' : '新增 AI', `
+      <form id="ai-form" class="stack">
+        <label>角色範本
+          <select name="roleKey">${roleOptionsHtml(roles)}</select>
+          <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
+        </label>
+        ${aiProjField(ai)}
+        <div class="two-col">
+          <div class="field">
+            <label>角色顯示名稱<input name="role" required maxlength="30"></label>
+            <div class="avatar-row compact">
+              <span class="av-48" id="ai-avatar-preview"></span>
+              <div><b>頭像</b><span class="muted small">未設定時顯示角色代碼</span></div>
+              <button class="btn small" type="button" id="ai-avatar-change">更換</button>
+              <input type="hidden" name="avatar">
+            </div>
+          </div>
+        </div>
+        <hr>
+        <div><div class="group-title flush">AI 設定六題</div><span class="field-hint">皆為必填，每題上限 1000 字。</span></div>
+        <label>1. AI 名稱<input name="name" required maxlength="40"></label>
+        ${fields.map(f => `<label class="ta-field"><span class="ta-head"><span>${esc(f.label)}</span><span class="counter" data-count="${f.key}">0/1000</span></span><textarea autocomplete="off" autocorrect="on" name="${f.key}" rows="4" required maxlength="1000"></textarea></label>`).join('')}
+        <p class="error" id="ai-error" role="alert"></p>
+      </form>`, {
+      size: 'form',
+      foot: `<button class="btn" type="button" data-close>取消</button>
+             <button class="btn primary" type="submit" form="ai-form">${editing ? '儲存變更' : '建立 AI'}</button>`,
+    });
+    const form = body.querySelector('#ai-form');
+    const counts = () => { for (const f of fields) body.querySelector(`[data-count="${f.key}"]`).textContent = `${form[f.key].value.length}/1000`; };
+    // 頭像圖片：existing＝沿用已上傳的、new＝這次新選的、none＝不用圖片
+    const img = { state: editing && ai.avatarImg ? 'existing' : 'none', blob: null, url: null };
+    const autoText = () => form.roleKey.value !== 'custom' ? form.roleKey.value : [...(form.role.value || 'AI')].slice(0, 2).join('');
+    const preview = () => {
+      const p = { memberType: 'ai', roleKey: form.roleKey.value, role: form.role.value, avatar: form.avatar.value.trim() };
+      if (img.state === 'new') p.imgUrl = img.url;
+      if (img.state === 'existing') Object.assign(p, { participantId: ai.participantId, avatarImg: ai.avatarImg });
+      body.querySelector('#ai-avatar-preview').innerHTML = avatar(p);
+    };
+    body.querySelector('#ai-avatar-change').onclick = async () => {
+      const cur = { text: form.avatar.value, imgUrl: img.state === 'new' ? img.url : img.state === 'existing' ? await avatarUrl(ai.participantId, ai.avatarImg) : null };
+      const aiRow = editing ? { askLabel: '請它幫自己做', prevPath: `/api/my-ais/${encodeURIComponent(ai.participantId)}/avatar/prev` } : null;
+      const r = await avatarDialog({ title: '更換 AI 頭像', isAi: true, fallback: autoText(), cur, aiRow });
+      if (!r || r.kind === 'keep') return;
+      if (r.kind === 'ask') return askAvatar([state.participants.get(ai.participantId) || ai], '幫你自己做一個頭像：');
+      if (r.kind === 'revert') {
+        try {
+          const v = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/avatar/revert`, { method: 'POST' });
+          Object.assign(ai, { avatar: v.avatar, avatarImg: v.avatarImg });
+          form.avatar.value = v.avatar || '';
+          Object.assign(img, { state: v.avatarImg ? 'existing' : 'none', blob: null, url: null });
+          preview(); await loadParticipants(); renderMessages(false);
+          toast('已換回上一張頭像');
+        } catch (err) { toast(err.message); }
+        return;
+      }
+      if (r.kind === 'img') Object.assign(img, { state: 'new', blob: r.blob, url: r.url });
+      else { form.avatar.value = r.text; Object.assign(img, { state: 'none', blob: null, url: null }); }
+      preview();
+    };
+    const fill = (src, includeName) => {
+      form.role.value = src.role;
+      if (includeName) form.name.value = src.name;
+      for (const f of fields) form[f.key].value = src[f.key];
+      counts();
+    };
+    const roleHint = key => {
+      const r = roles.find(x => x.key === key);
+      body.querySelector('#role-hint').textContent = (editing ? '切換範本會覆蓋下方六題內容（名稱不變）。' : '選取後自動預填下方六題，可再修改。')
+        + (r?.resident === false ? '試用者不常駐，被叫醒才跑一輪；回饋只發給 PO。' : '');
+      return r;
+    };
+    // 範本帶預設專案（試用者只勾平台）；換回沒有預設專案的範本時，恢復原本的預設勾選
+    let projAuto = false;
+    const applyRoleProjects = r => {
+      if (editing || (!r?.projects && !projAuto)) return;
+      form.querySelectorAll('input[name="proj"]').forEach(c => { c.checked = r?.projects ? r.projects.includes(c.value) : myProjects().length === 1; });
+      projAuto = !!r?.projects;
+    };
+    if (editing) {
+      form.roleKey.value = ai.roleKey || 'custom';
+      fill(ai, true);
+      roleHint(form.roleKey.value);
+    } else {
+      const r = roleHint(roles[0].key);
+      fill({ ...r, name: `${state.me.name}的${r.suffix}` }, true);
+    }
+    if (editing) form.avatar.value = ai.avatar || '';
+    preview();
+    let lastAutoName = form.name.value;
+    let prevKey = form.roleKey.value;
+    form.roleKey.addEventListener('change', async e => {
+      if (form.roleKey.value === '__ai') { form.roleKey.value = prevKey; e.stopImmediatePropagation(); const checked = [...form.querySelectorAll('input[name="proj"]:checked')].map(c => c.value); const pj = roleAiPj(checked) || await pickRoleAiPj(roleAiPjs(checked)); if (pj) askRoleAi(pj); return; }
+      prevKey = form.roleKey.value;
+      const r = roleHint(form.roleKey.value);
+      const autoName = `${state.me.name}的${r.suffix}`;
+      // 名稱若還是自動產生的就一起換；使用者改過就保留
+      const keepName = editing || form.name.value !== lastAutoName;
+      fill({ ...r, name: autoName }, !keepName);
+      applyRoleProjects(r);
+      if (!keepName) lastAutoName = autoName;
+    });
+    form.addEventListener('input', () => { counts(); preview(); });
+    form.roleKey.addEventListener('change', preview);
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form));
+      delete data.proj;
+      for (const [k, v] of Object.entries(data)) data[k] = v.trim();
+      const picked = [...form.querySelectorAll('input[name="proj"]:checked:not(:disabled)')].map(i => i.value);
+      if (!editing) {
+        data.projects = picked;
+        if (!data.projects.length) return toast('請至少選一個所屬專案');
+      } else if (!state.projMeta.crossRoleIds.includes(ai.participantId) && myProjects().length) {
+        // 編輯時改了專案：先看影響（移出的專案有幾張卡會退回待處理）再確認
+        const before = (ai.projects || []).filter(p => PROJECTS.includes(p));
+        const next = [...picked, ...before.filter(p => !myProjects().includes(p))]; // 自己不在的專案不動
+        if (!next.length) return toast('請至少選一個所屬專案');
+        if (next.slice().sort().join() !== before.slice().sort().join()) {
+          try {
+            const d = await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: { projects: next, dryRun: true } });
+            const im = d.impact?.[0];
+            if (im?.removed.length && !await confirmDialog({ title: '移出專案？', confirmText: '確定移出', danger: true,
+              message: `${esc(ai.name)} 將移出「${esc(im.removed.map(projName).join('、'))}」${im.returnedCards.length ? `，它負責的 <b>${im.returnedCards.length} 張卡</b>（${esc(im.returnedCards.join('、'))}）會退回待處理、改為未指派` : '，它在那邊沒有負責的卡'}。` })) return;
+          } catch (err) { body.querySelector('#ai-error').textContent = err.message; return; }
+          data.projects = next;
+        }
+      }
+      try {
+        const saved = editing ? await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data })
+          : await api('/api/my-ais', { method: 'POST', body: data });
+        if (img.state === 'new') {
+          const res = await fetch(`/api/my-ais/${saved.participantId}/avatar`, { method: 'PUT', headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': img.blob.type }, body: img.blob });
+          if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error?.message || '頭像上傳失敗');
+        } else if (img.state === 'none' && editing && ai.avatarImg) {
+          await api(`/api/my-ais/${saved.participantId}/avatar`, { method: 'DELETE' });
+        }
+        loadParticipants().then(() => renderMessages(false)).catch(() => {});
+        if (state.page === 'myai' || state.page === 'team') closeModal(); // 頁面模式：先關表單再重畫清單
+        await openMyAi();
+        if (editing) toast('已儲存'); else openTokenOnly(saved, true); // Token 只有現在看得到
+      } catch (err) { body.querySelector('#ai-error').textContent = err.message; }
+    });
+  }
+
+  // 通知收件匣
+  // 收件匣：有新訊息通知時更新（徽章只算「要你處理」，由 updateTodoBadge 負責；在收件匣頁時順便更新「給你知道的」）
+  async function refreshInboxCount() {
+    try {
+      if ((state.newMsgAt || 0) >= (work.notesAt || 0) || Date.now() - (work.notesAt || 0) > (dm.waitUntil > Date.now() ? 60_000 : (hubJoin.items || []).some(p => p.status === 'pending') ? 30_000 : 300_000)) { await loadNotes(); if (state.page === 'inbox') renderWork(); if ((work.notes || []).some(n => n.dm)) dm.waitUntil = 0; } // 只在送出私訊、AI 還沒回的 30 分鐘內每分鐘看一次；其他時間照舊 5 分鐘 // ：沒新訊息就不重抓；徽章要算要你回覆，所以每頁都更新
+      updateTodoBadge();
+    } catch {}
+  }
+
+  async function openInbox() {
+    const body = openModal('通知', '<div id="inbox-list"></div>', {
+      sub: '<span id="inbox-sub">載入中…</span>',
+      actions: '<button class="btn small" type="button" id="ack-all" hidden>全部標為已處理</button>',
+    });
+    const ack = ids => api('/api/notifications/ack', { method: 'POST', body: { notificationIds: ids } });
+    const ackAll = body.modal.querySelector('#ack-all');
+    let ids = [];
+    async function draw() {
+      const d = await api('/api/notifications?status=pending&limit=50&order=desc');
+      ids = d.items.map(n => n.notificationId);
+      body.modal.querySelector('#inbox-sub').textContent = d.items.length ? (d.hasMore ? `共 ${d.total} 則待處理，只顯示最新 50 則` : `${d.items.length} 則待處理`) : '沒有待處理的通知';
+      ackAll.hidden = !d.items.length;
+      const reasonTag = { mention: '<span class="tag me">指定給我</span>', reply: '<span class="tag reply">回覆我</span>', all: '<span class="tag all">全體通知</span>' };
+      body.querySelector('#inbox-list').innerHTML = d.items.length ? d.items.map(n => {
+        if (n.sender.system) n = { ...n, preview: dmGist(n.preview, true) }; // 平台通知寫一句白話
+        const who = noteWho(n);
+        return `
+          <div class="inbox-row">
+            ${avatar(who)}
+            <div class="inbox-main">
+              <div class="inbox-top"><b>${esc(n.sender.name)}</b>${n.reasons.map(r => reasonTag[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></div>
+              <div class="inbox-preview">${esc(n.preview)}</div>
+              <div class="row"><button class="btn primary small" type="button" data-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">查看</button>
+                <button class="btn small" type="button" data-ack="${esc(n.notificationId)}">標為已處理</button></div>
+            </div>
+          </div>`;
+      }).join('') : '<p class="muted">沒有待處理的通知。</p>';
+    }
+    body.modal.addEventListener('click', async e => {
+      try {
+        if (e.target.closest('#ack-all')) await ack(ids);
+        else if (e.target.closest('[data-ack]')) await ack([e.target.closest('[data-ack]').dataset.ack]);
+        else if (e.target.closest('[data-goto]')) {
+          const g = e.target.closest('[data-goto]');
+          await ack([g.dataset.n]);
+          closeModal();
+          refreshInboxCount();
+          return jumpTo(g.dataset.goto);
+        } else return;
+        await draw();
+        refreshInboxCount();
+      } catch (err) { toast(err.message); }
+    });
+    await draw();
+  }
+
+  // ---------- 上傳文件 ----------
+  const FILE_EXTS = ['pdf', 'docx', 'xlsx', 'pptx', 'md', 'txt', 'png', 'jpg', 'jpeg'];
+  const MAX_FILE = 2 * 1024 * 1024;
+  const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(1)} GB`;
+  const fileIcon = ext => ({ pdf: '📕', docx: '📘', xlsx: '📗', pptx: '📙', png: '🖼️', jpg: '🖼️', jpeg: '🖼️' }[ext] || '📄');
+  // 上傳者本人，或上傳者是我名下的 AI → 可刪除
+  const canDeleteFile = f => f.uploaderId === meId() || myAiIds().has(f.uploaderId);
+  const leftText = iso => {
+    const min = Math.max(0, Math.round((new Date(iso) - Date.now()) / 60000));
+    return min >= 60 ? `剩 ${Math.floor(min / 60)} 小時 ${min % 60} 分鐘` : `剩 ${min} 分鐘`;
+  };
+
+  // 附檔訊息：只顯示上傳者的附註，自動產生的「[文件] …」由卡片呈現
+  function fileNoteHtml(text) {
+    const i = text.indexOf('[文件] ');
+    const note = i > 0 ? text.slice(0, i).trim() : '';
+    return note ? `<div class="msg-text">${renderText(note)}</div>` : '';
+  }
+
+  function fileCardHtml(f) {
+    if (!f.available) return '<div class="file-card gone">📄 文件已過期或已刪除</div>';
+    return `
+      <div class="file-card" data-file="${esc(f.fileId)}">
+        <span class="file-icon" aria-hidden="true">${fileIcon(f.ext)}</span>
+        <div class="file-info">
+          <b class="file-name">${esc(f.name)}</b>
+          <span class="muted small">${fmtBytes(f.size)} <span class="file-ok">✓ 已聲明不含程式碼與個資</span></span>
+          <details class="file-more"><summary>詳細</summary><span class="muted small">到期 ${fmtTime(f.expiresAt)} · SHA-256 ${esc(f.sha256.slice(0, 12))}…（給稽核用）</span></details>
+        </div>
+        <button class="btn" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
+        ${canDeleteFile(f) ? `<button class="btn danger-outline" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
+      </div>`;
+  }
+
+  const downloadFile = (id, name) => downloadFrom(`/api/files/${encodeURIComponent(id)}`, name);
+  async function downloadFrom(path, name) { // 專案文件區也用這支
+    try {
+      const r = await fetch(path, { headers: { Authorization: `Bearer ${state.token}` } });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e?.error?.message || `HTTP ${r.status}`);
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) { toast('下載失敗：' + err.message); }
+  }
+
+  async function deleteFileById(id) {
+    if (!await confirmDialog({ title: '刪除文件？', confirmText: '刪除', danger: true, message: '刪除後所有人都無法再下載這個文件。' })) return false;
+    try {
+      await api(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      toast('已刪除');
+      // 讓訊息中的卡片同步顯示為已刪除
+      for (const m of state.messages) if (m.file?.fileId === id) m.file = { fileId: id, available: false };
+      renderMessages(false);
+      return true;
+    } catch (err) { toast(err.message); return false; }
+  }
+
+  document.addEventListener('click', e => {
+    const d = e.target.closest('[data-download]');
+    if (d) return downloadFile(d.dataset.download, d.dataset.name);
+    const x = e.target.closest('[data-delete-file]');
+    if (x) deleteFileById(x.dataset.deleteFile).then(ok => { if (ok && x.closest('.modal')) openFiles(); });
+  });
+
+  // 選檔 → 聲明 → 上傳
+  $('#attach').addEventListener('click', () => $('#file-input').click());
+  $('#file-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (file) openUpload(file);
+  });
+
+  // 在輸入框 Ctrl+V 貼上截圖 → 走同一個上傳流程（先預覽、可取消、每張都要重新勾聲明）
+  input.addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.items || [])].filter(it => it.kind === 'file' && /^image\/(png|jpeg)$/.test(it.type)).map(it => it.getAsFile()).filter(Boolean);
+    if (!files.length) return; // 純文字照舊貼上
+    e.preventDefault();
+    if (files.length > 1) toast('一次只能貼一張截圖，先處理第一張');
+    const f = files[0], ext = f.type === 'image/jpeg' ? 'jpg' : 'png', d = new Date(), p = n => String(n).padStart(2, '0');
+    const name = `截圖-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+    openUpload(new File([f], name, { type: f.type }));
+  });
+
+  // @ 成員選單（上傳視窗的附註欄用）：輸入 @ 跳出清單，↑↓ 移動、Enter／Tab／點選插入、Esc 關閉
+  function attachMention(ta, list, { candidates = mentionCandidates } = {}) {
+    let st = null;
+    const close = () => { st = null; list.hidden = true; };
+    const render = () => {
+      list.innerHTML = mentionItemsHtml(st.items, st.index, mentionScope() || projectView());
+      list.hidden = false;
+      scrollPicked(list);
+    };
+    const update = () => {
+      const pos = ta.selectionStart, m = ta.value.slice(0, pos).match(/@([^\s@]*)$/);
+      if (!m) return close();
+      const items = candidates(m[1]);
+      if (!items.length) return close();
+      st = { start: pos - m[0].length, end: pos, items, index: 0 };
+      render();
+    };
+    ta.openMention = update; // 「＠ 加人」按鈕插入 @ 後直接開選單
+    const pick = i => {
+      noteRecentAt(st.items[i]);
+      const insert = '@' + st.items[i].name + ' ';
+      ta.value = ta.value.slice(0, st.start) + insert + ta.value.slice(st.end);
+      const caret = st.start + insert.length;
+      close(); ta.focus(); ta.setSelectionRange(caret, caret);
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    ta.addEventListener('input', update);
+    ta.addEventListener('click', update);
+    ta.addEventListener('blur', () => setTimeout(close, 150));
+    ta.addEventListener('keydown', e => {
+      if (!st || e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); st.index = (st.index + (e.key === 'ArrowDown' ? 1 : st.items.length - 1)) % st.items.length; return render(); }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pick(st.index); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    });
+    list.addEventListener('mousedown', e => { const li = e.target.closest('li[data-i]'); if (li && st) { e.preventDefault(); pick(Number(li.dataset.i)); } });
+  }
+
+  function openUpload(file) {
+    const isImg = /^image\//.test(file.type);
+    const previewUrl = isImg ? URL.createObjectURL(file) : '';
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    let problem = '';
+    if (!FILE_EXTS.includes(ext)) problem = `不允許的檔案類型「.${ext}」，只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg。`;
+    else if (file.size > MAX_FILE) problem = `檔案 ${fmtBytes(file.size)} 超過 2 MB 上限。`;
+    const body = openModal('上傳文件', `
+      <div class="file-box"><span class="file-icon">${fileIcon(ext)}</span>
+        <div class="file-info"><b class="file-name">${esc(file.name)}</b><span class="muted small">${fmtBytes(file.size)}</span></div></div>
+      ${isImg && !problem ? `<img class="up-preview" alt="截圖預覽" src="${previewUrl}">` : ''}
+      ${problem ? `<div class="warn-box red">${esc(problem)}</div>` : `
+      <div class="warn-box">上傳到平台後，所有群組成員都能下載，1 小時後自動刪除。${isImg ? '截圖請先確認沒有客戶資料。' : ''}</div>
+      <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea autocomplete="off" autocorrect="on" id="up-note" rows="3" maxlength="1500" placeholder="例如：@林志明的程式開發助手 這是今天的會議紀錄"></textarea></div></label>
+      <p class="mention-warn" id="up-warn" role="status" hidden></p>
+      <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>
+      <p class="error" id="up-error" role="alert"></p>`}`, problem ? {} : {
+      foot: `<button class="btn" type="button" data-close>取消</button>
+             <button class="btn primary" type="button" id="up-go" disabled>上傳</button>`,
+    });
+    body.querySelector('.up-preview')?.addEventListener('load', () => URL.revokeObjectURL(previewUrl));
+    if (problem) { if (previewUrl) URL.revokeObjectURL(previewUrl); return; }
+    attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'));
+    body.querySelector('#up-note').addEventListener('input', e => { const w = body.querySelector('#up-warn'), t = outsideText(outsideMentions(e.target.value)); w.textContent = t; w.hidden = !t; });
+    const go = body.modal.querySelector('#up-go');
+    body.querySelector('#up-declare').addEventListener('change', e => { go.disabled = !e.target.checked; });
+    go.addEventListener('click', async () => {
+      go.disabled = true; go.textContent = '上傳中…';
+      const note = body.querySelector('#up-note').value.trim();
+      const q = new URLSearchParams({ name: file.name, declared: 'true' });
+      if (note) q.set('text', note);
+      const rec = note ? resolveRecipients(note) : {};
+      if (rec.audience) q.set('audience', 'all');
+      if (rec.recipientIds) q.set('recipientIds', rec.recipientIds.join(','));
+      if (state.replyTo) q.set('replyToMessageId', state.replyTo.messageId);
+      q.set('project', sendTarget());
+      try {
+        const r = await fetch(`/api/files?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: file });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+        closeModal();
+        setReply(null);
+        onNewMessage(data.message);
+        toast('已上傳，群組已發出附檔訊息');
+      } catch (err) {
+        body.querySelector('#up-error').textContent = '上傳失敗：' + err.message;
+        go.disabled = false; go.textContent = '上傳';
+      }
+    });
+  }
+
+  // 文件頁：在專案裡分兩個分頁——「專案文件」（長期保存、資料夾、可多選上傳）與「訊息附件」（1 小時後刪除）
+  // 總覽、跨專案頻道沒有專案文件區，只有訊息附件
+  const filesUi = { tab: 'docs', folder: null, pj: null, data: null };
+  const DOC_MAX = 20 * 1024 * 1024;
+  async function openFiles() {
+    const pj = projectView(), hasDocs = PROJECTS.includes(pj);
+    if (filesUi.pj !== pj) { filesUi.pj = pj; filesUi.folder = null; }
+    const tab = hasDocs ? filesUi.tab : 'att';
+    const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
+    const body = openModal('文件', `${tabs}<div id="files-list" class="stack"></div>`, {
+      sub: tab === 'docs' ? `${esc(projName(pj))} 的共用文件，不會自動刪除` : '上傳 1 小時後自動刪除',
+      actions: tab === 'docs' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>',
+    });
+    body.querySelectorAll('[data-files-tab]').forEach(b => { b.onclick = () => { filesUi.tab = b.dataset.filesTab; openFiles(); }; });
+    if (tab === 'docs') return drawDocs(body, pj);
+    body.modal.querySelector('#files-up').onclick = () => $('#file-input').click();
+    try {
+      const d = await api('/api/files');
+      const pct = Math.min(100, d.usedBytes / d.limitBytes * 100);
+      body.querySelector('#files-list').innerHTML = `
+        <p class="muted small">只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg，單檔 2 MB 以內，禁止程式碼與客戶個資。</p>
+        <div class="usage"><div class="usage-bar"><span style="width:${pct.toFixed(1)}%"></span></div>
+          <span class="muted small">已用 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}</span></div>
+        <div class="file-list">${(d.items = d.items.filter(f => inView(f.project))).length ? d.items.map(f => `
+          <div class="file-row">
+            <span class="file-icon" aria-hidden="true">${fileIcon(f.ext)}</span>
+            <div class="file-info">
+              <b class="file-name">${esc(f.name)}</b>
+              <span class="muted small">${fmtBytes(f.size)} · ${leftText(f.expiresAt)}</span>
+              <span class="muted small">${esc(f.uploader?.name || '?')}${f.uploader?.memberType === 'ai' ? '（AI）' : ''} · ${fmtTime(f.createdAt)}</span>
+            </div>
+            <button class="btn small" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
+            ${canDeleteFile(f) ? `<button class="btn small danger-outline" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
+          </div>`).join('') : '<p class="muted">目前沒有文件。按右上角「上傳」或輸入框旁的 📎。</p>'}</div>
+        <details class="audit"><summary>稽核紀錄</summary><div id="audit-list" class="muted small">載入中…</div></details>`;
+      body.querySelector('details.audit').addEventListener('toggle', async e => {
+        if (!e.target.open) return;
+        const box = body.querySelector('#audit-list');
+        try {
+          const a = await api('/api/files/audit?limit=200');
+          const label = { upload: '上傳', download: '下載', delete: '刪除', reject: '拒絕', expire: '到期清除', rename: '改名', move: '搬移' };
+          box.innerHTML = (a.scope === 'mine' ? '<p class="muted small">只顯示你所屬專案的檔案紀錄與你自己的操作；全站稽核限群組管理員。</p>' : '') + (a.items.length ? `<div class="table-scroll"><table class="audit-table"><thead><tr><th>時間</th><th>動作</th><th>操作者</th><th>檔名</th><th>大小</th><th>SHA-256</th><th>聲明</th><th>備註</th></tr></thead><tbody>${
+            a.items.map(x => `<tr><td>${fmtTime(x.at)}</td><td>${label[x.action] || x.action}</td>
+              <td>${esc(x.actor.name || x.actor.participantId || '')}${x.actor.memberType === 'ai' ? '（AI）' : x.actor.memberType === 'human' ? '（人類）' : ''}</td>
+              <td>${esc(x.name || '')}</td><td>${x.size == null ? '' : fmtBytes(x.size)}</td>
+              <td>${x.sha256 ? esc(x.sha256.slice(0, 12)) + '…' : ''}</td><td>${x.declared == null ? '' : x.declared ? '✓' : '✗'}</td>
+              <td>${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></div>` : '沒有紀錄。');
+        } catch (err) { box.textContent = err.message; }
+      });
+    } catch (err) {
+      body.querySelector('#files-list').innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    }
+  }
+
+  // ---------- 專案文件區 ----------
+  const docFolderPath = (folders, id) => { const f = folders.find(x => x.folderId === id); if (!f) return []; const p = f.parentId ? folders.find(x => x.folderId === f.parentId) : null; return p ? [p, f] : [f]; };
+  async function drawDocs(body, pj) {
+    const box = body.querySelector('#files-list');
+    let d;
+    try { d = filesUi.data = await api(`/api/projects/${encodeURIComponent(pj)}/docs`); }
+    catch (err) { box.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+    if (filesUi.folder && !d.folders.some(f => f.folderId === filesUi.folder)) filesUi.folder = null;
+    const cur = filesUi.folder, trail = docFolderPath(d.folders, cur);
+    const subs = d.folders.filter(f => (f.parentId || null) === cur);
+    const docs = d.items.filter(x => (x.folderId || null) === cur);
+    const count = id => d.items.filter(x => x.folderId === id).length + d.folders.filter(f => f.parentId === id).length;
+    const crumbs = [cur ? `<button type="button" class="link" data-doc-go="">${esc(projName(pj))}</button>` : `<b>${esc(projName(pj))}</b>`,
+      ...trail.map((f, i) => (i === trail.length - 1 ? `<b>${esc(f.name)}</b>` : `<button type="button" class="link" data-doc-go="${esc(f.folderId)}">${esc(f.name)}</button>`))];
+    const acts = (kind, id) => (d.canWrite ? ['rename', 'move', 'delete'].map(a => `<button class="btn small${a === 'delete' ? ' danger-outline' : ''}" type="button" data-doc-act="${a}" data-kind="${kind}" data-id="${esc(id)}">${{ rename: '改名', move: '搬移', delete: '刪除' }[a]}</button>`).join('') : '');
+    box.innerHTML = `
+      ${d.enabled ? '' : '<div class="warn-box">這個環境還沒開通專案文件區的儲存空間（Cloudflare R2），暫時不能上傳。請群組管理員開通。</div>'}
+      ${d.canWrite ? '' : '<p class="muted small">你在這個專案是唯讀：可以看、下載，不能上傳或整理。</p>'}
+      <div class="docs-bar">
+        <nav class="docs-crumbs" aria-label="資料夾位置">${crumbs.join('<span class="crumb-sep" aria-hidden="true">▸</span>')}</nav>
+        <span class="docs-btns">${d.canWrite && d.enabled ? '<button class="btn small primary" type="button" data-doc-act="upload">上傳（可多選）</button>' : ''}${d.canWrite && trail.length < d.maxFolderDepth ? '<button class="btn small" type="button" data-doc-act="mkdir">新資料夾</button>' : ''}</span>
+      </div>
+      <input type="file" id="docs-input" multiple accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
+      <div class="file-list">
+        ${subs.map(f => `<div class="file-row doc-row">
+          <span class="file-icon" aria-hidden="true">📁</span>
+          <button type="button" class="file-info doc-open" data-doc-go="${esc(f.folderId)}"><b class="file-name">${esc(f.name)}</b><span class="muted small">${count(f.folderId)} 項</span></button>
+          <span class="doc-acts">${acts('folder', f.folderId)}</span></div>`).join('')}
+        ${docs.map(x => `<div class="file-row doc-row">
+          <span class="file-icon" aria-hidden="true">${fileIcon(x.ext)}</span>
+          <div class="file-info"><b class="file-name">${esc(x.name)}</b>
+            <span class="muted small">${fmtBytes(x.size)} · ${esc(x.uploader?.name || '?')}${x.uploader?.memberType === 'ai' ? '（AI）' : ''} · ${fmtTime(x.updatedAt)}</span></div>
+          <span class="doc-acts"><button class="btn small" type="button" data-doc-act="download" data-kind="doc" data-id="${esc(x.docId)}">下載</button>${acts('doc', x.docId)}</span></div>`).join('')}
+        ${subs.length || docs.length ? '' : `<p class="muted">${cur ? '這個資料夾是空的。' : '還沒有文件。'}${d.canWrite && d.enabled ? '按「上傳（可多選）」一次放多個檔。' : ''}</p>`}
+      </div>
+      <p class="muted small">只有本專案成員看得到。單檔 ${fmtBytes(d.maxFileBytes)} 以內，只收 pdf、docx、xlsx、pptx、md、txt、png、jpg，禁止程式碼與客戶個資；資料夾最多 ${d.maxFolderDepth} 層。這個專案已用 ${fmtBytes(d.projectBytes)}（全部專案 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}）。</p>
+      <details class="audit"><summary>異動紀錄</summary><div id="docs-log" class="muted small">載入中…</div></details>`;
+    box.querySelector('#docs-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files); });
+    box.querySelector('details.audit').addEventListener('toggle', async e => {
+      if (!e.target.open) return;
+      const log = box.querySelector('#docs-log');
+      try {
+        const ev = (await api(`/api/projects/${encodeURIComponent(pj)}/events?limit=100`)).items.filter(x => /文件|資料夾/.test(x.text));
+        log.innerHTML = ev.length ? `<ul class="docs-log">${ev.map(x => `<li>${fmtTime(x.at)}　${esc(x.text)}</li>`).join('')}</ul>` : '還沒有紀錄。';
+      } catch (err) { log.textContent = err.message; }
+    });
+    box.onclick = e => {
+      const go = e.target.closest('[data-doc-go]');
+      if (go) { filesUi.folder = go.dataset.docGo || null; return openFiles(); }
+      const b = e.target.closest('[data-doc-act]');
+      if (b) docAction(pj, b.dataset.docAct, b.dataset.kind, b.dataset.id);
+    };
+  }
+  async function docAction(pj, act, kind, id) {
+    const d = filesUi.data, base = `/api/projects/${encodeURIComponent(pj)}`;
+    const item = kind === 'folder' ? d.folders.find(f => f.folderId === id) : d.items.find(x => x.docId === id);
+    const path = kind === 'folder' ? `${base}/doc-folders/${encodeURIComponent(id)}` : `${base}/docs/${encodeURIComponent(id)}`;
+    try {
+      if (act === 'upload') return $('#docs-input').click();
+      if (act === 'download') return downloadFrom(item.downloadUrl, item.name);
+      if (act === 'mkdir') {
+        const name = await promptName('新資料夾', '', { label: '資料夾名稱', max: 50, hint: filesUi.folder ? '建在目前的資料夾裡（最多兩層）' : '建在最上層' });
+        if (!name) return;
+        await api(`${base}/doc-folders`, { method: 'POST', body: { name, parentId: filesUi.folder } });
+        toast('已建立資料夾');
+      } else if (act === 'rename') {
+        const name = await promptName(kind === 'folder' ? '資料夾改名' : '文件改名', item.name, { label: '新名稱', max: kind === 'folder' ? 50 : 120, hint: kind === 'folder' ? '' : '副檔名不能改，沒寫會自動補上' });
+        if (!name || name === item.name) return;
+        await api(path, { method: 'PATCH', body: { name } });
+        toast('已改名');
+      } else if (act === 'move') {
+        const to = await pickFolder(kind, item, d);
+        if (to === undefined) return;
+        await api(path, { method: 'PATCH', body: kind === 'folder' ? { parentId: to } : { folderId: to } });
+        toast('已搬移');
+      } else if (act === 'delete') {
+        if (!await confirmDialog({ title: kind === 'folder' ? '刪除資料夾？' : '刪除文件？', confirmText: '刪除', danger: true,
+          message: kind === 'folder' ? `刪除資料夾「${esc(item.name)}」。資料夾要先清空才能刪。` : `刪除「${esc(item.name)}」後，專案成員都無法再下載（異動紀錄會留著）。` })) return;
+        await api(path, { method: 'DELETE' });
+        toast('已刪除');
+      }
+      openFiles();
+    } catch (err) { toast(err.message); }
+  }
+  // 搬到哪裡：文件可放最上層或任一資料夾；資料夾只能放最上層或第一層資料夾（裡面還有資料夾的只能放最上層）
+  function pickFolder(kind, item, d) {
+    const label = f => docFolderPath(d.folders, f.folderId).map(x => x.name).join(' ▸ ');
+    const curId = (kind === 'folder' ? item.parentId : item.folderId) || null;
+    const hasSub = kind === 'folder' && d.folders.some(f => f.parentId === item.folderId);
+    const opts = [{ id: null, label: '最上層' }, ...d.folders.filter(f => kind === 'doc' || (!hasSub && !f.parentId && f.folderId !== item.folderId)).map(f => ({ id: f.folderId, label: label(f) }))].filter(o => o.id !== curId);
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: `搬移「${item.name}」`, size: 'narrow',
+        body: opts.length ? `<div class="pick-list" role="radiogroup" aria-label="搬到">${opts.map((o, i) => `<label class="pick-row"><input type="radio" name="pf" value="${i}"${i ? '' : ' checked'}>${esc(o.label)}</label>`).join('')}</div>${hasSub ? '<p class="muted small">裡面還有資料夾，只能放最上層（最多兩層）。</p>' : ''}` : '<p class="muted">沒有其他可以放的地方。</p>',
+        foot: `<button class="btn" type="button" data-pf="0">取消</button>${opts.length ? '<button class="btn primary" type="button" data-pf="1">搬移</button>' : ''}` });
+      document.body.appendChild(host);
+      holdBackdrop(host.firstElementChild);
+      const done = ok => { const i = Number(host.querySelector('input[name=pf]:checked')?.value); host.remove(); resolve(ok && opts[i] ? opts[i].id : undefined); };
+      host.addEventListener('click', e => { const b = e.target.closest('[data-pf]'); if (b) done(b.dataset.pf === '1'); else if (e.target.closest('[data-close]')) done(false); });
+      host.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+      (host.querySelector('input[name=pf]') || host.querySelector('[data-pf]')).focus();
+    });
+  }
+  // 多選上傳：先在本機擋掉類型、大小不對的，勾一次聲明，一個一個送，每個檔旁邊寫成功或失敗原因
+  function uploadDocs(pj, files) {
+    const folder = filesUi.folder, d = filesUi.data;
+    const where = folder ? docFolderPath(d.folders, folder).map(f => f.name).join(' ▸ ') : '最上層';
+    const extOf = f => (f.name.includes('.') ? f.name.split('.').pop() : '').toLowerCase();
+    const pre = files.map(f => ({ f, problem: !FILE_EXTS.includes(extOf(f)) ? `不允許的類型「.${extOf(f)}」` : !f.size ? '檔案是空的' : f.size > d.maxFileBytes ? `${fmtBytes(f.size)} 超過 ${fmtBytes(d.maxFileBytes)} 上限` : '' }));
+    const okN = pre.filter(x => !x.problem).length;
+    const body = openModal('上傳到專案文件', `
+      <p>放到 <b>${esc(projName(pj))} ▸ ${esc(where)}</b>，共 ${files.length} 個檔${okN < files.length ? `（${files.length - okN} 個不能上傳，原因寫在旁邊）` : ''}。</p>
+      <ul class="up-list">${pre.map((x, i) => `<li data-up="${i}"><span class="file-icon" aria-hidden="true">${fileIcon(extOf(x.f))}</span><span class="up-name">${esc(x.f.name)}</span><span class="muted small">${fmtBytes(x.f.size)}</span><span class="up-st${x.problem ? ' bad' : ''}">${x.problem ? '✗ ' + esc(x.problem) : '等待上傳'}</span></li>`).join('')}</ul>
+      ${okN ? `<div class="warn-box">專案文件長期保存、不會自動刪除，本專案成員都能下載。</div>
+      <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認這些檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>` : ''}
+      <p class="small" id="up-sum" role="status"></p>`, {
+      foot: okN ? `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" id="up-go" disabled>上傳 ${okN} 個檔</button>` : '<button class="btn" type="button" data-close>關閉</button>',
+    });
+    const go = body.modal.querySelector('#up-go');
+    if (!go) return;
+    const declare = body.querySelector('#up-declare');
+    declare.addEventListener('change', () => { go.disabled = !declare.checked; });
+    go.addEventListener('click', async () => {
+      go.disabled = true; declare.disabled = true; go.textContent = '上傳中…';
+      let good = 0, bad = 0;
+      for (const [i, x] of pre.entries()) {
+        if (x.problem) { bad++; continue; }
+        const st = body.querySelector(`[data-up="${i}"] .up-st`);
+        st.textContent = '上傳中…';
+        try {
+          const q = new URLSearchParams({ name: x.f.name, declared: 'true' });
+          if (folder) q.set('folderId', folder);
+          const r = await fetch(`/api/projects/${encodeURIComponent(pj)}/docs?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: x.f });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+          st.textContent = '✓ 完成'; st.className = 'up-st good'; good++;
+        } catch (err) { st.textContent = '✗ ' + err.message; st.className = 'up-st bad'; bad++; }
+      }
+      body.querySelector('#up-sum').textContent = `上傳完成 ${good} 個${bad ? `，${bad} 個沒有上傳（原因寫在檔名旁）` : ''}。`;
+      go.remove();
+      const c = body.modal.querySelector('.modal-foot [data-close]'); if (c) c.textContent = '關閉';
+      if (state.page === 'files') openFiles();
+    });
+  }
+
+  // API 資訊
+  function openApi() {
+    const base = location.origin;
+    const ep = (m, path, desc) => `<li><span class="method ${m.toLowerCase()}">${m}</span><div><code>${path}</code><span class="muted small">${desc}</span></div></li>`;
+    const body = openModal('API 資訊與登入碼', `
+      <div class="kv-field"><span class="field-label">API Base URL</span>
+        <div class="copy-row"><code class="val" title="${esc(base)}">${esc(base)}</code><button class="btn small" type="button" data-copy="${esc(base)}">複製</button></div></div>
+      <div class="kv-field"><span class="field-label">本人 participantId</span>
+        <div class="copy-row"><code class="val" title="${esc(meId())}">${esc(meId())}</code><button class="btn small" type="button" data-copy="${esc(meId())}">複製</button></div></div>
+      <div class="kv-field"><span class="field-label">本人登入碼（長期有效）</span>
+        <div class="copy-row"><code class="val" id="my-token">已設定（看不到原文，要用請產生新的）</code><button class="btn small" type="button" id="tok-show">產生新的</button><button class="btn small" type="button" id="tok-copy" hidden>複製</button></div></div>
+      <div class="warn-box red">這是你本人的登入碼，等同密碼：在其他裝置的登入頁選「用登入碼登入」貼上即可用同一身分登入（換裝置比較建議用「我的裝置」的 6 位數配對）。不要給 AI 用；AI 請到「我的 AI」建立專屬身分。平台不保存登入碼原文：要用就產生一組新的，舊的立刻失效，已登入的裝置不受影響；覺得外流了也是再產生一組。</div>
+      <div class="row"><button class="btn" type="button" id="api-qr">用手機掃 QR Code 登入</button><span class="muted small">掃了就以你的身分登入，等同密碼，請勿分享</span></div>
+      <div class="group-title">主要端點</div>
+      <ul class="endpoints">
+        ${ep('GET', '/api/me', '自身身分')}
+        ${ep('GET', '/api/participants', '有效成員與在線狀態')}
+        ${ep('GET', '/api/messages?limit=50&amp;after=&lt;nextCursor&gt;', '增量讀取訊息')}
+        ${ep('GET', '/api/messages/:messageId', '單則訊息')}
+        ${ep('POST', '/api/messages', '發文（text、requestId、project、recipientIds、replyToMessageId、audience）；屬於多個專案要帶 project（專案代號或 all）')}
+        ${ep('GET', '/api/notifications?status=pending&amp;limit=50', '待處理通知')}
+        ${ep('GET', '/api/notifications/count', '未讀通知數')}
+        ${ep('POST', '/api/notifications/ack', '確認通知（notificationIds）')}
+        ${ep('POST', '/api/files?name=&amp;declared=true', '上傳文件（原始位元組）')}
+        ${ep('GET', '/api/files', '文件清單；/api/files/:id 下載')}
+      </ul>
+      <p><a href="/api/docs/ai-integration" target="_blank" rel="noopener">完整規格：AI 代理人接入通訊協定指南</a></p>
+      <div class="group-title">快速測試</div>
+      <code class="block">curl -H "Authorization: Bearer &lt;TOKEN&gt;" ${esc(base)}/api/me</code>`);
+    let code = null;
+    const getCode = async () => { if (code) return code; code = await newLoginCode(); if (code) { body.querySelector('#my-token').textContent = code; body.querySelector('#tok-copy').hidden = false; } return code; }; // 剛產生的才有複製
+    body.querySelector('#tok-show').onclick = async () => { code = null; try { await getCode(); } catch (err) { toast(err.message); } };
+    body.querySelector('#tok-copy').onclick = async () => { try { const c = await getCode(); if (c) toast((await copyText(c)) ? '已複製' : '複製失敗'); } catch (err) { toast(err.message); } };
+    body.querySelector('#api-qr').onclick = () => openQr(); // QR Code 併進 API 資訊與登入碼
+    body.addEventListener('click', async e => {
+      const c = e.target.closest('[data-copy]');
+      if (c) toast((await copyText(c.dataset.copy)) ? '已複製' : '複製失敗');
+    });
+  }
+
+  // 進階設定
+  // 所屬專案：一般成員只能看；群組管理員在「專案管理」調整
+  function projMineHtml() {
+    const rows = [state.me, ...[...state.participants.values()].filter(p => p.ownerParticipantId === meId() && p.status !== 'disabled')];
+    return rows.map(p => `<div class="proj-row"><b>${esc(p.name)}${p.participantId === meId() ? '（我）' : ''}</b><span class="muted small">${(p.projects || []).filter(x => PROJECTS.includes(x)).map(projName).map(esc).join('、') || '尚未加入任何專案'}</span></div>`).join('');
+  }
+
+  // 專案管理（只有群組管理員）：左邊專案清單與異動紀錄，右邊勾選成員
+  function openProjAdmin(selected = state.projectList.find(p => !p.archived)?.id) {
+    const pm = { sel: selected, draft: null, events: [] };
+    const body = openModal('專案管理', '<div class="pa-grid"><section class="pa-col" id="pa-left"></section><section class="pa-col" id="pa-right"></section></div>',
+      { size: 'wide', sub: `僅群組管理員（${esc(state.projMeta.adminName || '')}）可操作` });
+    const people = () => [...state.participants.values()].filter(p => p.status !== 'disabled');
+    const fixed = p => state.projMeta.crossRoleIds.includes(p.participantId);
+    // 跨專案角色一律算在內（固定在所有專案），儲存時順便補齊
+    const resetDraft = () => { pm.draft = new Set(people().filter(p => fixed(p) || (p.projects || []).includes(pm.sel)).map(p => p.participantId)); };
+    async function loadEvents() {
+      pm.events = pm.sel ? (await api(`/api/projects/${encodeURIComponent(pm.sel)}/events?limit=10`).catch(() => ({ items: [] }))).items : [];
+    }
+    function drawLeft() {
+      const rows = state.projectList.map(p => {
+        const blocked = p.openCards > 0;
+        return `<div class="pa-row${p.id === pm.sel ? ' sel' : ''}${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}">
+          <button type="button" class="pa-pick" data-pa="pick" aria-pressed="${p.id === pm.sel}"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}
+            <span class="muted small">成員 ${p.memberCount} · 未結案卡 ${p.openCards}</span></button>
+          ${p.archived ? '<button type="button" class="btn small" data-pa="unarchive">還原</button>'
+            : `<button type="button" class="btn small" data-pa="rename">改名</button>
+               <button type="button" class="btn small danger-outline" data-pa="archive" ${blocked ? `aria-disabled="true" title="還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案"` : ''}>封存</button>`}
+        </div>`;
+      }).join('');
+      const selP = state.projectList.find(p => p.id === pm.sel);
+      body.querySelector('#pa-left').innerHTML = `<div class="pa-head"><b>專案</b></div>${rows}
+        ${state.projectList.some(p => !p.archived && p.openCards) ? '<p class="muted small pa-note">「封存」不能按：還有未結案卡，請先結案或把卡移到別的專案。</p>' : ''}
+        <div class="pm-new"><input id="pa-new-name" maxlength="20" placeholder="新專案名稱" aria-label="新專案名稱"><button type="button" class="btn small primary" data-pa="create">新增專案</button></div>
+        <p class="muted small">${esc(newProjText())}，其他成員請在成員清單勾選加入。</p>
+        ${selP ? `<div class="pa-head"><b>異動紀錄（${esc(selP.name)}）</b></div>
+        <ul class="pa-log">${pm.events.map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul>` : ''}`;
+    }
+    function memberRow(p, archived) {
+      const on = pm.draft.has(p.participantId);
+      const owner = p.memberType === 'ai' ? state.participants.get(p.ownerParticipantId) : null;
+      const ownerOut = owner && !pm.draft.has(owner.participantId);
+      let dis = '', why = '';
+      if (archived) dis = 'disabled';
+      else if (fixed(p)) dis = 'disabled'; // 標籤已說明是跨專案角色
+      else if (ownerOut && !on) { dis = 'disabled'; why = `所屬人類 ${owner.name} 不在此專案`; }
+      const sub = fixed(p) ? '<span class="pill-tag blue">跨專案角色</span>'
+        : !(p.projects || []).filter(x => PROJECTS.includes(x)).length ? '<span class="muted small">· 新加入，尚未指派專案</span>'
+        : '';
+      return `<div class="pa-mem"><span class="pa-mem-name">${esc(p.name)} ${sub}${why ? `<span class="muted small pa-why">${esc(why)}</span>` : ''}</span>
+        <label class="check"><input type="checkbox" data-mem="${esc(p.participantId)}" ${on || fixed(p) ? 'checked' : ''} ${dis}> ${fixed(p) ? '成員（固定）' : '成員'}</label></div>`;
+    }
+    function drawRight() {
+      const selP = state.projectList.find(p => p.id === pm.sel);
+      const box = body.querySelector('#pa-right');
+      if (!selP) { box.innerHTML = '<p class="muted">選一個專案來管理成員。</p>'; return; }
+      const list = people(), humans = list.filter(p => p.memberType === 'human'), ais = list.filter(p => p.memberType === 'ai');
+      box.innerHTML = `<div class="pa-head"><b>${esc(selP.name)} · 成員</b><span class="muted small">勾選＝可看到並參與此專案</span></div>
+        <div class="pa-group">人類</div>${humans.map(p => memberRow(p, selP.archived)).join('')}
+        <div class="pa-group">AI</div>${ais.map(p => memberRow(p, selP.archived)).join('') || '<p class="muted small">沒有 AI</p>'}
+        <p class="muted small pa-note">AI 的專案不能超出所屬人類的專案。一般成員在「進階設定」只能看自己的專案，不能自己加入。取消勾選時，該成員在這個專案負責的未結案卡會退回待處理。</p>
+        ${selP.archived ? '<p class="muted small">專案已封存，請先還原再調整成員。</p>' : '<div class="pa-save"><button type="button" class="btn primary" data-pa="save">儲存</button></div>'}`;
+    }
+    async function refresh() {
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      const m = await api('/api/me').catch(() => null);
+      if (m) state.me = { ...state.me, ...m };
+      if (!state.projectList.some(p => p.id === pm.sel)) pm.sel = state.projectList.find(p => !p.archived)?.id;
+      resetDraft(); await loadEvents(); drawLeft(); drawRight();
+      drawProjSwitch(); renderMessages(false); if (state.page === 'work') renderWork();
+    }
+    body.addEventListener('change', e => {
+      const c = e.target.closest('[data-mem]');
+      if (!c) return;
+      if (c.checked) pm.draft.add(c.dataset.mem); else pm.draft.delete(c.dataset.mem);
+      // 所屬人類被取消時，他名下還沒勾的 AI 要跟著停用；重畫右欄即可
+      if (state.participants.get(c.dataset.mem)?.memberType === 'human') drawRight();
+    });
+    body.addEventListener('click', async e => {
+      const b = e.target.closest('[data-pa]');
+      if (!b) return;
+      const row = b.closest('.pa-row'), id = row?.dataset.pj, act = b.dataset.pa;
+      try {
+        if (act === 'pick') { pm.sel = id; resetDraft(); await loadEvents(); drawLeft(); drawRight(); return; }
+        if (act === 'archive' && b.getAttribute('aria-disabled') === 'true') return toast(b.title);
+        if (act === 'create') {
+          const name = body.querySelector('#pa-new-name').value.trim();
+          if (!name) return toast('請輸入專案名稱');
+          const r = await api('/api/projects', { method: 'POST', body: { name } });
+          pm.sel = r.id; toast(crossNames().length ? `已新增專案，你和 ${crossNames().join('、')} 已加入` : '已新增專案，目前只有你');
+        } else if (act === 'rename') {
+          const p = state.projectList.find(x => x.id === id);
+          const name = await promptName('改名', p?.name || '');
+          if (!name || name === p?.name) return;
+          await api(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } });
+          toast('已改名');
+        } else if (act === 'archive') {
+          if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(id))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以還原。` })) return;
+          await api(`/api/projects/${encodeURIComponent(id)}/archive`, { method: 'POST' });
+          toast('已封存');
+        } else if (act === 'unarchive') {
+          await api(`/api/projects/${encodeURIComponent(id)}/unarchive`, { method: 'POST' });
+          toast('已還原');
+        } else if (act === 'save') {
+          const memberIds = [...pm.draft];
+          const path = `/api/projects/${encodeURIComponent(pm.sel)}/members`;
+          const dry = await api(path, { method: 'PUT', body: { memberIds, dryRun: true } });
+          if (!dry.impact.length) return toast('沒有變更');
+          const back = dry.impact.filter(x => x.returnedCards.length);
+          if (back.length && !await confirmDialog({ title: '移出成員？', confirmText: '確認儲存', danger: true,
+            message: back.map(x => `<b>${esc(x.name)}</b> 負責的 ${x.returnedCards.length} 張卡（${esc(x.returnedCards.join('、'))}）會退回待處理、改為未指派。`).join('<br>') })) return;
+          await api(path, { method: 'PUT', body: { memberIds } });
+          toast(`已更新 ${projName(pm.sel)} 的成員`);
+        }
+        await refresh();
+      } catch (err) { toast(err.message); }
+    });
+    resetDraft();
+    loadEvents().then(() => { drawLeft(); drawRight(); });
+    drawLeft(); drawRight();
+  }
+  // 小對話框：輸入名稱（改名用）
+  // ---------- 成員與權限（第一層，只有管理員）----------
+  // 分頁 成員｜專案｜邀請；成員分頁裡再分「依專案／依成員」（memView）
+  const perm = { tab: 'members', memView: 'byProject', moreOpen: null, invites: null, draft: new Map(), events: {}, openLog: null, pq: '', mq: '', selProj: null, selMember: null, picker: false, pickSel: new Set(), pickQ: '', addOpen: false, mobileDetail: false };
+  const permDirty = () => perm.draft.size > 0;
+  // 新專案一開始的成員＝建立者＋目前的跨專案角色（不寫死 PO、SM）
+  const crossNames = () => state.projMeta.crossRoleIds.filter(x => x !== meId()).map(x => state.participants.get(x)?.name).filter(Boolean);
+  const newProjText = () => { const n = crossNames(); return n.length ? `新專案一開始只有你與跨專案角色（${n.join('、')}）` : '新專案一開始只有你'; };
+  function permLeave(go) {
+    confirmDialog({ title: '還有沒儲存的變更', confirmText: '放棄變更並離開', danger: true, message: `成員與權限有 <b>${perm.draft.size} 位成員</b>的變更還沒儲存，離開後會不見。` })
+      .then(ok => { if (ok) go(); });
+  }
+  const permPeople = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && p.status !== 'deleted' && p.memberType !== 'system');
+  const permBase = p => ({ projects: new Set((p.projects || []).filter(x => PROJECTS.includes(x))), cross: state.projMeta.crossRoleIds.includes(p.participantId), leaders: new Set(PROJECTS.filter(pj => leadersOf(pj).includes(p.participantId))), roles: new Map(Object.entries(p.projectRoles || {}).filter(([, v]) => v)) });
+  const sameRoles = (a, b) => [...new Set([...a.keys(), ...b.keys()])].every(k => (a.get(k) || '') === (b.get(k) || ''));
+  const permCanEdit = pj => isAdmin() || myLeadProjects().includes(pj); // leader 只能改自己當 leader 的專案欄
+  const permCur = p => perm.draft.get(p.participantId) || permBase(p);
+  const sameSet = (a, b) => a.size === b.size && [...a].every(x => b.has(x));
+  function permSet(p, next) {
+    const b = permBase(p);
+    next.leaders = new Set([...(next.leaders || b.leaders)].filter(pj => next.cross || next.projects.has(pj))); // 移出專案，leader 身分一起拿掉
+    // 角色沿用目前的；移出的專案角色清掉、原本就在的專案恢復原角色
+    next.roles = new Map(next.roles || permCur(p).roles || b.roles);
+    for (const pj of PROJECTS) { const inNow = next.cross || next.projects.has(pj); if (!inNow) next.roles.delete(pj); else if (!next.roles.has(pj) && (b.cross || b.projects.has(pj)) && b.roles.has(pj) && !(permCur(p).cross || permCur(p).projects.has(pj))) next.roles.set(pj, b.roles.get(pj)); }
+    if (next.cross === b.cross && (next.cross || sameSet(next.projects, b.projects)) && sameSet(next.leaders, b.leaders) && sameRoles(next.roles, b.roles)) perm.draft.delete(p.participantId);
+    else perm.draft.set(p.participantId, next);
+  }
+  // AI 所屬人類不在那個專案時鎖住（以畫面上的變更後狀態判斷）
+  function ownerBlocks(p, pj) {
+    if (p.memberType !== 'ai') return '';
+    const o = state.participants.get(p.ownerParticipantId);
+    if (!o) return '找不到所屬人類';
+    const oc = permCur(o);
+    return oc.cross || oc.projects.has(pj) ? '' : `所屬人類 ${o.name} 不在${projName(pj)}，AI 的專案不能超出所屬人類`;
+  }
+  function permSummary() {
+    const out = [];
+    for (const [id, d] of perm.draft) {
+      const p = state.participants.get(id), b = permBase(p);
+      if (d.cross !== b.cross) out.push(`${p.name}${d.cross ? '設為' : '取消'}跨專案角色`);
+      if (!d.cross) {
+        for (const x of d.projects) if (!b.projects.has(x) || b.cross) out.push(`${p.name}加入${projName(x)}`);
+        if (!b.cross) for (const x of b.projects) if (!d.projects.has(x)) out.push(`${p.name}離開${projName(x)}`);
+      }
+      for (const x of PROJECTS) if ((d.roles?.get(x) || '') !== (b.roles.get(x) || '') && (d.cross || d.projects.has(x))) out.push(`${p.name}在${projName(x)}的角色改成${d.roles?.get(x) || '未設定'}`);
+      for (const x of d.leaders || []) if (!b.leaders.has(x)) out.push(`${p.name}成為${projName(x)} leader`);
+      for (const x of b.leaders) if (!(d.leaders || new Set()).has(x)) out.push(`${p.name}不再是${projName(x)} leader`);
+    }
+    return out;
+  }
+  // 專案再多都只看一個專案或一個人；兩種檢視共用 perm.draft 與底部變更列
+  const narrowPerm = () => matchMedia('(max-width: 899px)').matches;
+  matchMedia('(max-width: 899px)').addEventListener('change', () => { if (state.page === 'perm') drawPerm(); }); // 視窗跨過手機寬（旋轉、拉窄）時換版面
+  const permProjects = () => (isAdmin() ? PROJECTS : myLeadProjects());
+  const inProj = (p, pj) => { const c = permCur(p); return c.cross || c.projects.has(pj); };
+  const pmGhost = (p, pj) => p.memberType === 'human' && p.participantId === state.projMeta.adminId && !permCur(p).roles?.get(pj); // 照草稿的角色判斷
+  const pmMember = (p, pj) => inProj(p, pj) && !pmGhost(p, pj);
+  const ownerOf = p => state.participants.get(p.ownerParticipantId);
+  const permSub = p => (p.memberType === 'ai' ? L(`${ownerOf(p)?.name || ''}的`, `${ownerOf(p)?.name || ''}'s`) : '');
+  const pmSw = (on, attrs, chg, label, extra = '') => `<button type="button" class="pm-sw${chg ? ' chg' : ''}" role="switch" aria-checked="${on}" aria-label="${esc(label)}" ${attrs} ${extra}></button>`;
+  const projChanges = pj => [...perm.draft.keys()].filter(id => {
+    const p = state.participants.get(id), d = perm.draft.get(id), b = permBase(p);
+    return (b.cross || b.projects.has(pj)) !== (d.cross || d.projects.has(pj)) || (d.leaders || b.leaders).has(pj) !== b.leaders.has(pj);
+  }).length;
+  function permAdd(p, pj) { const c = permCur(p); permSet(p, { projects: new Set([...c.projects, pj]), cross: c.cross, leaders: c.leaders }); }
+  function permRemove(p, pj) {
+    const c = permCur(p), np = new Set(c.projects); np.delete(pj);
+    permSet(p, { projects: np, cross: c.cross, leaders: c.leaders });
+    // 人類移出時，他在這個專案的 AI 一併移出（列在「這次會移出」看得到）
+    if (p.memberType === 'human') for (const a of permPeople().filter(a => a.memberType === 'ai' && a.ownerParticipantId === p.participantId && !permCur(a).cross && permCur(a).projects.has(pj))) permRemove(a, pj);
+  }
+  function permSetRole(p, pj, v) { const c = permCur(p), r = new Map(c.roles || permBase(p).roles); if (v) r.set(pj, v); else r.delete(pj); permSet(p, { projects: new Set(c.projects), cross: c.cross, leaders: c.leaders, roles: r }); }
+  const roleChanged = (p, pj) => (permCur(p).roles?.get(pj) || '') !== (permBase(p).roles.get(pj) || '');
+  // 人類：可改就下拉，不能改就顯示文字；AI：角色跟著 AI 設定，固定
+  function permRoleHtml(p, pj) {
+    if (p.memberType !== 'human') return `<span class="pm-role-tag">${esc(p.role || '')}</span><span class="muted small">${state.projMeta.crossRoleIds.includes(p.participantId) ? '跨專案角色' : '固定'}</span>`;
+    const v = permCur(p).roles?.get(pj) || '';
+    if (!permCanEdit(pj)) return `<span class="pm-role-tag${v ? '' : ' empty'}">${esc(v || '未設定')}</span>`;
+    return roleSelectHtml(v, `data-pm-role="${esc(p.participantId)}" data-pj="${esc(pj)}"`, { changed: roleChanged(p, pj), label: `${p.name} 在${projName(pj)}的角色`, pj, ai: false });
+  }
+  function permStar(p, pj) { const c = permCur(p), l = new Set(c.leaders || permBase(p).leaders); if (l.has(pj)) l.delete(pj); else l.add(pj); permSet(p, { projects: new Set(c.projects), cross: c.cross, leaders: l }); }
+  // 誰能移出：管理員全部（跨專案角色除外）；leader 只能動自己的專案，不能動管理員與自己
+  const canRemove = (p, pj) => permCanEdit(pj) && !permCur(p).cross && (isAdmin() || (p.participantId !== state.projMeta.adminId && p.participantId !== meId()));
+  // 共用的小元件
+  const permView = () => (isAdmin() ? perm.memView : 'byProject'); // leader 只有依專案
+  const pmViewSeg = () => (isAdmin() ? `<div class="seg-scope full pm-view" role="group" aria-label="檢視方式">${[['byProject', '依專案'], ['byMember', '依成員']].map(([k, t]) => `<button type="button" data-pm-view="${k}" aria-pressed="${perm.memView === k}">${t}</button>`).join('')}</div>` : '');
+  const pmLock = why => `<span class="pm-lock" role="img" aria-label="${esc(why)}" title="${esc(why)}">🔒</span>`;
+  const pmHead = first => `<thead><tr><th scope="col">${first}</th><th scope="col" class="c-role">角色</th><th scope="col" class="c-lead">leader</th><th scope="col" class="c-act">移出</th></tr></thead>`;
+  const pmGrp = t => `<tr class="pm-grp-tr"><td colspan="4">${t}</td></tr>`;
+  // leader 欄：只有人類；管理員本人「—」；管理員可切 ★／☆，其他人唯讀
+  function pmLeadCell(p, pj) {
+    const c = permCur(p), b = permBase(p), lead = (c.leaders || b.leaders).has(pj), lchg = lead !== b.leaders.has(pj);
+    if (p.memberType !== 'human') return '<span class="muted">—</span>';
+    if (p.participantId === state.projMeta.adminId) return '<span class="muted" title="管理員本來就能管所有專案">—</span>';
+    if (isAdmin() && !c.cross) return `<button type="button" class="pm-star on-${lead}${lchg ? ' chg' : ''}" data-pm-star="${esc(p.participantId)}" data-pj="${esc(pj)}" aria-pressed="${lead}" aria-label="${esc(p.name)} 是${esc(projName(pj))}的 leader" title="${lead ? '取消 leader' : '設為 leader'}">${lead ? '★' : '☆'}</button>`;
+    return lead ? '<span class="pm-star-ro" aria-label="leader">★</span>' : '<span class="muted">—</span>';
+  }
+  function pmActCell(p, pj, crossWhere) {
+    const c = permCur(p);
+    if (p.participantId === state.projMeta.adminId) return pmLock('管理員自動在所有專案');
+    if (c.cross) return pmLock(`跨專案角色自動在所有專案；要移出請先${crossWhere}關掉跨專案角色`);
+    if (canRemove(p, pj)) return `<button type="button" class="pm-x" data-pm-rm="${esc(p.participantId)}" data-pj="${esc(pj)}" aria-label="把 ${esc(p.name)} 移出${esc(projName(pj))}" title="移出">✕</button>`;
+    return p.participantId === meId() ? pmLock('自己不能移出') : '<span class="muted">—</span>';
+  }
+  const pmRoleCell = (p, pj, q = '') => (p.memberType === 'human' ? permRoleHtml(p, pj) : `<span class="pm-ai-role">${markQ(p.role || '', q)}${p.roleKey && p.roleKey !== p.role ? ` <span class="muted small">(${markQ(p.roleKey, q)})</span>` : ''}</span>`);
+  // 人類列的「一般／👁 唯讀」；AI 跟著主人（只顯示）
+  function pmRoCell(p, pj, isNew) {
+    const ro = roOf(p.participantId, pj);
+    if (p.memberType !== 'human') return ro ? '<span class="pill-tag ro-tag" title="主人在這個專案是唯讀，AI 跟著唯讀">👁 唯讀</span>' : '';
+    const can = permCanEdit(pj) && !isNew && p.participantId !== state.projMeta.adminId && !leadersOf(pj).includes(p.participantId);
+    if (!can) return ro ? '<span class="pill-tag ro-tag">👁 唯讀</span>' : '';
+    return `<button type="button" class="pm-ro-btn${ro ? ' on' : ''}" data-pm-ro="${esc(p.participantId)}" data-pj="${esc(pj)}" aria-pressed="${ro}" title="${ro ? '改回一般成員' : '設成唯讀：只能看，不能發訊息或操作'}">${ro ? '👁 唯讀' : '設唯讀'}</button>`;
+  }
+  async function permSetRo(id, pj, on, { confirm = true } = {}) {
+    const p = state.participants.get(id);
+    const cur = PROJECTS.filter(x => roOf(id, x)), next = on ? [...new Set([...cur, pj])] : cur.filter(x => x !== pj);
+    const changes = [{ id, readOnlyIn: next }];
+    const dry = await api('/api/members/matrix', { method: 'PUT', body: { changes, dryRun: true } });
+    const back = (dry.roChanges || []).flatMap(c => c.returnedCards);
+    if (confirm && !await confirmDialog({ title: on ? `把 ${p?.name} 設成唯讀？` : `把 ${p?.name} 改回一般成員？`, confirmText: on ? '設成唯讀' : '改回一般', danger: on && back.length > 0,
+      message: on ? `在「<b>${esc(projName(pj))}</b>」只能看：不能發訊息、回覆、建卡改卡、交接、上傳或私訊；他名下的 AI 在這個專案也跟著唯讀。${back.length ? `<br>他和名下 AI 負責的 <b>${back.length}</b> 張卡會退回待處理：${esc(back.join('、'))}` : ''}` : `在「<b>${esc(projName(pj))}</b>」恢復一般權限。` })) return false;
+    await api('/api/members/matrix', { method: 'PUT', body: { changes } });
+    return true;
+  }
+  function permByProjectHtml() {
+    const all = permProjects();
+    if (!all.includes(perm.selProj)) perm.selProj = all[0] || null;
+    const pj = perm.selProj, admin = isAdmin(), q = perm.pq.trim().toLowerCase();
+    const list = all.filter(x => !q || projName(x).toLowerCase().includes(q));
+    const left = `<section class="pm-col pm-list" aria-label="專案清單"><div class="pm-search">${pmViewSeg()}<input id="pm-pq" type="search" placeholder="搜尋專案（${all.length} 個）" aria-label="搜尋專案" value="${esc(perm.pq)}"></div>
+      ${list.map(x => { const n = permPeople().filter(p => pmMember(p, x)).length, ch = projChanges(x); return `<button type="button" class="pm-li${x === pj ? ' sel' : ''}" data-pm-proj="${esc(x)}" aria-current="${x === pj}"><b>${esc(projName(x))}</b>${ch ? `<span class="pm-chg-tag">${ch} 變更</span>` : ''}<span class="muted small">${n}</span></button>`; }).join('') || '<p class="muted small pm-pad">找不到專案</p>'}</section>`;
+    if (!pj) return `<div class="pm-split">${left}</div>`;
+    const members = permPeople().filter(p => pmMember(p, pj));
+    const adm = state.participants.get(state.projMeta.adminId), admNote = adm && pmGhost(adm, pj)
+      ? `<p class="muted small pm-admin-note">管理員 ${esc(adm.name)} 可以看所有專案${admin ? `，在這裡沒有角色所以不列在成員裡。<button type="button" class="link small" data-pm-goto-mem="${esc(adm.participantId)}">設定他在這個專案的角色</button>` : ''}</p>` : '';
+    // 表格「成員｜角色｜leader｜移出」；名字可以點，跳到依成員
+    const row = p => {
+      const c = permCur(p), b = permBase(p), isNew = !(b.cross || b.projects.has(pj)), lchg = (c.leaders || b.leaders).has(pj) !== b.leaders.has(pj), isAdm = p.participantId === state.projMeta.adminId;
+      const tags = [isAdm ? '<span class="pill-tag blue">管理員</span>' : c.cross ? '<span class="pm-cross-tag">跨專案</span>' : '', isNew ? '<span class="pill-tag yellow">新加入</span>' : '', !admin && p.participantId === meId() ? '<span class="muted small">· 你</span>' : '', admin && p.needsLogin ? `<span class="pill-tag red">要重設登入才進得來</span><button type="button" class="link small" data-pm-reset="${esc(p.participantId)}">重設登入…</button>` : ''].join('');
+      const name = admin ? `<button type="button" class="pm-name-link" data-pm-goto-mem="${esc(p.participantId)}" title="看 ${esc(p.name)} 的所有專案">${markQ(p.name, fq)}</button>` : `<b>${markQ(p.name, fq)}</b>`;
+      const sub = [p.shortCode ? '#' + markQ(p.shortCode, fq) : '', esc(permSub(p))].filter(Boolean).join(' · ');
+      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name">${name}${tags}${pmRoCell(p, pj, isNew)}${sub ? `<span class="pm-sub"> · ${sub}</span>` : ''}</td><td class="c-role">${pmRoleCell(p, pj, fq)}</td><td class="c-lead">${pmLeadCell(p, pj)}</td><td class="c-act">${pmActCell(p, pj, '到「依成員」')}</td></tr>`;
+    };
+    const removed = permPeople().filter(p => { const b = permBase(p); return (b.cross || b.projects.has(pj)) && !inProj(p, pj); });
+    // 搜尋＋人類／AI＋角色
+    const fs = finder('perm', drawPerm), fq = findQ(fs.q);
+    const fRoles = findRoles(members, pj), fl = findLive(fs.f, { roles: fRoles }), fsl = { q: fs.q, f: fl }; // 角色不在這個專案的選項裡就不套用
+    const shown = members.filter(p => findHit(p, fq, pj) && findPass(p, fl, pj));
+    const rmRow = p => `<tr class="pm-tr chg pm-gone"><td class="c-name"><s>${esc(p.name)}</s><span class="pill-tag red">將移出</span>${permSub(p) ? `<span class="pm-sub"> · ${esc(permSub(p))}</span>` : ''}</td><td class="c-role"><span class="muted">—</span></td><td class="c-lead"><span class="muted">—</span></td><td class="c-act"><button type="button" class="link small" data-pm-restore="${esc(p.participantId)}" data-pj="${esc(pj)}">復原</button></td></tr>`;
+    const humans = shown.filter(p => p.memberType === 'human');
+    const owner = a => ownerOf(a)?.name || '';
+    const ais = shown.filter(p => p.memberType === 'ai').sort((a, b) => owner(a).localeCompare(owner(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant')); // 依主人分組
+    const pr = state.projectList.find(x => x.id === pj);
+    const mid = `<section class="pm-col pm-detail" aria-label="${esc(projName(pj))} 的成員">
+      ${narrowPerm() ? '<button type="button" class="ph-back pm-back" data-pm-back>‹ 專案清單</button>' : ''}
+      <div class="pm-dhead"><div class="pm-dtitle"><strong>${esc(projName(pj))}</strong><span class="pm-sub"> · API 代號 ${esc(pj)} · ${members.length} 人</span></div><span class="grow"></span>
+        ${admin ? '<button type="button" class="btn small" data-pm-invite>邀請新的人</button>' : ''}${permCanEdit(pj) ? '<button type="button" class="btn primary small" data-pm-pick>＋ 加入成員</button>' : ''}</div>
+      ${pr ? repoLine(pr, permCanEdit(pj), { code: false }) : ''}
+      ${permCanEdit(pj) ? joinPanelHtml(pj) : ''}
+      ${admNote}
+      ${findBarHtml('perm', { roles: fRoles, shown: shown.length, total: members.length, unit: '人' })}
+      <table class="pm-table">${pmHead('成員')}
+      <tbody>${fl.kind === 'ai' ? '' : pmGrp(`人類 · ${humans.length}`) + (humans.map(row).join('') || `<tr><td colspan="4" class="muted small">${findOn(fsl) ? '沒有符合的人類' : '沒有人類成員'}</td></tr>`)}
+      ${fl.kind === 'human' ? '' : pmGrp(`AI · ${ais.length}（依主人分組；角色跟著 AI 設定）`) + (ais.map(row).join('') || `<tr><td colspan="4" class="muted small">${findOn(fsl) ? '沒有符合的 AI' : '沒有 AI'}</td></tr>`)}
+      ${removed.length ? pmGrp('這次會移出') + removed.map(rmRow).join('') : ''}</tbody></table>
+      ${findOn(fsl) ? findEmptyHtml('perm', !shown.length) : ''}
+      <p class="muted small pm-note">🔒＝管理員或跨專案角色，自動在所有專案，滑過看怎麼移出。✕＝移出（人類名下的 AI 會一起移出）${admin ? '；☆ 點了變 ★＝設為 leader（只有人類）；點名字看他的所有專案' : ''}。</p></section>`;
+    const cls = narrowPerm() ? (perm.picker ? ' m-pick' : perm.mobileDetail ? ' m-detail' : ' m-list') : perm.picker ? ' with-pick' : '';
+    return `<div class="pm-split${cls}">${left}${mid}${perm.picker ? permPickerHtml(pj) : ''}</div>`;
+  }
+  // 「＋ 加入成員」：只列還不在這個專案的人；人類底下縮排列他的 AI；主人不在的 AI 鎖住
+  function permPickerHtml(pj) {
+    const q = perm.pickQ.trim().toLowerCase(), sel = perm.pickSel, admin = isAdmin();
+    const out = permPeople().filter(p => !inProj(p, pj));
+    const match = p => !q || p.name.toLowerCase().includes(q) || (p.role || '').toLowerCase().includes(q);
+    const mineP = myProjects();
+    const humanOk = p => admin || (!permBase(p).projects.size && !permBase(p).cross) || [...permBase(p).projects].some(x => mineP.includes(x));
+    const humans = out.filter(p => p.memberType === 'human' && humanOk(p));
+    const ownerIn = a => { const o = ownerOf(a); return !!o && (inProj(o, pj) || sel.has(o.participantId)); };
+    const box = (p, indent, lock = '') => {
+      const note = lock ? '🔒 ' + lock : p.memberType === 'ai' ? (indent ? '跟著主人' : permSub(p)) : `人類${permCur(p).projects.size || permCur(p).cross ? '' : ' · 還沒有專案'}`;
+      return `<label class="pm-row pm-pick-row${indent ? ' indent' : ''}${lock ? ' off' : ''}"><input type="checkbox" data-pm-picksel="${esc(p.participantId)}" ${sel.has(p.participantId) ? 'checked' : ''} ${lock ? 'disabled' : ''}><span class="pm-name"><b>${esc(p.name)}</b></span><span class="muted small">${esc(note)}</span></label>`;
+    };
+    const rows = [];
+    for (const h of humans) {
+      const kids = sel.has(h.participantId) ? out.filter(a => a.memberType === 'ai' && a.ownerParticipantId === h.participantId) : []; // 勾了人類，名下的 AI 才列在下面
+      if (!match(h) && !kids.some(match)) continue;
+      rows.push(box(h, false), ...kids.map(a => box(a, true)));
+    }
+    const listed = new Set(humans.filter(h => sel.has(h.participantId)).map(h => h.participantId));
+    const ownerInAis = out.filter(a => a.memberType === 'ai' && !listed.has(a.ownerParticipantId) && ownerOf(a) && inProj(ownerOf(a), pj) && match(a));
+    if (ownerInAis.length) rows.push('<div class="pm-grp">主人已在這個專案的 AI</div>', ...ownerInAis.map(a => box(a, false)));
+    const others = admin ? out.filter(a => a.memberType === 'ai' && !listed.has(a.ownerParticipantId) && !ownerIn(a) && match(a)) : [];
+    if (others.length) rows.push(`<details class="pm-others"><summary class="pm-grp">其他（主人不在${esc(projName(pj))}的 AI，${others.length} 個）</summary>${others.map(a => box(a, false, `主人${ownerOf(a) ? ' ' + ownerOf(a).name : ''}不在${projName(pj)}`)).join('')}</details>`);
+    const pending = perm.draft.size > 0;
+    return `<section class="pm-col pm-pick" aria-label="加入${esc(projName(pj))}的成員">
+      <div class="pm-dhead"><strong>加入${esc(projName(pj))}的成員</strong></div>
+      <div class="pm-search"><input id="pm-pickq" type="search" placeholder="搜尋要加入的人" aria-label="搜尋要加入的人" value="${esc(perm.pickQ)}"></div>
+      <div class="pm-pick-list">${rows.join('') || '<p class="muted small pm-pad">沒有可以加入的人</p>'}</div>
+      <label class="chk pm-pick-ro"><input type="checkbox" id="pm-pick-ro"${perm.pickRo ? ' checked' : ''}> 👁 以唯讀加入（只能看，不能發訊息或操作；只套用在勾選的人類）</label>
+      <div class="pm-pick-foot"><button type="button" class="btn" data-pm-pick-cancel>取消</button><button type="button" class="btn primary" data-pm-pick-ok ${sel.size ? '' : 'disabled'}>加入 ${sel.size} 人${pending ? '（跟其他變更一起儲存）' : ''}</button></div>
+      <p class="muted small pm-pad">${pending ? '底下還有沒儲存的變更，這次加入會一起放進變更列。' : '加入不會退回任何卡片，按下就直接儲存，10 秒內可以復原。'}勾人類時，名下的 AI 會列在下面可一起勾。</p></section>`;
+  }
+  function permByMemberHtml() {
+    const all = permPeople(), q = perm.mq.trim().toLowerCase();
+    if (!all.some(p => p.participantId === perm.selMember)) perm.selMember = all[0]?.participantId || null;
+    const list = all.filter(p => findHit(p, q));
+    const li = p => { const c = permCur(p); return `<button type="button" class="pm-li${p.participantId === perm.selMember ? ' sel' : ''}" data-pm-mem="${esc(p.participantId)}" aria-current="${p.participantId === perm.selMember}"><b>${markQ(p.name, q)}</b>${p.ownerDisabled ? '<span class="pill-tag red">主人已停用</span>' : ''}${p.needsLogin ? '<span class="pill-tag red">要重設登入</span>' : ''}${perm.draft.has(p.participantId) ? '<span class="pm-chg-tag">變更</span>' : ''}<span class="muted small">${c.cross ? '全部' : `${c.projects.size} 專案`}</span></button>`; };
+    const hs = list.filter(p => p.memberType === 'human'), as = list.filter(p => p.memberType === 'ai');
+    const left = `<section class="pm-col pm-list" aria-label="成員清單"><div class="pm-search">${pmViewSeg()}<input id="pm-mq" type="search" placeholder="搜尋成員（${all.length} 人）" aria-label="搜尋成員" value="${esc(perm.mq)}"></div>
+      ${hs.length ? `<div class="pm-sec">人類</div>${hs.map(li).join('')}` : ''}${as.length ? `<div class="pm-sec">AI</div>${as.map(li).join('')}` : ''}${list.length ? '' : '<p class="muted small pm-pad">找不到成員</p>'}</section>`;
+    const p = state.participants.get(perm.selMember);
+    if (!p) return `<div class="pm-split">${left}</div>`;
+    const c = permCur(p), b = permBase(p), id = esc(p.participantId), isAdm = p.participantId === state.projMeta.adminId;
+    const projs = c.cross ? PROJECTS : PROJECTS.filter(x => c.projects.has(x));
+    const gone = c.cross ? [] : PROJECTS.filter(x => (b.cross || b.projects.has(x)) && !c.projects.has(x));
+    const addable = c.cross ? [] : PROJECTS.filter(x => !c.projects.has(x) && permCanEdit(x));
+    const addWhy = x => (p.memberType === 'ai' && !(ownerOf(p) && inProj(ownerOf(p), x)) ? `主人不在${projName(x)}` : '');
+    const menu = perm.addOpen ? `<div class="pm-addmenu" role="menu">${addable.map(x => { const why = addWhy(x); return `<button type="button" role="menuitem" data-pm-addp="${esc(x)}" ${why ? `disabled title="${esc(why)}"` : ''}>${esc(projName(x))}${why ? `<span class="muted small">🔒 ${esc(why)}</span>` : ''}</button>`; }).join('')}</div>` : '';
+    // 所屬專案也是「專案｜角色｜leader｜移出」表格；專案名可以點，跳到依專案
+    const row = x => {
+      const isNew = !(b.cross || b.projects.has(x)), lchg = (c.leaders || b.leaders).has(x) !== b.leaders.has(x);
+      return `<tr class="pm-tr${isNew || lchg ? ' chg' : ''}"><td class="c-name"><button type="button" class="pm-name-link" data-pm-goto-proj="${esc(x)}" title="看${esc(projName(x))}的成員">${esc(projName(x))}</button>${isNew ? '<span class="pill-tag yellow">新加入</span>' : ''}</td><td class="c-role">${pmRoleCell(p, x)}</td><td class="c-lead">${pmLeadCell(p, x)}</td><td class="c-act">${pmActCell(p, x, '在下面「帳號」')}</td></tr>`;
+    };
+    const goneRow = x => `<tr class="pm-tr chg pm-gone"><td class="c-name"><s>${esc(projName(x))}</s><span class="pill-tag red">將離開</span></td><td class="c-role"><span class="muted">—</span></td><td class="c-lead"><span class="muted">—</span></td><td class="c-act"><button type="button" class="link small" data-pm-restore="${id}" data-pj="${esc(x)}">復原</button></td></tr>`;
+    const addRow = addable.length ? `<tr class="pm-add-tr"><td colspan="4"><span class="pm-addwrap"><button type="button" class="link pm-add-proj" data-pm-addopen aria-expanded="${perm.addOpen}">＋ 加入專案</button>${menu}</span></td></tr>` : '';
+    const crossNow = state.projMeta.crossRoleIds.map(x => state.participants.get(x)?.name).filter(Boolean);
+    const sub = [p.memberType === 'ai' ? 'AI' : '人類', permSub(p), p.lastSeenAt ? `最後上線 ${agoText(p.lastSeenAt)}` : ''].filter(Boolean).join(' · ');
+    const account = isAdmin() ? `<div class="pm-sec">帳號</div>
+        <div class="pm-set"><div class="pm-set-t"><b id="pm-cross-t">跨專案角色</b><span class="pm-sub">開了會自動在所有專案${crossNow.length ? `（現在：${esc(crossNow.join('、'))}）` : ''}；跟其他變更一起儲存</span></div>
+          ${pmSw(c.cross, `data-pm-cross="${id}" aria-describedby="pm-cross-t"`, c.cross !== b.cross, `${p.name} 跨專案角色`, isAdm && c.cross ? 'aria-disabled="true" title="管理員本人不能關掉自己的跨專案角色（避免沒人能管）"' : '')}</div>
+        ${p.memberType === 'human' && p.participantId !== meId() ? `<div class="pm-set"><div class="pm-set-t"><b>重設登入</b><span class="pm-sub">登出他所有裝置、作廢舊登入碼、清掉帳號密碼，產生新邀請連結（立即執行）</span></div><button type="button" class="btn small danger-outline" data-pm-reset="${id}">重設登入…</button></div>
+        <div class="pm-set"><div class="pm-set-t"><b>停用帳號</b><span class="pm-sub">立刻登出他所有裝置、作廢登入碼，他的 AI 的 Token 也全部失效；訊息、卡片都留著，之後可以恢復</span></div><button type="button" class="btn small danger-outline" data-pm-disable="${id}">停用…</button></div>
+        <div class="pm-set"><div class="pm-set-t"><b>群組管理員</b><span class="pm-sub">把管理員交給他，你變一般成員</span></div><button type="button" class="btn small" data-pm-admin="${id}">交給他…</button></div>` : ''}` : '';
+    const right = `<section class="pm-col pm-detail" aria-label="${esc(p.name)} 的專案與帳號">
+      ${narrowPerm() ? '<button type="button" class="ph-back pm-back" data-pm-back>‹ 成員清單</button>' : ''}
+      <div class="pm-dhead"><div class="pm-dtitle"><strong>${esc(p.name)}</strong>${isAdm ? '<span class="pill-tag blue">管理員</span>' : c.cross ? '<span class="pm-cross-tag">跨專案</span>' : ''}<span class="pm-sub"> · ${esc(sub)}</span></div></div>
+      <div class="pm-sec">所屬專案</div>
+      <table class="pm-table">${pmHead('專案')}<tbody>
+        ${projs.map(row).join('') || '<tr><td colspan="4" class="muted small">還沒有專案</td></tr>'}${gone.map(goneRow).join('')}${addRow}</tbody></table>
+      ${account}</section>`;
+    return `<div class="pm-split${narrowPerm() ? (perm.mobileDetail ? ' m-detail' : ' m-list') : ''}">${left}${right}</div>`;
+  }
+  // 依成員加入專案時：人類有 AI 就問一次要不要一起加入
+  async function permAskAis(p, pj) {
+    const mine = permPeople().filter(a => a.memberType === 'ai' && a.ownerParticipantId === p.participantId && !inProj(a, pj));
+    if (!mine.length) return;
+    const pick = await new Promise(res => {
+      const body = openModal('也讓這位成員的 AI 加入？', `<p>${esc(p.name)} 加入「${esc(projName(pj))}」。要不要讓這位成員名下的 AI 一起加入？</p>
+        <div class="stack">${mine.map(a => `<label class="chk"><input type="checkbox" name="pm-ai" value="${esc(a.participantId)}"> ${esc(a.name)}<span class="muted small">${esc(a.role || '')}</span></label>`).join('')}</div>`,
+        { size: 'narrow', foot: '<button class="btn" type="button" id="pm-ai-no">都不用</button><button class="btn primary" type="button" id="pm-ai-ok">加入勾選的 AI</button>' });
+      body.modal.querySelector('#pm-ai-no').onclick = () => { closeModal(); res([]); };
+      body.modal.querySelector('#pm-ai-ok').onclick = () => { const ids = [...body.querySelectorAll('input[name="pm-ai"]:checked')].map(i => i.value); closeModal(); res(ids); };
+    });
+    for (const id of pick) permAdd(state.participants.get(id), pj);
+  }
+  // 加入設定（開放註冊、群組密碼）與群組異動紀錄：存資料庫、立刻生效；群組密碼只顯示有沒有設
+  async function loadGroupSettings() {
+    perm.gsLoading = true;
+    try {
+      const [s, ev] = await Promise.all([api('/api/group/settings'), api('/api/group/events?limit=30').catch(() => ({ items: [] }))]);
+      perm.gs = s; perm.gsEvents = ev.items;
+    } catch (err) { perm.gs = { error: err.message }; }
+    perm.gsLoading = false;
+    if (state.page === 'perm' && perm.tab === 'group') drawPerm();
+  }
+  function groupJoinHtml() {
+    const gs = perm.gs;
+    if (!gs) { if (!perm.gsLoading) loadGroupSettings(); return '<div class="pm-card pm-join-set"><span class="muted small">載入加入設定…</span></div>'; }
+    if (gs.error) return `<div class="pm-card pm-join-set"><p class="error">${esc(gs.error)}</p></div>`;
+    const env = k => gs.source?.[k] === 'env' ? '<span class="pm-sub">目前用的是安裝時的設定；在這裡改過就以這裡為準</span>' : '';
+    const log = (perm.gsEvents || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>';
+    return `<div class="pm-card pm-join-set">
+        <div class="pm-gs-row"><div class="pm-gs-t"><b id="pm-oj-t">開放自己註冊</b><span class="pm-sub">${gs.openJoin ? '知道網址的人都能註冊；註冊的人沒有專案，要你指派' : '關閉中：只能用邀請連結加入'}</span>${env('openJoin')}</div>
+          <button type="button" class="switch" role="switch" aria-checked="${gs.openJoin}" aria-labelledby="pm-oj-t" data-pp="openjoin"><span></span></button></div>
+        <div class="pm-gs-row pm-gs-code"><div class="pm-gs-t"><b><label for="pm-room-code">群組密碼</label></b><span class="pm-sub">${gs.roomCodeSet ? '<b>已設定</b>：註冊時要輸入；設好後看不到原文，忘了就重設' : '未設定：註冊不用密碼。公開部署建議設一組'}</span>${env('roomCode')}</div>
+          <div class="pm-gs-ctl"><input id="pm-room-code" type="password" maxlength="64" autocomplete="new-password" placeholder="${gs.roomCodeSet ? '輸入新密碼' : '4～64 字'}"><button type="button" class="btn small primary" data-pp="roomcode">${gs.roomCodeSet ? '更換' : '設定'}</button>${gs.roomCodeSet ? '<button type="button" class="btn small" data-pp="roomclear">清除</button>' : ''}</div></div>
+        <details class="audit pm-gs-log"${perm.gsLogOpen ? ' open' : ''}><summary>群組異動紀錄</summary><ul class="pa-log">${log}</ul></details>
+      </div>`;
+  }
+  async function saveGroupSettings(body, done) {
+    try { perm.gs = await api('/api/group/settings', { method: 'PUT', body }); toast(done); }
+    catch (err) { toast(err.message); }
+    perm.gsLogOpen = !!$('.pm-gs-log')?.open;
+    await loadGroupSettings();
+  }
+  // 群組分頁＝群組名稱＋怎麼加入（開放註冊、群組密碼）＋群組異動紀錄（原本放在「專案」分頁，想改群組密碼的人找不到）
+  function permGroupHtml() {
+    return `<div class="pm-projs">
+      <div class="pm-card pm-group-name"><label for="pm-group-name">群組名稱</label><input id="pm-group-name" maxlength="30" value="${esc(BASE_TITLE)}" aria-describedby="pm-gn-hint"><button type="button" class="btn small primary" data-pp="groupname">儲存</button><span class="muted small" id="pm-gn-hint">顯示在登入頁、左上角、分頁標題與 AI 接入設定。</span></div>
+      ${groupJoinHtml()}</div>`;
+  }
+  // 專案分頁＝專案表格；改名／程式庫／異動紀錄／封存收進「⋯」
+  function permProjectsHtml() {
+    const list = state.projectList, active = list.filter(p => !p.archived);
+    const rows = list.map(p => {
+      const open = perm.openLog === p.id, blocked = !p.archived && p.openCards > 0, why = `還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案`;
+      const repo = p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
+        : p.archived ? '<span class="muted">—</span>' : `<span class="pm-sub">未填 · </span><button type="button" class="link small" data-pm-repo="${esc(p.id)}">設定</button>`;
+      const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
+          <button type="button" role="menuitem" data-pp="rename">改名</button>
+          <button type="button" role="menuitem" data-pp="slug">網址英文名…<span class="pm-sub">/p/${esc(p.slug || p.id)}</span></button>
+          <button type="button" role="menuitem" data-pp="code">專案代號…<span class="pm-sub">${esc(p.code || '')}-1、${esc(p.code || '')}-2…</span></button>
+          <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">程式庫設定</button>
+          <button type="button" role="menuitem" data-pp="dm">${p.dm?.on ? '關閉私訊…' : '開放成員私訊自己的 AI…'}<span class="pm-sub">${p.dm?.on ? `已開放${p.dm.at ? ' · ' + esc(mmdd(p.dm.at)) : ''}${p.dm.byName ? ' ' + esc(p.dm.byName) + ' 打開' : ''}` : '預設關'}</span></button>
+          <button type="button" role="menuitem" data-pp="log">異動紀錄</button>
+          <button type="button" role="menuitem" class="danger" data-pp="archive" ${blocked ? `aria-disabled="true" title="${esc(why)}"` : ''}>封存…${blocked ? `<span class="pm-sub">${esc(why)}</span>` : ''}</button></div>` : '';
+      const last = p.archived ? '<button type="button" class="btn small" data-pp="unarchive">還原</button>'
+        : `<span class="pm-more-wrap"><button type="button" class="pm-more" data-pm-more="${esc(p.id)}" aria-haspopup="menu" aria-expanded="${perm.moreOpen === p.id}" aria-label="${esc(p.name)} 的更多動作">⋯</button>${menu}</span>`;
+      const log = open ? `<tr class="pm-log-tr" data-pj="${esc(p.id)}"><td colspan="6"><div class="pm-log-head"><b>異動紀錄 · ${esc(p.name)}</b><button type="button" class="link small" data-pp="log" aria-expanded="true">收起</button></div><ul class="pa-log">${(perm.events[p.id] || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul></td></tr>` : '';
+      return `<tr class="pm-prow${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}"><td class="c-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}</td><td class="c-code" data-label="API 代號" title="${esc(p.id)}">${esc(p.id)}</td><td class="c-num" data-label="成員">${p.memberCount}</td><td class="c-num2" data-label="未結案卡">${p.openCards}</td><td class="c-repo" data-label="程式庫">${repo}</td><td class="c-more">${last}</td></tr>${log}`;
+    }).join('');
+    return `<div class="pm-projs">
+      <div class="pm-card"><div class="pm-card-head"><strong>專案 · ${active.length}</strong><span class="grow"></span><button type="button" class="btn primary small" data-pm-newproj>＋ 新增專案</button></div>
+        <table class="pm-table pm-ptable"><thead><tr><th scope="col">專案</th><th scope="col" class="c-code">API 代號</th><th scope="col" class="c-num">成員</th><th scope="col" class="c-num2">未結案卡</th><th scope="col" class="c-repo">程式庫</th><th scope="col" class="c-more"><span class="sr-only">動作</span></th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`;
+  }
+  // 新增專案彈窗：名稱＋程式庫＋分支（選填）一次填完
+  function openNewProject() {
+    const body = openModal('新增專案', `<form id="np-form" class="stack">
+        <label class="field">專案名稱<input name="name" required maxlength="20" autocomplete="off"></label>
+        ${slugFieldHtml('np-slug', '')}
+        <label class="field">程式庫連結（選填）<input name="url" maxlength="300" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/帳號/專案"></label>
+        <label class="field">分支（選填）<input name="branch" maxlength="100" autocomplete="off" spellcheck="false" placeholder="main"></label>
+        <p class="muted small" id="pm-new-hint">${esc(newProjText())}，其他成員請到「成員」分頁加入。</p>
+        <p class="error" id="np-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="np-form">新增專案</button>' });
+    const f = body.querySelector('#np-form');
+    const slugF = bindSlugField(body, 'np-slug', f.name, null);
+    setTimeout(() => f.name.focus(), 30);
+    f.addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = body.querySelector('#np-err'), name = f.name.value.trim(), url = f.url.value.trim(), branch = f.branch.value.trim();
+      err.textContent = '';
+      if (!name) { err.textContent = '請輸入專案名稱'; return f.name.focus(); }
+      if (!url && branch) { err.textContent = '有分支就要填程式庫連結'; return f.url.focus(); }
+      if (url && (!/^https?:\/\//i.test(url) || url.includes('@'))) { err.textContent = url.includes('@') ? '連結裡不要放帳號密碼或 Token，只放網址' : '程式庫連結要用 https:// 開頭'; return f.url.focus(); }
+      const sf = slugF.check();
+      if (!sf) return;
+      try {
+        let r;
+        try { r = await api('/api/projects', { method: 'POST', body: { name, slug: sf.auto ? '' : sf.slug } }); }
+        catch (e1) { if (slugF.serverError(e1)) return; throw e1; }
+        let repoErr = '';
+        if (url) { try { await api(`/api/projects/${encodeURIComponent(r.id)}/repo`, { method: 'PUT', body: { url, branch } }); } catch (e2) { repoErr = e2.message; } }
+        closeModal();
+        await Promise.all([loadProjectList(), loadParticipants()]);
+        drawProjSwitch(); drawPerm();
+        toast(repoErr ? `已新增專案「${name}」，但程式庫沒存：${repoErr}` : crossNames().length ? `已新增專案「${name}」，你和 ${crossNames().join('、')} 已加入` : `已新增專案「${name}」，目前只有你`);
+      } catch (e2) { err.textContent = e2.message; }
+    });
+  }
+  function drawPermBar() {
+    const bar = $('#pm-bar');
+    if (!bar) return;
+    const s = permSummary();
+    bar.hidden = !perm.draft.size;
+    bar.innerHTML = perm.draft.size ? `<span class="pm-bar-text">${s.length} 項變更：${esc(s.slice(0, 4).join('；'))}${s.length > 4 ? '…' : ''}</span><span class="grow"></span>
+      <button type="button" class="btn small pm-undo" data-pm-act="undo">復原</button><button type="button" class="btn primary" data-pm-act="save">檢查並儲存</button>` : '';
+  }
+  // 已停用的人類（管理員才看得到）：可以恢復
+  function permDisabledHtml() {
+    if (perm.disabled === undefined) { perm.disabled = null; api('/api/participants/disabled').then(d => { perm.disabled = d.items; drawPerm(); }).catch(() => { perm.disabled = []; }); }
+    const list = perm.disabled || [];
+    return list.length ? `<section class="wpanel pm-disabled" aria-label="已停用的成員"><div class="pm-sec">已停用的成員</div>${list.map(p => `<div class="pm-set"><div class="pm-set-t"><b>${esc(p.name)} <span class="pill-tag">已停用</span></b><span class="pm-sub">登入和他的 AI 都不能用；恢復後他要重新登入，AI 要他重發 Token</span></div><button type="button" class="btn small" data-pm-enable="${esc(p.participantId)}">恢復</button></div>`).join('')}</section>` : '';
+  }
+  function drawPerm() {
+    const box = $('#page-work');
+    if (state.page !== 'perm') return;
+    const keep = document.activeElement?.id, top = box.scrollTop, admin = isAdmin();
+    if (!admin && !['roles', 'skills'].includes(perm.tab)) perm.tab = 'members'; // leader 有成員、角色、技能分頁
+    const nValid = (perm.invites || []).filter(iv => iv.status === '有效').length;
+    const tabs = `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${(admin ? [['members', '成員'], ['group', '群組'], ['projects', '專案'], ['roles', '角色'], ['skills', '技能'], ['invites', `邀請${nValid ? ` · ${nValid}` : ''}`], ['system', '系統']] : [['members', '成員'], ['roles', '角色'], ['skills', '技能']]).map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>`;
+    const body = perm.tab === 'system' ? permSystemHtml() : perm.tab === 'skills' ? permSkillsHtml() : perm.tab === 'roles' ? permRolesHtml() : perm.tab === 'projects' ? permProjectsHtml() : perm.tab === 'group' ? permGroupHtml() : perm.tab === 'invites' ? permInvitesHtml() : permView() === 'byMember' ? permByMemberHtml() : permByProjectHtml();
+    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${admin ? '' : ' · 你是 leader'}</span></div>${tabs}</div>
+      ${admin ? updBanner() : ''}
+      ${admin ? '' : `<div class="pm-banner">你是 <b>${esc(myLeadProjects().map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(myLeadProjects().map(projName).join('、'))}的成員。其他專案只能看。</div>`}
+      <section class="wpanel pm-panel pm-tab-${perm.tab}">${body}</section>
+      ${admin && perm.tab === 'members' ? permDisabledHtml() : ''}
+      <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
+    box.scrollTop = top;
+    drawPermBar();
+    if (['pm-pq', 'pm-mq', 'pm-pickq', 'fb-q-perm'].includes(keep)) { const q = $('#' + keep); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
+    if (perm.moreOpen) box.querySelector('.pm-more-menu [role="menuitem"]')?.focus();
+  }
+  // ---------- 申請加入專案 ----------
+  // leader 打開「開放申請」才看得到；只有人類能申請；送出不自動加入，leader／管理員核准（選角色、一般／唯讀）或拒絕（寫原因）
+  work.joins = [];
+  const joinReviewer = () => isAdmin() || myLeadProjects().length > 0;
+  async function loadJoins() {
+    if (!joinReviewer()) { work.joins = []; return; }
+    try { work.joins = (await api('/api/join-requests')).items; } catch { work.joins = []; }
+  }
+  async function afterJoinChange() {
+    await Promise.all([loadProjectList(), loadParticipants(), loadJoins()]).catch(() => {});
+    updateTodoBadge();
+    if (state.page === 'perm') drawPerm();
+  }
+  // 申請人：即時通道送來核准／拒絕，不用重新整理就看得到結果
+  async function onJoinDecided({ name = '', status } = {}) {
+    hubJoin.items = null;
+    if (status === 'approved') {
+      work.joinReloaded = true; // 已經就地更新，收件匣看到核准通知時不再整頁重新整理
+      state.me = await api('/api/me');
+      await afterJoinChange();
+      drawProjSwitch();
+      await loadWindow().catch(() => {});
+      loadCards().catch(() => {});
+      toast(name ? `你已加入「${name}」` : '你已加入新專案');
+    } else if (status === 'rejected') {
+      toast(name ? `「${name}」沒有核准你的申請，原因在收件匣` : '申請沒有核准，原因在收件匣');
+    }
+    refreshInboxCount();
+    loadNotes().then(() => { if (state.page === 'inbox') renderWork(); }).catch(() => {});
+    if (state.page === 'hub' || state.page === 'work') renderWork();
+  }
+  function joinPanelHtml(pj) {
+    const j = state.projMeta.join?.[pj] || { open: true, note: '', pending: 0 }; // 專案預設開放申請
+    return `<div class="pm-join"><div class="pm-set"><div class="pm-set-t"><b id="pj-join-t">新成員可以申請加入這個專案</b><span class="pm-sub">打開時（預設），群組裡還不在這個專案的人會在主畫面與「申請加入專案」看到這個專案的名稱和說明，送出申請後要 leader 或你核准才會加入；關掉就只能由你直接加人</span></div>
+        ${pmSw(j.open, `data-pj-join="${esc(pj)}" aria-describedby="pj-join-t"`, false, '開放申請加入')}</div>
+      ${j.open ? `<label class="pm-join-note"><span class="muted small">給申請的人看的說明（選填，100 字內）</span><input data-pj-join-note="${esc(pj)}" maxlength="100" value="${esc(j.note)}" placeholder="例：外食熱量追蹤 POC，歡迎 PO、UX 加入"></label>` : ''}
+      ${j.pending ? `<button type="button" class="link small pm-join-go" data-join-review="${esc(pj)}"><span class="pill-tag yellow">待審 ${j.pending}</span> 看申請 ›</button>` : ''}</div>`;
+  }
+  async function saveJoinSettings(pj, open, note) {
+    try { await api(`/api/projects/${encodeURIComponent(pj)}/join-settings`, { method: 'PUT', body: { open, note } }); await afterJoinChange(); toast(open ? '已開放申請加入' : '已關閉申請'); }
+    catch (err) { toast(err.message); }
+  }
+  document.addEventListener('click', async e => {
+    const sw = e.target.closest?.('[data-pj-join]');
+    if (sw) {
+      const pj = sw.dataset.pjJoin, j = state.projMeta.join?.[pj] || {}, on = !j.open;
+      if (on && !await confirmDialog({ title: `開放申請加入「${projName(pj)}」？`, confirmText: '打開',
+        message: '專案名稱和說明會給<b>整個群組</b>看到（包括不在這個專案的同仁）。送出的申請要 leader 或管理員核准才會加入。' })) return;
+      return saveJoinSettings(pj, on, j.note || '');
+    }
+    const rv = e.target.closest?.('[data-join-review]');
+    if (rv) { if (rv.closest('#modal-root .modal')) closeModal(); return openJoinReview(rv.dataset.joinReview); }
+    const jo = e.target.closest?.('[data-join-open]');
+    if (jo) { if (e.target.closest('#modal-root .modal')) closeModal(); return openJoinList(jo.dataset.joinOpen || null); }
+  });
+  document.addEventListener('change', e => {
+    const inp = e.target.closest?.('[data-pj-join-note]');
+    if (inp) saveJoinSettings(inp.dataset.pjJoinNote, true, inp.value.trim());
+  });
+  const approverOf = p => (p.leaders.length ? L('leader：', 'Lead: ') + esc(p.leaders.map(shownName).join(L('、', ', '))) : p.admin ? L('核准：', 'Lead: ') + esc(shownName(p.admin)) : ''); // 英文：Lead: Admin
+  const joinMeta = p => [p.note ? esc(p.note) : '', approverOf(p), `${p.members} 人`].filter(Boolean).map(x => `<span>${x}</span>`).join(' · ');
+  const joinIcon = p => `<span class="pico" style="--pc:#0f766e;--psz:34px" aria-hidden="true">${esc(firstChar(p.name))}</span>`;
+  // 同仁：可以申請的專案
+  async function openJoinList(only = null) {
+    const body = openModal('申請加入專案', '<div id="jl" class="jl"><p class="muted small">載入中…</p></div>', { size: 'narrow', sub: '只列開放申請的專案。' }); // 核准的說明在送出按鈕下面，不重複
+    let items = [], formFor = only;
+    const draw = () => {
+      const box = body.querySelector('#jl');
+      if (!box) return;
+      box.innerHTML = items.length ? items.map(p => `<div class="jl-row">${joinIcon(p)}<div class="jl-main"><b>${esc(p.name)}</b>
+          <div class="muted small">${joinMeta(p)}</div></div>
+          ${p.status === 'pending' ? '<span class="join-wait"><span class="pill-tag yellow">審核中</span><span class="muted small">核准後會自動更新</span></span>' : formFor === p.id ? '' : `<button type="button" class="btn primary small" data-jl-apply="${esc(p.id)}">申請</button>`}</div>
+        ${formFor === p.id ? `<form class="jl-form" data-jl-form="${esc(p.id)}"><b>申請加入${esc(p.name)}</b>
+          ${p.lastRejected ? `<div class="jl-last">上次被拒：${esc(p.lastRejected.reason)}</div>` : ''}
+          <textarea id="jl-note" maxlength="200" rows="2" placeholder="想做什麼（選填）：例：我想幫忙做手機畫面" aria-label="想做什麼（選填）"></textarea>
+          <div class="jl-acts"><button type="button" class="btn" data-jl-cancel>取消</button><button type="submit" class="btn primary">送出申請</button></div>
+          <span class="muted small">送出後要 leader 或管理員核准，結果會通知你。</span></form>` : ''}`).join('')
+        : '<p class="muted">目前沒有開放申請的專案。要加入某個專案，請找那個專案的 leader 或群組管理員。</p>';
+      body.querySelector('#jl-note')?.focus();
+    };
+    body.addEventListener('click', e => {
+      const a = e.target.closest('[data-jl-apply]');
+      if (a) { formFor = a.dataset.jlApply; draw(); }
+      if (e.target.closest('[data-jl-cancel]')) { formFor = null; draw(); }
+    });
+    body.addEventListener('submit', async e => {
+      const f = e.target.closest('[data-jl-form]');
+      if (!f) return;
+      e.preventDefault();
+      const p = items.find(x => x.id === f.dataset.jlForm);
+      try {
+        await api(`/api/projects/${encodeURIComponent(p.id)}/join-requests`, { method: 'POST', body: { note: body.querySelector('#jl-note').value.trim() } });
+        p.status = 'pending'; formFor = null; draw();
+        const h = (hubJoin.items || []).find(x => x.id === p.id); if (h) { h.status = 'pending'; if (state.page === 'hub') renderWork(); }
+        toast(`已送出申請，等${p.name}的 leader 處理`);
+      } catch (err) { toast(err.message); }
+    });
+    try { items = (await api('/api/join/projects')).items; } catch (err) { items = []; toast(err.message); }
+    draw();
+  }
+  // 拒絕原因（一定要寫，申請人會看到）
+  function askJoinReason(name) {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: `拒絕 ${name} 的申請`, size: 'narrow', body: '<label class="field"><span class="field-label">原因（申請人會看到，200 字內）</span><textarea id="jr-reason" maxlength="200" rows="3" placeholder="例：目前人夠了，下個月再開放"></textarea></label>',
+        foot: '<button class="btn" type="button" data-jx="0">取消</button><button class="btn danger" type="button" data-jx="1">拒絕</button>' });
+      document.body.appendChild(host);
+      const ta = host.querySelector('#jr-reason');
+      ta.focus();
+      const done = ok => { const v = ta.value.trim(); if (ok && !v) { ta.focus(); return toast('請寫一句原因'); } host.remove(); document.removeEventListener('keydown', key, true); resolve(ok ? v : null); };
+      const key = e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+      document.addEventListener('keydown', key, true);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-jx]'); if (b) done(b.dataset.jx === '1'); else if (e.target.closest('[data-close]')) done(false); });
+    });
+  }
+  // leader／管理員：待審申請（pj 空＝全部）
+  async function openJoinReview(pj = '') {
+    const body = openModal(pj ? `待審申請 · ${projName(pj)}` : '待審申請', '<div id="jr" class="jr"><p class="muted small">載入中…</p></div>', { size: 'form', sub: '核准時選角色和一般／唯讀；拒絕要寫一句原因（申請人會看到）。核准了才會加入。' });
+    let items = [];
+    const roleOpts = (p, cur = '') => [...new Set(['', ...ROLE_CHOICES, ...projRoleDefs(p).map(d => d.role), ...(cur ? [cur] : [])])].map(r => `<option value="${esc(r)}"${r === cur ? ' selected' : ''}>${r ? esc(r) : '未設定'}</option>`).join(''); // cur：註冊時填的角色
+    const draw = () => {
+      const box = body.querySelector('#jr');
+      if (!box) return;
+      box.innerHTML = items.length ? items.map(x => `<div class="jr-row">${avatar(state.participants.get(x.participantId) || { name: x.name, memberType: 'human' })}<div class="jr-main">
+          <div><b>${esc(x.name)}</b> <span class="muted small">${pj ? '' : esc(x.projectName) + ' · '}${esc(fmtTime(x.createdAt))}</span></div>
+          <div class="jr-note">${x.note ? `「${esc(x.note)}」` : '<span class="muted small">沒寫原因</span>'}</div>
+          ${x.lastRejected ? `<div class="muted small">上次被拒：${esc(x.lastRejected.reason)}</div>` : ''}
+          <div class="jr-acts"><label class="jr-lab"><span>角色</span><select data-jr-role="${esc(x.id)}">${roleOpts(x.project, x.role || '')}</select></label>
+            <label class="jr-lab"><span>權限</span><select data-jr-ro="${esc(x.id)}"><option value="">一般（可以發文、改卡片）</option><option value="1">👁 唯讀（只能看）</option></select></label>
+            <span class="grow"></span><button type="button" class="btn small danger-outline" data-jr-no="${esc(x.id)}">拒絕</button><button type="button" class="btn small primary" data-jr-ok="${esc(x.id)}">核准加入</button></div></div></div>`).join('')
+        : '<p class="muted">沒有待審的申請。</p>';
+    };
+    body.addEventListener('click', async e => {
+      const ok = e.target.closest('[data-jr-ok]'), no = e.target.closest('[data-jr-no]');
+      const id = ok?.dataset.jrOk || no?.dataset.jrNo, x = id && items.find(i => i.id === id);
+      if (!x) return;
+      try {
+        if (ok) {
+          const role = body.querySelector(`[data-jr-role="${CSS.escape(id)}"]`).value, ro = body.querySelector(`[data-jr-ro="${CSS.escape(id)}"]`).value === '1';
+          await api(`/api/join-requests/${encodeURIComponent(id)}/approve`, { method: 'POST', body: { role, readOnly: ro } });
+          toast(`已核准 ${x.name} 加入${x.projectName}`);
+        } else {
+          const reason = await askJoinReason(x.name);
+          if (!reason) return;
+          await api(`/api/join-requests/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason } });
+          toast(`已拒絕 ${x.name}，原因會通知他`);
+        }
+        items = items.filter(i => i.id !== id);
+        if (!items.length) closeModal(); else draw(); // 處理完最後一筆就關掉視窗，只留提示
+        afterJoinChange();
+      } catch (err) { toast(err.message); }
+    });
+    try { items = (await api('/api/join-requests' + (pj ? '?project=' + encodeURIComponent(pj) : ''))).items; } catch (err) { toast(err.message); }
+    draw();
+  }
+  // 本專案角色（只列自己能管理的專案）：改字、停用／啟用、沒人用才能刪
+  function permRolesHtml() {
+    const pjs = PROJECTS.filter(canMakeRole);
+    if (!pjs.length) return '<p class="muted">你不是任何專案的 leader，不能管理本專案角色。</p>';
+    return `<p class="muted small pr-note">本專案角色只出現在該專案的角色選單（建 AI、設人類角色都能選）。內建角色（PO、PG、UX…）所有專案共用，不在這裡改。</p>` + pjs.map(pj => {
+      const defs = projRoleDefs(pj, true);
+      const row = d => `<div class="pr-row${d.status === 'disabled' ? ' off' : ''}"><span class="pr-key" aria-hidden="true">${esc(d.key)}</span><div class="pr-main"><b>${esc(d.role)}</b> <span class="tag pr-tag">本專案</span>${d.status === 'disabled' ? ' <span class="tag pr-off">已停用</span>' : ''}<div class="muted small">${d.inUse} 個成員在用 · ${esc(mmdd(d.createdAt))} ${esc(d.createdByName || '')} 建立</div></div>
+        <div class="pr-acts"><button type="button" class="link small" data-pr-edit="${esc(d.key)}" data-pj="${esc(pj)}">編輯</button><button type="button" class="link small" data-pr-toggle="${esc(d.key)}" data-pj="${esc(pj)}">${d.status === 'disabled' ? '啟用' : '停用'}</button>${d.inUse ? '' : `<button type="button" class="link small danger-text" data-pr-del="${esc(d.key)}" data-pj="${esc(pj)}">刪除</button>`}</div></div>`;
+      return `<section class="pr-proj" aria-label="${esc(projName(pj))} 的本專案角色"><div class="pr-head"><b>${esc(projName(pj))} · 角色</b><button type="button" class="btn small" data-pr-new="${esc(pj)}">＋ 跟 AI 討論新角色</button></div>
+        ${defs.map(row).join('') || '<p class="muted small pr-empty">還沒有本專案角色。按「＋ 跟 AI 討論新角色」，在私訊跟自己的 AI 討論，它會送角色提案卡，你按「建立角色」才生效。</p>'}</section>`;
+    }).join('');
+  }
+  function editProjRole(pj, key) {
+    const d = projRoleDefs(pj, true).find(x => x.key === key);
+    if (!d) return;
+    const body = openModal(`編輯角色 · ${d.role}（${d.key}）`, `<form id="pr-form" class="stack"><label>名稱<input name="role" maxlength="10" required value="${esc(d.role)}"></label>
+      ${RP_FIELDS.slice(2).map(([k, t]) => `<label>${t}<textarea name="${k}" rows="3" maxlength="1000" required>${esc(d[k] || '')}</textarea></label>`).join('')}
+      <p class="muted small">代碼 ${esc(d.key)} 不能改。改名稱時，用這個角色的人類角色字會一起換；AI 的設定是建立時帶入的，不會跟著改。</p><p class="error small" id="pr-err" role="alert"></p></form>`,
+      { size: 'form', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="pr-form">儲存</button>' });
+    body.querySelector('#pr-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      try { await api(`/api/projects/${encodeURIComponent(pj)}/roles/${encodeURIComponent(key)}`, { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); closeModal(); await loadProjectList(); drawPerm(); toast('已儲存角色'); }
+      catch (err) { body.querySelector('#pr-err').textContent = err.message; }
+    });
+  }
+  document.addEventListener('click', async e => {
+    const b = state.page === 'perm' && e.target.closest?.('[data-pr-new], [data-pr-edit], [data-pr-toggle], [data-pr-del]');
+    if (!b) return;
+    const pj = b.dataset.pj || b.dataset.prNew;
+    if (b.dataset.prNew) return askRoleAi(pj);
+    if (b.dataset.prEdit) return editProjRole(pj, b.dataset.prEdit);
+    const key = b.dataset.prToggle || b.dataset.prDel, d = projRoleDefs(pj, true).find(x => x.key === key);
+    if (!d) return;
+    try {
+      if (b.dataset.prToggle) {
+        const off = d.status !== 'disabled';
+        if (off && !await confirmDialog({ title: `停用「${d.role}」？`, confirmText: '停用', message: '停用後選單不再出現；已經在用的人照舊。之後可以再啟用。' })) return;
+        await api(`/api/projects/${encodeURIComponent(pj)}/roles/${encodeURIComponent(key)}`, { method: 'PUT', body: { status: off ? 'disabled' : 'active' } });
+        toast(off ? '已停用' : '已啟用');
+      } else {
+        if (!await confirmDialog({ title: `刪除「${d.role}」？`, confirmText: '刪除', message: '沒有人在用這個角色。刪除後選單不再出現，不能復原（要再用就重新跟 AI 討論）。' })) return;
+        await api(`/api/projects/${encodeURIComponent(pj)}/roles/${encodeURIComponent(key)}`, { method: 'DELETE' });
+        toast('已刪除');
+      }
+      await loadProjectList(); drawPerm();
+    } catch (err) { toast(err.message); }
+  });
+  async function renderPermPage() {
+    $('#page-work').classList.remove('is-board');
+    await Promise.all([loadProjectList(), loadParticipants()]).catch(() => {});
+    drawPerm();
+    if (isAdmin()) loadInvites(); // 分頁上顯示有效邀請數
+  }
+  // 只有「加入」時直接儲存（不會退回卡片），toast 可在 10 秒內復原
+  async function applyPendingRo() { // 「以唯讀加入」的人，加入存好後設唯讀（新加入沒有卡，不用再確認）
+    const pr = perm.pendingRo; perm.pendingRo = null;
+    if (!pr?.ids.length) return;
+    await loadProjectList().catch(() => {});
+    for (const id of pr.ids) await permSetRo(id, pr.pj, true, { confirm: false }).catch(err => toast(err.message));
+  }
+  async function permQuickAdd(ids, pj) {
+    const before = ids.map(id => ({ id, projects: [...permBase(P2(id)).projects] }));
+    const changes = ids.map(id => ({ id, projects: PROJECTS.filter(x => perm.draft.get(id)?.projects.has(x)) })).filter(c => c.projects.length);
+    try {
+      await api('/api/members/matrix', { method: 'PUT', body: { changes } });
+      perm.draft.clear();
+      await applyPendingRo();
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      drawProjSwitch(); drawPerm();
+      const names = ids.map(id => P2(id)?.name).filter(Boolean).join('、');
+      const t = $('#toast');
+      t.innerHTML = `已加入 ${esc(names)} <button type="button" class="link toast-undo" id="toast-undo">復原</button>`;
+      t.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { t.hidden = true; }, 10_000);
+      t.querySelector('#toast-undo').onclick = async () => {
+        t.hidden = true;
+        try {
+          await api('/api/members/matrix', { method: 'PUT', body: { changes: before.slice().reverse().map(b => ({ id: b.id, projects: b.projects })) } });
+          await Promise.all([loadProjectList(), loadParticipants()]);
+          drawProjSwitch(); drawPerm(); toast(`已復原：${names} 不在${projName(pj)}`);
+        } catch (err) { toast(err.message); }
+      };
+    } catch (err) { toast(err.message); drawPerm(); }
+  }
+  const P2 = id => state.participants.get(id);
+  async function permSave() {
+    const changes = [];
+    const order = [...perm.draft.keys()].sort((a, b) => (state.participants.get(a)?.memberType === 'ai') - (state.participants.get(b)?.memberType === 'ai'));
+    for (const id of order) {
+      const p = state.participants.get(id), d = perm.draft.get(id), b = permBase(p), ch = { id };
+      if (d.cross !== b.cross) ch.crossRole = d.cross;
+      if (!d.cross) ch.projects = PROJECTS.filter(x => d.projects.has(x));
+      if (isAdmin() && d.leaders && !sameSet(d.leaders, b.leaders)) ch.leaderOf = PROJECTS.filter(x => d.leaders.has(x));
+      if (p.memberType === 'human') { const rc = PROJECTS.filter(x => (d.cross || d.projects.has(x)) && permCanEdit(x) && (d.roles?.get(x) || '') !== (b.roles.get(x) || '') && (b.cross || b.projects.has(x) || d.roles?.get(x))); if (rc.length) ch.projectRoles = Object.fromEntries(rc.map(x => [x, d.roles?.get(x) || ''])); }
+      if (!isAdmin() && sameSet(d.projects, b.projects) && d.cross === b.cross && !ch.projectRoles) continue;
+      changes.push(ch);
+    }
+    try {
+      const dry = await api('/api/members/matrix', { method: 'PUT', body: { changes, dryRun: true } });
+      const lines = [
+        ...(dry.crossChanges || []).map(c => `${esc(c.name)}：${c.crossRole ? '設為跨專案角色（自動在所有專案）' : '取消跨專案角色'}`),
+        ...(dry.leaderChanges || []).map(c => `${esc(c.name)}：${c.leader ? '成為' : '不再是'}${esc(projName(c.project))} leader${c.auto ? '（已移出專案）' : ''}`),
+        ...(dry.roleChanges || []).map(c => `${esc(c.name)}：在${esc(projName(c.project))}的角色改成${esc(c.role || '未設定')}`),
+        ...dry.impact.map(x => `${esc(x.name)}：${[x.added.length ? '加入 ' + x.added.map(p => esc(projName(p))).join('、') : '', x.removed.length ? '離開 ' + x.removed.map(p => esc(projName(p))).join('、') : ''].filter(Boolean).join('；')}${x.returnedCards.length ? `（<b>${x.returnedCards.length} 張卡退回待處理</b>：${x.returnedCards.join('、')}）` : ''}`),
+      ];
+      if (!await confirmDialog({ title: '確定儲存這些變更？', confirmText: '確定儲存', danger: dry.impact.some(x => x.returnedCards.length),
+        message: `<ul class="pm-impact">${lines.map(l => `<li>${l}</li>`).join('') || '<li>沒有實際變更</li>'}</ul>` })) return;
+      await api('/api/members/matrix', { method: 'PUT', body: { changes } });
+      perm.draft.clear();
+      await applyPendingRo();
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      drawProjSwitch(); drawAvatarMenu(); drawPerm();
+      toast('已儲存成員與權限');
+    } catch (err) { toast(err.message); }
+  }
+  $('#page-work').addEventListener('change', async e => {
+    const sel = state.page === 'perm' && e.target.closest?.('[data-pm-role]');
+    if (!sel) return;
+    const p = state.participants.get(sel.dataset.pmRole), pj = sel.dataset.pj, cur = permCur(p).roles?.get(pj) || '';
+    const v = await pickRole(sel, cur);
+    if (v === null) return;
+    permSetRole(p, pj, v); drawPerm();
+    document.querySelector(`[data-pm-role="${CSS.escape(p.participantId)}"][data-pj="${CSS.escape(pj)}"]`)?.focus();
+  });
+  $('#page-work').addEventListener('click', async e => {
+    if (state.page !== 'perm') return;
+    const t = e.target;
+    // 「⋯」選單開著時，點外面就關
+    if (perm.moreOpen && !t.closest('.pm-more-wrap')) { perm.moreOpen = null; drawPerm(); if (!t.closest('[data-pm-more]')) return; }
+    const tab = t.closest('[data-pm-tab]');
+    if (tab) { perm.tab = tab.dataset.pmTab; if (perm.tab === 'skills') skv.data = null; if (perm.tab === 'group') perm.gs = null; /* 加入設定每次重讀 */ if (state.page === 'perm') loadInvites(); Object.assign(perm, { picker: false, addOpen: false, mobileDetail: false, moreOpen: null }); return drawPerm(); } // 切換檢視不丟變更
+    const vw = t.closest('[data-pm-view]');
+    if (vw) { Object.assign(perm, { memView: vw.dataset.pmView, picker: false, addOpen: false, mobileDetail: false }); return drawPerm(); }
+    const gm = t.closest('[data-pm-goto-mem]'), gp = t.closest('[data-pm-goto-proj]');
+    if (gm) { Object.assign(perm, { tab: 'members', memView: 'byMember', selMember: gm.dataset.pmGotoMem, addOpen: false, picker: false, mobileDetail: true, mq: '' }); return drawPerm(); }
+    if (gp) { Object.assign(perm, { tab: 'members', memView: 'byProject', selProj: gp.dataset.pmGotoProj, addOpen: false, picker: false, mobileDetail: true, pq: '' }); return drawPerm(); }
+    const more = t.closest('[data-pm-more]');
+    if (more) { perm.moreOpen = perm.moreOpen === more.dataset.pmMore ? null : more.dataset.pmMore; return drawPerm(); }
+    if (t.closest('[data-pm-newproj]')) return openNewProject();
+    // 邀請與重設登入
+    if (t.closest('[data-pm-invite]')) return openInvite();
+    if (t.closest('[data-pm-inv-reload]')) return loadInvites();
+    const ivR = t.closest('[data-pm-inv-regen]'), ivC = t.closest('[data-pm-inv-cancel]'), rs = t.closest('[data-pm-reset]');
+    if (ivR) { try { showInviteLink(await api(`/api/invites/${encodeURIComponent(ivR.dataset.pmInvRegen)}/regenerate`, { method: 'POST' })); loadInvites(); } catch (err) { toast(err.message); } return; }
+    if (ivC) {
+      if (!await confirmDialog({ title: '作廢這個邀請？', confirmText: '作廢', danger: true, message: '連結會立刻失效。' })) return;
+      try { await api(`/api/invites/${encodeURIComponent(ivC.dataset.pmInvCancel)}/cancel`, { method: 'POST' }); toast('已作廢邀請'); loadInvites(); } catch (err) { toast(err.message); }
+      return;
+    }
+    if (rs) return resetLogin(state.participants.get(rs.dataset.pmReset));
+    const dis = t.closest('[data-pm-disable]'), ena = t.closest('[data-pm-enable]'), adm = t.closest('[data-pm-admin]');
+    if (dis) {
+      const p = state.participants.get(dis.dataset.pmDisable);
+      if (!p || !await confirmDialog({ title: `停用 ${p.name}？`, confirmText: '停用', danger: true,
+        message: `<b>${esc(p.name)}</b> 所有裝置立刻登出、登入碼作廢，他的 AI 的 Token 也全部失效。訊息、卡片、文件都留著；之後可以在「已停用的成員」恢復。` })) return;
+      try {
+        const r = await api(`/api/participants/${encodeURIComponent(p.participantId)}/disable`, { method: 'POST' });
+        toast(r.revokedAiTokens ? `已停用 ${p.name}，${r.revokedAiTokens} 隻 AI 的 Token 已失效` : `已停用 ${p.name}`);
+        Object.assign(perm, { disabled: undefined, selMember: null, mobileDetail: false });
+        await loadParticipants(); drawPerm();
+      } catch (err) { toast(err.message); }
+      return;
+    }
+    if (ena) {
+      try {
+        const r = await api(`/api/participants/${encodeURIComponent(ena.dataset.pmEnable)}/enable`, { method: 'POST' });
+        toast(`已恢復 ${r.participant.name}：請他用帳號密碼重新登入`);
+        perm.disabled = undefined; await loadParticipants(); drawPerm();
+      } catch (err) { toast(err.message); }
+      return;
+    }
+    if (adm) {
+      const p = state.participants.get(adm.dataset.pmAdmin);
+      if (!p || !await confirmDialog({ title: `把群組管理員交給 ${p.name}？`, confirmText: '交給他', danger: true,
+        message: `交出後 <b>${esc(p.name)}</b> 是群組管理員，你變一般成員：成員與權限、專案、系統設定都要請他處理。<br>交出後你不能自己拿回來，要請 <b>${esc(p.name)}</b> 再交給你。` })) return;
+      try { await api('/api/admin/transfer', { method: 'POST', body: { toId: p.participantId } }); toast(`群組管理員已交給 ${p.name}`); setTimeout(() => location.reload(), 800); } catch (err) { toast(err.message); }
+      return;
+    }
+    const P = id => state.participants.get(id);
+    const el = (sel) => t.closest(sel);
+    let x;
+    if ((x = el('[data-pm-proj]'))) { Object.assign(perm, { selProj: x.dataset.pmProj, picker: false, pickSel: new Set(), mobileDetail: true }); return drawPerm(); }
+    if ((x = el('[data-pm-mem]'))) { Object.assign(perm, { selMember: x.dataset.pmMem, addOpen: false, mobileDetail: true }); return drawPerm(); }
+    if (el('[data-pm-back]')) { perm.mobileDetail = false; return drawPerm(); }
+    if (el('[data-pm-pick]')) { Object.assign(perm, { picker: true, pickSel: new Set(), pickQ: '' }); drawPerm(); return $('#pm-pickq')?.focus(); }
+    if (el('[data-pm-pick-cancel]')) { perm.picker = false; return drawPerm(); }
+    if (el('[data-pm-pick-ok]')) {
+      const ids = [...perm.pickSel].sort((a, b) => (P(a)?.memberType === 'ai') - (P(b)?.memberType === 'ai'));
+      const direct = perm.draft.size === 0, pj = perm.selProj;
+      if ($('#pm-pick-ro')?.checked) perm.pendingRo = { pj, ids: ids.filter(id => P(id)?.memberType === 'human') }; // 加入存好後再設唯讀
+      for (const id of ids) permAdd(P(id), pj);
+      Object.assign(perm, { picker: false, pickSel: new Set() });
+      if (!direct) return drawPerm();
+      return permQuickAdd(ids, pj); // 加入沒有破壞性，直接儲存，10 秒內可復原
+    }
+    if ((x = el('[data-pm-ro]'))) {
+      const on = x.getAttribute('aria-pressed') !== 'true';
+      try { if (await permSetRo(x.dataset.pmRo, x.dataset.pj, on)) { await Promise.all([loadProjectList(), loadParticipants()]); drawPerm(); toast(on ? '已設成唯讀' : '已改回一般成員'); } } catch (err) { toast(err.message); }
+      return;
+    }
+    if ((x = el('[data-pm-rm]'))) { permRemove(P(x.dataset.pmRm), x.dataset.pj); return drawPerm(); }
+    if ((x = el('[data-pm-restore]'))) { permAdd(P(x.dataset.pmRestore), x.dataset.pj); return drawPerm(); }
+    if ((x = el('[data-pm-star]'))) { permStar(P(x.dataset.pmStar), x.dataset.pj); return drawPerm(); }
+    if (el('[data-pm-addopen]')) { perm.addOpen = !perm.addOpen; return drawPerm(); }
+    if ((x = el('[data-pm-addp]'))) {
+      if (x.disabled) return;
+      const p = P(perm.selMember);
+      permAdd(p, x.dataset.pmAddp); perm.addOpen = false;
+      if (p.memberType === 'human') await permAskAis(p, x.dataset.pmAddp);
+      return drawPerm();
+    }
+    const cr = t.closest('[data-pm-cross]');
+    if (cr) {
+      if (cr.getAttribute('aria-disabled') === 'true') return toast(cr.title);
+      const p = state.participants.get(cr.dataset.pmCross), c = permCur(p), b = permBase(p);
+      permSet(p, { projects: c.cross ? (b.cross ? new Set(PROJECTS) : new Set(b.projects.size ? b.projects : PROJECTS)) : new Set(PROJECTS), cross: !c.cross, leaders: c.leaders });
+      return drawPerm();
+    }
+    const rp = t.closest('[data-pm-repo]');
+    if (rp) { if (perm.moreOpen) { perm.moreOpen = null; drawPerm(); } return openRepoEditor(rp.dataset.pmRepo); }
+    const act = t.closest('[data-pm-act]')?.dataset.pmAct;
+    if (act === 'undo') { perm.draft.clear(); return drawPerm(); }
+    if (act === 'save') return permSave();
+    const pp = t.closest('[data-pp]');
+    if (!pp) return;
+    const id = pp.closest('[data-pj]')?.dataset.pj, a = pp.dataset.pp;
+    if (perm.moreOpen) perm.moreOpen = null; // 選單裡選了就收起
+    if (a === 'groupname') {
+      const name = $('#pm-group-name').value.trim();
+      if (!name) return toast('請輸入群組名稱');
+      try { const d = await api('/api/group', { method: 'PUT', body: { name } }); applyGroupName(d.name); toast(`群組名稱已改成「${d.name}」`); } catch (err) { toast(err.message); }
+      perm.gsLogOpen = !!$('.pm-gs-log')?.open;
+      return loadGroupSettings(); // 異動紀錄多一筆
+    }
+    if (a === 'openjoin') { const on = pp.getAttribute('aria-checked') !== 'true'; return saveGroupSettings({ openJoin: on }, on ? '已開放自己註冊' : '已關閉開放註冊，只能用邀請連結加入'); }
+    if (a === 'roomcode') {
+      const inp = $('#pm-room-code'), code = inp.value;
+      if (code.length < 4 || /\s/.test(code)) { toast('群組密碼需為 4～64 字，不可有空白'); return inp.focus(); }
+      inp.value = '';
+      return saveGroupSettings({ roomCode: code }, '群組密碼已更新，之後註冊要輸入新密碼');
+    }
+    if (a === 'roomclear') {
+      if (!await confirmDialog({ title: '清除群組密碼？', confirmText: '清除', message: '清除後，開放註冊打開時，知道網址的人不用密碼就能註冊。' })) return;
+      return saveGroupSettings({ roomCode: '' }, '已清除群組密碼');
+    }
+    try {
+      if (a === 'log') {
+        perm.openLog = perm.openLog === id ? null : id;
+        if (perm.openLog) perm.events[id] = (await api(`/api/projects/${encodeURIComponent(id)}/events?limit=20`).catch(() => ({ items: [] }))).items;
+        return drawPerm();
+      }
+      if (a === 'create') {
+        const name = $('#pm-new-name').value.trim();
+        if (!name) return toast('請輸入專案名稱');
+        await api('/api/projects', { method: 'POST', body: { name } });
+        toast(crossNames().length ? `已新增專案「${name}」，你和 ${crossNames().join('、')} 已加入` : `已新增專案「${name}」，目前只有你`);
+      } else if (a === 'rename') {
+        const name = await promptName('改專案名稱', projName(id));
+        if (!name || name === projName(id)) return;
+        await api(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } });
+      } else if (a === 'code') {
+        const cur = state.projectList.find(p => p.id === id)?.code || '';
+        const code = await promptName('專案代號', cur, { label: '2～5 個英文字母（例：PLAT）', max: 5, hint: `卡片會顯示成 ${'<代號>'}-12；改了以後卡片換成新代號，舊的卡號照樣查得到。` });
+        if (!code || code.toUpperCase() === cur) return;
+        await api(`/api/projects/${encodeURIComponent(id)}/code`, { method: 'PUT', body: { code } });
+        await loadCards().catch(() => {}); renderWork();
+        toast(`專案代號改成 ${code.toUpperCase()}`);
+      } else if (a === 'slug') {
+        const slug = await editSlug(id);
+        if (!slug) return;
+        if (projectView() === id) setTimeout(() => syncUrl(true), 0);
+        toast(`網址改成 /p/${slug.toLowerCase()}/…`);
+      } else if (a === 'archive') {
+        if (pp.getAttribute('aria-disabled') === 'true') { drawPerm(); return toast(pp.title); }
+        if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(id))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以還原。` })) return;
+        await api(`/api/projects/${encodeURIComponent(id)}/archive`, { method: 'POST' });
+      } else if (a === 'dm') {
+        const on = !state.projectList.find(p => p.id === id)?.dm?.on;
+        const ok = await confirmDialog(on
+          ? { title: '開放私訊？', confirmText: '開放', message: `打開後，「<b>${esc(projName(id))}</b>」的成員可以在網頁、手機直接跟自己名下的 AI 講話。內容只有雙方看得到，你也看不到內容和數量。<br><span class="muted small">定案的事仍要寫回卡片。私訊存在平台資料庫，系統維護者技術上仍讀得到。</span>` }
+          : { title: '關閉私訊？', confirmText: '關閉', danger: true, message: '關掉後成員不能再送私訊，舊的私訊雙方還看得到。' });
+        if (!ok) return;
+        await api(`/api/projects/${encodeURIComponent(id)}/dm`, { method: 'PUT', body: { on } });
+        toast(on ? '已開放私訊' : '已關閉私訊');
+      } else if (a === 'unarchive') {
+        await api(`/api/projects/${encodeURIComponent(id)}/unarchive`, { method: 'POST' });
+      }
+      await Promise.all([loadProjectList(), loadParticipants()]);
+      if (perm.openLog) perm.events[perm.openLog] = (await api(`/api/projects/${encodeURIComponent(perm.openLog)}/events?limit=20`).catch(() => ({ items: [] }))).items;
+      drawProjSwitch(); drawPerm();
+    } catch (err) { toast(err.message); }
+  });
+  $('#page-work').addEventListener('keydown', e => {
+    if (state.page !== 'perm' || !perm.moreOpen) return;
+    const items = [...document.querySelectorAll('.pm-more-menu [role="menuitem"]')], i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const id = perm.moreOpen; perm.moreOpen = null; drawPerm(); document.querySelector(`[data-pm-more="${CSS.escape(id)}"]`)?.focus(); }
+    else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && items.length) { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+  });
+  $('#page-work').addEventListener('input', e => {
+    if (state.page !== 'perm') return;
+    const k = { 'pm-pq': 'pq', 'pm-mq': 'mq', 'pm-pickq': 'pickQ' }[e.target.id];
+    if (k) { perm[k] = e.target.value; drawPerm(); }
+  });
+  $('#page-work').addEventListener('change', e => {
+    const cb = e.target.closest?.('[data-pm-picksel]');
+    if (!cb || state.page !== 'perm') return;
+    const id = cb.dataset.pmPicksel;
+    if (cb.checked) perm.pickSel.add(id);
+    else {
+      perm.pickSel.delete(id);
+      // 取消勾人類：名下因此被鎖住的 AI 也取消
+      for (const a of permPeople()) if (a.memberType === 'ai' && a.ownerParticipantId === id && !inProj(state.participants.get(id), perm.selProj)) perm.pickSel.delete(a.participantId);
+    }
+    drawPerm();
+  });
+  function promptName(title, value, { label = '專案名稱', max = 20, hint = '' } = {}) {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title, size: 'narrow', body: `<label class="field"><span class="field-label">${esc(label)}</span><input id="pn-input" maxlength="${max}" value="${esc(value)}">${hint ? `<span class="field-hint">${esc(hint)}</span>` : ''}</label>`,
+        foot: '<button class="btn" type="button" data-pn="0">取消</button><button class="btn primary" type="button" data-pn="1">確定</button>' });
+      document.body.appendChild(host);
+      const input = host.querySelector('#pn-input');
+      input.focus(); input.select();
+      const done = ok => { const v = input.value.trim(); host.remove(); resolve(ok ? v : null); };
+      holdBackdrop(host.firstElementChild);
+      host.addEventListener('click', e => { const b = e.target.closest('[data-pn]'); if (b) done(b.dataset.pn === '1'); else if (e.target.closest('[data-close]')) done(false); });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+    });
+  }
+  // 「請我的 AI 幫我做」「請它幫自己做」→ 打開私訊、預填開頭；私訊沒開走開啟說明
+  const myAisForAvatar = () => [...state.participants.values()].filter(p => isMyAi(p) && p.status !== 'disabled');
+  function askAvatar(ais, prefill, onlyPj = '') {
+    closeModal();
+    const pv = projectView();
+    const cands = ais.map(a => ({ a, pj: (onlyPj ? [onlyPj] : [pv, ...(a.projects || [])]).find(p => PROJECTS.includes(p) && (a.projects || []).includes(p) && dmOn(p)) })).filter(x => x.pj);
+    if (!cands.length) {
+      if (onlyPj && onlyPj !== pv) return toast(`「${projName(onlyPj)}」還沒開放私訊自己的 AI；請 leader 或管理員在「成員與權限 → 專案 → ⋯」打開。`);
+      if (PROJECTS.includes(pv) && dmEntry()) return dmEnable();
+      return toast(`${ais.length === 1 ? ais[0].name + ' ' : '你的 AI '}所在的專案還沒開放私訊；請管理員或 leader 在「成員與權限 → 專案 → ⋯」打開。`);
+    }
+    const go = ({ a, pj }) => { state.dmPrefill = prefill; state.dmAi = a.participantId; return pj !== pv ? Promise.resolve(setProjectView(pj)).then(() => openDm(a.participantId)) : openDm(a.participantId); };
+    if (cands.length === 1) return go(cands[0]);
+    const body = openModal(onlyPj ? '跟哪個 AI 討論新角色？' : '請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: onlyPj ? `在「${esc(projName(onlyPj))}」的私訊跟它討論，它會送角色提案卡` : '會打開跟它的私訊，幫你先打好開頭' });
+    body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });
+  }
+  // ---------- ：頂欄搜尋（卡片、訊息、成員），按 Enter 才查一次 ----------
+  const findAt = (s, q) => String(s || '').toLowerCase().indexOf(q.toLowerCase());
+  function markHit(s, q) { // 把第一個符合的字標起來（先切段再跳脫，不用正規式）
+    s = String(s || ''); const i = findAt(s, q);
+    return i < 0 ? esc(s) : `${esc(s.slice(0, i))}<mark>${esc(s.slice(i, i + q.length))}</mark>${esc(s.slice(i + q.length))}`;
+  }
+  function snippet(s, q, n = 90) {
+    s = String(s || '').replace(/\s+/g, ' '); const i = Math.max(0, findAt(s, q));
+    const a = Math.max(0, i - 30), part = s.slice(a, a + n);
+    return (a ? '…' : '') + markHit(part, q) + (a + n < s.length ? '…' : '');
+  }
+  function searchForm(q = '') {
+    return `<form class="search-modal-form" data-search-form role="search"><input type="search" name="q" value="${esc(q)}" maxlength="50" enterkeyhint="search" autocomplete="off" placeholder="搜尋卡片、訊息、成員" aria-label="搜尋卡片、訊息、成員（按 Enter 搜尋）"></form>`;
+  }
+  function openSearch(q = '') {
+    openModal('搜尋', `${searchForm(q)}<div id="search-res" class="search-res"><p class="muted small">輸入至少 2 個字，按 Enter 搜尋。訊息只找最近 5000 則。</p></div>`);
+  }
+  async function runSearch(q) {
+    if ([...q].length < 2) { toast('請輸入至少 2 個字'); return; }
+    const top = $('.topbar [data-search-form] input'); if (top) top.value = q;
+    const body = openModal('搜尋', `${searchForm(q)}<div id="search-res" class="search-res" aria-live="polite"><p class="muted">搜尋中…</p></div>`);
+    const ql = q.toLowerCase();
+    const [found, people] = await Promise.allSettled([api(`/api/search?q=${encodeURIComponent(q)}`), loadParticipants()]); // 一次 Enter 只算 1 次
+    const cards = found.status === 'fulfilled' ? { status: 'fulfilled', value: { items: found.value.cards } } : found;
+    const msgs = found.status === 'fulfilled' ? { status: 'fulfilled', value: { items: found.value.messages } } : found;
+    const res = body.querySelector('#search-res'); if (!res) return;
+    const cs = cards.status === 'fulfilled' ? cards.value.items || [] : null;
+    const ms = msgs.status === 'fulfilled' ? msgs.value.items || [] : null;
+    const ps = people.status === 'fulfilled' ? people.value.filter(p => inViewPerson(p.participantId) && [p.name, p.role, p.shortCode, p.ownerName].some(v => (v || '').toLowerCase().includes(ql))).slice(0, 10) : null;
+    const sec = (title, list, row, err) => `<section class="sr-sec"><h3>${title}${list ? ` <span class="muted small">${list.length}${list.length >= 10 && title !== '訊息' ? '+' : ''}</span>` : ''}</h3>${
+      !list ? `<p class="muted small">${err}</p>` : list.length ? list.map(row).join('') : '<p class="muted small">沒有符合的。</p>'}</section>`;
+    res.innerHTML = sec('卡片', cs, c => `<button type="button" class="sr-row" data-sr-card="${esc(c.cardId)}"><span class="sr-k">${esc(ckeyOf(c))}</span><span class="sr-t">${markHit(c.title, q)}</span><span class="sr-m muted small">${esc(c.status)}${c.project ? ' · ' + esc(projName(c.project)) : ''}</span></button>`, esc(cards.reason?.message || '卡片搜尋失敗，請再按一次 Enter。'))
+      + sec('訊息', ms, m => `<button type="button" class="sr-row" data-sr-msg="${esc(m.messageId)}" data-sr-pj="${esc(m.project || '')}"><span class="sr-k">${esc(m.author?.name || '?')}</span><span class="sr-t">${snippet(m.text, q)}</span><span class="sr-m muted small">${esc(fmtTime(m.createdAt).slice(0, -3))}${m.project ? ' · ' + esc(projName(m.project)) : ''}</span></button>`, esc(msgs.reason?.message || '訊息搜尋失敗，請再按一次 Enter。'))
+      + sec('成員', ps, p => `<button type="button" class="sr-row" data-sr-person="${esc(p.name)}">${avatarDot(p)}<span class="sr-t">${markHit(p.name, q)}</span><span class="sr-m muted small">${esc(roleNoPj(p))}${p.memberType === 'ai' && p.ownerName ? ' · 所屬 ' + esc(p.ownerName) : ''}</span></button>`, '成員載入失敗。');
+  }
+  document.addEventListener('submit', e => {
+    const f = e.target.closest?.('[data-search-form]'); if (!f) return;
+    e.preventDefault(); runSearch(f.q.value.trim());
+  });
+  document.addEventListener('click', async e => {
+    if (e.target.closest?.('[data-search-open]')) return openSearch($('.topbar [data-search-form] input')?.value || '');
+    const c = e.target.closest?.('[data-sr-card]'), m = e.target.closest?.('[data-sr-msg]'), p = e.target.closest?.('[data-sr-person]');
+    if (c) { closeModal(); return openCard(c.dataset.srCard); }
+    if (m) {
+      closeModal();
+      const pj = m.dataset.srPj, target = pj && myProjects().includes(pj) ? pj : 'cross';
+      if (hasHub() && (projectView() !== target || state.page !== 'messages')) await setProjectView(target, 'messages');
+      return jumpTo(m.dataset.srMsg);
+    }
+    if (p) {
+      closeModal(); await openMembers();
+      const i = $('#member-q'); if (i) { i.value = p.dataset.srPerson; i.dispatchEvent(new Event('input')); }
+    }
+  });
+  document.addEventListener('click', e => { const b = e.target.closest?.('[data-set-open]'); if (!b) return; closeModal(); return b.dataset.setOpen === 'devices' ? openDevices() : openApi(); }); // 從個人設定進
+  const SET_TABS = [['look', '🎨', '外觀'], ['me', '👤', '個人資料'], ['proj', '📁', '我的專案'], ['acct', '🔐', '帳號與登入']];
+  const SET_TAB_KEY = 'aigile-switch-set-tab';
+  function openSettings(opts = {}) {
+    const theme = store.get(THEME_KEY) || 'system';
+    // 個人設定分四頁（電腦左邊分頁、手機上方可滑）；記住上次分頁，捷徑直接開對應分頁
+    const cur = SET_TABS.some(t => t[0] === opts.tab) ? opts.tab : opts.focusRoles ? 'proj' : (SET_TABS.some(t => t[0] === store.get(SET_TAB_KEY)) ? store.get(SET_TAB_KEY) : 'look');
+    const pane = (k, html) => `<section class="set-pane" role="tabpanel" id="sp-${k}" aria-labelledby="st-${k}" tabindex="0"${k === cur ? '' : ' hidden'}>${html}</section>`;
+    const body = openModal('個人設定', `<div class="set-tabs-wrap">
+      <div class="set-tabs" role="tablist" aria-label="個人設定分頁" aria-orientation="vertical">
+        ${SET_TABS.map(([k, ic, t], i) => `<button type="button" role="tab" id="st-${k}" data-set-tab="${k}" aria-controls="sp-${k}" aria-selected="${k === cur}" tabindex="${k === cur ? 0 : -1}" aria-label="${t}，分頁 ${i + 1}／${SET_TABS.length}"><span class="set-tab-ico" aria-hidden="true">${ic}</span>${t}</button>`).join('')}
+      </div>
+      <div class="set-panes">
+      ${pane('look', `
+      <div class="field"><span class="field-label" id="theme-label">外觀</span>
+        <div class="seg-scope full" role="group" aria-labelledby="theme-label">
+          ${[['system', '跟隨系統'], ['light', '淺色'], ['dark', '深色']].map(([k, t]) => `<button type="button" data-theme-opt="${k}" aria-pressed="${theme === k}">${t}</button>`).join('')}
+        </div></div>
+      <div class="field"><span class="field-label" id="style-label">風格</span>
+        <div class="style-opts" role="group" aria-labelledby="style-label">
+          ${STYLE_OPTS.map(([k, t, d]) => `<button type="button" class="style-opt" data-style-opt="${k}" aria-pressed="${(state.me?.prefs?.style || 'a') === k}"><span class="style-sw sw-${k}" aria-hidden="true"><i></i><i></i><i></i></span><b>${t}</b><span class="muted small">${d}</span></button>`).join('')}
+        </div>
+        <span class="muted small">記在你的帳號，換裝置也一樣；淺色、深色都能用。</span></div>
+      <div class="switch-row">
+        <div><b>只顯示與我相關的訊息</b><span class="muted small">包含我和我名下 AI 發出或收到的訊息</span></div>
+        <button type="button" class="switch" role="switch" id="set-mine" aria-checked="${state.filter.scope === 'related'}" aria-label="只顯示與我相關的訊息"><span></span></button>
+      </div>`)}
+      ${pane('me', `
+      <div class="avatar-row">
+        <span class="av-56" id="set-avatar">${avatar(state.me)}</span>
+        <div><b>我的頭像</b><span class="muted small">可上傳圖片，或用文字、表情符號。所有成員都會看到。</span></div>
+      </div>
+      <div class="row set-av-acts">
+        <button class="btn small primary" type="button" data-change-avatar>更換</button>
+        ${myAisForAvatar().length ? '<button class="btn small" type="button" data-set-av="ask">🖼 請我的 AI 幫我做</button>' : ''}
+        <button class="btn small" type="button" data-set-av="revert">↩ 換回上一張</button>
+      </div>`)}
+      ${pane('proj', `
+      <div class="field"><span class="field-label">所屬專案</span>
+        <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員與權限」調整，這裡只能看。</p>
+        <div class="proj-rows">${projMineHtml()}</div>
+      </div>
+      ${state.me.memberType === 'human' && myProjects().length ? `<div class="field my-roles" id="my-roles"><span class="field-label">我的角色</span>
+        <p class="muted small">每個專案各一個，只能改自己的；跨專案角色在成員與權限。</p>
+        ${myProjects().map(pj => `<div class="my-role-row"><b class="my-role-name" title="${esc(projName(pj))}">${esc(projName(pj))}</b>${roleSelectHtml(state.me.projectRoles?.[pj] || '', `data-myrole="${esc(pj)}"`, { pj, label: `我在${projName(pj)}的角色` })}</div>`).join('')}
+        <div class="my-role-foot"><button type="button" class="btn primary small" id="my-roles-save">儲存角色</button></div></div>` : ''}`)}
+      ${pane('acct', `
+      <div class="field pwd-set" id="pwd-set"><span class="field-label" id="pwd-set-h">帳號密碼</span>
+        <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">讀取中…</span></div>
+        <form id="pwd-set-form" class="stack" aria-labelledby="pwd-set-h" hidden>
+          <label>帳號<input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="field-hint">4～30 字，英文、數字、. _ -；不分大小寫</span></label>
+          <label id="pwd-cur-l">目前密碼<span class="pwd-wrap"><input name="current" type="password" maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示目前密碼">顯示</button></span><span class="field-hint">改帳號或密碼都要先填</span></label>
+          <label><span id="pwd-new-t">新密碼</span><span class="pwd-wrap"><input name="newPassword" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示新密碼">顯示</button></span><span class="field-hint" id="pwd-new-hint">至少 8 碼</span></label>
+          <label>再輸入一次<input name="again" type="password" maxlength="128" autocomplete="new-password"></label>
+          <p class="error" id="pwd-set-err" role="alert"></p>
+          <div><button class="btn primary small" type="submit">儲存</button></div>
+          <p class="muted small" id="pwd-forgot"></p>
+        </form>
+      </div>
+      <div class="field set-links"><span class="field-label">登入與裝置</span><div class="row"><button type="button" class="btn small" data-set-open="devices">📱 我的裝置…</button><button type="button" class="btn small" data-set-open="api">🔑 API 資訊與登入碼…</button></div></div>
+      <div class="danger-zone">
+        <b>離開群組</b>
+        <p class="muted small">會停用你和你名下的所有 AI，其他成員將看不到你們，Token 全部失效。</p>
+        <button class="btn small danger-outline" type="button" id="set-leave">離開群組</button>
+      </div>`)}
+      </div></div>`, { size: 'set-modal' });
+    // 分頁切換：有沒存的修改（角色、帳號密碼）先問；上下（手機左右）鍵切換
+    const savedRole = pj => state.me.projectRoles?.[pj] || '';
+    const rolesDirty = () => [...body.querySelectorAll('[data-myrole]')].some(s => (s.value === '__other' ? '' : s.value) !== savedRole(s.dataset.myrole));
+    const pwdForm = body.querySelector('#pwd-set-form');
+    const pwdDirty = () => !!pwdForm && !pwdForm.hidden && (['current', 'newPassword', 'again'].some(k => pwdForm[k].value) || pwdForm.username.value.trim() !== (pwdForm.dataset.saved ?? pwdForm.username.value.trim()));
+    const dirtyIn = k => (k === 'proj' && rolesDirty()) || (k === 'acct' && pwdDirty());
+    const discard = k => {
+      if (k === 'proj') body.querySelectorAll('[data-myrole]').forEach(s => { s.value = savedRole(s.dataset.myrole); s.dataset.v = s.value; s.classList.toggle('empty', !s.value); });
+      if (k === 'acct' && pwdForm) { ['current', 'newPassword', 'again'].forEach(n => { pwdForm[n].value = ''; }); pwdForm.username.value = pwdForm.dataset.saved ?? ''; body.querySelector('#pwd-set-err').textContent = ''; }
+    };
+    let curTab = cur;
+    async function showSetTab(k, focus = false) {
+      if (k === curTab) return;
+      if (dirtyIn(curTab)) {
+        const what = curTab === 'proj' ? '我的角色' : '帳號密碼';
+        if (!await confirmDialog({ title: '要先儲存嗎？', message: `「${what}」有還沒儲存的修改，換頁就不會保留。`, confirmText: '不儲存，換頁', cancelText: '留下來儲存' })) {
+          body.querySelector(`#st-${curTab}`)?.focus();
+          return;
+        }
+        discard(curTab);
+      }
+      curTab = k; store.set(SET_TAB_KEY, k);
+      body.querySelectorAll('[data-set-tab]').forEach(b => { const on = b.dataset.setTab === k; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+      body.querySelectorAll('.set-pane').forEach(p => { p.hidden = p.id !== 'sp-' + k; });
+      body.querySelector('.set-panes').scrollTop = 0;
+      const tb = body.querySelector(`#st-${k}`);
+      tb?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      if (focus) tb?.focus();
+    }
+    const tabList = body.querySelector('.set-tabs');
+    tabList.addEventListener('click', e => { const b = e.target.closest('[data-set-tab]'); if (b) showSetTab(b.dataset.setTab); });
+    tabList.addEventListener('keydown', e => {
+      const keys = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1, Home: 'first', End: 'last' };
+      if (!(e.key in keys)) return;
+      e.preventDefault();
+      const i = SET_TABS.findIndex(t => t[0] === curTab), d = keys[e.key];
+      const j = d === 'first' ? 0 : d === 'last' ? SET_TABS.length - 1 : (i + d + SET_TABS.length) % SET_TABS.length;
+      showSetTab(SET_TABS[j][0], true);
+    });
+    setTimeout(() => body.querySelector(`#st-${cur}`)?.focus(), 0);
+    body.querySelector('[data-set-av="ask"]')?.addEventListener('click', () => askAvatar(myAisForAvatar(), '幫我做一個頭像：'));
+    body.querySelector('[data-set-av="revert"]')?.addEventListener('click', async () => {
+      try { await afterAvatar(await api('/api/me/avatar/revert', { method: 'POST' })); toast('已換回上一張頭像'); const a = body.querySelector('#set-avatar'); if (a) a.innerHTML = avatar(state.me); } catch (err) { toast(err.message); }
+    });
+    // 我的角色
+    body.querySelectorAll('[data-myrole]').forEach(sel => sel.addEventListener('change', async () => {
+      const pj = sel.dataset.myrole, prev = sel.dataset.v ?? (state.me.projectRoles?.[pj] || '');
+      const v = await pickRole(sel, prev);
+      if (v === null) return;
+      if (!ROLE_CHOICES.includes(v) && v && ![...sel.options].some(o => o.value === v || o.textContent === v)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(v)}">${esc(v)}</option>`);
+      sel.value = v; sel.dataset.v = v; sel.classList.toggle('empty', !v);
+    }));
+    body.querySelector('#my-roles-save')?.addEventListener('click', async () => {
+      const roles = Object.fromEntries([...body.querySelectorAll('[data-myrole]')].map(s => [s.dataset.myrole, s.value === '__other' ? '' : s.value]));
+      try {
+        const r = await api(`/api/participants/${encodeURIComponent(meId())}/project-roles`, { method: 'PUT', body: { roles } });
+        state.me.projectRoles = r.projectRoles;
+        const mine = state.participants.get(meId()); if (mine) mine.projectRoles = r.projectRoles;
+        drawAvatarMenu(); drawRoleBanner(); toast('已儲存我的角色');
+      } catch (err) { toast(err.message); }
+    });
+    if (opts.focusRoles) setTimeout(() => body.querySelector('#my-roles [data-myrole]')?.focus(), 50);
+    initPwdSettings(body);
+    body.querySelectorAll('[data-theme-opt]').forEach(b => b.addEventListener('click', () => {
+      const v = b.dataset.themeOpt;
+      if (v === 'system') store.del(THEME_KEY); else store.set(THEME_KEY, v);
+      applyTheme(v);
+      body.querySelectorAll('[data-theme-opt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    }));
+    body.querySelectorAll('[data-style-opt]').forEach(b => b.addEventListener('click', async () => { // 換風格，存在帳號
+      const v = b.dataset.styleOpt, prev = state.me?.prefs?.style || 'a';
+      if (v === prev) return;
+      const mark = s => body.querySelectorAll('[data-style-opt]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.styleOpt === s)));
+      rememberStyle(v); mark(v);
+      try {
+        const r = await api('/api/me/prefs', { method: 'PUT', body: { style: v } });
+        state.me = { ...state.me, prefs: r.prefs };
+        toast(`已換成「${STYLE_OPTS.find(o => o[0] === v)[1]}」風格`);
+      } catch (err) { rememberStyle(prev); mark(prev); toast(err.message); }
+    }));
+    const sw = body.querySelector('#set-mine');
+    sw.onclick = () => {
+      const on = sw.getAttribute('aria-checked') !== 'true';
+      sw.setAttribute('aria-checked', String(on));
+      setFilter({ scope: on ? 'related' : 'all' });
+    };
+    body.querySelector('#set-leave').onclick = async () => {
+      if (!await confirmDialog({ title: '離開群組？', confirmText: '離開群組', danger: true,
+        message: '你和名下所有 AI 的 Token 都會立即失效，其他成員將看不到你們。' })) return;
+      await api('/api/leave', { method: 'POST' }).catch(() => {});
+      logout(false);
+    };
+  }
+
+  // ---------- 個人設定 › 帳號密碼 ----------
+  async function initPwdSettings(body) {
+    const form = body.querySelector('#pwd-set-form'), status = body.querySelector('#pwd-status');
+    if (!form) return;
+    let cur;
+    const draw = (saved = '') => {
+      status.innerHTML = cur.set
+        ? `<div class="ok-box">已設定 · 帳號 <b>${esc(cur.username)}</b> · 上次修改 ${esc(fmtDate(cur.updatedAt))}</div>`
+        : '<p class="muted small">還沒設定。設了以後換裝置、清掉瀏覽器也能自己登入。</p>';
+      if (saved) status.insertAdjacentHTML('beforeend', `<p class="ok-text small pwd-saved">${saved}</p>`);
+      form.hidden = false;
+      form.username.value = cur.username || form.username.value;
+      form.dataset.saved = cur.username || ''; // 換分頁時判斷有沒有沒存的修改
+      body.querySelector('#pwd-cur-l').hidden = !cur.set;
+      body.querySelector('#pwd-new-hint').textContent = cur.set ? '至少 8 碼；只改帳號可以留白' : '至少 8 碼';
+      form.newPassword.required = !cur.set;
+      body.querySelector('#pwd-forgot').textContent = isAdmin() ? '忘記密碼要請有主機權限的人用救援指令（npm run admin-rescue）。' : `忘記密碼請管理員（${state.projMeta.adminName || '管理員'}）在「成員與權限」按「重設登入」。`;
+      for (const k of ['current', 'newPassword', 'again']) form[k].value = '';
+    };
+    try { cur = await api('/api/me/password'); } catch (err) { status.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+    draw();
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = body.querySelector('#pwd-set-err');
+      err.textContent = '';
+      const username = form.username.value.trim(), np = form.newPassword.value, again = form.again.value;
+      if (!/^[a-z0-9._-]{4,30}$/i.test(username)) { err.textContent = '帳號需為 4～30 字，只能用英文、數字、. _ -'; return form.username.focus(); }
+      if (np || !cur.set) { const bad = credError(username, np, again); if (bad) { err.textContent = bad; return form.newPassword.focus(); } }
+      if (cur.set && !form.current.value) { err.textContent = '請先填目前密碼'; return form.current.focus(); }
+      const btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        const r = await api('/api/me/password', { method: 'PUT', body: { username, ...(cur.set ? { currentPassword: form.current.value } : {}), ...(np ? { newPassword: np, newPasswordAgain: again } : {}) } });
+        const first = !cur.set;
+        cur = r;
+        draw(`已儲存。建議存到密碼管理器。${r.loggedOut ? `另外 ${r.loggedOut} 台用帳號密碼登入的裝置已登出。` : ''}`);
+        toast(first ? '已設定帳號密碼' : '已儲存帳號密碼');
+      } catch (e2) { err.textContent = e2.message; }
+      finally { btn.disabled = false; }
+    });
+  }
+
+  // ---------- 我的裝置：列每台、登出這台、＋配對新裝置（6 位數、5 分鐘、一次性） ----------
+  let pairTimer = null;
+  async function openDevices() {
+    const body = openModal('我的裝置', `<p class="muted small">這些裝置正以「${esc(state.me.name)}」登入。不認得的裝置請按「登出這台」。</p>
+      <ul class="dev-list" id="dev-list"><li class="muted small">讀取中…</li></ul>
+      <div class="dev-pair" id="dev-pair"><button class="btn primary" type="button" data-dev-pair>＋配對新裝置</button>
+        <span class="muted small">在新裝置的登入頁選「配對這台裝置」，輸入這裡出現的 6 位數字。</span></div>`, { size: 'narrow' });
+    const draw = async () => {
+      let items;
+      try { items = (await api('/api/devices')).items; } catch (err) { body.querySelector('#dev-list').innerHTML = `<li class="error">${esc(err.message)}</li>`; return; }
+      body.querySelector('#dev-list').innerHTML = items.map(d => `<li class="dev-row"><div class="dev-main"><b>${esc(d.label || '瀏覽器')}</b>${d.current ? '<span class="pill-tag blue">這台</span>' : ''}
+          <span class="muted small">最後使用 ${esc(d.current ? '現在' : agoText(d.lastUsedAt))} · ${esc(fmtDate(d.createdAt))} 登入</span></div>
+        <button class="btn small" type="button" data-dev-out="${esc(d.id)}" data-cur="${d.current ? 1 : ''}">登出這台</button></li>`).join('') || '<li class="muted small">沒有其他裝置</li>';
+    };
+    body.addEventListener('click', async e => {
+      const out = e.target.closest('[data-dev-out]');
+      if (out) {
+        const cur = !!out.dataset.cur;
+        if (!await confirmDialog({ title: cur ? '登出這台裝置？' : '登出那台裝置？', confirmText: '登出', danger: !cur, message: cur ? '登出後這台要重新配對或用登入碼才能再登入。' : '那台裝置會立刻被登出，要重新配對才能再用。' })) return;
+        try {
+          await api(`/api/devices/${encodeURIComponent(out.dataset.devOut)}/logout`, { method: 'POST' });
+          if (cur) { state.me = null; store.del(TOKEN_KEY); state.token = null; return location.replace('/'); }
+          toast('已登出那台裝置'); draw();
+        } catch (err) { toast(err.message); }
+        return;
+      }
+      if (e.target.closest('[data-dev-pair]')) showPairCode(body);
+    });
+    draw();
+  }
+  async function showPairCode(body) {
+    const box = body.querySelector('#dev-pair');
+    let d;
+    try { d = await api('/api/devices/pair-code', { method: 'POST' }); } catch (err) { return toast(err.message); }
+    box.innerHTML = `<div class="pair-code" aria-label="配對碼 ${d.code.split('').join(' ')}">${d.code.slice(0, 3)}<span> </span>${d.code.slice(3)}</div>
+      <p class="small">在新裝置打開 <b>${esc(location.host)}</b> ▸「配對這台裝置」輸入這 6 位數字。<span class="pair-left">剩 <b id="pair-cd"></b>，只能用一次。</span></p>
+      <button class="btn small" type="button" data-dev-pair>重新產生</button>`;
+    const end = Date.parse(d.expiresAt);
+    const tick = () => {
+      const cd = body.querySelector('#pair-cd');
+      if (!cd || !cd.isConnected) return clearInterval(pairTimer);
+      const left = end - Date.now();
+      if (left <= 0) { clearInterval(pairTimer); box.querySelector('.pair-code').classList.add('expired'); box.querySelector('.pair-left').textContent = '已過期，請重新產生。'; return; }
+      cd.textContent = mmss(left);
+    };
+    clearInterval(pairTimer); pairTimer = setInterval(tick, 1000); tick();
+  }
+  const fmtDate = iso => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+  // ---------- 邀請（只有管理員）：名字、角色、專案 → 一次性連結＋QR；有效時間可選（預設 24 小時） ----------
+  let invTimer = null;
+  function openInvite() {
+    const body = openModal('＋邀請', `<form id="inv-new" class="stack">
+        <label class="field">名字<input name="name" required maxlength="40" autocomplete="off" placeholder="例如：王小明"></label>
+        <fieldset class="field inv-projs"><legend class="field-label">專案與角色</legend>
+          ${PROJECTS.map(pj => `<div class="inv-proj-row"><label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label><label class="chk inv-ro"><input type="checkbox" data-inv-ro="${esc(pj)}" disabled> 👁 唯讀</label>${roleSelectHtml('', `data-inv-role="${esc(pj)}" disabled`, { pj, ai: false, label: `在${projName(pj)}的角色` })}</div>`).join('')}
+          <span class="muted small">每個專案各自一個角色；不勾＝還沒有專案，之後再指派</span></fieldset>
+        <fieldset class="field inv-ttl"><legend class="field-label">有效時間</legend>
+          <div class="inv-ttl-opts">${INV_TTLS.map(([k, t]) => `<label class="chk"><input type="radio" name="ttl" value="${k}"${k === '24h' ? ' checked' : ''}> ${t}${k === '24h' ? '（預設）' : ''}</label>`).join('')}</div>
+          <span class="muted small">只能用一次；對方用掉或你作廢就失效。</span>
+          <p class="inv-ttl-warn" id="inv-ttl-warn" role="status" hidden>⚠ ${INV_RISK}</p></fieldset>
+        <p class="error" id="inv-new-err" role="alert"></p>
+      </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="inv-new">產生邀請連結</button>' });
+    // 勾了專案才能選那個專案的角色
+    body.querySelector('#inv-new').addEventListener('change', async e => {
+      if (e.target.name === 'ttl') { body.querySelector('#inv-ttl-warn').hidden = e.target.value !== '7d'; return; }
+      const cb = e.target.closest('input[name="projects"]');
+      if (cb) { const s = body.querySelector(`[data-inv-role="${CSS.escape(cb.value)}"]`); s.disabled = !cb.checked; const ro = body.querySelector(`[data-inv-ro="${CSS.escape(cb.value)}"]`); if (ro) { ro.disabled = !cb.checked; if (!cb.checked) ro.checked = false; } return; }
+      const s = e.target.closest('[data-inv-role]');
+      if (!s) return;
+      const v = await pickRole(s, s.dataset.v || '');
+      if (v === null) return;
+      if (v && ![...s.options].some(o => o.value === v)) s.insertAdjacentHTML('afterbegin', `<option value="${esc(v)}">${esc(v)}</option>`);
+      s.value = v; s.dataset.v = v; s.classList.toggle('empty', !v);
+    });
+    body.querySelector('#inv-new').addEventListener('submit', async e => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const projects = f.getAll('projects');
+      const roles = Object.fromEntries(projects.map(pj => [pj, body.querySelector(`[data-inv-role="${CSS.escape(pj)}"]`)?.value || '']).filter(([, v]) => v && v !== '__other'));
+      try {
+        const readOnly = projects.filter(pj => body.querySelector(`[data-inv-ro="${CSS.escape(pj)}"]`)?.checked);
+        const out = await api('/api/invites', { method: 'POST', body: { name: f.get('name').trim(), projects, roles, readOnly, ttl: f.get('ttl') || '24h' } });
+        showInviteLink(out);
+        if (state.page === 'perm') loadInvites();
+      } catch (err) { body.querySelector('#inv-new-err').textContent = err.message; }
+    });
+  }
+  async function showInviteLink(out, title) {
+    const iv = out.invite, reset = iv.kind === 'reset';
+    const body = openModal(title || (reset ? `重設登入：${iv.name}` : '邀請連結'), `
+      <p>${reset ? `已登出 <b>${esc(iv.name)}</b> 的所有裝置、舊登入碼已作廢、帳號密碼已清掉。把這個連結傳給他，打開就能重新登入（可以順便重設帳號密碼）。` : `把連結傳給 <b>${esc(iv.name)}</b>${iv.role ? `（${esc(iv.role)}）` : ''}，對方打開確認名字就能加入。`}</p>
+      <p class="muted small">專案：${iv.projects.length ? iv.projects.map(x => esc(projName(x))).join('、') : '還沒有'} · 只能用一次</p>
+      <div class="copy-row"><code class="val inv-url" id="inv-url">${esc(out.url)}</code><button class="btn small" type="button" data-inv="copy">複製</button></div>
+      <div id="inv-qr" class="qr"></div>
+      <p class="inv-count" id="inv-count"><span>剩 <b id="inv-cd"></b> 失效</span></p>
+      <div class="row inv-acts"><button class="btn" type="button" data-inv="regen">重新產生</button><button class="btn danger" type="button" data-inv="cancel">作廢</button></div>
+      ${iv.ttl === '7d' ? `<p class="inv-ttl-warn">⚠ 有效 7 天：${INV_RISK}</p>` : ''}
+      <p class="muted small">重新產生：舊連結立刻失效，用同樣的有效時間（${esc(INV_TTLS.find(t => t[0] === iv.ttl)?.[1] || '24 小時')}）重新計時。</p>`, { size: 'narrow' });
+    try {
+      if (!window.QRCode) await loadScript(...QR_JS);
+      new window.QRCode(body.querySelector('#inv-qr'), { text: out.url, width: 200, height: 200 });
+    } catch { body.querySelector('#inv-qr').outerHTML = '<p class="muted small">QR Code 元件載入失敗（可能離線），請改用「複製」。</p>'; }
+    const end = Date.parse(iv.expiresAt);
+    const tick = () => {
+      const cd = body.querySelector('#inv-cd');
+      if (!cd || !cd.isConnected) return clearInterval(invTimer);
+      const left = end - Date.now();
+      if (left <= 0) {
+        clearInterval(invTimer);
+        body.querySelector('#inv-count').innerHTML = '<b class="bad">已過期</b>，按「重發」產生新連結（同樣內容）';
+        body.querySelector('#inv-url').classList.add('expired');
+        body.querySelector('[data-inv="regen"]').textContent = '重發';
+        return;
+      }
+      cd.textContent = invLeft(left);
+    };
+    clearInterval(invTimer); invTimer = setInterval(tick, 1000); tick();
+    body.addEventListener('click', async e => {
+      const k = e.target.closest('[data-inv]')?.dataset.inv;
+      if (k === 'copy') toast((await copyText(out.url)) ? '已複製邀請連結' : '複製失敗');
+      else if (k === 'regen') {
+        try { showInviteLink(await api(`/api/invites/${encodeURIComponent(iv.id)}/regenerate`, { method: 'POST' }), title); toast('已重新產生，舊連結已失效'); if (state.page === 'perm') loadInvites(); } catch (err) { toast(err.message); }
+      } else if (k === 'cancel') {
+        if (!await confirmDialog({ title: '作廢這個邀請？', confirmText: '作廢', danger: true, message: `給 ${esc(iv.name)} 的連結會立刻失效。` })) return;
+        try { await api(`/api/invites/${encodeURIComponent(iv.id)}/cancel`, { method: 'POST' }); clearInterval(invTimer); closeModal(); toast('已作廢邀請'); if (state.page === 'perm') loadInvites(); } catch (err) { toast(err.message); }
+      }
+    });
+  }
+  // 邀請清單（最近 7 天）
+  async function loadInvites() {
+    try { perm.invites = (await api('/api/invites')).items; } catch (err) { perm.invites = []; toast(err.message); }
+    drawPerm();
+  }
+  // 邀請分頁：名字｜專案與角色｜狀態｜動作（按鈕固定在最後一欄）
+  // ---------- 示範資料：一鍵載入、看完一鍵清掉（只刪示範的部分）----------
+  const demo = { status: null, busy: false };
+  function demoCardHtml() {
+    if (!demo.status) { api('/api/admin/demo').then(d => { demo.status = d; if (state.page === 'perm' && perm.tab === 'system') drawPerm(); }).catch(() => {}); }
+    const d = demo.status;
+    const body = !d ? '<p class="muted small">讀取中…</p>'
+      : d.loaded ? `<p class="small">已載入「${esc(d.projectName || '示範專案')}」。看完按清除，只會刪示範的成員、卡片與對話；你們自己在示範專案發的訊息或建的卡會留著。</p><button type="button" class="btn" data-demo="clear"${demo.busy ? ' disabled' : ''}>清除示範資料</button>`
+      : `<p class="small">建一個示範專案：幾張不同狀態的卡、一段人與 AI 的對話、一張等你決定的決策卡。內容是虛構的，看完可以一鍵清掉。</p><button type="button" class="btn primary" data-demo="load"${demo.busy ? ' disabled' : ''}>載入示範資料</button>`;
+    return `<div class="pm-card"><div class="pm-card-head"><strong>示範資料</strong></div><div class="pm-pad">${body}</div></div>`;
+  }
+  async function demoLoad() {
+    const r = await api('/api/admin/demo', { method: 'POST', body: { lang: window.aigileI18n?.lang || 'zh' } }); // 英文介面載英文示範
+    demo.status = { loaded: true, projectId: r.projectId, projectName: r.projectName };
+    return r;
+  }
+  document.addEventListener('click', async e => {
+    const b = e.target.closest?.('[data-demo]');
+    if (!b || demo.busy) return;
+    if (b.dataset.demo === 'clear' && !(await confirmDialog({ title: '清除示範資料？', confirmText: '清除', danger: true,
+      message: `會刪掉示範專案「${esc(demo.status?.projectName || '')}」裡示範的成員、卡片與對話。你們自己在示範專案發的訊息或建的卡會留著，其他專案不受影響。` }))) return;
+    demo.busy = true; drawPerm();
+    try {
+      if (b.dataset.demo === 'load') { const r = await demoLoad(); toast(`已載入「${r.projectName}」，重新整理後在專案清單看得到`); }
+      else { const r = await api('/api/admin/demo', { method: 'DELETE' }); demo.status = { loaded: false }; toast(r.keptProject ? '已清除示範資料（專案裡有你們自己的資料，專案保留）' : '已清除示範資料'); }
+      setTimeout(() => location.reload(), 1200);
+    } catch (err) { toast(err.message); demo.busy = false; demo.status = null; drawPerm(); }
+  });
+  // ---------- 有新版本：管理員打開成員與權限時查一次（伺服器一天最多問 GitHub 一次）----------
+  const upd = { data: null, loading: false };
+  const UPD_HIDE = 'aigile.updHidden';
+  function loadUpd() {
+    if (upd.data || upd.loading) return;
+    upd.loading = true;
+    api('/api/admin/update-check').then(d => { upd.data = d; if (state.page === 'perm') drawPerm(); }).catch(() => { upd.data = { enabled: false }; }).finally(() => { upd.loading = false; });
+  }
+  function updBanner() {
+    loadUpd();
+    const n = upd.data?.newer;
+    if (!n || store.get(UPD_HIDE) === n.version) return '';
+    return `<div class="upd-banner" role="status"><span>有新版本 <b>v${esc(n.version)}</b>（目前 v${esc(upd.data.current)}）</span><a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">版本說明</a><span class="grow"></span><button type="button" class="alert-close" data-upd-hide="${esc(n.version)}" aria-label="先不提醒這一版">×</button></div>`;
+  }
+  function updCardHtml() {
+    loadUpd();
+    const d = upd.data;
+    const line = !d ? '檢查中…' : !d.enabled ? '檢查新版本：已關閉（UPDATE_CHECK=0）' : d.failed ? '查不到最新版本（連不上 GitHub 或還沒有發行版），明天再查' : d.newer ? `有新版本 v${esc(d.newer.version)}，<a href="${esc(d.newer.url)}" target="_blank" rel="noopener noreferrer">看版本說明</a>` : '已經是最新版';
+    const when = d?.checkedAt ? ` · 上次檢查 ${esc(fmtDate(d.checkedAt))}` : '';
+    return `<div class="pm-card"><div class="pm-card-head"><strong>版本</strong><span class="muted small">目前 v${esc(d?.current || APP_VERSION)} · ${line}${when}</span></div></div>`;
+  }
+  document.addEventListener('click', e => { const b = e.target.closest?.('[data-upd-hide]'); if (b) { store.set(UPD_HIDE, b.dataset.updHide); if (state.page === 'perm') drawPerm(); } });
+  // ---------- 系統：備份匯出與匯入（只有管理員）----------
+  // 匯出：先拿清單，再一張表一頁一頁拿、文件一份一份拿，在瀏覽器組成一個 JSON 檔下載（每次請求都小，不超過 Workers 限制）
+  // 匯入：只在空站；選檔 → 預覽數量 → 確認 → 分批送 → 結束後重新整理（你會變成備份裡的管理員，密碼與這台裝置照舊）
+  const bk = { status: null, busy: false, msg: '' };
+  const bkB64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+  const bkUnB64 = b => Uint8Array.from(atob(b), c => c.charCodeAt(0));
+  const bkRaw = async (path, method = 'GET', bytes) => {
+    const r = await fetch(path, { method, headers: { Authorization: `Bearer ${state.token}`, ...(bytes ? { 'Content-Type': 'application/octet-stream' } : {}) }, body: bytes });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d?.error?.message || `HTTP ${r.status}`); }
+    return r;
+  };
+  const bkSay = msg => { bk.msg = msg; const el = $('#bk-msg'); if (el) el.textContent = msg; };
+  const bkMsgHtml = where => (bk.where === where && bk.msg ? `<p class="small bk-msg" id="bk-msg" role="status" aria-live="polite">${esc(bk.msg)}</p>` : '');
+  function permSystemHtml() {
+    if (!bk.status) { api('/api/admin/backup/status').then(s => { bk.status = s; if (state.page === 'perm' && perm.tab === 'system') drawPerm(); }).catch(err => toast(err.message)); }
+    const st = bk.status;
+    const imp = !st ? '<p class="muted small">讀取中…</p>'
+      : st.empty ? `<p class="small">${st.restoring ? '<b>上次匯入沒有做完</b>，可以再選一次備份檔從頭匯入。' : '這是空站，可以匯入備份。'}</p>
+        <label class="btn${bk.busy ? ' disabled' : ''}">選擇備份檔…<input type="file" accept=".json,application/json" data-bk-file hidden${bk.busy ? ' disabled' : ''}></label>`
+      : '<p class="small">這個站已經有資料，不能匯入；要搬家請在新架的空站匯入</p>';
+    return `<div class="pm-projs">
+      ${updCardHtml()}
+      ${demoCardHtml()}
+      <div class="pm-card"><div class="pm-card-head"><strong>下載備份</strong><span class="muted small">整個群組的資料（成員、專案、訊息、卡片、決策、技能、設定）存成一個檔。不含 Token、密碼與登入連結：匯入後其他人要你在「成員」按「重設登入」，AI 要主人重發 Token。</span></div>
+        <div class="pm-pad bk-row"><label class="bk-check"><input type="checkbox" id="bk-files" checked> 含附件與專案文件</label><button type="button" class="btn primary" data-bk="export"${bk.busy ? ' disabled' : ''}>下載備份</button></div>${bkMsgHtml('export')}</div>
+      <div class="pm-card"><div class="pm-card-head"><strong>匯入備份</strong><span class="muted small">把備份搬到新架的站。會先列出數量讓你確認。</span></div>
+        <div class="pm-pad">${imp}</div>${bkMsgHtml('import')}</div>
+    </div>`;
+  }
+  async function bkExport() {
+    const withFiles = !!$('#bk-files')?.checked;
+    bk.busy = true; bk.where = 'export'; bk.msg = '準備中…'; drawPerm();
+    try {
+      bkSay('準備中…');
+      const info = await api(`/api/admin/backup?files=${withFiles ? 1 : 0}`);
+      const out = { format: info.format, formatVersion: info.formatVersion, appVersion: info.appVersion, exportedAt: info.exportedAt, includeFiles: info.includeFiles, tables: {}, docs: [] };
+      const total = info.tables.reduce((n, t) => n + t.count, 0) + info.docs.length;
+      let done = 0;
+      for (const t of info.tables) {
+        out.tables[t.name] = [];
+        for (let after = 0; ;) {
+          const r = await api(`/api/admin/backup/rows?table=${t.name}&after=${after}&files=${withFiles ? 1 : 0}`);
+          out.tables[t.name].push(...r.rows); done += r.rows.length;
+          bkSay(`下載中… ${Math.min(done, total)} / ${total}`);
+          if (r.next == null) break;
+          after = r.next;
+        }
+      }
+      for (const id of info.docs) { out.docs.push({ id, b64: bkB64(new Uint8Array(await (await bkRaw(`/api/admin/backup/doc?id=${encodeURIComponent(id)}`)).arrayBuffer())) }); bkSay(`下載中… ${++done} / ${total}`); }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(out)], { type: 'application/json' }));
+      a.download = `aigile-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+      setTimeout(() => $('#bk-msg')?.scrollIntoView({ block: 'nearest' }), 0); // 手機：提示在畫面外就捲過去
+      bkSay(`備份完成：${(out.tables.participants || []).length} 位成員、${(out.tables.messages || []).length} 則訊息、${(out.tables.cards || []).length} 張卡${withFiles ? `、${out.docs.length} 份文件` : '（不含附件與文件）'}。`);
+    } catch (err) { bkSay('備份失敗：' + err.message); toast('備份失敗：' + err.message); }
+    finally { bk.busy = false; drawPerm(); }
+  }
+  async function bkImport(file) {
+    let b;
+    try { b = JSON.parse(await file.text()); } catch { return toast('讀不懂這個檔：不是 JSON'); }
+    if (b?.format !== 'aigile-backup' || !b.tables) return toast('這不是本平台的備份檔');
+    const T = b.tables, cnt = k => (T[k] || []).length;
+    const people = T.participants || [], humans = people.filter(p => p.kind === 'human'), ais = people.filter(p => p.kind === 'ai');
+    const admin = humans.filter(p => p.status === 'active').sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)) || String(x.id).localeCompare(String(y.id)))[0];
+    const ok = await confirmDialog({ title: '匯入這份備份？', confirmText: '匯入',
+      message: `<p>${esc(b.appVersion || '?')} 版，${esc(localYmdHm(b.exportedAt))} 匯出${b.includeFiles ? '' : '（不含附件與文件）'}：</p>
+        <ul class="bk-preview"><li>成員 ${people.length} 位（人類 ${humans.length}、AI ${ais.length}）</li><li>專案 ${cnt('projects')} 個</li><li>訊息 ${cnt('messages')} 則、私訊 ${cnt('dms')} 則</li><li>卡片 ${cnt('cards')} 張</li><li>技能 ${cnt('skills')} 版</li><li>專案文件 ${(b.docs || []).length} 份</li></ul>
+        <p>匯入後，你會變成備份裡的群組管理員（名字：<b>${esc(admin?.name || '你自己')}</b>），你現在的密碼與這台裝置照舊。其他人的登入與 AI 的 Token 都不在備份裡：請在「成員」按「重設登入」、請主人重發 Token。</p>` });
+    if (!ok) return;
+    bk.busy = true; bk.where = 'import'; bk.msg = '開始匯入…'; drawPerm();
+    try {
+      bkSay('開始匯入…');
+      await api('/api/admin/restore/begin', { method: 'POST', body: { format: b.format, formatVersion: b.formatVersion, appVersion: b.appVersion } });
+      const total = Object.values(T).reduce((n, rows) => n + rows.length, 0) + (b.docs || []).length;
+      let done = 0;
+      for (const [table, rows] of Object.entries(T)) {
+        for (let i = 0; i < rows.length;) { // 一批最多 500 列、約 3 MB
+          let j = i, size = 0;
+          while (j < rows.length && j - i < 500 && (size += JSON.stringify(rows[j]).length) < 3_000_000) j++;
+          if (j === i) j = i + 1;
+          await api('/api/admin/restore/rows', { method: 'POST', body: { table, rows: rows.slice(i, j) } });
+          done += j - i; i = j;
+          bkSay(`匯入中… ${done} / ${total}`);
+        }
+      }
+      for (const d of b.docs || []) { await bkRaw(`/api/admin/restore/doc?id=${encodeURIComponent(d.id)}`, 'POST', bkUnB64(d.b64)); bkSay(`匯入中… ${++done} / ${total}`); }
+      const fin = await api('/api/admin/restore/finish', { method: 'POST', body: {} });
+      bkSay(`匯入完成：${fin.humans} 位人類、${fin.ais} 隻 AI。即將重新整理…`);
+      toast(`匯入完成，你現在是「${fin.admin.name}」`);
+      setTimeout(() => location.reload(), 1500);
+    } catch (err) { bkSay('匯入失敗：' + err.message + '（可以再選一次檔案從頭匯入）'); toast('匯入失敗：' + err.message); bk.status = null; bk.busy = false; drawPerm(); }
+  }
+  document.addEventListener('click', e => { if (e.target.closest?.('[data-bk="export"]') && !bk.busy) bkExport(); });
+  document.addEventListener('change', e => { const inp = e.target.closest?.('[data-bk-file]'); if (inp?.files?.[0] && !bk.busy) { const f = inp.files[0]; inp.value = ''; bkImport(f); } });
+  function permInvitesHtml() {
+    if (!perm.invites) { loadInvites(); return '<p class="muted pm-pad">讀取中…</p>'; }
+    const cls = { 有效: 'green', 已使用: 'blue', 已過期: 'grey', 已取消: 'grey' };
+    const st = iv => iv.status === '有效' ? `有效 · 剩 ${invLeftShort(Date.parse(iv.expiresAt) - Date.now())}${iv.ttl === '7d' ? '（7 天）' : ''}`
+      : iv.status === '已使用' ? `已使用 · ${iv.usedByName ? iv.usedByName + ' · ' : ''}${fmtDate(iv.usedAt).split(' ')[0]}` : iv.status === '已取消' ? '已作廢' : iv.status;
+    const projText = iv => iv.projects.map(x => projName(x) + (iv.roles?.[x] ? ` · ${iv.roles[x]}` : '')).join('、') + (!iv.roles && iv.role ? ` · ${iv.role}` : '') || (iv.kind === 'reset' ? '—' : '還沒有專案');
+    const acts = iv => iv.status === '有效' ? `<button type="button" class="btn small" data-pm-inv-regen="${esc(iv.id)}">重新產生</button><button type="button" class="btn small" data-pm-inv-cancel="${esc(iv.id)}">作廢</button>`
+      : iv.status === '已使用' ? '' : `<button type="button" class="btn small primary" data-pm-inv-regen="${esc(iv.id)}">重發</button>`;
+    return `<div class="pm-projs"><div class="pm-card"><div class="pm-card-head"><strong>最近 7 天的邀請</strong><span class="muted small">連結只能用一次，有效時間在產生時選（預設 24 小時）；過期可以「重發」，不需要就「作廢」</span><span class="grow"></span><button type="button" class="link small" data-pm-inv-reload>重新整理</button><button type="button" class="btn primary small" data-pm-invite>＋ 邀請新的人</button></div>
+      ${perm.invites.length ? `<table class="pm-table pm-itable"><thead><tr><th scope="col">名字</th><th scope="col" class="c-proj">專案與角色</th><th scope="col" class="c-st">狀態</th><th scope="col" class="c-iact"><span class="sr-only">動作</span></th></tr></thead><tbody>
+        ${perm.invites.map(iv => `<tr class="pm-irow"><td class="c-name"><b>${esc(iv.name)}</b>${iv.kind === 'reset' ? '<span class="pill-tag yellow">重設登入</span>' : ''}</td><td class="c-proj">${esc(projText(iv))}</td><td class="c-st"><span class="inv-st ${cls[iv.status]}">${esc(st(iv))}</span></td><td class="c-iact">${acts(iv)}</td></tr>`).join('')}</tbody></table>`
+        : '<p class="muted small pm-pad">最近 7 天沒有邀請。按「＋ 邀請新的人」邀請新成員。</p>'}</div></div>`;
+  }
+  async function resetLogin(p) {
+    if (!await confirmDialog({ title: `重設 ${p.name} 的登入？`, confirmText: '重設登入', danger: true,
+      message: `會<b>登出 ${esc(p.name)} 所有裝置</b>、作廢他的舊登入碼、清掉他的帳號密碼，並產生一個新的邀請連結（24 小時內有效、只能用一次）讓他重新登入。他的 AI 不受影響。` })) return;
+    try { showInviteLink(await api(`/api/participants/${encodeURIComponent(p.participantId)}/reset-login`, { method: 'POST' })); if (perm.invites) perm.invites = null; loadParticipants().then(() => { if (state.page === 'perm') drawPerm(); }).catch(() => {}); } catch (err) { toast(err.message); }
+  }
+
+  // QR Code：在另一台裝置登入同一身分
+  // 外部腳本一律帶 integrity：CDN 上的檔案被換掉，瀏覽器就不執行（登入 Token 在 localStorage，外部腳本能讀到）
+  const QR_JS = ['https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js', 'sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA=='];
+  function loadScript(src, integrity) {
+    return new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = src; s.onload = res; s.onerror = rej;
+      if (integrity) { s.integrity = integrity; s.crossOrigin = 'anonymous'; }
+      document.head.append(s);
+    });
+  }
+  // 登入碼只存雜湊：要用（顯示、複製、QR Code）就產生一組新的，先問；回傳 null＝取消
+  async function newLoginCode() {
+    if (!await confirmDialog({ title: '產生新的登入碼？', confirmText: '產生',
+      message: '平台不保存登入碼原文。產生新的之後，<b>舊的立刻失效</b>（貼過舊登入碼、還沒登入的地方要改用新的）；已經登入的裝置不受影響。' })) return null;
+    const c = (await api('/api/me/login-code', { method: 'POST' })).code;
+    toast('已產生新的登入碼，舊的已失效');
+    return c;
+  }
+  async function openQr() {
+    let link;
+    try { const c = await newLoginCode(); if (!c) return; link = `${location.origin}/?login=${encodeURIComponent(c)}`; } catch (err) { return toast(err.message); }
+    const body = openModal('QR Code 登入', `
+      <p class="notice">用手機掃描，即可在手機上以「${esc(state.me.name)}」身分登入。此 QR Code 等同密碼，請勿分享。</p>
+      <div id="qr" class="qr"></div>
+      <button class="btn" type="button" id="qr-copy">複製登入連結</button>
+      <p class="notice">提示：用 localhost 開啟時手機連不到；請改用電腦的區網 IP 開啟本頁後再產生 QR Code。</p>`, { size: 'narrow' });
+    body.querySelector('#qr-copy').onclick = async () => toast((await copyText(link)) ? '已複製' : '複製失敗');
+    try {
+      if (!window.QRCode) await loadScript(...QR_JS);
+      new window.QRCode(body.querySelector('#qr'), { text: link, width: 220, height: 220 });
+    } catch {
+      body.querySelector('#qr').outerHTML = '<p class="notice warn">QR Code 元件載入失敗（可能離線），請改用「複製登入連結」。</p>';
+    }
+  }
+
+  // ---------- 進入點 ----------
+  const params = new URLSearchParams(location.search);
+  const qrCode = params.get('login');
+  // 已經登入時，?login= 連結不直接換帳號（別人寄來的連結可能讓你登進他的帳號）：先問，同意才換
+  const askSwitch = qrCode && store.get(TOKEN_KEY) && store.get(TOKEN_KEY) !== qrCode;
+  if (askSwitch) history.replaceState(null, '', '/');
+  if (qrCode && !askSwitch) {
+    store.set(TOKEN_KEY, qrCode);
+    history.replaceState(null, '', '/');
+    // 先開登入碼分頁並帶入；自動登入成功就直接進去，失敗就停在這裡顯示原因
+    setLoginTab('code', false);
+    document.querySelector('#token-form [name=token]').value = qrCode;
+  }
+  state.token = store.get(TOKEN_KEY);
+  if (/^\/invite(\/|$)/.test(location.pathname)) showInvite(); // 被邀請頁優先（這台裝置已登入別人也一樣）
+  else if (/^\/rescue(\/|$)/.test(location.pathname)) showRescue(); // 主機救援連結
+  else if (state.token) start().then(async () => {
+    if (askSwitch && state.me && await confirmDialog({ title: '改用這個登入碼登入？', confirmText: '改用它登入', message: `你現在登入的是 <b>${esc(state.me.name)}</b>。連結裡的登入碼會讓這台裝置換成另一個帳號；不是你自己產生的連結請按取消。` })) { store.set(TOKEN_KEY, qrCode); location.replace('/'); return; }
+    if (qrCode && !askSwitch && state.me) rememberLoginTab('code');
+  }).catch(() => { store.del(TOKEN_KEY); state.token = null; if (qrCode) $('#token-error').textContent = '這個登入碼無效或已換過，請在已登入的裝置重新複製。'; showJoin(); });
+  else showJoin();
+  if (!state.token) $('#boot').hidden = true;
+})();

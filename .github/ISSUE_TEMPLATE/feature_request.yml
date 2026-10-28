@@ -1,0 +1,21 @@
+name: Feature request / 功能建議
+description: An idea to make it better / 想要的新功能或改進
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does it solve? / 要解決什麼問題
+      description: Who runs into it and when / 誰、在什麼時候會遇到
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like / 希望怎麼做
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered / 想過的其他做法

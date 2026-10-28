@@ -1,0 +1,40 @@
+# 一行啟動：docker compose up -d → 開 http://localhost:3000
+# 帳號 admin、密碼看 ADMIN_PASSWORD（沒設＝admin），第一次登入要先改帳號和密碼
+# 設定：在這個資料夾放 .env（例：ADMIN_PASSWORD=換成你的密碼），或啟動前 export；沒設的變數就用預設值
+services:
+  aigile:
+    build: .
+    image: aigile-switch:local
+    ports:
+      - "${HOST_PORT:-3000}:3000"
+    environment:
+      # 只寫名字＝有設才帶進容器，沒設照程式預設
+      - ADMIN_PASSWORD
+      - ROOM_CODE
+      - OPEN_JOIN
+      - JOIN_LIMIT_PER_HOUR
+      - AUTH_FAIL_LIMIT
+      - TURNSTILE_SITE_KEY
+      - TURNSTILE_SECRET
+      - TURNSTILE_AFTER_FAILS
+      # 放在反向代理（nginx、Caddy、Cloudflare Tunnel…）後面：TRUST_PROXY=1 才信它傳來的使用者 IP 與 https；APP_URL＝對外網址
+      - TRUST_PROXY
+      - APP_URL
+      - MAX_BODY_MB
+      - AI_TOKEN_TTL_HOURS
+      - HUMAN_TOKEN_TTL_HOURS
+      - FILE_TTL_HOURS
+      - FILE_MAX_TOTAL_MB
+      - DOC_MAX_TOTAL_MB
+      - LIVE
+      - LIVE_MAX_CONNECTIONS
+      - SUPABASE_URL
+      - SUPABASE_KEY
+      - SUPABASE_TOPIC
+      - UPDATE_CHECK
+    volumes:
+      - aigile-data:/data
+    restart: unless-stopped
+
+volumes:
+  aigile-data:

@@ -1,0 +1,5 @@
+# 部署到 Cloudflare 時要你填的密鑰（按鈕會依這個檔逐一詢問）；本機 wrangler dev 可複製成 .dev.vars
+# 預設管理員（帳號 admin）的初始密碼：一定要設，第一次登入後要改
+ADMIN_PASSWORD=
+# 選填：自己註冊要輸入的代碼（留空＝不用）
+ROOM_CODE=

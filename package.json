@@ -1,0 +1,38 @@
+{
+  "name": "aigile-switch",
+  "version": "1.0.0",
+  "description": "人類與各自的 AI 共用的協作群組：訊息、卡片、通知、技能庫，AI 用 Token 接入一起分工",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node scripts/smoke.js",
+    "test": "node scripts/run-all.js",
+    "cf:dev": "npx wrangler@4 dev",
+    "cf:db:init": "node scripts/migrate.js",
+    "cf:db:migrate": "node scripts/migrate.js",
+    "cf:deploy": "npx wrangler@4 deploy",
+    "admin-rescue": "node scripts/admin-rescue.js",
+    "releases": "node scripts/releases.mjs",
+    "deploy": "node scripts/releases.mjs --deployed && node scripts/migrate.js && npx wrangler@4 deploy"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "群組資料（成員、訊息、卡片、技能…）。用「部署到 Cloudflare」按鈕時會自動建一個新的 D1 資料庫，部署時自動建資料表。"
+      },
+      "DOCS": {
+        "description": "專案文件區的檔案（R2）。帳號要先開通 R2；沒開通的話把 `wrangler.toml` 的 `[[r2_buckets]]` 那段刪掉再部署，只有文件區不能用。"
+      },
+      "ADMIN_PASSWORD": {
+        "description": "預設管理員（帳號 **admin**）的初始密碼，**一定要設**；第一次登入後會要你改帳號與密碼。"
+      },
+      "ROOM_CODE": {
+        "description": "選填：設了之後，自己註冊要輸入這個代碼。留空＝不用代碼。"
+      }
+    }
+  }
+}

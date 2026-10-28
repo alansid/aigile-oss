@@ -1,0 +1,52 @@
+name = "aigile-switch"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# 智慧放置——資料庫（D1）在亞太，請求卻常在西雅圖等節點執行，每查一次都要跨太平洋；
+# 開了之後 Cloudflare 會把 Worker 放到靠近資料庫的地方跑。效果不好就刪掉這兩行再部署。
+[placement]
+mode = "smart"
+
+# 開 Workers Logs，500 的原因事後查得到（儀表板 Workers → aigile-switch → Logs，保留 3 天）。
+# 只留程式自己印的紀錄（console.error），不記每一次請求：量小、免費額度內，也不會把網址參數存進日誌
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# 網頁頁面先經過 Worker（換上群組名與連結預覽）；有副檔名的靜態檔照舊直接送
+run_worker_first = ["/*", "!/*.js", "!/*.mjs", "!/*.css", "!/*.svg", "!/*.png", "!/*.ico", "!/*.md", "!/*.json", "!/*.txt"]
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aigile-switch"
+database_id = "<YOUR_D1_DATABASE_ID>"  # 手動部署：npx wrangler d1 create aigile-switch 印出來的 ID；用「部署到 Cloudflare」按鈕會自動建好並填上
+
+# 專案文件區：檔案本體存 R2（單檔 20 MB，不自動過期）。要用就先在 Cloudflare 開通 R2、建好 bucket；
+# 沒綁定時文件區回 503「還沒開通」，其他功能照常。
+[[r2_buckets]]
+binding = "DOCS"
+bucket_name = "aigile-switch-docs"
+
+# 上傳文件（方案 B）：檔案存 D1；每 10 分鐘清除超過保存期限的檔案
+[triggers]
+crons = ["*/10 * * * *"]
+
+# 選用：設定後，每個人自己註冊都要輸入這個代碼。正式環境建議改用 `wrangler secret put ROOM_CODE`
+# OPEN_JOIN：沒設＝開放自己註冊；要改成只能用邀請連結加入，設 OPEN_JOIN = "0"
+# ROOM_CODE、OPEN_JOIN 都只是初始值：管理頁「成員與權限 › 專案」改過就以管理頁為準
+# 選用：Cloudflare Turnstile 人機驗證（兩個都設才啟用）。Site Key 公開可寫這裡：TURNSTILE_SITE_KEY = "0x4AAAA..."
+# Secret 一定用 `wrangler secret put TURNSTILE_SECRET`，不要寫進這個檔
+# 新站會自動建管理員帳號 admin：初始密碼請先設 `wrangler secret put ADMIN_PASSWORD`（沒設＝admin），第一次登入要改帳號和密碼
+# [vars]
+# AI_TOKEN_TTL_HOURS = "168"

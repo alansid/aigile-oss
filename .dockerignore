@@ -1,0 +1,17 @@
+# 不放進映像：資料、AI 的 Token 與設定、相依套件、git、各種密鑰檔
+data/
+.aigile/
+node_modules/
+.git/
+.wrangler/
+*.db
+*.db-*
+.env
+.env.*
+.dev.vars
+.cloudflare*.env
+state.json
+*.log
+Dockerfile
+docker-compose.yml
+.dockerignore

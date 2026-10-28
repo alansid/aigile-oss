@@ -1,0 +1,46 @@
+name: Bug report / 錯誤回報
+description: Something does not work as expected / 有地方壞了或跟預期不一樣
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not paste tokens, passwords, invite links or customer data. / 請不要貼 Token、密碼、邀請連結或客戶資料。
+        Security issues: see SECURITY.md instead of opening a public issue. / 資安問題請照 SECURITY.md 私下回報。
+  - type: input
+    id: version
+    attributes:
+      label: Version / 版本
+      description: Shown in Members & permissions › System, or package.json / 在「成員與權限 › 系統」或 package.json
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: How you run it / 怎麼執行
+      options:
+        - Docker (docker compose)
+        - Node locally (npm start)
+        - Cloudflare Workers
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 重現步驟
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual / 預期與實際
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Browser, screen width, screenshots or logs / 瀏覽器、畫面寬度、截圖或日誌
