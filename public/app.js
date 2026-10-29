@@ -2715,7 +2715,7 @@
     if (c.status !== '待確認' || c.type === NOTE) return '';
     const dec = c.type === '決策', who = dec ? (c.decision?.decider || c.waitFor) : (c.waitFor || c.owner);
     const mine = who?.participantId === meId(), act = dec ? '決定' : '驗收';
-    return `<span class="cfm-pill ${dec ? 'dec' : 'ver'}">${mine ? `等你${act}` : `等${who?.name ? ' ' + esc(who.name) + ' ' : ''}${act}`}</span>`;
+    return `<span class="cfm-pill ${dec ? 'dec' : 'ver'}">${mine ? `等你${act}` : L(`等${who?.name ? ' ' + esc(who.name) + ' ' : ''}${act}`, `Waiting on ${who?.name ? esc(who.name) + ' ' : ''}to ${dec ? 'decide' : 'verify'}`)}</span>`;
   }
   // 驗收通過＝標已完成（人類完成即驗收）；退回＝填原因，卡回到交過來的 AI
   // 收件匣裡驗收／退回：留在原位，該列原地淡出、下一列補上；數字（紅點、分頁標題）立刻更新
@@ -4672,7 +4672,7 @@
       .map(mb => ({ mb, now: aiNowOf(mb) }))
       .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
   }
-  const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}` : x.now.kind === 'idle' ? '待命' : x.now.why === 'expired' ? 'Token 已過期' : x.now.why === 'new' ? '還沒接入' : '離線');
+  const aiNowText = x => (x.now.kind === 'work' ? L(`在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`, `Working on${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`) : x.now.kind === 'idle' ? '待命' : x.now.why === 'expired' ? 'Token 已過期' : x.now.why === 'new' ? '還沒接入' : '離線');
   const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${x.now.kind === 'work' && x.now.cardId ? `在做 <span data-nt>${esc(ckey(x.now.cardId))}</span>` : esc(aiNowText(x))}</span></button>`; // 卡號另包不翻：「在做」才查得到字典
   function drawAiNow() {
     drawDmSide();
@@ -4989,7 +4989,7 @@
     const humans = [...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled' && p.isOnline).length;
     const w = list.filter(x => x.now.kind === 'work').length, i = list.filter(x => x.now.kind === 'idle').length;
     const nw = list.filter(x => x.now.why === 'new').length; // 建好還沒接入的也寫出來（不然剛建好的 AI 在總覽看不到）
-    document.querySelectorAll('.sb-presence-text').forEach(el => { el.innerHTML = `<span class="nw">人類 ${humans} 在線</span><br><span class="nw">AI ${w} 在做事、</span><span class="nw">${nw ? `${i} 待命、` : `${i} 待命`}</span>${nw ? `<span class="nw">${nw} 還沒接入</span>` : ''}`; });
+    document.querySelectorAll('.sb-presence-text').forEach(el => { el.innerHTML = `<span class="nw">人類 ${humans} 在線</span><br><span class="nw">AI ${w} 在做事、</span><wbr><span class="nw">${nw ? `${i} 待命、` : `${i} 待命`}</span>${nw ? `<wbr><span class="nw">${nw} 還沒接入</span>` : ''}`; }); // <wbr>：英文在段與段之間換行（中文本來就能斷）
   }
   function openAiNowSheet() {
     const list = aiNowList();
@@ -5702,7 +5702,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const dot = { installed: ['ok', '已裝'], waiting: ['wait', '等主人允許'], not_synced: ['', '還沒同步'] };
       box.innerHTML = `<div class="sk-dh">${skIcon(s)}<span class="sk-tt"><b class="sk-nm">${esc(s.name)}</b><span class="muted small">${esc(pj?.name || projName(s.project))} · ${esc(skToText(s))} · v${s.version}</span></span><span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || ''}</span><button type="button" class="modal-x" data-skx aria-label="關閉">×</button></div>
         <div class="sk-sec"><b class="sk-h">${s.kind === 'pack' ? '說明（plugin.json）' : '說明（SKILL.md）'}</b>${esc(s.description)}${skBody(s.files.find(f => f.path === 'SKILL.md')?.text) ? `<div class="sk-skill">${esc(skBody(s.files.find(f => f.path === 'SKILL.md').text)).slice(0, 1200)}</div>` : ''}</div>
-        ${s.kind === 'pack' ? skPackFilesHtml(s) : `<div class="sk-sec"><b class="sk-h">檔案${s.previous ? `（跟 v${s.previous.version} 比較）` : ''}</b>${s.files.map(f => skFileHtml(f, s.previous)).join('')}
+        ${s.kind === 'pack' ? skPackFilesHtml(s) : `<div class="sk-sec"><b class="sk-h">檔案${s.previous ? `<span>（跟 v${s.previous.version} 比較）</span>` : ''}</b>${s.files.map(f => skFileHtml(f, s.previous)).join('')}
           ${s.previous ? s.previous.files.filter(o => !s.files.some(f => f.path === o.path)).map(o => `<p class="small"><code>${esc(o.path)}</code> <span class="pill-tag red">刪除</span></p>`).join('') : ''}</div>`}
         ${['published', 'pending'].includes(s.status) ? `<div class="sk-sec" id="sk-to-sec"><b class="sk-h">發給誰</b><div class="sk-to-sum">${esc(skToText(s))}${s.ais?.length ? `：${s.ais.map(a => esc(a.name) + (a.gone ? '（已不在專案，不會再發）' : '')).join('、')}` : ''}${s.canManage && skv.data?.projects.some(p => p.id === s.project) ? ' <button type="button" class="link small" data-skto>改</button>' : ''}</div></div>` : ''}
         ${s.status === 'published' ? `<div class="sk-sec"><b class="sk-h">裝到哪些 AI</b>${s.installs.length ? s.installs.map(a => `<div class="sk-ai"><span class="sk-dot ${dot[a.state][0]}" aria-hidden="true"></span>${esc(a.name)}（${esc(a.owner)}）· ${a.state === 'waiting' && a.mine ? '等你允許' : dot[a.state][1]}${a.state === 'installed' ? ` v${s.version}` : ''}${a.state === 'waiting' && a.mine ? `<button type="button" class="link small sk-push" data-skallow="${esc(a.aiId)}">允許並同步</button>` : ''}</div>`).join('') : '<p class="muted small">這個專案沒有符合發給誰的 AI。</p>'}</div>` : ''}
@@ -6982,11 +6982,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const p = state.participants.get(id), b = permBase(p);
       if (d.cross !== b.cross) out.push(`${p.name}${d.cross ? '設為' : '取消'}跨專案角色`);
       if (!d.cross) {
-        for (const x of d.projects) if (!b.projects.has(x) || b.cross) out.push(`${p.name}加入${projName(x)}`);
-        if (!b.cross) for (const x of b.projects) if (!d.projects.has(x)) out.push(`${p.name}離開${projName(x)}`);
+        for (const x of d.projects) if (!b.projects.has(x) || b.cross) out.push(L(`${p.name}加入${projName(x)}`, `${p.name} joins ${projName(x)}`));
+        if (!b.cross) for (const x of b.projects) if (!d.projects.has(x)) out.push(L(`${p.name}離開${projName(x)}`, `${p.name} leaves ${projName(x)}`));
       }
       for (const x of PROJECTS) if ((d.roles?.get(x) || '') !== (b.roles.get(x) || '') && (d.cross || d.projects.has(x))) out.push(`${p.name}在${projName(x)}的角色改成${d.roles?.get(x) || '未設定'}`);
-      for (const x of d.leaders || []) if (!b.leaders.has(x)) out.push(`${p.name}成為${projName(x)} leader`);
+      for (const x of d.leaders || []) if (!b.leaders.has(x)) out.push(L(`${p.name}成為${projName(x)} leader`, `${p.name} becomes project lead of ${projName(x)}`)); // 名字緊貼短中文，字典比對會略過，直接給英文
       for (const x of b.leaders) if (!(d.leaders || new Set()).has(x)) out.push(`${p.name}不再是${projName(x)} leader`);
     }
     return out;
@@ -7121,7 +7121,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const humans = out.filter(p => p.memberType === 'human' && humanOk(p));
     const ownerIn = a => { const o = ownerOf(a); return !!o && (inProj(o, pj) || sel.has(o.participantId)); };
     const box = (p, indent, lock = '') => {
-      const note = lock ? '🔒 ' + lock : p.memberType === 'ai' ? (indent ? '跟著主人' : permSub(p)) : `人類${permCur(p).projects.size || permCur(p).cross ? '' : ' · 還沒有專案'}`;
+      const note = lock ? '🔒 ' + lock : p.memberType === 'ai' ? (indent ? '跟著主人' : permSub(p)) : (permCur(p).projects.size || permCur(p).cross ? '人類' : L('人類 · 還沒有專案', 'Human · No projects yet'));
       return `<label class="pm-row pm-pick-row${indent ? ' indent' : ''}${lock ? ' off' : ''}"><input type="checkbox" data-pm-picksel="${esc(p.participantId)}" ${sel.has(p.participantId) ? 'checked' : ''} ${lock ? 'disabled' : ''}><span class="pm-name"><b>${esc(p.name)}</b></span><span class="muted small">${esc(note)}</span></label>`;
     };
     const rows = [];
@@ -7313,7 +7313,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const keep = document.activeElement?.id, top = box.scrollTop, admin = isAdmin();
     if (!admin && !['roles', 'skills'].includes(perm.tab)) perm.tab = 'members'; // leader 有成員、角色、技能分頁
     const nValid = (perm.invites || []).filter(iv => iv.status === '有效').length;
-    const tabs = `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${(admin ? [['members', '成員'], ['group', '群組'], ['projects', '專案'], ['roles', '角色'], ['skills', '技能'], ['invites', `邀請${nValid ? ` · ${nValid}` : ''}`], ['system', '系統']] : [['members', '成員'], ['roles', '角色'], ['skills', '技能']]).map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>`;
+    const tabs = `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${(admin ? [['members', '成員'], ['group', '群組'], ['projects', '專案'], ['roles', '角色'], ['skills', '技能'], ['invites', `邀請${nValid ? `<span> · ${nValid}</span>` : ''}`], ['system', '系統']] : [['members', '成員'], ['roles', '角色'], ['skills', '技能']]).map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>`;
     const body = perm.tab === 'system' ? permSystemHtml() : perm.tab === 'skills' ? permSkillsHtml() : perm.tab === 'roles' ? permRolesHtml() : perm.tab === 'projects' ? permProjectsHtml() : perm.tab === 'group' ? permGroupHtml() : perm.tab === 'invites' ? permInvitesHtml() : permView() === 'byMember' ? permByMemberHtml() : permByProjectHtml();
     box.innerHTML = `<div class="work-head"><div class="work-title"><h2>成員與權限</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${admin ? '' : ' · 你是 leader'}</span></div>${tabs}</div>
       ${admin ? updBanner() : ''}

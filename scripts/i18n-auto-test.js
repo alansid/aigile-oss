@@ -134,6 +134,44 @@ try {
   assert.equal(en.tr('· 王小明 交來'), '· handed over by 王小明');
   console.log('✓ 其他句型、對不上照原文、中文介面不動');
 
+  // ---------- 2b. 字典裡「變數緊貼短中文」的樣板：i18n.js 為了不把名字翻一半會略過（永遠不生效） ----------
+  // 每一個都要有交代：畫面上實際出現的句子別的樣板翻得到、或程式直接給英文（L）、或本來就是名字不能翻；新加的會在這裡被抓到
+  const HAN = /[㐀-鿿]/g;
+  const skipped = Object.keys(loadEn().dict).filter(k => /\{\d+\}/.test(k)).filter(k => {
+    const han = (k.split(/\{\d+\}/).join('').match(HAN) || []).length;
+    if (!han) return false;
+    if (han < 2 && /^\{\d+\}/.test(k) && /\{\d+\}$/.test(k)) return true;
+    return han < 3 && (/^\{\d+\}[㐀-鿿]/.test(k) || /[㐀-鿿]\{\d+\}$/.test(k));
+  }).sort();
+  const appSrc = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const covered = {
+    // 畫面上的句子（實際會出現的值）→ 英文
+    '🧩 技能{0}': [['🧩 技能 · 2 等你允許', '🧩 Skill · 2 awaiting your approval']],
+    '技能{0}': [['技能 · 2 等你允許', 'Skill · 2 awaiting your approval']],
+    '問題{0}': [['問題2', 'Question 2'], ['問題1 選 A', 'Question 1: A']],
+    '等你{0}': [['等你驗收', 'Awaiting your verification'], ['等你決定', 'Waiting for your decision']],
+    '搜尋{0}': [['搜尋卡片', 'Search cards']],
+    '檔案{0}': [['檔案', 'Files'], ['（跟 v1 比較）', ' (compared with v1)']], // 括號另包一層
+    '邀請{0}': [['邀請', 'Invites']], // 「 · 3」另包一層、沒有中文
+    '在做{0}': [['在做', 'Working on']], // 現況列卡號另包 data-nt；aria-label 用 L()
+    '{0}交來': [['40 分鐘前交來', 'handed in 40 min ago'], ['剛剛交來', 'handed in just now']], // 時間另包一層，由「{0} 分鐘前交來」等接住
+  };
+  const viaL = { '{0}加入{1}': 'joins', '{0}離開{1}': 'leaves', '{0}成為{1} leader': 'becomes project lead of', '{0}的': "'s", '在做{0}': 'Working on' }; // 程式直接給英文
+  const names = ['{0}助手']; // AI 名稱預填（中文介面才用；英文另有 -PG-AI），是名字不是介面字
+  for (const k of skipped) {
+    assert.ok(covered[k] || viaL[k] || names.includes(k), `字典樣板「${k}」永遠不會生效：改成變數另包一層（data-nt／span）、或用 L() 直接給英文，再加進這裡`);
+    for (const [zhText, want] of covered[k] || []) assert.equal(en.tr(zhText), want, `${k}：${zhText}`);
+    if (viaL[k]) assert.ok(new RegExp(`L\\(\`[^\`]*\`, \`[^\`]*${viaL[k].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(appSrc), `${k}：app.js 要用 L() 給英文（${viaL[k]}）`);
+  }
+  assert.ok(skipped.length >= 10, '樣板清單抓得到：' + skipped.length);
+  // 數量開頭的先比樣板：側欄「1 待命」「1 還沒接入」不再變成 1 Standby／1 Not connected yet
+  assert.equal(en.tr('1 待命'), '1 on standby');
+  assert.equal(en.tr('1 待命、'), '1 on standby, ');
+  assert.equal(en.tr('1 還沒接入'), '1 not connected yet');
+  assert.equal(en.tr('1. 群組名稱'), '1. Group name', '編號照樣只翻後面');
+  assert.equal(en.tr('1 隻 AI 有技能要同步'), 'AIs with skills to sync: 1');
+  console.log(`✓ ${skipped.length} 個會被略過的字典樣板都有交代`);
+
   // ---------- 3. 瀏覽器：英文看到英文、中文看到原文 ----------
   const target = has(expect.建卡等決定);
   const { js, cdp, login } = await kit.browser(1280, 900);

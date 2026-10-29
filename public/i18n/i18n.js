@@ -54,12 +54,14 @@
     if (k in exact) return exact[k];
     // 前面是符號／表情（例：「🔍 找名字」「＋ 新增專案」）：留著符號，翻後面
     const sym = /^([^\p{L}]+?)(\p{Script=Han}[\s\S]*)$/u.exec(k); // 也含「1. 群組名稱」這種編號
-    if (sym) { const r = tr(sym[2]); if (r != null) return sym[1] + r; }
+    const count = sym && /^\d+\s+$/.test(sym[1]); // 「1 待命」「2 還沒接入」：數量開頭的先比樣板（{0} 待命 → 1 on standby），比不到才只翻後面
+    if (sym && !count) { const r = tr(sym[2]); if (r != null) return sym[1] + r; }
     for (const p of pats) {
       if (!k.includes(p.probe)) continue;
       const m = p.re.exec(k);
       if (m) return plural(p.v.replace(/\{(\d+)\}/g, (x, i) => { const pos = p.idx.indexOf(+i); return pos >= 0 ? (tr(m[pos + 1]) ?? m[pos + 1]) : x; }));
     }
+    if (count) { const r = tr(sym[2]); if (r != null) return sym[1] + r; }
     return null;
   }
   api.tr = tr;
