@@ -126,6 +126,12 @@ try {
   assert.equal(en.tr('等你：設計稿還沒來'), 'Waiting on you: 設計稿還沒來');
   assert.equal(en.tr('等 王小明'), 'Waiting on 王小明');
   assert.equal(en.tr('等 王小明：設計稿還沒來'), 'Waiting on 王小明: 設計稿還沒來');
+  // AI 現況列「在做 DEMO-2」（卡號另包不翻）、收件匣「40 分鐘前交來」（不再被「交來」的寬樣板翻成 Handed over by）
+  assert.equal(en.tr('在做'), 'Working on');
+  assert.equal(en.tr('40 分鐘前交來'), 'handed in 40 min ago');
+  assert.equal(en.tr('2 小時前交來'), 'handed in 2 hr ago');
+  assert.equal(en.tr('剛剛交來'), 'handed in just now');
+  assert.equal(en.tr('· 王小明 交來'), '· handed over by 王小明');
   console.log('✓ 其他句型、對不上照原文、中文介面不動');
 
   // ---------- 3. 瀏覽器：英文看到英文、中文看到原文 ----------

@@ -3513,7 +3513,7 @@
     const verSection = verifyMe.length ? `
       <section class="wsugg wverify"><div class="wsugg-head"><span class="wdot ok"></span><h3>等你驗收</h3><span class="wcount ok">${verifyMe.length}</span><span class="muted small">AI 做完交給你的卡：看過沒問題按「驗收通過」，要改按「退回」</span></div>
         ${verifyMe.map(c => `<div class="sugg-row ver-row" data-ver-row="${esc(c.cardId)}">
-          <div class="sugg-main"><b>${cidHtml(c)} ${cardPTag(c)} ${esc(cardTitle(c))}</b><span class="muted small">${c.next ? '下一步：' + esc(c.next) + ' · ' : ''}${agoText(c.updatedAt)}交來</span></div>
+          <div class="sugg-main"><b>${cidHtml(c)} ${cardPTag(c)} ${esc(cardTitle(c))}</b><span class="muted small">${c.next ? '下一步：' + esc(c.next) + ' · ' : ''}<span>${agoText(c.updatedAt)}交來</span></span></div>
           <div class="sugg-actions">${reportBtn(c)}<button type="button" class="btn small primary" data-ver-ok="${esc(c.cardId)}">驗收通過</button><button type="button" class="btn small" data-ver-no="${esc(c.cardId)}">退回…</button><button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
         </div>`).join('')}</section>` : '';
     const confSection = confirms.length ? `
@@ -4673,7 +4673,7 @@
       .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
   }
   const aiNowText = x => (x.now.kind === 'work' ? `在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}` : x.now.kind === 'idle' ? '待命' : x.now.why === 'expired' ? 'Token 已過期' : x.now.why === 'new' ? '還沒接入' : '離線');
-  const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${esc(aiNowText(x))}</span></button>`;
+  const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${x.now.kind === 'work' && x.now.cardId ? `在做 <span data-nt>${esc(ckey(x.now.cardId))}</span>` : esc(aiNowText(x))}</span></button>`; // 卡號另包不翻：「在做」才查得到字典
   function drawAiNow() {
     drawDmSide();
     const el = $('#ai-now');
@@ -5077,7 +5077,7 @@
       const h = health(mb);
       const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
       return `<div class="tm-row" data-tm-id="${esc(mb.participantId)}">
-        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small">${esc(roleIn(mb, pv))}${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
+        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small"><span>${esc(roleIn(mb, pv))}</span>${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
         <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
         <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
         <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `待處理 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '待處理 0'}</div>
