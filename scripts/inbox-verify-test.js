@@ -6,26 +6,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
-import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { testToken } from './test-token.js';
+import { findBrowser, startServer, openChrome } from './browser-kit.js';
 
-const BROWSERS = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean);
-const exe = BROWSERS.find(p => fs.existsSync(p));
-if (!exe) { console.log('inbox-verify-test：略過（找不到 Chrome／Edge）'); process.exit(0); }
+if (!findBrowser()) { console.log('inbox-verify-test：略過（找不到 Chrome／Edge）'); process.exit(0); }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-inbox-'));
-const PORT = 39000 + Math.floor(Math.random() * 500), DBG = PORT + 600, BASE = `http://127.0.0.1:${PORT}`;
 const kids = [];
-const run = (cmd, args, env = {}) => { const p = spawn(cmd, args, { env: { ...process.env, ...env }, stdio: 'ignore' }); kids.push(p); return p; };
+let BASE = '';
 const until = async (fn, ms = 15000, label = '') => { const end = Date.now() + ms; for (;;) { try { const v = await fn(); if (v) return v; } catch {} if (Date.now() > end) throw new Error('等太久：' + label); await sleep(150); } };
 const call = async (t, p, m = 'GET', b) => { const r = await fetch(BASE + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
 
 try {
-  run(process.execPath, [new URL('../server.js', import.meta.url).pathname.replace(/^\/(\w:)/, '$1')], { PORT: String(PORT), DATA_DIR: path.join(dir, 'data'), AIGILE_TEST_PROJECTS: '1', RATE_LIMIT_PER_MIN: '10000' });
-  await until(() => fetch(BASE + '/api/health').then(r => r.ok), 15000, '本機伺服器');
+  BASE = await startServer(kids, path.join(dir, 'data'));
 
   // 資料：一位人類、一個 AI；AI 交 8 張卡給他驗收，上面 3 則要你回覆、下面 20 則給你知道的（跟的畫面一樣），頁面夠長
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
@@ -41,8 +36,7 @@ try {
   for (let i = 1; i <= 20; i++) await call(aiTok, '/api/messages', 'POST', { requestId: 'n' + i, project: '預設專案', text: `[通知] 第 ${i} 則進度`, recipientIds: [L], replyFrom: [] });
 
   // 無頭瀏覽器
-  run(exe, [...(process.env.CI ? ['--no-sandbox'] : []), '--headless=new', '--lang=zh-TW', '--accept-lang=zh-TW', `--remote-debugging-port=${DBG}`, `--user-data-dir=${path.join(dir, 'chrome')}`, '--no-first-run', '--no-default-browser-check', '--window-size=1400,700', 'about:blank']);
-  const target = await until(async () => (await (await fetch(`http://127.0.0.1:${DBG}/json/list`)).json()).find(t => t.type === 'page'), 15000, '瀏覽器');
+  const target = await openChrome(kids, path.join(dir, 'chrome'), 1400, 700);
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = bad; });
   let seq = 0; const wait = new Map();
