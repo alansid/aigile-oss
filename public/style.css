@@ -800,22 +800,25 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .crow-time { display: grid; justify-items: end; }
 .board-tools { display: flex; gap: 12px; align-items: center; }
 .board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
-.bcol { flex: 0 0 280px; background: #eef1f5; border: 2px solid transparent; border-radius: 12px; padding: 10px; display: grid; gap: 8px; align-content: start; }
+.bcol { flex: 0 0 280px; background: #eef1f5; border: 2px solid transparent; border-radius: 12px; padding: 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; } /* 欄寬不被不換行的字撐開 */
 .bcol.over { background: #e8efff; border-color: #93b4f5; }
 .bcol-head { display: flex; gap: 8px; align-items: center; }
 .bcol-head .wdot[data-st="待處理"] { background: #6366f1; } .bcol-head .wdot[data-st="進行中"] { background: #f59e0b; }
 .bcol-head .wdot[data-st="待確認"] { background: #ea580c; } .bcol-head .wdot[data-st="受阻"] { background: #dc2626; } .bcol-head .wdot[data-st="已完成"] { background: #16a34a; }
-.bcol-list { display: grid; gap: 8px; }
+.bcol-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .bempty { text-align: center; padding: 12px 0; margin: 0; }
-.ctile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; cursor: pointer; }
+.ctile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; cursor: pointer; }
 .ctile.me { border-color: #f5c79a; }
 .ctile.dragging { opacity: .45; }
 .ctile:focus-visible { outline: 2px solid var(--primary); }
 .ctile-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .ctile-title { font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
-.cwait { font-size: 12.5px; padding: 2px 8px; border-radius: 6px; background: #f1f4f9; justify-self: start; }
+.cwait { font-size: 12.5px; padding: 2px 8px; border-radius: 6px; background: #f1f4f9; justify-self: start; overflow-wrap: anywhere; }
 .cwait.me { background: #ffedd5; } .cwait.bad { background: #fee2e2; }
 .ctile-foot { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 2px; }
+.ctile-foot > :last-child { flex: none; }
+.ctile .cfm-pill { height: auto; min-height: 22px; white-space: normal; overflow-wrap: anywhere; } /* 卡片上的「等誰驗證」標籤換行 */
+.ctile .cowner > span:last-child { white-space: normal; overflow-wrap: anywhere; } /* 負責人名字換行、不省略 */
 
 /* 詳情抽屜 */
 .drawer-root { position: fixed; inset: 0; z-index: 9; display: flex; justify-content: flex-end; }
@@ -1285,6 +1288,7 @@ body.drawer-docked #app { padding-right: 400px; }
 .cmini { all: unset; box-sizing: border-box; cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
 .cmini:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .cmini-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmini > :not(.cmini-t) { flex: none; } /* 精簡列只有標題可以省略，日期、標籤不被擠掉 */
 .bfoot { all: unset; box-sizing: border-box; cursor: pointer; min-height: 44px; display: flex; align-items: center; justify-content: center; text-align: center; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px; color: var(--text); }
 .bfoot:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .arch-group { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
