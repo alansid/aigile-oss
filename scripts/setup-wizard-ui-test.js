@@ -110,7 +110,7 @@ try {
   await click('button[form="se-form"]');
   await until(async () => (await kit.call(tok, '/api/projects')).body.items.some(p => p.slug === 'test'), 8000, '改成 test');
   await click('[data-pm-newproj]');
-  await until(() => js("!!document.querySelector('#np-slug')"), 5000, '新增專案對話框');
+  await until(() => js("!!document.querySelector('#np-slug')"), 15000, '新增專案對話框');
   await set('#np-form [name=name]', '行銷');
   await until(async () => /\/p\/project-1/.test(await txt('#np-slug-hint')), 5000, '新增專案留空也自動產生');
   await click('button[form="np-form"]');

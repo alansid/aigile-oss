@@ -31,7 +31,13 @@ try {
   const snap = async () => JSON.stringify({ m: (await call(chen.token, '/api/messages?limit=50')).body.items.map(m => m.messageId), c: (await call(chen.token, '/api/cards?limit=50')).body.items?.map(c => [c.cardId, c.status, c.owner?.participantId]) });
   const before = await snap();
 
-  const { js, login, cdp, key } = await kit.browser(1280, 900);
+  const { js, login, cdp, key, on } = await kit.browser(1280, 900);
+  // 診斷用：記下還沒結束的網路請求（CI 上 help.json 5 秒沒回，要看是不是連線被別的請求佔滿）
+  const pending = new Map();
+  on(m => { const p = m.params || {};
+    if (m.method === 'Network.requestWillBeSent') pending.set(p.requestId, { url: (p.request?.url || '').replace(kit.BASE, ''), t: Date.now() });
+    else if (m.method === 'Network.loadingFinished' || m.method === 'Network.loadingFailed') pending.delete(p.requestId); });
+  await cdp('Network.enable');
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const size = (w, h = 900) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
   await size(1280);
@@ -42,9 +48,10 @@ try {
   const helpDiag = () => js(`(async () => JSON.stringify({ path: location.pathname, lang: document.documentElement.lang, help: document.querySelector('.help-ch')?.dataset.helpCh ?? null,
     pages: [...document.querySelectorAll('[id^="page-"]')].filter(e => !e.hidden).map(e => e.id), work: (document.querySelector('#page-work')?.innerText || '').slice(0, 160), toast: document.querySelector('#toast')?.textContent || '', errs: window.__errs || [],
     fetch: await Promise.race([fetch('/help.json', { cache: 'no-store' }).then(r => r.status + ' ' + r.headers.get('content-type')).catch(e => 'fetch 失敗：' + e.message), new Promise(r => setTimeout(() => r('fetch 5 秒沒回'), 5000))]) }))()`).catch(e => 'diag 失敗：' + e.message);
+  const pendingNow = () => [...pending.values()].map(r => `${r.url} ${Math.round((Date.now() - r.t) / 1000)}s`).slice(-15).join(' | ');
   const toHelp = async (t, ch = 2) => {
     await login(t, `/help/${ch}`);
-    await until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${ch}'`), 30000, `說明第 ${ch} 章`).catch(async e => { throw new Error(`${e.message}；畫面：${await helpDiag()}`); });
+    await until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${ch}'`), 30000, `說明第 ${ch} 章`).catch(async e => { throw new Error(`${e.message}；畫面：${await helpDiag()}；未結束的請求：${pendingNow()}`); });
   };
   const pop = () => J(`(() => { const p = document.querySelector('.tour-pop'); if (!p) return null; const h = document.querySelector('.tour-hole').getBoundingClientRect();
     return { meta: p.querySelector('.tour-meta')?.textContent || '', title: p.querySelector('.tour-title')?.textContent || '', text: p.querySelector('.tour-text')?.textContent || '', tip: p.querySelector('.tour-tip')?.textContent || '',

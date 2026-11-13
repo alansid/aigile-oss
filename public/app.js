@@ -923,6 +923,10 @@
     }, 150);
   }
   const ensureLive = () => { if (!liveConn.ctl && !liveConn.retry && state.token) connectLive(); };
+  // 離開這頁就關掉即時通道：頁面被瀏覽器留在「上一頁快取」時連線不會斷，同一個網站的連線有上限（HTTP/1.1 約 6 條），
+  // 舊頁佔著就會讓新頁的請求一直排隊（CI 上說明頁 help.json 卡在「載入中」）。回到這頁再接上
+  addEventListener('pagehide', () => { liveConn.gen++; clearTimeout(liveConn.retry); liveConn.retry = null; liveConn.ctl?.abort(); liveConn.ctl = null; liveConn.on = false; });
+  addEventListener('pageshow', e => { if (e.persisted) ensureLive(); });
   function connectEvents(immediate = false) {
     clearTimeout(pollTimer);
     ensureLive(); // 內建即時通道（有就用）

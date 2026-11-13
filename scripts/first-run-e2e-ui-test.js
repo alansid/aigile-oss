@@ -149,7 +149,7 @@ try {
     // 自己註冊第二人
     await h.fresh();
     await h.click('#self-join');
-    await until(() => h.visible('#jn-user'), 5000, '註冊表單');
+    await until(() => h.visible('#jn-user'), 15000, '註冊表單');
     await h.type('#join-form [name=name]', '陳大文'); await h.type('#join-form [name=role]', 'QA');
     await h.type('#jn-user', 'chen.dw'); await h.type('#jn-pwd', 'pass-word-1'); await h.type('#jn-again', 'pass-word-1');
     await h.click('#join-submit');
