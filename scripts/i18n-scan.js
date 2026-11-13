@@ -1,4 +1,4 @@
-// 掃出介面上的中文片段（給英文字典檢查用）：public/app.js、public/index.html 的字串與模板字串，去掉 HTML 標籤，${} 換成 {0}{1}…
+// 掃出介面上的中文片段（給英文字典檢查用）：public/app.js、public/tour.js、public/index.html 的字串與模板字串，去掉 HTML 標籤，${} 換成 {0}{1}…
 // 也掃伺服器回給網頁的錯誤訊息（src/*.js 的 ApiError、invalid、fieldErr、reject）
 // 用法：import { scanUi, scanServer } from './i18n-scan.js'；或 node scripts/i18n-scan.js 列出還沒翻的
 import fs from 'node:fs';
@@ -52,8 +52,10 @@ const norm = f => { let k = f.replace(/\s+/g, ' ').trim(), i = 0; return k.repla
 export function scanUi(root = ROOT) {
   const keys = new Set();
   const add = f => { const k = norm(f); if (k && HAN.test(k)) keys.add(k); };
-  const app = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
-  for (const l of literals(app)) if (CJK.test(l)) fragments(l).forEach(add);
+  for (const f of ['public/app.js', 'public/tour.js']) { // tour.js：聚光燈導覽說明框上的字
+    const src = fs.readFileSync(path.join(root, f), 'utf8');
+    for (const l of literals(src)) if (CJK.test(l)) fragments(l).forEach(add);
+  }
   const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '').replace(/<script[\s\S]*?<\/script>/g, '');
   fragments(html).forEach(add);
   return [...keys];

@@ -3085,3 +3085,142 @@ button.ask-pv:focus-visible { outline: 2px solid var(--primary); outline-offset:
   .tm-who > div { display: grid; gap: 0; }
   .tm-who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* ---------- 新手上路（總覽最上面） ---------- */
+.ob { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin: 0 0 16px; overflow: hidden; }
+.ob-head { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; }
+button.ob-toggle { all: unset; box-sizing: border-box; flex: 1; min-width: 0; min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-radius: 8px; cursor: pointer; }
+button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
+.ob-title { font-weight: 700; font-size: 1rem; }
+.ob-prog { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+.ob-bar { flex: 0 1 140px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.ob-bar i { display: block; height: 100%; background: var(--ok, #16a34a); border-radius: 3px; }
+.ob-chev { flex: none; width: 1em; margin-right: -4px; font-size: 1.6rem; line-height: 1; text-align: center; color: var(--muted); transition: transform .15s; } /* 箭頭放標題左邊，看得出整條能點 */
+.ob.collapsed .ob-chev { transform: rotate(-90deg); }
+.ob-skip { flex: none; min-height: 44px; }
+.ob-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+.ob-item { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+.ob-item + .ob-item { border-top: 1px solid var(--border); }
+.ob-check { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); display: grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--bg); }
+.ob-item.done .ob-check { background: var(--ok, #16a34a); border-color: var(--ok, #16a34a); }
+.ob-txt { flex: 1; min-width: 0; display: grid; gap: 2px; justify-items: start; }
+.ob-txt b { font-weight: 600; }
+.ob-item.done .ob-txt b { color: var(--muted); font-weight: 400; } /* 做完的變細變灰，沒做的更突出 */
+.ob-t { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.ob-opt { font-size: .75rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+.ob-item .btn { flex: none; min-height: 40px; }
+.ob-item a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+@media (max-width: 640px) {
+  .ob-bar { display: none; }
+  .ob-item { flex-wrap: wrap; padding: 10px 12px; }
+  .ob-item .btn { margin-left: 34px; min-height: 44px; }
+}
+
+/* ---------- 說明頁（/help、/help/1～5） ---------- */
+.help-btn .help-q, .sheet-help .help-q { font-weight: 800; }
+.help-btn[aria-current="page"], .sheet-help[aria-current="page"] { background: var(--human-bg); color: var(--human-text); } /* 在說明頁時亮起，跟側欄目前項目同樣式 */
+.sheet-panel > a.sheet-help { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 12px; color: var(--text); text-decoration: none; }
+/* 目錄 */
+.help-index { width: 100%; max-width: 960px; display: grid; gap: 14px; }
+.help-ask { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; font-weight: 600; }
+.help-toc { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+@media (min-width: 900px) { .help-toc { grid-template-columns: 1fr 1fr; } }
+.help-toc a { height: 100%; box-sizing: border-box; display: grid; align-content: start; gap: 4px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); text-decoration: none; }
+.help-toc a:hover { border-color: var(--primary); }
+.help-toc a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.help-toc li.dim a { opacity: .55; } /* 選「不會」帶 AI 時第 1 章變淡，不藏起來 */
+.ht-n, .help-meta { font-size: .82rem; color: var(--muted); }
+.ht-skip { margin-left: 8px; padding: 0 6px; border-radius: 6px; background: var(--surface-2); }
+.ht-t { font-size: 1.02rem; }
+.ht-goal { font-size: .88rem; color: var(--muted); line-height: 1.6; }
+/* 章節頁：不到 1100 只有內文、置中；≥1100 左邊 200px 章節清單跟著捲 */
+.help-wrap { width: 100%; display: flex; justify-content: center; gap: 32px; }
+.help-side { display: none; }
+.help-ch { width: 100%; max-width: 720px; min-width: 0; line-height: 1.75; overflow-wrap: anywhere; }
+@media (min-width: 1100px) {
+  .help-side { display: block; flex: 0 0 200px; position: sticky; top: 0; align-self: flex-start; font-size: .9rem; }
+  .help-side ol { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; }
+  .help-side a { display: flex; gap: 8px; padding: 7px 10px; border-radius: 8px; color: var(--text); text-decoration: none; line-height: 1.45; }
+  .help-side a:hover { background: var(--surface-2); }
+  .help-side a[aria-current="page"] { background: var(--human-bg); color: var(--human-text); font-weight: 700; }
+  .help-side .hsd-top { color: var(--muted); font-size: .82rem; }
+  .hsd-n { flex: none; width: 1.2em; color: var(--muted); }
+  .help-side a[aria-current="page"] .hsd-n { color: inherit; }
+  .help-ch .help-top { display: none; } /* 左邊已有「說明目錄」 */
+}
+.help-top a { color: var(--primary); text-decoration: none; }
+.help-top a:hover { text-decoration: underline; }
+.help-head h2 { margin: 2px 0 6px; font-size: 1.3rem; line-height: 1.4; }
+.help-lead { font-size: 1.02rem; margin: 0; }
+.help-steps { list-style: none; padding: 0; margin: 18px 0; display: grid; gap: 26px; }
+.help-step { scroll-margin-top: 16px; }
+.help-step h3 { font-size: 1rem; margin: 0 0 4px; display: flex; gap: 6px; align-items: baseline; }
+.help-step p, .help-step ul { margin: 0; }
+.help-step ul { padding-left: 1.3em; }
+.help-sn { color: var(--primary); }
+.help-copy { margin-left: auto; font-weight: 400; color: var(--muted); visibility: hidden; } /* 第 5 章：桌機滑過標題才出現，手機不顯示 */
+@media (hover: hover) and (min-width: 900px) { .help-step:hover .help-copy, .help-copy:focus-visible { visibility: visible; } }
+@media (hover: none), (max-width: 899px) { .help-copy { display: none; } }
+.help-step.hit { outline: 2px solid var(--primary); outline-offset: 6px; border-radius: 6px; }
+.help-fig { margin: 10px 0 0; }
+.help-fig img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--border); } /* 圖是 2 倍解析度 */
+.help-fig a { display: block; cursor: zoom-in; } /* 點圖開原尺寸 */
+.help-fig figcaption { margin-top: 4px; font-size: .78rem; color: var(--muted); }
+.help-note { margin: 22px 0 0; padding: 10px 14px; border-left: 4px solid var(--primary); border-radius: 8px; background: var(--surface-2); }
+.help-after { margin: 18px 0 0; }
+.help-try { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; margin: 18px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.help-pager { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 22px 0 32px; }
+.help-pager a { display: grid; gap: 2px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); text-decoration: none; line-height: 1.5; }
+.help-pager a:hover { border-color: var(--primary); }
+.help-pager .hp-next { text-align: right; grid-column: 2; }
+.hp-dir { font-size: .82rem; color: var(--primary); }
+.h-mob { display: none; }
+@media (max-width: 899px) { .h-desk { display: none; } .h-mob { display: inline; } } /* 跟側欄同一個斷點：沒有側欄就用手機寫法 */
+.help-fig.mob-only { display: none; }
+@media (max-width: 899px) { .help-fig.desk-only { display: none; } .help-fig.mob-only { display: block; } } /* 只有一種圖時，另一種寬度不顯示 */
+
+/* 新手上路：清單底下一行，桌機寫右上角、手機寫選單 */
+.ob-foot { margin: 0; padding: 8px 16px 10px; border-top: 1px solid var(--border); }
+.ob-mob { display: none; }
+@media (max-width: 899px) { .ob-desk { display: none; } .ob-mob { display: inline; } }
+
+/* 聚光燈導覽：遮罩 rgba(15,23,42,.62)；亮塊四周 6px、圓角 10、外圈 3px 白框；只擋視線、不攔點擊 */
+.tour-hole { position: fixed; z-index: 200; pointer-events: none; border-radius: 10px;
+  box-shadow: 0 0 0 3px #fff, 0 0 0 200vmax rgba(15, 23, 42, .62); transition: left .18s, top .18s, width .18s, height .18s; }
+.tour-hole.no-target { inset: 0; width: auto !important; height: auto !important; border-radius: 0; box-shadow: none; background: rgba(15, 23, 42, .62); transition: none; }
+.tour-pop { position: fixed; z-index: 201; width: 320px; box-sizing: border-box; padding: 14px 16px 12px; background: var(--surface); color: var(--text);
+  border-radius: 12px; box-shadow: 0 12px 32px rgba(15, 23, 42, .28); }
+.tour-pop.loading { opacity: .6; }
+.tour-pop::before { content: ''; position: absolute; width: 14px; height: 14px; background: inherit; transform: rotate(45deg); }
+.tour-pop.at-bottom::before { top: -7px; left: calc(var(--ax, 50%) - 7px); }
+.tour-pop.at-top::before { bottom: -7px; left: calc(var(--ax, 50%) - 7px); }
+.tour-pop.at-right::before { left: -7px; top: calc(var(--ay, 50%) - 7px); }
+.tour-pop.at-left::before { right: -7px; top: calc(var(--ay, 50%) - 7px); }
+.tour-pop.at-center::before { display: none; }
+.tour-x { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; border-radius: 8px; cursor: pointer; }
+.tour-x:hover { background: var(--surface-2); color: var(--text); }
+.tour-meta { font-size: 12px; color: var(--muted); padding-right: 28px; }
+.tour-title { margin: 6px 0 4px; font-size: 15px; font-weight: 700; }
+.tour-text { margin: 0; font-size: 14px; line-height: 1.6; }
+.tour-tip { margin: 8px 0 0; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); color: var(--muted); font-size: 13px; line-height: 1.5; }
+.tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.tour-grow { flex: 1; }
+.tour-dots { display: inline-flex; gap: 4px; }
+.tour-dots i { width: 6px; height: 6px; border-radius: 3px; background: var(--border); }
+.tour-dots i.done { background: var(--primary); opacity: .45; }
+.tour-dots i.on { width: 16px; background: var(--primary); }
+/* 說明頁章首入口「▶ 帶我在畫面上走一次」：只在寬 ≥1000 顯示 */
+.help-tour { display: none; align-items: center; gap: 14px; margin: 14px 0 4px; padding: 12px 14px; border-radius: 12px; background: var(--human-bg); border: 1px solid var(--human-border); }
+.help-tour .btn { white-space: nowrap; flex: none; }
+.help-tour .muted { line-height: 1.6; }
+@media (min-width: 1000px) { .help-tour { display: flex; } }
+/* 導覽暫停（表單蓋住畫面）時說明框在左下角、沒有箭頭；「下一步」不能按時的說明 */
+.tour-pop.paused::before { display: none; }
+.tour-block { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.tour-foot .btn[disabled] { opacity: .45; cursor: not-allowed; }
+.help-tour.dim { opacity: .55; }
+.help-tour .ht-skip { margin-left: 6px; }
+.ob-tour { white-space: nowrap; }
+@media (max-width: 999px) { .ob-tour { display: none; } }
+.ob-tour { margin-left: 2px; }
+.help-colon { white-space: pre; }

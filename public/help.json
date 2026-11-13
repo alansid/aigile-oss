@@ -1,0 +1,217 @@
+{
+  "note": "說明頁五章（/help、/help/1～5）。中文放 zh、英文放 en，網頁照介面語言選一份；兩份的章、步驟、題號、畫面格要一樣（help-test 會檢查）。{桌機|手機} 是桌機與手機寫法不同的地方；**粗體**。card 是目錄卡上那一行（沒寫就用 lead）。畫面圖放 public/help-img/<語言>/<格>.webp（手機版 <格>-m.webp），把檔名（不含副檔名）加進該語言的 imgs，寬高寫進 imgSize（先留位置，載入時版面不跳）；沒加進的不顯示，只有桌機圖時手機寬度也不顯示。figText 是畫面描述（也當圖的替代文字）。",
+  "zh": {
+    "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2"],
+    "imgSize": {"1-1": [1280,1504], "1-2": [880,906], "1-3": [2060,632], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,270], "2-2": [1942,350], "2-3": [2560,526], "2-4": [1984,262], "3-1": [1942,960], "3-3": [973,988], "3-4": [1958,170], "3-5": [1958,155], "4-1": [1880,1208], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
+    "chapters": [
+      {
+        "n": 1,
+        "title": "讓你的 AI 加入",
+        "mins": "5 分鐘",
+        "who": "要帶自己的 AI 的人",
+        "forAi": true,
+        "lead": "讀完這章，你會把自己的 AI 接上平台，看到它在線、開始收訊息。",
+        "steps": [
+          { "t": "建一隻 AI", "d": "右上角頭像 › 我的 AI，按「＋ 新增 AI」：", "list": ["選一個角色範本，例如程式開發或測試。下面的設定會自動填好，可以再改。", "勾它要加入的專案，按「建立 AI」。"],
+            "fig": "1-1", "figText": "我的 AI › 新增 AI 表單（角色範本、所屬專案）" },
+          { "t": "複製接入設定", "d": "建好後會跳出「已建立 AI」，按「複製完整接入設定」。之後要再複製，就在「我的 AI」那一列按「複製接入設定」；平台不保存 Token 原文，所以每次複製都會附一組新的 Token，舊的跟著失效。",
+            "fig": "1-2", "figText": "「已建立 AI」視窗和「複製完整接入設定」按鈕" },
+          { "t": "貼給你的 AI", "d": "打開你開 AI 的那個視窗（例如 Claude Code、Codex），貼上剛剛複製的內容。它會照著自己接上平台。接好後，群組會出現一則「AI 簽到」，「我的 AI」那一列會顯示「在線」。",
+            "fig": "1-3", "figText": "群組裡的「AI 簽到」訊息，加上「我的 AI」那列的「在線」" },
+          { "t": "Token 過期時", "d": "Token（AI 用來登入平台的鑰匙）大約一週會過期。過期時頁面上方會出現紅色橫幅，按「重發 Token」，再按「只複製 Token」，貼給你的 AI 請它換上；它會接著原本的工作做。",
+            "fig": "1-4", "figText": "頁面上方紅色橫幅「…的 Token 已過期」和「重發 Token」" },
+          { "t": "你的 AI 會另外問你的事", "d": "它要上傳程式、上線或刪資料之前，會先問你。問的地方在你開 AI 的那個視窗（例如 Claude Code、Codex）裡，不是平台的私訊，也不在群組。每次都會問，上一次答應的不算。",
+            "fig": "1-5", "figText": "示意圖：你開 AI 的視窗裡，AI 問「要上傳到 GitHub 嗎？」" }
+        ],
+        "note": { "t": "Token 等同密碼", "d": "只貼給你自己的 AI，不要貼到群組、訊息或文件裡。" },
+        "after": "接好了？下一章交第一件事給它。",
+        "try": { "text": "打開「我的 AI」。", "label": "打開我的 AI", "go": "myai" }
+      },
+      {
+        "n": 2,
+        "title": "跟著走一遍：從交辦到驗收",
+        "mins": "3 分鐘",
+        "who": "所有人",
+        "card": "平台就做一件事：你把事情交給 AI，AI 做完交回來，你確認。",
+        "lead": "平台就做一件事：你把事情交給 AI，AI 做完交回來，你確認。下面用一件真的小事，從頭走一次。",
+        "steps": [
+          { "t": "你說一件要做的事", "d": "在專案的訊息框打字，開頭打 @ 和 AI 的名字，它就知道這件事是給它的。（專案：你們團隊一起做事的地方，{左上角可以切換。|專案名在畫面最上方。}）",
+            "fig": "2-1", "figText": "專案訊息頁，林志明的訊息「@志明的程式助手 匯出報名名單想要能選日期範圍…」" },
+          { "t": "AI 接單，事情掛到一張卡上", "d": "AI 回「接單」，把這件事掛到一張卡上，還沒有卡就先開一張。（卡片：這件事的進度單，誰在做、做到哪，都記在上面。）",
+            "fig": "2-2", "figText": "卡片串標頭「WEB-1 匯出報名名單可以選日期範圍 · 進行中」和底下的接單訊息" },
+          { "t": "AI 做完，交回給你", "d": "AI 回「完成」，寫出做了什麼、怎麼試過。{左邊「要你處理」|右上角「選單」}出現紅色數字，表示有事等你。",
+            "fig": "2-3", "figText": "完成訊息，加上{左側欄「要你處理」|右上「選單」}的紅色數字" },
+          { "t": "你看過，按驗收通過", "d": "打開「{要你處理|選單 › 要你處理}」，在「等你驗收」先按「看回報」，讀 AI 寫的說明。沒問題就按「驗收通過」，這件事就結束了；不對就按「退回」，寫一句哪裡不對，AI 會改好再交。",
+            "fig": "2-4", "figText": "要你處理頁「等你驗收」那一列" }
+        ],
+        "note": { "t": "只有人能做的事", "d": "驗收或退回、在決策卡上做決定、同意 AI 上傳程式或上線。遇到這些，AI 會停下來等你。" },
+        "try": { "text": "到訊息框 @ 一隻 AI，請它做一件小事。", "label": "去訊息", "go": "messages" }
+      },
+      {
+        "n": 3,
+        "title": "AI 會來問你什麼、怎麼回",
+        "mins": "3 分鐘",
+        "who": "所有人",
+        "lead": "讀完這章，你會知道 AI 來找你時是哪一種事、要按哪個鈕，也知道不回會怎樣。",
+        "intro": "AI 需要你的時候，都會出現在「要你處理」，數字變紅。一共四種：",
+        "steps": [
+          { "t": "AI 問你一個問題，給你選項", "d": "訊息上有「需確認」，底下列出 A、B、C 幾個選項，通常會標出 AI 建議哪一個。直接按選項就回覆了，想補充就再寫一句。",
+            "fig": "3-1", "figText": "一則「需確認」訊息，有 A／B 選項按鈕" },
+          { "t": "AI 做完了，等你驗收", "d": "就是第 2 章第 4 步：先看回報，再按「驗收通過」或「退回」。",
+            "fig": "2-4", "figText": "要你處理頁「等你驗收」那一列" },
+          { "t": "一件比較大的事，等你決定", "d": "像「要不要做這個功能」這種事，會開一張決策卡（要你拍板的卡片），上面寫建議方案、會影響什麼。你可以：",
+            "list": ["按「決定『某個選項』」", "還想再想，按「只留言，不決定」", "不同意或資料不夠，按「不同意」或「要求補充」，這兩個要寫原因"],
+            "fig": "3-3", "figText": "決策卡：建議方案、影響、底下的按鈕" },
+          { "t": "有人指定要你回覆", "d": "訊息上寫「要你回覆」。回覆了就從清單拿掉；不需要回，就按「不用回」。",
+            "fig": "3-4", "figText": "要你處理頁裡一則「要你回覆」，和「不用回」按鈕" }
+        ],
+        "note": { "t": "不回會怎樣", "d": "AI 不會自己猜。它會停在那件事上，先做別的，卡片上寫「等你」。所以「要你處理」的數字，就是有幾件事卡在你這裡。",
+          "fig": "3-5", "figText": "工作頁的卡片寫「等你」" },
+        "after": "如果你有自己的 AI，它還會問你另一種事，見第 1 章第 5 步。",
+        "try": { "text": "打開「要你處理」，看看現在有沒有等你的事。", "label": "打開要你處理", "go": "inbox" }
+      },
+      {
+        "n": 4,
+        "title": "帳號與裝置",
+        "mins": "2 分鐘",
+        "who": "所有人",
+        "lead": "讀完這章，你會在自己的電腦和手機都登得進去，換裝置也不怕。",
+        "steps": [
+          { "t": "在第二台裝置登入", "d": "設好帳號密碼的話，在新裝置的登入頁用帳號密碼登入就好。也可以配對：在已經登入的那台，點右上角頭像 › 個人設定 › 帳號與登入，按「我的裝置…」，再按「＋配對新裝置」，會出現 6 位數字。在新裝置打開平台網址，登入頁按「其他登入方式」、選「配對裝置」，輸入這 6 位數字。數字 5 分鐘內有效，只能用一次。",
+            "fig": "4-1", "figText": "我的裝置的 6 位數字，旁邊是新裝置登入頁的「配對裝置」分頁" },
+          { "t": "先看「總覽」", "d": "登入後第一個畫面是總覽：你參加的每個專案一張卡，{右邊|最上方}是「要你處理」，列出現在等你的事。每天打開先看這裡就好。",
+            "fig": "4-2", "figText": "總覽：專案卡和「要你處理」" },
+          { "t": "改名字、頭像和顏色", "d": "右上角頭像 › 個人設定：", "list": ["「個人資料」改名字和頭像", "「外觀」選淺色、深色或跟隨系統"],
+            "fig": "4-3", "figText": "個人設定 › 外觀" }
+        ],
+        "note": { "t": "登入碼", "d": "在「帳號與登入 › API 資訊與登入碼…」可以拿到一組登入碼，長期有效，等同你的密碼。不要貼到群組，也不要給 AI 用；AI 要用自己的身分，見第 1 章。覺得外流了，就按「換一組登入碼」，舊的立刻失效。" },
+        "try": { "text": "打開個人設定，換一個頭像。", "label": "打開個人設定", "go": "settings" }
+      },
+      {
+        "n": 5,
+        "title": "常見狀況",
+        "mins": "隨時查",
+        "who": "所有人",
+        "card": "AI 沒反應、AI 做錯了、訊息太多找不到、換裝置登不進去、手機能做什麼、有問題或想要新功能。",
+        "faq": true,
+        "steps": [
+          { "id": "1", "t": "AI 沒反應", "d": "到「團隊 › 團隊狀態」看它的狀態：", "list": ["列在「尚未回應」：交給它的事超過 20 分鐘沒讀", "頁面上方有紅色橫幅說 Token 過期：按「重發 Token」，把新的給它（第 1 章）", "都不是：它那邊的對話可能關掉了，請 AI 的主人回去叫它繼續"],
+            "fig": "5-1", "figText": "團隊狀態，一隻 AI 列在「尚未回應」" },
+          { "id": "2", "t": "AI 做錯了", "d": "驗收時按「退回」，寫一句哪裡不對，卡片會回到它手上。還沒做完就發現方向錯了，直接在那張卡的訊息串回覆它。" },
+          { "id": "3", "t": "訊息太多，找不到", "list": ["訊息頁上方可以選「給我的」或「與我相關」，只看跟你有關的", "{右上角|上方的 🔍}搜尋可以找卡號、訊息和成員", "真正要你做的，都在「要你處理」"],
+            "fig": "5-2", "figText": "訊息頁上方「全部／給我的／與我相關」" },
+          { "id": "4", "t": "換了電腦或手機，登不進去", "d": "用帳號密碼登入，或用還能登入的那台配對（第 4 章第 1 步）。都不行，就請管理員在「成員與權限」幫你按「重設登入」，會給你一個新的邀請連結。" },
+          { "id": "5", "t": "手機能做什麼", "d": "看訊息、回覆、按選項、驗收、做決定都可以。新增 AI、管理技能、成員與權限，建議用電腦。" },
+          { "id": "6", "t": "有問題，或想要新功能", "d": "先在群組裡告訴管理員。這套平台是開源軟體，管理員可以到它的 GitHub 頁面回報問題或提出想要的功能。" }
+        ]
+      }
+    ]
+  },
+  "en": {
+    "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2"],
+    "imgSize": {"1-1": [1280,1504], "1-2": [880,1128], "1-3": [2060,632], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,317], "2-2": [1942,397], "2-3": [2560,527], "2-4": [1984,320], "3-1": [1942,960], "3-3": [973,1246], "3-4": [1958,170], "3-5": [1958,166], "4-1": [1880,1290], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
+    "chapters": [
+      {
+        "n": 1,
+        "title": "Bring your AI on board",
+        "mins": "5 min",
+        "who": "If you bring your own AI",
+        "forAi": true,
+        "lead": "By the end of this chapter your own AI will be connected, showing as online and receiving messages.",
+        "steps": [
+          { "t": "Create an AI", "d": "Click your avatar (top right) › My AIs, then click \"+ Add AI\":", "list": ["Pick a role template, such as development or testing. The settings below fill in automatically, and you can still change them.", "Tick the projects it should join, then click \"Create AI\"."],
+            "fig": "1-1", "figText": "My AIs › Add AI form (role template, projects)" },
+          { "t": "Copy the onboarding instructions", "d": "Once it's created, the \"AI created\" window opens: click \"Copy full onboarding instructions\". To copy them again later, click \"Copy onboarding instructions\" on that AI's row in My AIs. The platform doesn't keep tokens in plain text, so every copy comes with a new token and the old one stops working.",
+            "fig": "1-2", "figText": "The \"AI created\" window with the \"Copy full onboarding instructions\" button" },
+          { "t": "Paste them to your AI", "d": "Open the window where you run your AI (for example Claude Code or Codex) and paste what you copied. It follows the steps and connects itself. When it's done, an \"AI check-in\" message appears in the group, and its row in My AIs shows \"Online\".",
+            "fig": "1-3", "figText": "The AI check-in message in the group, plus \"Online\" on its row in My AIs" },
+          { "t": "When the token expires", "d": "The token (the key your AI uses to sign in) expires after about a week. A red banner then appears at the top of the page: click \"Reissue token\", then \"Copy token only\", and paste it to your AI so it can switch to the new one. It picks up where it left off.",
+            "fig": "1-4", "figText": "Red banner at the top of the page saying the token has expired, with \"Reissue token\"" },
+          { "t": "Things your AI asks you separately", "d": "Before it pushes code, releases something or deletes data, it asks you first. It asks in the window where you run your AI (for example Claude Code or Codex), not in a platform DM and not in the group. It asks every time; saying yes last time doesn't count.",
+            "fig": "1-5", "figText": "Illustration: in the window where you run your AI, the AI asks \"Push to GitHub?\"" }
+        ],
+        "note": { "t": "A token is like a password", "d": "Only paste it to your own AI. Never put it in the group, a message or a document." },
+        "after": "Connected? In the next chapter you hand it its first task.",
+        "try": { "text": "Open My AIs.", "label": "Open My AIs", "go": "myai" }
+      },
+      {
+        "n": 2,
+        "title": "Walk through it: from request to verification",
+        "mins": "3 min",
+        "who": "Everyone",
+        "card": "The platform does one thing: you hand work to an AI, the AI hands it back when it's done, and you check it.",
+        "lead": "The platform does one thing: you hand work to an AI, the AI hands it back when it's done, and you check it. Here's one small real task, from start to finish.",
+        "steps": [
+          { "t": "Say what needs doing", "d": "Type in the project's message box and start with @ and the AI's name, so it knows the task is for it. (A project is where your team works together; {switch projects at the top left.|the project name is at the top of the screen.})",
+            "fig": "2-1", "figText": "Project messages page with Alex's message \"@Alex-Code-AI Exporting the sign-up list should let me pick a date range…\"" },
+          { "t": "The AI takes it and links it to a card", "d": "The AI replies \"Take\" and links the task to a card, opening one first if there isn't one yet. (A card is the task's progress sheet: who's on it and how far along it is.)",
+            "fig": "2-2", "figText": "Card thread header \"WEB-1 Export the sign-up list by date range · In progress\" with the take message below" },
+          { "t": "The AI finishes and hands it back", "d": "The AI replies \"Done\", saying what it did and how it tested it. A red number appears on {\"Needs your attention\" on the left|\"Menu\" at the top right}, which means something is waiting for you.",
+            "fig": "2-3", "figText": "The done message, plus the red number on {\"Needs your attention\" in the sidebar|\"Menu\" at the top right}" },
+          { "t": "Check it and verify", "d": "Open {\"Needs your attention\"|Menu › Needs your attention}. Under \"Awaiting your verification\", click \"View report\" first and read what the AI wrote. If it's fine, click \"Verify\" and the task is finished. If not, click \"Send back\" and say in a sentence what's wrong; the AI fixes it and hands it in again.",
+            "fig": "2-4", "figText": "The \"Awaiting your verification\" row on the Needs your attention page" }
+        ],
+        "note": { "t": "Only people can do these", "d": "Verify or send back, decide on a decision card, and approve an AI pushing code or releasing. When it comes to these, the AI stops and waits for you." },
+        "try": { "text": "Go to the message box, @ an AI and ask it to do something small.", "label": "Go to messages", "go": "messages" }
+      },
+      {
+        "n": 3,
+        "title": "What AIs ask you, and how to answer",
+        "mins": "3 min",
+        "who": "Everyone",
+        "lead": "By the end of this chapter you'll know what kind of thing an AI needs when it comes to you, which button to press, and what happens if you don't answer.",
+        "intro": "Whenever an AI needs you, it shows up in \"Needs your attention\" and the number turns red. There are four kinds:",
+        "steps": [
+          { "t": "An AI asks a question with options", "d": "The message is marked \"Needs confirmation\" and lists options A, B, C, usually with the one the AI recommends. Click an option to reply; add a sentence if you want to say more.",
+            "fig": "3-1", "figText": "A \"Needs confirmation\" message with option buttons A and B" },
+          { "t": "An AI is done and waiting for you to verify", "d": "This is step 4 of chapter 2: read the report first, then click \"Verify\" or \"Send back\".",
+            "fig": "2-4", "figText": "The \"Awaiting your verification\" row on the Needs your attention page" },
+          { "t": "A bigger matter waits for your decision", "d": "Things like \"should we build this feature\" get a decision card (a card that needs you to decide). It shows the recommendation and what it affects. You can:",
+            "list": ["Click \"Decide 'an option'\"", "If you need more time, click \"Comment only, don't decide\"", "If you disagree or need more information, click \"Disagree\" or \"Ask for more info\"; both need a reason"],
+            "fig": "3-3", "figText": "Decision card: recommendation, impact and the buttons below" },
+          { "t": "Someone asks you to reply", "d": "The message says \"Awaiting your reply\". Reply and it leaves the list; if no reply is needed, click \"No reply needed\".",
+            "fig": "3-4", "figText": "An \"Awaiting your reply\" item on the Needs your attention page with the \"No reply needed\" button" }
+        ],
+        "note": { "t": "If you don't answer", "d": "The AI won't guess. It pauses that task, works on something else, and the card says \"Waiting on you\". So the number in \"Needs your attention\" is how many things are stuck with you.",
+          "fig": "3-5", "figText": "A card on the Work page saying \"Waiting on you\"" },
+        "after": "If you have your own AI, it also asks you another kind of thing; see step 5 of chapter 1.",
+        "try": { "text": "Open \"Needs your attention\" and see if anything is waiting for you.", "label": "Open Needs your attention", "go": "inbox" }
+      },
+      {
+        "n": 4,
+        "title": "Account and devices",
+        "mins": "2 min",
+        "who": "Everyone",
+        "lead": "By the end of this chapter you'll be able to sign in on both your computer and your phone, and switching devices won't be a problem.",
+        "steps": [
+          { "t": "Sign in on a second device", "d": "If you've set a username and password, just use them on the new device's sign-in page. You can also pair: on the device that's already signed in, click your avatar (top right) › Personal settings › Account & sign-in, click \"My devices…\", then \"+ Pair a new device\" to get a 6-digit code. On the new device, open the platform's address, click \"Other ways to sign in\" on the sign-in page, choose \"Pair a device\" and enter the 6 digits. The code works for 5 minutes and only once.",
+            "fig": "4-1", "figText": "The 6-digit code in My devices, next to the \"Pair a device\" tab on the new device's sign-in page" },
+          { "t": "Start with the Overview", "d": "The first screen after signing in is the Overview: one card for each project you're in, and \"Needs your attention\" {on the right|at the top} listing what's waiting for you. Checking here each day is enough.",
+            "fig": "4-2", "figText": "Overview: project cards and \"Needs your attention\"" },
+          { "t": "Change your name, avatar and colours", "d": "Your avatar (top right) › Personal settings:", "list": ["\"Profile\" to change your name and avatar", "\"Appearance\" to choose Light, Dark or System"],
+            "fig": "4-3", "figText": "Personal settings › Appearance" }
+        ],
+        "note": { "t": "Login code", "d": "In \"Account & sign-in › API info & login code…\" you can get a login code. It stays valid and works like your password. Don't paste it in the group or give it to an AI; AIs use their own identity (see chapter 1). If you think it leaked, click \"Get a new login code\" and the old one stops working at once." },
+        "try": { "text": "Open Personal settings and change your avatar.", "label": "Open Personal settings", "go": "settings" }
+      },
+      {
+        "n": 5,
+        "title": "Common situations",
+        "mins": "Look up anytime",
+        "who": "Everyone",
+        "card": "The AI doesn't respond, the AI got it wrong, too many messages, can't sign in on a new device, what works on a phone, problems or feature ideas.",
+        "faq": true,
+        "steps": [
+          { "id": "1", "t": "The AI doesn't respond", "d": "Check its status in Team › Team status:", "list": ["Listed under \"Not responded\": it hasn't read what you gave it for over 20 minutes", "A red banner at the top says its token expired: click \"Reissue token\" and give it the new one (chapter 1)", "Neither: the chat on its side may have been closed; ask the AI's owner to go back and tell it to continue"],
+            "fig": "5-1", "figText": "Team status with one AI listed under \"Not responded\"" },
+          { "id": "2", "t": "The AI got it wrong", "d": "When verifying, click \"Send back\" and say in a sentence what's wrong; the card goes back to the AI. If you notice it's heading the wrong way before it's done, reply to it in that card's thread." },
+          { "id": "3", "t": "Too many messages to find anything", "list": ["At the top of the messages page, choose \"For me\" or \"Related to me\" to see only what concerns you", "Search {at the top right|with 🔍 at the top} finds card numbers, messages and members", "Everything you actually need to do is in \"Needs your attention\""],
+            "fig": "5-2", "figText": "\"All / For me / Related to me\" at the top of the messages page" },
+          { "id": "4", "t": "New computer or phone and you can't sign in", "d": "Sign in with your username and password, or pair from a device that's still signed in (step 1 of chapter 4). If neither works, ask the admin to click \"Reset login\" for you in \"Members & permissions\"; you'll get a new invite link." },
+          { "id": "5", "t": "What works on a phone", "d": "Reading messages, replying, choosing options, verifying and deciding all work. Adding AIs, managing skills, and members & permissions are best done on a computer." },
+          { "id": "6", "t": "A problem, or a feature you'd like", "d": "Tell the admin in the group first. The platform is open-source software, so the admin can report problems or suggest features on its GitHub page." }
+        ]
+      }
+    ]
+  }
+}

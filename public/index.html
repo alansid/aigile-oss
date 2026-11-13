@@ -133,6 +133,7 @@
       <div class="topbar">
         <nav id="crumbs" class="crumbs" aria-label="目前位置"></nav>
         <form class="tb-search" data-search-form role="search"><span class="tb-search-ico" aria-hidden="true">🔍</span><input type="search" name="q" maxlength="50" enterkeyhint="search" autocomplete="off" placeholder="搜尋卡片、訊息、成員" aria-label="搜尋卡片、訊息、成員（按 Enter 搜尋）"></form>
+        <a href="/help" class="dm-btn help-btn" data-help-open data-nt aria-label="說明"><span class="dm-ico help-q" aria-hidden="true">？</span><span class="dm-btn-t" aria-hidden="true">說明</span></a>
         <button type="button" class="dm-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊" hidden><span class="dm-ico" aria-hidden="true">💬</span><span class="dm-btn-t" aria-hidden="true">私訊</span><span class="badge" hidden></span></button>
         <button type="button" class="av-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu"></button>
       </div>
@@ -234,12 +235,15 @@
         </div>
         </div>
         <button type="button" data-nav="files" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5V2zm7 0v4h4"/></svg>文件</button>
+        <!-- 說明與教學（桌機在右上角「？ 說明」） -->
+        <a href="/help" class="sheet-help" data-help-open><span class="ni-ico sheet-emoji help-q" aria-hidden="true">？</span>說明與教學</a>
       </div>
     </div>
   </section>
 
   <div id="modal-root"></div>
   <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/tour.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

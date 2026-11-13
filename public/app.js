@@ -87,12 +87,12 @@
   const newRequestId = () => 'req_web_' + (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`);
 
   let toastTimer;
-  function toast(text) {
+  function toast(text, ms = 2400) {
     const t = $('#toast');
     t.textContent = text;
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 2400);
+    toastTimer = setTimeout(() => { t.hidden = true; }, ms);
   }
   // 提示＋一顆按鈕（例如「已建立 C-xxx · 打開」），預設 6 秒消失
   function actionToast(text, label, onClick, ms = 6000) {
@@ -1541,9 +1541,9 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.p === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '要你處理', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', releases: '版本紀錄' }; // 私訊整頁
-  const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases' }; // 第一層頁面（不分專案）：版本紀錄等
-  const isTop = p => p === 'myai' || p === 'releases' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
+  const PAGE_NAME = { messages: '訊息', inbox: '要你處理', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', releases: '版本紀錄', help: L('說明', 'Help') }; // 私訊整頁；「說明」在字典是交接的「Notes」，說明頁自己給英文
+  const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases', help: '/help' }; // 第一層頁面（不分專案）：版本紀錄、說明等
+  const isTop = p => p === 'myai' || p === 'releases' || p === 'help' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
   const projColor = p => (p === 'cross' ? '#4b5563' : PROJ_COLORS[Math.max(0, state.projectList.findIndex(x => x.id === p)) % PROJ_COLORS.length]);
   const projIcon = (p, size = 36) => `<span class="pico" style="--pc:${projColor(p)};--psz:${size}px" aria-hidden="true">${p === 'cross' ? '#' : esc(firstChar(projName(p)))}</span>`;
@@ -1599,7 +1599,12 @@
     drawRoleBanner();
     const v = projectView(), page = PAGE_NAME[state.page] || '訊息', top = !!TOP_PAGES[state.page];
     const home = !hasHub() ? '' : v === 'hub' && !top ? '<b aria-current="page">總覽</b>' : '<button type="button" class="crumb-link" data-proj="hub">總覽</button>';
-    const parts = top ? [home, `<b aria-current="page">${page}</b>`] : v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
+    // 說明頁不掛在總覽底下：目錄頁只寫「說明」，章節頁「說明 ▸ 第 2 章」
+    const parts = state.page === 'help' ? (help.ch ? [`<a href="/help" class="crumb-link">${L('說明', 'Help')}</a>`, `<b aria-current="page">第 ${help.ch} 章</b>`] : [`<b aria-current="page">${L('說明', 'Help')}</b>`])
+      : top ? [home, `<b aria-current="page">${page}</b>`] : v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
+    // 側欄「總覽」只在總覽頁亮（第一層頁面也掛在總覽檢視底下）；在說明頁改亮右上「？ 說明」
+    document.querySelectorAll('.hub-side [data-proj="hub"]').forEach(b => { const on = state.page === 'hub'; b.classList.toggle('on', on); if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    document.querySelectorAll('[data-help-open]').forEach(b => { if (state.page === 'help') b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     $('#crumbs').innerHTML = parts.filter(Boolean).join('<span class="crumb-sep" aria-hidden="true">▸</span>');
     $('#m-back').hidden = !hasHub() || (v === 'hub' && !top);
     $('#m-title').textContent = top ? page : v === 'hub' ? '總覽' : page; // 手機只放頁名，專案名放副標（不然窄畫面被截成「平台 · 收…」）
@@ -1647,11 +1652,13 @@
     if (seg[0] === 'my-ai') return { view: null, page: 'myai' };
     if (seg[0] === 'members') return { view: null, page: 'perm' };
     if (seg[0] === 'releases') return { view: null, page: 'releases' };
+    if (seg[0] === 'help') { help.ch = helpChOf(seg[1]); return { view: null, page: 'help' }; } // 說明：/help 目錄、/help/1～5 各章
     return { view: null, page: null };
   }
   function routePath() {
     const v = projectView();
     if (state.page === 'myai' && PROJECTS.includes(v)) return `/p/${encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/my-ai`;
+    if (state.page === 'help') return help.ch ? `/help/${help.ch}` : '/help';
     if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     if (v === 'hub') return '/';
     return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/${PAGE_SLUG[state.page] || 'messages'}`; // 網址英文名
@@ -3127,6 +3134,8 @@
       return renderMyAiPage();
     } else if (state.page === 'releases') {
       return renderReleasesPage();
+    } else if (state.page === 'help') {
+      return renderHelpPage();
     } else if (state.page === 'perm') {
       return renderPermPage();
     } else if (state.page === 'inbox') {
@@ -3421,12 +3430,54 @@
     const cm = lastMsgOf(null);
     return `<div class="hub"><section class="hub-main">
         <div class="work-head"><div class="work-title"><h2>${esc(greeting())}，<span data-nt>${esc(shownName(state.me?.name || ''))}</span></h2><span class="muted small"><span>${esc(new Date().toLocaleDateString(window.aigileI18n?.lang === 'en' ? 'en-US' : 'zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span>${counts.hub ? ` · ${counts.hub} 件要你處理` : ' · 沒有要你處理的事'}</span></div></div>
-        ${hubNewAiHtml()}${nextStepsHtml()}<div class="hub-grid">${cards || hubJoinHtml()}</div>
+        ${onboardHtml()}${hubNewAiHtml()}${nextStepsHtml()}<div class="hub-grid">${cards || hubJoinHtml()}</div>
         <button type="button" class="link hub-join" data-join-open>＋ 申請加入專案</button>
         <button type="button" class="hub-card hub-cross" data-proj="cross" aria-label="進入跨專案頻道">${projIcon('cross', 44)}<span class="hc-name"><b>跨專案頻道</b><span class="small">規則公告、跨團隊協調。${cm ? `最新：${esc(cm.author.name)} ${whenText(cm.createdAt)}「${esc(oneLine(cm.text, 40))}」` : '最近 12 小時沒有新訊息'}</span></span><span class="hc-go">進入 ›</span></button>
       </section>
       <aside class="hub-todo" aria-label="要你處理">${hubTodoHtml()}</aside></div>`;
   }
+  // 新手上路：總覽最上面 3 件事（AI 加入 → 走一遍說明第 2 章 → 回覆第一件），狀態由伺服器算（GET /api/me 的 onboard）；收合、「不用了」記在帳號，換裝置一樣
+  // 第 1、2 項後面的小連結「帶我走」直接開始那一章的聚光燈導覽（寬不到 1000 不顯示）；走完導覽不算完成
+  const obTour = n => `<button type="button" class="link small ob-tour" data-tour-start="${n}">帶我走</button>`;
+  function onboardHtml() {
+    const ob = state.me?.onboard;
+    if (!ob?.show) return '';
+    refreshOnboard();
+    const s = ob.steps || {}, open = todoByView().hub || 0;
+    const items = [
+      ['ai', '讓你的 AI 加入', s.ai ? '你的 AI 已經簽到過。' : '在「我的 AI」建一隻，把接入設定貼給它（說明第 1 章）。', s.ai ? '' : `<button type="button" class="btn small" data-ob-ai>到我的 AI ›</button>${obTour(1)}`],
+      ['walk', '跟著走一遍', '說明第 2 章：一張卡從交辦到驗收怎麼走，約 3 分鐘。', s.walk ? '' : `<a class="btn small" href="/help/2">開始 ›</a>${obTour(2)}`],
+      ['todo', '回覆第一件「要你處理」', s.todo ? '已經回過了。' : open ? `你現在有 ${open} 件。` : '等第一件「要你處理」來了再回。', s.todo || !open ? '' : '<button type="button" class="btn small" data-hub-todo-open>去處理 ›</button>'],
+    ];
+    const n = items.filter(([k]) => s[k]).length, col = !!ob.collapsed;
+    return `<section class="ob${col ? ' collapsed' : ''}" aria-label="新手上路">
+      <div class="ob-head"><button type="button" class="ob-toggle" data-ob-toggle aria-expanded="${!col}"><span class="ob-chev" aria-hidden="true">▾</span><span class="ob-title">新手上路</span><span class="ob-prog">${L(`${n}/${items.length} 完成`, `${n}/${items.length} done`)}</span><span class="ob-bar" aria-hidden="true"><i style="width:${Math.round(n / items.length * 100)}%"></i></span><span class="sr-only">${col ? '展開' : '收合'}</span></button>
+        <button type="button" class="link small ob-skip" data-ob-dismiss>不用了</button></div>
+      ${col ? '' : `<ol class="ob-list">${items.map(([k, t, d, act]) => `<li class="ob-item${s[k] ? ' done' : ''}" data-ob-step="${k}"><span class="ob-check" aria-hidden="true">${s[k] ? '✓' : ''}</span>
+        <span class="ob-txt"><span class="ob-t"><b>${t}</b>${k === 'ai' ? '<span class="ob-opt">要帶 AI 才需要</span>' : ''}</span><span class="sr-only">${s[k] ? '（已完成）' : '（還沒完成）'}</span><span class="muted small">${d}</span></span>${act}</li>`).join('')}</ol>
+      <p class="ob-foot muted small"><span class="ob-desk">做完會自動收起；之後隨時從右上角「？ 說明」再打開。</span><span class="ob-mob">做完會自動收起；之後隨時從「選單 › 說明與教學」再打開。</span></p>`}
+    </section>`;
+  }
+  // 在總覽時最多一分鐘問一次伺服器（回過訊息、AI 簽到後自動打勾）
+  let obAt = Date.now();
+  function refreshOnboard() {
+    if (Date.now() - obAt < 60_000) return;
+    obAt = Date.now();
+    api('/api/me').then(m => { if (JSON.stringify(m.onboard) !== JSON.stringify(state.me?.onboard)) { state.me = { ...state.me, onboard: m.onboard }; if (state.page === 'hub') renderWork(); } }).catch(() => {});
+  }
+  async function setOnboard(patch, done) {
+    const prev = state.me.onboard;
+    state.me = { ...state.me, onboard: { ...prev, ...('collapsed' in patch ? { collapsed: patch.collapsed } : {}), ...(patch.dismissed ? { show: false } : {}) } };
+    renderWork();
+    try { const r = await api('/api/me/prefs', { method: 'PUT', body: { onboard: patch } }); state.me = { ...state.me, onboard: r.onboard }; if (done) toast(done); }
+    catch (err) { state.me = { ...state.me, onboard: prev }; toast(err.message); }
+    renderWork();
+  }
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('[data-ob-toggle]')) return setOnboard({ collapsed: !state.me?.onboard?.collapsed });
+    if (e.target.closest?.('[data-ob-dismiss]')) return setOnboard({ dismissed: true }, '新手上路已關掉；教學隨時可以在右上角「？ 說明」看');
+    if (e.target.closest?.('[data-ob-ai]')) return goTop('myai');
+  });
   // 第一次設定引導按「全部略過」：主畫面提示接下來可以做的事，按「知道了」收起
   const NEXT_KEY = () => 'aigile-next-steps:' + (state.me?.participantId || '');
   function nextStepsHtml() {
@@ -5269,6 +5320,254 @@
     if (e.target.closest?.('[data-rel-back]')) { const b = rel.back; rel.back = null; return b && b.page !== 'releases' ? (b.view && b.view !== state.view ? setProjectView(b.view, b.page) : showPage(b.page)) : setProjectView('hub'); }
   });
   document.addEventListener('input', e => { if (e.target.id === 'rel-q') { rel.q = e.target.value; rel.hit = ''; drawReleases(); const q = $('#rel-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); } });
+
+  // ---------- 說明頁：/help 目錄、/help/1～5 五章（內容在 /help.json，中英各一份，照介面語言選） ----------
+  // 每章有自己的網址可以直接傳；第 5 章每題 /help/5#題號；第 2 章（跟著走一遍）看到最後或按「試試看」就記走完（新手上路打勾）
+  // 章節正文是長文，不走畫面字典：help.json 的 zh、en 各存一份，英文介面直接畫英文那份；頁面上的固定字（章號、上一章…）照舊進字典
+  const HELP_MODE_KEY = 'aigile-help-mode';
+  const HELP_WALK_CH = 2; // 「跟著走一遍」在第幾章
+  const help = { data: null, ch: 0, back: null, jump: '', walkSent: false, obs: null };
+  const helpLang = () => (window.aigileI18n?.lang === 'en' ? 'en' : 'zh');
+  const helpDoc = () => help.data?.[helpLang()] || help.data?.zh || null;
+  const helpChOf = x => { const n = Number(x); return Number.isInteger(n) && n >= 1 && n <= 5 ? n : 0; };
+  const helpMode = () => (store.get(HELP_MODE_KEY) === 'work' ? 'work' : 'ai'); // 「你會帶自己的 AI 嗎？」預設「會」
+  // {桌機|手機} 兩種寫法都畫出來，用 CSS 依螢幕寬度只顯示一種；**粗體**
+  const helpText = s => esc(s).replace(/\{([^|{}]*)\|([^{}]*)\}/g, '<span class="h-desk">$1</span><span class="h-mob">$2</span>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  const helpMeta = c => `第 ${c.n} 章 · ${esc(c.mins)} · ${esc(c.who)}`;
+  // 右上角「？ 說明」是 index.html 的固定字，字典裡「說明」是交接的「Notes」，所以這顆自己換（data-nt 不給畫面字典碰）
+  if (window.aigileI18n?.lang === 'en') document.querySelectorAll('.help-btn').forEach(a => { a.setAttribute('aria-label', 'Help'); a.querySelector('.dm-btn-t').textContent = 'Help'; });
+  function openHelp(ch = 0, hash = '') {
+    closeSheet(false);
+    if (state.page !== 'help') help.back = { view: state.view, page: state.page };
+    help.ch = helpChOf(ch);
+    help.jump = hash;
+    if (state.page !== 'help') return goTop('help');
+    syncUrl(false);
+    return renderHelpPage();
+  }
+  async function renderHelpPage() {
+    const box = $('#page-work');
+    box.classList.remove('is-board');
+    if (!help.data) {
+      box.innerHTML = '<p class="muted">載入中…</p>';
+      help.data = await fetch('/help.json').then(r => (r.ok ? r.json() : null)).catch(() => null);
+      if (state.page !== 'help') return;
+    }
+    drawHelp();
+  }
+  // 畫面圖：有放進 imgs 的才顯示；imgs 寫 "1-1"＝桌機、"1-1-m"＝手機；中英各一套（/help-img/zh、/help-img/en）
+  // 只有桌機圖時，手機寬度不顯示（不拿桌機圖硬縮）；寬高先寫進去，圖還沒載完就留好位置，下面的字不會被一路推下去
+  const helpFig = f => {
+    const doc = helpDoc(), imgs = doc.imgs || [], d = f?.fig && imgs.includes(f.fig), m = f?.fig && imgs.includes(f.fig + '-m');
+    if (!d && !m) return '';
+    const src = k => `/help-img/${helpLang()}/${esc(k)}.webp`, key = d ? f.fig : f.fig + '-m';
+    const alt = esc(f.figText.replace(/\{([^|{}]*)\|[^{}]*\}/g, d ? '$1' : '$2'));
+    const wh = k => { const z = (doc.imgSize || {})[k]; return z ? ` width="${z[0]}" height="${z[1]}"` : ''; };
+    const img = `<img src="${src(key)}" alt="${alt}" loading="lazy"${wh(key)}>`;
+    const pic = d && m ? `<picture><source media="(max-width: 899px)" srcset="${src(f.fig + '-m')}"${wh(f.fig + '-m')}>${img}</picture>` : img;
+    // 圖在該步文字下面、跟內文同寬；圖下灰色小字只寫「畫面 2-1」；點圖在新分頁開原尺寸
+    return `<figure class="help-fig${d && !m ? ' desk-only' : !d ? ' mob-only' : ''}"><a href="${src(key)}" target="_blank" rel="noopener" title="開原尺寸">${pic}</a><figcaption>畫面 ${esc(f.fig)}</figcaption></figure>`;
+  };
+  function drawHelp() {
+    const box = $('#page-work');
+    if (state.page !== 'help') return;
+    help.obs?.disconnect(); help.obs = null;
+    drawChrome(); // 麵包屑跟著章節變
+    const d = helpDoc();
+    if (!d) { box.innerHTML = `<div class="work-head"><div class="work-title"><h2>${L('說明', 'Help')}</h2></div></div><p class="muted">說明讀不到，請重新整理。</p>`; return; }
+    const chs = d.chapters, c = chs.find(x => x.n === help.ch);
+    if (!c) {
+      // 目錄：問句放標題下、清單上面；預設「會」；選「不會」時第 1 章變淡並寫「不帶 AI 可跳過」；桌機兩欄
+      const mode = helpMode();
+      box.innerHTML = `<div class="help-index">
+        <div class="work-head"><div class="work-title"><h2>${L('說明', 'Help')}</h2><span class="muted small">新來的先看第 1、2 章；遇到問題看第 5 章</span></div></div>
+        <div class="help-ask"><span id="help-ask-q">你會帶自己的 AI 嗎？</span><div class="seg-scope" role="group" aria-labelledby="help-ask-q"><button type="button" data-help-mode="ai" aria-pressed="${mode === 'ai'}">會</button><button type="button" data-help-mode="work" aria-pressed="${mode === 'work'}">不會</button></div></div>
+        <ol class="help-toc">${chs.map(x => { const dim = x.forAi && mode === 'work';
+          return `<li class="${dim ? 'dim' : ''}"><a href="/help/${x.n}"><span class="ht-n">${helpMeta(x)}${dim ? '<span class="ht-skip">不帶 AI 可跳過</span>' : ''}</span><b class="ht-t">${esc(x.title)}</b><span class="ht-goal">${helpText(x.card || x.lead || '')}</span></a></li>`; }).join('')}</ol>
+      </div>`;
+      return;
+    }
+    const prev = chs.find(x => x.n === c.n - 1), next = chs.find(x => x.n === c.n + 1);
+    const steps = c.steps.map((s, i) => `<li class="help-step"${s.id ? ` id="${esc(s.id)}"` : ''}>
+        <h3>${c.faq ? '' : `<span class="help-sn">${i + 1}.</span>`}<span>${helpText(s.t)}</span>${c.faq ? `<button type="button" class="help-copy link small" data-help-copy="${c.n}#${esc(s.id)}">複製連結</button>` : ''}</h3>
+        ${s.d ? `<p>${helpText(s.d)}</p>` : ''}${s.list ? `<ul>${s.list.map(x => `<li>${helpText(x)}</li>`).join('')}</ul>` : ''}${helpFig(s)}</li>`).join('');
+    // 桌機 ≥1100 左邊章節清單（目前這章亮、跟著捲），右邊內文；不到 1100 只有內文、置中
+    const side = `<nav class="help-side" aria-label="章節"><a href="/help" class="hsd-top">說明目錄</a><ol>${chs.map(x => `<li><a href="/help/${x.n}"${x.n === c.n ? ' aria-current="page"' : ''}><span class="hsd-n">${x.n}</span><span>${esc(x.title)}</span></a></li>`).join('')}</ol></nav>`;
+    const cell = (x, dir) => x ? `<a href="/help/${x.n}" class="hp-${dir}"><span class="hp-dir">${dir === 'prev' ? '‹ 上一章' : '下一章 ›'}</span><b>第 ${x.n} 章　${esc(x.title)}</b></a>` : '<span></span>';
+    box.innerHTML = `<div class="help-wrap">${side}<article class="help-ch" data-help-ch="${c.n}" lang="${helpLang() === 'en' ? 'en' : 'zh-Hant'}">
+      <nav class="help-top"><a href="/help" class="link">‹ 說明目錄</a></nav>
+      <header class="help-head"><span class="help-meta">${helpMeta(c)}</span><h2>${esc(c.title)}</h2>${c.lead ? `<p class="help-lead">${helpText(c.lead)}</p>` : ''}${tourEntryHtml(c.n)}</header>
+      ${c.intro ? `<p>${helpText(c.intro)}</p>` : ''}
+      <${c.faq ? 'div' : 'ol'} class="help-steps${c.faq ? ' faq' : ''}">${steps}</${c.faq ? 'div' : 'ol'}>
+      ${c.note ? `<aside class="help-note"><b>${helpText(c.note.t)}</b><span class="help-colon">${L('：', ': ')}</span>${helpText(c.note.d)}</aside>${helpFig(c.note)}` : ''}
+      ${c.after ? `<p class="help-after">${helpText(c.after)}</p>` : ''}
+      ${c.try ? `<section class="help-try"><span><b>試試看</b><span class="help-colon">${L('：', ': ')}</span>${helpText(c.try.text)}</span><button type="button" class="btn primary" data-help-try="${esc(c.try.go)}">${esc(c.try.label)}</button></section>` : '<div class="help-end"></div>'}
+      <nav class="help-pager" aria-label="上一章、下一章">${cell(prev, 'prev')}${cell(next, 'next')}</nav>
+    </article></div>`;
+    const j = help.jump || (location.hash.length > 1 ? decodeURIComponent(location.hash.slice(1)) : '');
+    help.jump = '';
+    if (j) { if (decodeURIComponent(location.hash.slice(1)) !== j) history.replaceState(history.state, '', `${location.pathname}#${encodeURIComponent(j)}`); helpJump(j); }
+    else { box.scrollTop = 0; window.scrollTo(0, 0); }
+    // 「跟著走一遍」那章：最後一格（試試看）出現在畫面上就算走完
+    if (c.n === HELP_WALK_CH && helpWalkPending() && 'IntersectionObserver' in window) {
+      help.obs = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { help.obs?.disconnect(); help.obs = null; markWalked(); } });
+      help.obs.observe(box.querySelector('.help-try'));
+    }
+  }
+  function helpJump(id) {
+    const el = document.getElementById(id);
+    if (!el || !el.closest('.help-ch')) return;
+    document.querySelectorAll('.help-step.hit').forEach(x => x.classList.remove('hit'));
+    el.classList.add('hit');
+    setTimeout(() => el.scrollIntoView({ block: 'start' }), 0);
+  }
+  const helpWalkPending = () => !help.walkSent && !!state.me?.onboard?.show && !state.me.onboard.steps?.walk;
+  async function markWalked() {
+    if (!helpWalkPending()) return;
+    help.walkSent = true;
+    try { const r = await api('/api/me/prefs', { method: 'PUT', body: { onboard: { walked: true } } }); state.me = { ...state.me, onboard: r.onboard }; }
+    catch { help.walkSent = false; }
+  }
+  // 「試試看」：帶到真的畫面
+  function helpTry(go) {
+    if (help.ch === HELP_WALK_CH) markWalked();
+    const b = help.back, proj = b && PROJECTS.includes(b.view) ? b.view : myProjects()[0];
+    if (go === 'messages') { const p = proj ? setProjectView(proj, 'messages') : showPage('messages'); return Promise.resolve(p).then(() => $('#input')?.focus()); }
+    if (go === 'inbox') return proj && !hasHub() ? setProjectView(proj, 'inbox') : setProjectView('hub'); // 總覽就有各專案的「要你處理」
+    if (go === 'myai') return goTop('myai');
+    if (go === 'settings') return openSettings();
+  }
+  // ---------- 聚光燈導覽：說明頁章首「▶ 帶我在畫面上走一次」、新手上路「帶我走」 ----------
+  // 框架在 /tour.js（自寫、沒有外部套件；說明文字由它照介面語言翻）；這裡只寫每條路線框哪裡、說什麼。只框、只說明，不替使用者按、不送出、不動資料。
+  // 不記錄走過導覽：新手上路「走一遍」照原本的規則算（讀完說明第 2 章）
+  const HELP_TOURS = { 1: '讓你的 AI 加入', 2: '跟著走一遍' }; // 章 → 說明框上的章名
+  // 說明目錄選「不會帶 AI」時，第 1 章入口變灰、寫「不帶 AI 可跳過」（還是可以按）
+  const tourEntryHtml = n => {
+    if (!HELP_TOURS[n]) return '';
+    const dim = n === 1 && helpMode() === 'work';
+    return `<div class="help-tour${dim ? ' dim' : ''}"><button type="button" class="btn primary" data-tour-start="${n}">▶ 帶我在畫面上走一次</button><span class="muted small"><span>約 1 分鐘、4 步。只框出要按的地方，不會替你按、不會動到資料；隨時按 Esc 結束。</span>${dim ? '<b class="ht-skip">不帶 AI 可跳過</b>' : ''}</span></div>`;
+  };
+  const shownEl = sel => { const e = typeof sel === 'string' ? document.querySelector(sel) : sel; return !!e && e.getClientRects().length > 0; };
+  // 路線 A：第 2 章「跟著走一遍」4 步：訊息框 → 最新一張卡的卡片串 → 側欄「要你處理」 → 「等你驗收」；找不到元素就改成說明（不默默跳過）
+  function walkTourSteps() {
+    // 在專案裡（或從專案進說明頁）就用那個專案；不在專案頁就帶到第一個專案
+    const b = state.page === 'help' ? help.back : { view: state.view }, proj = b && myProjects().includes(b.view) ? b.view : myProjects()[0];
+    const atMsgs = () => state.page === 'messages' && projectView() === proj;
+    const goMsgs = () => setProjectView(proj, 'messages');
+    return [
+      { at: atMsgs, go: goMsgs, skip: () => document.body.classList.contains('ro-here'), // 唯讀成員沒有訊息框，這步跳過
+        find: () => $('.composer'),
+        title: '在這裡交辦一件事', text: '開頭打 @，選你要交給的 AI，再寫要做什麼。導覽不會幫你送出，想試就自己按「送出」。' },
+      { at: atMsgs, go: goMsgs,
+        find: () => { const g = [...document.querySelectorAll('#messages .cgrp')].pop(); return g ? [g.querySelector('.cg-head'), g.querySelector('.gmsg')] : null; },
+        ready: () => !!document.querySelector('#messages > *'),
+        // 平台不會因為 [接單] 自動開卡：卡是人或 AI 另外開的，AI 接單時把訊息掛上去（沒有卡就照規則先開一張）
+        title: 'AI 接單後，事情都串在這張卡下', text: 'AI 接單時會把這件事掛到一張卡上（還沒有卡就先開一張），之後的進度、問題、交件都接在這一串。點卡號可以看完整紀錄。',
+        alt: { find: () => $('#messages'), text: 'AI 接單後，這裡會出現一張卡，事情都串在卡下面。你還沒交辦過，所以現在是空的。' } },
+      { at: atMsgs, go: goMsgs,
+        find: () => $('.sidebar [data-nav="inbox"]'),
+        altIf: () => !shownEl('.sidebar [data-nav="inbox"] .inbox-badge'),
+        title: '紅色數字＝有事等你', text: 'AI 做完交給你、或有事要問你，這裡就會加一。點進去就是所有要你處理的事。',
+        alt: { text: '現在沒有事等你。AI 交件或問你時，這裡會出現紅色數字。' } },
+      { at: () => state.page === 'inbox' && projectView() === proj, go: () => setProjectView(proj, 'inbox'),
+        find: () => { const s = $('#page-work .wverify'); return s ? [s.querySelector('.wsugg-head'), s.querySelector('.ver-row')] : null; },
+        ready: () => !!$('#page-work .work-head'),
+        title: '看過回報，再按驗收通過', text: '先按「看回報」讀 AI 寫的說明。沒問題按「驗收通過」，不對就按「退回」，寫一句哪裡不對。',
+        tip: '導覽到這裡結束，按鈕要你自己按。',
+        alt: { find: () => $('#page-work .work-head'), text: 'AI 交件後，會出現在這裡的「等你驗收」，按「看回報」再決定通過或退回。', tip: '現在沒有要驗收的，等第一件交回來再試。' } },
+    ];
+  }
+  // 路線 B：第 1 章「讓你的 AI 加入」4 步：頭像選單「我的 AI」→「＋ 新增 AI」→ 最新那隻的接入選項 →「複製」那一列
+  // 開源版的接入分頁沒有「選工具」，第 3 步改框「對話接續」「自動待命」兩個選項。導覽不碰 Token、不替使用者按「複製」
+  function aiTourSteps() {
+    const avBtn = () => [...document.querySelectorAll('.av-btn')].find(b => shownEl(b));
+    const menuOpen = () => !$('#av-menu').hidden;
+    const atMyAi = () => state.page === 'myai';
+    const goMyAi = () => { if (menuOpen()) avOpen(false); return goTop('myai'); };
+    const formOpen = () => !!$('#modal-root').firstElementChild; // 使用者自己按了「＋ 新增 AI」（建好後的「已建立 AI」也算）
+    const listReady = () => { const l = $('#ai-list'); return !!l && !(l.children.length === 1 && l.firstElementChild.matches('p.muted.small')); }; // 「載入中…」那一行（不看文字，英文介面也準）
+    const rows = () => [...document.querySelectorAll('#ai-list .ma-item')];
+    // 最新那隻：畫面上的 AI 裡加入時間最晚的（用成員清單的時間，不另外讀含 Token 的資料）
+    const latest = () => rows().map(el => el.dataset.ma).sort((a, b) => String(state.participants.get(b)?.joinedAt || '').localeCompare(String(state.participants.get(a)?.joinedAt || '')))[0];
+    let aiId = '';
+    const item = () => (aiId ? document.querySelector(`#ai-list [data-ma="${CSS.escape(aiId)}"]`) : null);
+    // 展開那隻 AI 的「接入」分頁：跟使用者自己點那一列一樣，只是展開，不送出、不動資料
+    const openConn = async () => {
+      for (let k = 0; k < 30 && !listReady(); k++) await new Promise(r => setTimeout(r, 100));
+      aiId = latest() || '';
+      const it = item();
+      if (!it) return;
+      if (!it.classList.contains('open')) it.querySelector('.ma-row')?.click();
+      const tab = item()?.querySelector('.ma-tabs [data-tab="conn"]');
+      if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
+    };
+    const expired = () => !!item()?.querySelector('.ma-row .ma-st.bad'); // 「Token 已過期」
+    return [
+      { at: menuOpen, go: () => { const b = avBtn(); if (b) avOpen(true, b); }, // 第 1 步打開頭像選單＝跟使用者自己點開一樣
+        find: () => $('#av-menu [data-av="myai"]'),
+        title: '你的 AI 都在「我的 AI」', text: '右上角頭像的選單裡有「我的 AI」，你名下的 AI 都在這裡。按「下一步」帶你過去。' },
+      { at: atMyAi, go: goMyAi,
+        find: () => $('#ai-new'), pause: formOpen,
+        block: () => (listReady() && !rows().length ? '建好 AI 後就能繼續' : ''), // 還沒有 AI：「下一步」先不能按
+        title: '按「＋ 新增 AI」建一隻', text: '選一個角色範本、勾要加入的專案，按「建立 AI」。建好後回到這裡按「下一步」。',
+        tip: '已經有 AI 的話可以直接按「下一步」。', pauseTip: '表單關掉後就能繼續。' }, // 表單打開（暫停）時灰底只寫這句
+      { at: atMyAi, go: goMyAi, prep: openConn,
+        find: () => { const it = item(); return it ? [it.querySelector('[data-ma-convo]')?.closest('.ma-f'), it.querySelector('[data-ma-auto]')?.closest('.ma-f')] : null; },
+        title: '接入選項先用預設', text: '「對話接續」和「自動待命」會寫進你接下來複製的那份設定。不確定就照預設，之後再改也可以。' },
+      { at: atMyAi, go: goMyAi, prep: openConn,
+        find: () => item()?.querySelector('.ma-btns')?.closest('.ma-f'),
+        altIf: expired,
+        title: '複製接入設定，貼給你的 AI', text: '按「完整接入設定」，整段貼到你開 AI 的那個視窗。AI 簽到後，這一列會顯示「在線」。',
+        tip: '複製要你自己按；導覽不會碰你的 Token。',
+        alt: { find: () => item()?.querySelector('.ma-row [data-act="reissue"]'), title: '先重發 Token', // Token 過期：改框「重發 Token」
+          text: '這隻 AI 的 Token 過期了，先按「重發 Token」，再把新的 Token 給它。', tip: '重發要你自己按；導覽不會碰你的 Token。' } },
+    ];
+  }
+  // 結束後焦點回到入口。頁面會重畫（總覽載完資料可能再畫一次，舊的連結被換掉、焦點掉回頁面），
+  // 所以 2 秒內持續看著：焦點掉回 body 就再放回去；使用者自己把焦點移到別處就不管
+  async function focusEntry(sel) {
+    let placed = false;
+    for (let k = 0; k < 40; k++) {
+      const a = document.activeElement, b = document.querySelector(sel);
+      if (placed && a && a !== document.body && a.isConnected && !a.matches(sel)) return; // 放過之後使用者自己移走了
+      if (b && shownEl(b) && a !== b) { b.focus(); placed = true; }
+      await new Promise(r => setTimeout(r, 50));
+    }
+  }
+  function startHelpTour(n, from = null) {
+    const T = window.AigileTour;
+    if (!T || !HELP_TOURS[n] || window.innerWidth < T.MIN_W) return;
+    if (n === 2 && !myProjects().length) return T.notice({ text: '你還沒加入專案。先到左側「申請加入專案」，加入後再回來。' });
+    const steps = n === 2 ? walkTourSteps() : n === 1 ? aiTourSteps() : null;
+    if (!steps) return;
+    const back = { view: state.view, page: state.page }; // 從哪開始（說明頁或總覽的新手上路），結束時回那裡
+    // 從新手上路「帶我走」進來的，焦點回那個連結；其他回說明頁章首的按鈕
+    const entrySel = from?.classList.contains('ob-tour') ? `.ob .ob-tour[data-tour-start="${n}"]` : `.help-head [data-tour-start="${n}"]`;
+    T.start({ label: `第 ${n} 章　${HELP_TOURS[n]}`, steps, onEnd: why => {
+      if (why === 'restart') return;
+      if (!$('#av-menu').hidden) avOpen(false);
+      if (why === 'done' || why === 'close') { // 按完成、×、Esc：回到原頁、焦點回入口；自己點到別頁、視窗縮窄：留在那頁
+        if (back.page === 'help') openHelp(n);
+        else if (state.view !== back.view || state.page !== back.page) setProjectView(back.view, back.page);
+        focusEntry(entrySel);
+      }
+      toast(`導覽結束。想再看一次，回說明第 ${n} 章按「帶我在畫面上走一次」`, 6000);
+    } });
+  }
+  document.addEventListener('click', e => {
+    if (e.defaultPrevented || e.button > 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // 開新分頁照瀏覽器
+    const a = e.target.closest?.('a[href^="/help"], [data-help-open]');
+    const m = a && !a.closest('.help-fig') && state.me && /^\/help(?:\/(\d))?(?:#(.+))?$/.exec(a.getAttribute('href') || '/help');
+    if (m) { e.preventDefault(); return openHelp(m[1] || 0, m[2] ? decodeURIComponent(m[2]) : ''); }
+    const cp = e.target.closest?.('[data-help-copy]');
+    if (cp) { const url = `${location.origin}/help/${cp.dataset.helpCopy}`; return (navigator.clipboard?.writeText(url) || Promise.reject(new Error())).then(() => toast('已複製這一題的連結'), () => toast(url)); }
+    const md = e.target.closest?.('[data-help-mode]');
+    if (md) { store.set(HELP_MODE_KEY, md.dataset.helpMode); return drawHelp(); }
+    const ts = e.target.closest?.('[data-tour-start]');
+    if (ts) return startHelpTour(Number(ts.dataset.tourStart), ts);
+    const t = e.target.closest?.('[data-help-try]');
+    if (t) return helpTry(t.dataset.helpTry);
+  });
 
   async function renderMyAiPage() {
     const box = $('#page-work');
@@ -8114,7 +8413,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const body = openModal('我的裝置', `<p class="muted small">這些裝置正以「${esc(state.me.name)}」登入。不認得的裝置請按「登出這台」。</p>
       <ul class="dev-list" id="dev-list"><li class="muted small">載入中…</li></ul>
       <div class="dev-pair" id="dev-pair"><button class="btn primary" type="button" data-dev-pair>＋配對新裝置</button>
-        <span class="muted small">在新裝置的登入頁選「配對這台裝置」，輸入這裡出現的 6 位數字。</span></div>`, { size: 'narrow' });
+        <span class="muted small">在新裝置的登入頁選「配對裝置」，輸入這裡出現的 6 位數字。</span></div>`, { size: 'narrow' });
     const draw = async () => {
       let items;
       try { items = (await api('/api/devices')).items; } catch (err) { body.querySelector('#dev-list').innerHTML = `<li class="error">${esc(err.message)}</li>`; return; }
@@ -8143,7 +8442,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     let d;
     try { d = await api('/api/devices/pair-code', { method: 'POST' }); } catch (err) { return toast(err.message); }
     box.innerHTML = `<div class="pair-code" aria-label="配對碼 ${d.code.split('').join(' ')}">${d.code.slice(0, 3)}<span> </span>${d.code.slice(3)}</div>
-      <p class="small">在新裝置打開 <b>${esc(location.host)}</b> ▸「配對這台裝置」輸入這 6 位數字。<span class="pair-left">剩 <b id="pair-cd"></b>，只能用一次。</span></p>
+      <p class="small">在新裝置打開 <b>${esc(location.host)}</b>，登入頁選「配對裝置」，輸入這 6 位數字。<span class="pair-left">剩 <b id="pair-cd"></b>，只能用一次。</span></p>
       <button class="btn small" type="button" data-dev-pair>重新產生</button>`;
     const end = Date.parse(d.expiresAt);
     const tick = () => {
