@@ -114,7 +114,7 @@
       <div class="proj-switch" aria-label="專案"></div>
       <nav class="side-nav" aria-label="主要功能">
         <button type="button" data-nav="messages" data-proj-only aria-current="page"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
-        <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>要你處理 <span class="badge inbox-badge" hidden></span></button>
         <button type="button" data-nav="work" data-proj-only data-no-cross><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="14" rx="1.5"/><rect x="11" y="3" width="6" height="9" rx="1.5"/></svg>工作</button>
         <div class="nav-group" data-team-group data-proj-only>
           <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><svg class="ni-ico" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="14" cy="8" r="2.4"/><path d="M2 16c0-3 2.4-5 5-5s5 2 5 5M12 14c.6-1.6 1.8-2.4 3-2.4 1.6 0 3 1.2 3 3.4"/></svg>團隊<span class="chev" aria-hidden="true">▸</span></button>
@@ -140,10 +140,10 @@
       <header class="mobile-top">
         <button type="button" id="m-back" class="m-back" data-proj="hub" aria-label="回我的專案" hidden>‹</button>
         <div class="mobile-title">
-          <h1 id="m-title">Aigile-Switch</h1>
+          <div class="m-tt"><h1 id="m-title">Aigile-Switch</h1><span id="m-sub" class="m-sub muted small" hidden></span></div>
           <button class="presence" type="button" data-open="members"><span class="dot on"></span><span class="presence-text">…</span></button>
         </div>
-        <!-- 每頁同一組、同順序（‹／標題、搜尋、私訊、選單、頭像）；要你處理、收件匣在選單裡 -->
+        <!-- 每頁同一組、同順序（‹／標題、搜尋、私訊、選單、頭像）；各專案要你處理、本專案要你處理在選單裡 -->
         <button type="button" class="top-btn" data-search-open aria-label="搜尋卡片、訊息、成員"><span aria-hidden="true">🔍</span></button>
         <button type="button" class="top-btn dm-top-btn" data-dm-toggle aria-controls="dm-panel" aria-expanded="false" aria-label="私訊" hidden><span class="dm-ico" aria-hidden="true">💬</span><span class="dm-btn-t" aria-hidden="true">私訊</span><span class="badge" hidden></span></button>
         <button type="button" class="top-btn menu-btn" id="menu-btn" aria-haspopup="dialog" aria-controls="sheet" aria-expanded="false">選單 <span class="badge menu-n" hidden></span></button>
@@ -221,9 +221,9 @@
         <div class="sheet-grab" aria-hidden="true"></div>
         <div id="sheet-me" class="sheet-me"></div>
         <div class="proj-switch sheet-proj" aria-label="專案"></div>
-        <button type="button" class="m-todo" id="m-todo" hidden><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10l4 4 8-8"/></svg>要你處理 <span class="badge m-todo-n" hidden></span></button>
+        <button type="button" class="m-todo" id="m-todo" hidden><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5h10M7 10h10M7 15h10M3 5h.01M3 10h.01M3 15h.01"/></svg>各專案要你處理 <span class="badge m-todo-n" hidden></span></button>
         <button type="button" data-nav="messages" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v7a2 2 0 01-2 2H9l-4 3v-3a2 2 0 01-2-2V5z"/></svg>訊息</button>
-        <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>收件匣 <span class="badge inbox-badge" hidden></span></button>
+        <button type="button" data-nav="inbox" data-proj-only><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l2-6h10l2 6v5H3v-5zm0 0h4l1 2h4l1-2h4"/></svg>要你處理 <span class="badge inbox-badge" hidden></span></button>
         <button type="button" data-nav="work" data-proj-only data-no-cross><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="6" height="14" rx="1.5"/><rect x="11" y="3" width="6" height="9" rx="1.5"/></svg>工作</button>
         <div class="nav-group" data-team-group data-proj-only>
           <button type="button" class="nav-parent" data-team-toggle aria-expanded="false"><svg class="ni-ico" width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="14" cy="8" r="2.4"/><path d="M2 16c0-3 2.4-5 5-5s5 2 5 5M12 14c.6-1.6 1.8-2.4 3-2.4 1.6 0 3 1.2 3 3.4"/></svg>團隊<span class="chev" aria-hidden="true">▸</span></button>

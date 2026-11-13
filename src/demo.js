@@ -27,7 +27,7 @@ const TEXT = {
       `[需確認] ${r(c.mail)}：確認信要不要附活動地圖？\n\n選項：\nA. 附地圖連結\nB. 不附，只寫地址\n建議：A`,
       '[回覆] A，附連結就好。',
       `[完成] ${r(c.mobile)} 活動頁手機版排版：375 寬檢查過，按鈕都放大了，請驗收。`,
-      `[通知] ${r(c.dec)} 有一個決定等你：報名截止後要不要開放候補？（在收件匣「等你決定」）`,
+      `[通知] ${r(c.dec)} 有一個決定等你：報名截止後要不要開放候補？（在「要你處理」）`,
     ],
   },
   en: {
@@ -50,7 +50,7 @@ const TEXT = {
       `[需確認] ${r(c.mail)}: should the confirmation email include the event map?\n\n選項：\nA. Include a map link\nB. No map, just the address\n建議：A`,
       '[回覆] A, a link is enough.',
       `[完成] ${r(c.mobile)} Mobile layout of the event page: checked at 375px and made the buttons bigger. Please verify.`,
-      `[通知] ${r(c.dec)} A decision is waiting for you: open a waiting list after sign-up closes? (Inbox, "Waiting for your decision")`,
+      `[通知] ${r(c.dec)} A decision is waiting for you: open a waiting list after sign-up closes? (see "Needs your attention")`,
     ],
   },
 };

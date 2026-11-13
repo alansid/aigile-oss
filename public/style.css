@@ -2730,6 +2730,7 @@ html, body { overflow-x: clip; }
 
 /* 申請加入專案 */
 .hub-join { display: inline-block; margin: 10px 2px 4px; }
+@media (min-width: 900px) { .hub-join { display: none; } } /* 桌機側欄已有「申請加入專案」，總覽不重複；手機沒有側欄才顯示 */
 .pm-join { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 .pm-join .pm-set { margin: 0; }
 .pm-join-note { display: flex; flex-direction: column; gap: 4px; }
@@ -3017,3 +3018,70 @@ button.ask-pv:focus-visible { outline: 2px solid var(--primary); outline-offset:
 .ask-pv.open .ask-more { display: block; margin-top: 4px; }
 .ask-pv.clamp:not(.open) .ask-more { display: block; position: absolute; right: 0; bottom: 0; padding-left: 2.2em; background: linear-gradient(90deg, transparent, var(--surface) 1.8em); }
 .ask-pv.clamp:not(.open) .ask-pv-t { -webkit-line-clamp: unset; line-clamp: none; max-height: calc(1.55em * 2); }
+
+/* ===== 頁面框架統一：文件、我的 AI、團隊改成一般頁面 =====
+   原本把彈窗框直接放進頁面（白框、陰影、手機頂端抽屜把手）；改成跟「工作」頁同一種標題列：
+   標題＋灰色副標，右側放分頁或主按鈕，內容直接放在頁面上 */
+.inline-pane .modal { border: 0; border-radius: 0; background: none; box-shadow: none; overflow: visible; max-height: none; animation: none; width: 100%; }
+.inline-pane .modal::before { content: none; display: none; }
+.inline-pane .modal-head { padding: 0 0 12px; border-bottom: 0; align-items: center; flex-wrap: wrap; gap: 10px 14px; }
+.inline-pane .modal-titles { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding-top: 0; }
+.inline-pane .modal-titles h2 { margin: 0; font-size: 20px; }
+.inline-pane .modal-sub { margin: 0; }
+.inline-pane .modal-actions { flex-wrap: wrap; padding-top: 0; }
+.inline-pane .modal-body { padding: 0; overflow: visible; }
+.inline-pane .modal-foot { padding-left: 0; padding-right: 0; background: none; border-top: 0; }
+/* 團隊頁：上面已有「團隊」標題列與分頁，分頁內不再重複大標題，只留灰色說明 */
+#team-pane .modal-titles h2 { display: none; }
+
+/* ===== 深色模式：訊息開頭標籤改深底淺字（原本全是淺底，「通知」「收到」白底最刺眼），同一套色；
+   停用的「送出」改淡、降對比、滑過不變色（原本實心藍，看起來能按） ===== */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .lead-blue { background: #0c2d48; color: #7dd3fc; }
+  :root:not([data-theme="light"]) .lead-green { background: #052e16; color: #86efac; }
+  :root:not([data-theme="light"]) .lead-orange { background: #431407; color: #fdba74; }
+  :root:not([data-theme="light"]) .lead-red { background: #450a0a; color: #fecaca; }
+  :root:not([data-theme="light"]) .lead-grey { background: #374151; color: #e5e7eb; }
+  :root:not([data-theme="light"]) .lead-light { background: #273244; color: #cbd5e1; }
+  :root:not([data-theme="light"]) .lead-indigo { background: #1e1b4b; color: #c7d2fe; }
+  :root:not([data-theme="light"]) .lead-purple { background: #3b0764; color: #e9d5ff; }
+  :root:not([data-theme="light"]) .composer-tools .send:disabled,
+  :root:not([data-theme="light"]) .composer-tools .send:disabled:hover { background: transparent; border-color: #334155; color: #64748b; }
+}
+:root[data-theme="dark"] .lead-blue { background: #0c2d48; color: #7dd3fc; }
+:root[data-theme="dark"] .lead-green { background: #052e16; color: #86efac; }
+:root[data-theme="dark"] .lead-orange { background: #431407; color: #fdba74; }
+:root[data-theme="dark"] .lead-red { background: #450a0a; color: #fecaca; }
+:root[data-theme="dark"] .lead-grey { background: #374151; color: #e5e7eb; }
+:root[data-theme="dark"] .lead-light { background: #273244; color: #cbd5e1; }
+:root[data-theme="dark"] .lead-indigo { background: #1e1b4b; color: #c7d2fe; }
+:root[data-theme="dark"] .lead-purple { background: #3b0764; color: #e9d5ff; }
+:root[data-theme="dark"] .composer-tools .send:disabled,
+:root[data-theme="dark"] .composer-tools .send:disabled:hover { background: transparent; border-color: #334155; color: #64748b; }
+
+/* ---------- 手機與窄畫面 ---------- */
+/* 頁標題（版本紀錄）、頂端麵包屑：不被擠成一字一行 */
+.work-title { flex-wrap: wrap; }
+.work-title h2 { flex: none; white-space: nowrap; }
+.crumbs > * { flex: none; white-space: nowrap; }
+/* 手機頂欄：只放頁名，專案名放副標 */
+.m-tt { display: grid; min-width: 0; }
+.m-sub { font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-sub[hidden] { display: none; }
+/* 英文標題原本最多兩行；有專案名副標時只留一行，不然三行會擠出頂欄 */
+@media (max-width: 600px) { html[lang="en"] .m-tt:has(.m-sub:not([hidden])) h1 { -webkit-line-clamp: 1; line-clamp: 1; } }
+/* 看板「還有 N 欄」：放看板上方工具列右端，不浮在卡片上 */
+.board-tools { flex-wrap: wrap; }
+.board-more { position: static; min-height: 32px; padding: 0 12px; border-radius: 16px; box-shadow: none; font-size: 13px; }
+.board-more.left { left: auto; }
+/* 團隊成員表：桌機有欄名列；窄畫面沒有欄名列，改在格子裡寫「目前工作」「Token 到期」 */
+.tm-th { padding: 0 0 6px; font-weight: 600; align-items: end; }
+.tm-lbl { display: none; }
+@media (max-width: 899px) {
+  .tm-th { display: none; }
+  .tm-lbl, .tm-state .tm-lbl.muted.small { display: inline; flex: none; margin-right: 6px; }
+}
+@media (max-width: 640px) {
+  .tm-who > div { display: grid; gap: 0; }
+  .tm-who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}

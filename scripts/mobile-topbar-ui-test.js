@@ -35,7 +35,7 @@ try {
   const pages = [
     ['總覽', '/', null],
     ['訊息', '/p/main/messages', null],
-    ['收件匣', '/p/main/inbox', null],
+    ['要你處理', '/p/main/inbox', null],
     ['工作', '/p/main/work', null],
     ['成員與權限', '/members', null],
     ['我的 AI', '/my-ai', null],
@@ -65,12 +65,12 @@ try {
   await go('/p/main/messages');
   assert.equal(await js("document.querySelector('.dm-top-btn').classList.contains('off')"), false, '專案裡私訊可用');
 
-  // 要你處理、收件匣都在選單裡；開源版沒有回報
+  // 各專案要你處理、本專案要你處理（原收件匣）都在選單裡；開源版沒有回報
   await js("document.querySelector('#menu-btn').click(); true");
   await until(() => js("!document.querySelector('#sheet').hidden"), 5000, '選單');
   const sheet = await js(`[...document.querySelectorAll('#sheet .sheet-panel > button')].filter(b => !b.hidden).map(b => b.textContent.trim().replace(/\\s+/g, ' '))`);
-  assert.ok(sheet.some(t => t.startsWith('要你處理')), '選單有要你處理：' + sheet.join('｜'));
-  assert.ok(sheet.some(t => t.startsWith('收件匣')), '選單有收件匣');
+  assert.ok(sheet.some(t => t.startsWith('各專案要你處理')), '選單有各專案要你處理：' + sheet.join('｜'));
+  assert.ok(sheet.some(t => /^要你處理/.test(t)), '選單有本專案要你處理（原收件匣）');
   assert.ok(!sheet.some(t => t.includes('回報') || t.includes('許願')), '選單沒有回報與許願');
   console.log('mobile-topbar-ui-test：全部通過');
 } catch (e) {

@@ -43,7 +43,7 @@ try {
   assert.deepEqual(d, [[' ', 'a'], ['-', 'b'], ['+', 'B'], [' ', 'c'], ['+', 'd']], '逐行差異');
   // 入口：我的 AI 卡片「技能」、成員與權限的「技能」分頁（leader 也有）
   // 我的 AI：一列一個 AI、一顆主按鈕、⋯ 選單、展開分頁（接入／技能／設定）；技能分頁展開才讀
-  for (const k of ['ma-row', 'data-act="menu"', '複製接入設定', '重發 Token', '技能庫 ›', '＋ 新增 AI', 'data-ma-skills', '🗑 刪除這個 AI', 'skillsWaiting']) assert.ok(js.includes(k), '我的 AI 有 ' + k);
+  for (const k of ['ma-row', 'data-act="menu"', '複製接入設定', '重發 Token', '技能庫 ›', '＋ 新增 AI', 'data-ma-skills', '🗑 刪除這隻 AI', 'skillsWaiting']) assert.ok(js.includes(k), '我的 AI 有 ' + k);
   assert.ok(!/C-\d+）：/.test(js), '拿掉專案連結串');
   assert.ok(!/let (autoStandbyConsent|convoMode)/.test(js), '自動待命、對話接續改成每個 AI 自己的');
   assert.ok(js.includes("[['members', '成員'], ['roles', '角色'], ['skills', '技能']]"), 'leader 有技能分頁');

@@ -422,7 +422,7 @@
     const card = $('#invite-card');
     card.innerHTML = `<h1 data-group-name>${esc(BASE_TITLE)}</h1>
       <p class="inv-from">主機救援登入</p>
-      <p>用這個一次性連結，以<b>管理員</b>身分登入這台裝置。連結 15 分鐘內有效、只能用一次；登入後管理員的收件匣會收到安全通知。</p>
+      <p>用這個一次性連結，以<b>管理員</b>身分登入這台裝置。連結 15 分鐘內有效、只能用一次；登入後管理員會收到安全通知。</p>
       <p id="rsc-error" class="error" role="alert"></p>
       <button class="btn primary" type="button" id="rsc-go">登入</button>
       <p><a href="/" class="link" id="rsc-home">回登入頁</a></p>`;
@@ -1270,7 +1270,7 @@
       ${body}
       ${authHtml(m)}
       <div class="msg-foot">
-        <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
+        ${needReply(m) ? `<button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆這則</button>` : ''}
         ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && !ai && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
         ${threadToggle(m)}
       </div>
@@ -1541,7 +1541,7 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.p === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '收件匣', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', releases: '版本紀錄' }; // 私訊整頁
+  const PAGE_NAME = { messages: '訊息', inbox: '要你處理', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員與權限', dm: '私訊', releases: '版本紀錄' }; // 私訊整頁
   const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases' }; // 第一層頁面（不分專案）：版本紀錄等
   const isTop = p => p === 'myai' || p === 'releases' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
@@ -1602,7 +1602,8 @@
     const parts = top ? [home, `<b aria-current="page">${page}</b>`] : v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
     $('#crumbs').innerHTML = parts.filter(Boolean).join('<span class="crumb-sep" aria-hidden="true">▸</span>');
     $('#m-back').hidden = !hasHub() || (v === 'hub' && !top);
-    $('#m-title').innerHTML = top ? esc(page) : v === 'hub' ? '總覽' : `${esc(viewLabel(v))} · <span>${esc(page)}</span>`; // 頁名自成一段，英文介面才翻得到
+    $('#m-title').textContent = top ? page : v === 'hub' ? '總覽' : page; // 手機只放頁名，專案名放副標（不然窄畫面被截成「平台 · 收…」）
+    const msub = $('#m-sub'); if (msub) { msub.textContent = top || v === 'hub' ? '' : viewLabel(v); msub.hidden = !msub.textContent; }
     const counts = todoByView(), here = counts[v] || 0; // 收件匣徽章＝所在專案的件數，切專案就跟著變
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !here; b.textContent = here > 99 ? '99+' : here; });
     const todo = $('#m-todo'), n = counts.hub, nb = todo.querySelector('.m-todo-n');
@@ -1821,6 +1822,7 @@
         <button type="button" class="link small" id="ctx-latest">回到最新 ↓${c.pending ? `（${c.pending} 則新訊息）` : ''}</button></div>`;
     }
     const first = state.messages[0];
+    if (!list.length && !filtering()) return ''; // 這個頻道 0 則（例如跨專案頻道，載入的都是別的專案）不放大按鈕；空白提示裡有小連結
     const top = state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">${state.mobileWin ? `↑ 載入更早 ${MOBILE_N} 則` : `↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）`}</button>`
       : state.messages.length ? '<div class="msg-start muted small">這是最早的訊息</div>' : '';
     const since = !first ? '' : state.mobileWin ? `從 ${hm(first.createdAt)} 起` : state.winExpanded || !state.winFrom ? `從 ${hm(first.createdAt)} 起`
@@ -1834,7 +1836,7 @@
     $('#f-count').textContent = filtering() ? `符合 ${list.length} 則` : '';
     const empty = filtering()
       ? `${state.ctx ? '這段沒有符合篩選條件的訊息。' : `最近 ${WIN_H} 小時沒有符合的訊息`}${!state.ctx && state.hasOlder ? ' · <button type="button" class="link" id="load-older-empty">載入更早</button>' : ''}`
-      : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。';
+      : !state.ctx && state.hasOlder ? '最近沒有訊息 · <button type="button" class="link" id="load-older-empty">載入更早</button>' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。';
     const tail = state.ctx && state.ctx.hasNewer ? '<button type="button" class="load-older" id="ctx-newer">再往後</button>' : '';
     $('#messages').innerHTML = headHtml(list) + (list.length ? listHtml(list) : `<div class="empty">${empty}</div>`) + tail;
     const nl = state.firstNewId && document.getElementById('msg-' + state.firstNewId);
@@ -2789,7 +2791,7 @@
   const decOptBtns = (key, c) => { const ri = recommendedIndex(c.decision?.recommendation, optionsOf(c)); return optionsOf(c).map((o, i) => inlBtn(key, 'decide', `${userText('決定「{0}」', o)}${i === ri ? REC_TAG : ''}`, { cls: i === ri ? 'ok rec' : '', result: o })).join(''); };
   function inlineHtml(key, kind, c) {
     if (narrowInl() && work.openInl !== key) {
-      if (kind !== 'decision') return `<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">回覆…</button>`;
+      if (kind !== 'decision') return `<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">決定或回覆…</button>`;
       // 手機的決策卡：選項按鈕直接看得到，留言、不同意、要求補充、先擱著收在「其他回覆…」
       return `<div class="inl" data-inl-root="${esc(key)}"><div class="inl-actions">${decOptBtns(key, c)}<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">其他回覆…</button></div><p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
     }
@@ -2812,7 +2814,7 @@
         ${kind === 'card' ? '<ul class="mention-list" role="listbox" aria-label="選擇成員" hidden></ul>' : ''}</div>
       ${kind === 'card' ? cardToHtml(key, c) : ''}
       <div class="inl-actions">${btns}</div>
-      ${kind === 'decision' ? '<p class="muted small inl-note">留言會通知提案人；先擱著會移出收件匣，之後可在工作頁恢復。</p>' : ''}
+      ${kind === 'decision' ? '<p class="muted small inl-note">留言會通知提案人；先擱著會移出「要你處理」，之後可在工作頁恢復。</p>' : ''}
       <p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
   }
   const decisionActions = c => inlineHtml('c:' + c.cardId, 'decision', c);
@@ -2918,7 +2920,7 @@
       } else if (act === 'defer') {
         const c = work.cards.get(id);
         work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/defer`, { method: 'POST', body: { reason: text, version: c?.version } }));
-        toast('已暫緩，會從收件匣移出；要繼續請到「工作」按「恢復」');
+        toast('已暫緩，會從「要你處理」移出；要繼續請到「工作」按「恢復」');
       } else if (act === 'sugg-note' || act === 'sugg-skip') {
         const g = (work.sugg || []).find(x => x.suggestionId === id);
         if (!g) throw new Error('這則建議已經被處理過了');
@@ -3156,8 +3158,9 @@
     if (!board || !wide()) return;
     const mk = side => { const b = document.createElement('button'); b.type = 'button'; b.className = 'board-more' + (side === 'left' ? ' left' : ''); return b; };
     const rightBtn = mk('right'), leftBtn = mk('left');
-    board.parentElement.style.position = 'relative';
-    board.after(rightBtn, leftBtn);
+    // 放在看板上方工具列的右端（欄位外），不再浮在卡片上蓋住標題
+    const tools = board.parentElement.querySelector('.board-tools');
+    if (tools) tools.append(leftBtn, rightBtn); else { const bar = document.createElement('div'); bar.className = 'board-tools'; bar.append(leftBtn, rightBtn); board.before(bar); }
     const update = () => {
       const cols = [...board.querySelectorAll('.bcol')], r = board.getBoundingClientRect();
       const hiddenR = cols.filter(c => c.getBoundingClientRect().right > r.right + 2).length; // 被切到一部分也算
@@ -3471,7 +3474,7 @@
       ${groups.length ? groups.map(([p, l]) => `<div class="ht-group">${esc(p ? projName(p) : '跨專案頻道')}</div>
         ${l.map(x => `<button type="button" class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(p || 'cross')}"><span class="ht-tag ${cls[x.kind]}">${x.kind}</span><span class="ht-title">${esc(x.title)}</span><span class="ht-go" aria-hidden="true">›</span></button>`).join('')}`).join('')
         : '<p class="muted small ht-empty">目前沒有要你處理的事。</p>'}
-      <p class="muted small ht-note">點一項＝進那個專案的收件匣並打開那一項；選項、回覆都在專案裡做，這裡只列、不在這裡決定。</p>`;
+      <p class="muted small ht-note">點一項＝進那個專案的「要你處理」並打開那一項；選項、回覆都在專案裡做，這裡只列、不在這裡決定。</p>`;
   }
   // 點一項：進那個專案的收件匣，捲到那一項並閃一下（決策卡不在收件匣時直接打開卡片）
   document.addEventListener('click', async e => {
@@ -3496,8 +3499,7 @@
   function inboxHtml() {
     const all = [...work.cards.values()].filter(cardInView);
     const open = todoByView()[projectView()] || 0;
-    return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你處理` : '沒有要你處理的事'}</span></div></div>
-      <div class="inbox-block-title">要你處理</div>
+    return `<div class="work-head"><div class="work-title"><h2>要你處理</h2><span class="muted small">${open ? `${open} 件` : '目前沒有'}</span></div></div>
       ${todoHtml(all)}${(markAskClamp(), '')}
       ${noteList().length || work.sec?.length ? `<div class="inbox-block-title">給你知道的</div>
       ${notesHtml()}` : ''}`;
@@ -3557,6 +3559,7 @@
   const wide = () => matchMedia('(min-width: 900px)').matches;
   function boardHtml(all) {
     const BOARD_ORDER = ['待整理', '待處理', '進行中', '受阻', '待確認', '已完成', '已封存']; // 受阻提前到第三欄（待整理有卡才顯示）
+    const colName = st => (st === '待確認' ? '待驗收／決定' : st); // 欄裡混著驗收與決定；只改欄名，狀態值不變
     const cols = wide() ? BOARD_ORDER.filter(s => (s !== '已封存' || work.showArchived) && (s !== '待整理' || all.some(c => c.status === '待整理'))) : [work.mCol];
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
@@ -3580,15 +3583,15 @@
         + (work.archived.hasMore ? `<button type="button" class="bfoot" data-arch-more>再載入 50 張</button>` : '');
       return list.length ? list.map(tile).join('') : `<p class="muted small bempty">${wide() ? '拖曳卡片到這裡' : '這個狀態沒有卡片'}</p>`;
     };
-    const mLabel = st => (st === '已完成' ? '已完成（7 天）' : st);
+    const mLabel = st => (st === '已完成' ? '已完成（7 天）' : colName(st));
     return `
       ${wide() ? `<div class="board-tools"><span class="muted small">拖曳卡片到其他欄可以改狀態</span><span class="grow"></span><span class="muted small">已封存 ${work.archived.count} 張（完成滿 7 天自動收起）</span><button type="button" class="link small" id="toggle-archived">${work.showArchived ? '隱藏已封存' : '顯示已封存'}</button></div>`
         : `<div class="wchips" role="group" aria-label="狀態">${BOARD_ORDER.map(st => `<button type="button" data-mcol="${esc(st)}" aria-pressed="${work.mCol === st}"${st === '已封存' ? ' class="dashed"' : ''}>${mLabel(st)}<span>${st === '已封存' ? work.archived.count : all.filter(c => c.status === st).length}</span></button>`).join('')}</div>`}
       <div class="board">
         ${cols.map(s => {
           const list = all.filter(c => c.status === s);
-          return `<section class="bcol" data-col="${esc(s)}" aria-label="${esc(s)}">
-            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(s)}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount${s === '受阻' && list.length ? ' bad' : ''}">${s === '已封存' ? work.archived.count : list.length}</span></div>
+          return `<section class="bcol" data-col="${esc(s)}" aria-label="${esc(colName(s))}">
+            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(colName(s))}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount${s === '受阻' && list.length ? ' bad' : ''}">${s === '已封存' ? work.archived.count : list.length}</span></div>
             <div class="bcol-list">${colBody(s, list)}</div>
           </section>`;
         }).join('')}
@@ -3636,7 +3639,7 @@
     if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
     const tr = t.closest('[data-todo-resolve]');
     if (tr) {
-      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); toast('已從收件匣移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
+      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); toast('已從「要你處理」移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
       return;
     }
     const bt = t.closest('[data-batch]');
@@ -3682,7 +3685,7 @@
       inp.value = `@ 請整理以下人類紀錄：${ids.join('、')}。內容相近的整理成一張新卡並回覆我；原本的卡標已完成，並註明已整理到哪張。`;
       inp.focus(); inp.setSelectionRange(1, 1);
       inp.dispatchEvent(new Event('input', { bubbles: true }));
-      return toast('選一個 AI，確認內容後送出');
+      return toast('選一隻 AI，確認內容後送出');
     }
     const c = t.closest('[data-card]');
     if (c) openCard(c.dataset.card);
@@ -3981,7 +3984,7 @@
     host.classList.toggle('docked', docked);
     document.body.classList.toggle('drawer-docked', docked);
     host.innerHTML = `
-      ${docked ? '' : '<div class="drawer-overlay" data-close-drawer></div>'}
+      ${docked ? '' : '<div class="drawer-overlay"></div>'}<!-- 點灰底不關，用 × 或 Esc 關 -->
       <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
         <div class="drawer-head">
           <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
@@ -4336,7 +4339,7 @@
       <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>先擱著（暫緩）</button></div>
-      <p class="muted small inl-note">留言會通知提案人；先擱著會移出收件匣，之後可在工作頁恢復。</p>
+      <p class="muted small inl-note">留言會通知提案人；先擱著會移出「要你處理」，之後可在工作頁恢復。</p>
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
     }
     const qs = parseQuestions(m.text);
@@ -4371,7 +4374,7 @@
         if (kind === 'hold') work.cards.set(dcard.cardId, await api(`/api/cards/${encodeURIComponent(dcard.cardId)}/defer`, { method: 'POST', body: { reason: q.text.trim(), version: dcard.version } }));
         else onNewMessage(await postMsg({ text: `[回覆] ${dcard.cardId}（決策意見）：${q.text.trim()}`, requestId: newRequestId(), replyToMessageId: id, cardId: dcard.cardId, recipientIds: [m.author.participantId] }));
         quickMap.delete(id); refreshMsg(id);
-        toast(kind === 'hold' ? '已暫緩，決策卡已移出收件匣' : '已送出');
+        toast(kind === 'hold' ? '已暫緩，決策卡已移出「要你處理」' : '已送出');
         await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]); updateTodoBadge();
       } catch (err) { q.busy = false; q.error = err.message; refreshMsg(id); }
       return;
@@ -4577,7 +4580,7 @@
   // 團隊：第一版先把四個既有畫面收進同一個入口（第二版再整合成一頁）
   function openTeamHub() {
     const body = openModal('團隊', `<div class="stack">
-      <button type="button" class="btn hub-btn" data-hub="team-status"><b>團隊狀態</b><span class="muted small">每位成員目前在做什麼、誰在線、有沒有人卡住</span></button>
+      <button type="button" class="btn hub-btn" data-hub="team-status"><b>團隊狀態</b><span class="muted small">每位成員目前在做什麼、誰在線、有沒有人受阻</span></button>
       <button type="button" class="btn hub-btn" data-hub="members"><b>成員名單</b><span class="muted small">誰在群組、誰在線</span></button>
       <button type="button" class="btn hub-btn" data-hub="my-ai"><b>我的 AI</b><span class="muted small">管理我名下的 AI、重發 Token</span></button></div>`, { size: 'narrow' });
     body.addEventListener('click', e => {
@@ -4605,7 +4608,7 @@
   const curSeq = c => { try { const b = String(c).slice(4).replace(/-/g, '+').replace(/_/g, '/'); const s = JSON.parse(atob(b + '==='.slice((b.length + 3) % 4))).s; return Number.isInteger(s) && s >= 0 ? s : null; } catch { return null; } }; // 只顯示整數（不是整數＝不顯示，不放進 HTML）
   const posLine = st => { const n = st?.messagesCursor ? curSeq(st.messagesCursor) : null, c = st?.cardsSince; return n == null && !c ? '' : `<br><span class="muted small astate-pos">讀到：${[n != null ? `第 ${n} 則` : '', c ? `卡片到 ${fmtDate(c)}` : ''].filter(Boolean).join('・')}</span>`; };
   // ---------- 團隊狀態 ----------
-  const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '卡住', waiting: '等人決定', todo: '待處理' };
+  const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '受阻', waiting: '等人決定', todo: '待處理' };
   // 「等你決定」：訊息型的所有人都看；決策卡只給指定的決策者看
   work.answered = new Set(); // 已經有人類回覆的 [需確認]，不等團隊狀態快取（約 1 分鐘）就先移走
   const myDecisions = t => t.decisions.filter(d => ((!d.cardId && !cardOfConfirm(d)) || d.deciderId === meId()) && !(d.messageId && work.answered.has(d.messageId)));
@@ -4634,7 +4637,7 @@
     for (const u of list) by.set(u.participantId, [...(by.get(u.participantId) || []), u]);
     const groups = [...by.values()].map(items => items.sort((a, b) => String(a.since).localeCompare(String(b.since))))
       .sort((a, b) => String(a[0].since).localeCompare(String(b[0].since)));
-    return `<div class="group-title">尚未回應的指派 · ${groups.length} 個 AI</div>
+    return `<div class="group-title">尚未回應的指派 · ${groups.length} 隻 AI</div>
       ${groups.map(items => `<details class="note-card red unans">
         <summary class="note-main"><span><b>${esc(items[0].name)}</b> <span class="red-text">· ${items.length} 則 · 最久 ${agoText(items[0].since).replace('前', '')}</span></span></summary>
         <ul class="unans-list">${items.map(u => `<li><span class="muted small">已等 ${agoText(u.since).replace('前', '')}</span> <button type="button" class="link small" data-jump-team="${esc(u.messageId)}">查看訊息</button></li>`).join('')}</ul>
@@ -4704,7 +4707,7 @@
     if (el.hidden) { el.innerHTML = ''; return; }
     const n = list.filter(x => x.now.kind === 'work').length;
     el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(x => aiNowBtn(x)).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
-      <button type="button" class="an-chip" data-ainow-sheet><span class="an-dot ${n ? 'work' : 'idle'}" aria-hidden="true"></span>${n ? `${n} 個 AI 在做事` : 'AI 都沒在做事'} <span aria-hidden="true">›</span></button>`;
+      <button type="button" class="an-chip" data-ainow-sheet><span class="an-dot ${n ? 'work' : 'idle'}" aria-hidden="true"></span>${n ? `${n} 隻 AI 在做事` : 'AI 都沒在做事'} <span aria-hidden="true">›</span></button>`;
   }
   // ---------- 私訊自己的 AI ----------
   // 只有本人與他名下的 AI 看得到；專案沒開就整區不出現。資料只在打開對話時讀
@@ -5099,19 +5102,19 @@
       return `<div class="tm-row" data-tm-id="${esc(mb.participantId)}">
         <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small"><span>${esc(roleIn(mb, pv))}</span>${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
         <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
-        <div class="tm-state">${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
-        <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `待處理 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '待處理 0'}</div>
-        <div class="tm-token small ${tokenCls}">${mb.memberType === 'ai' ? `Token ${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' 已過期' : mb.tokenExpiringSoon ? ' 快到期' : ''}` : ''}</div>
+        <div class="tm-state"><span class="tm-lbl muted small">目前工作</span>${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
+        <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `未讀 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '未讀 0'}</div>
+        <div class="tm-token small ${tokenCls}">${mb.memberType === 'ai' ? `<span class="tm-lbl">Token 到期 </span>${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' 已過期' : mb.tokenExpiringSoon ? ' 快到期' : ''}` : ''}</div>
       </div>`;
     }).join('');
     const body = openModal('團隊狀態', `
       <details class="help"><summary>狀態怎麼判斷？</summary>
-        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝卡住，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；AI 被指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」，同一個 AI 合併一列（人類不列，請看收件匣）。</p>
+        <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝受阻，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；AI 被指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」，同一隻 AI 合併一列（人類不列，請看「要你處理」）。</p>
       </details>
-      <p class="muted small">要你決定、確認或採用的事都在<button type="button" class="link" data-goto-inbox>收件匣</button>，這裡只看團隊狀況。</p>
+      <p class="muted small">要你決定、確認或採用的事都在<button type="button" class="link" data-goto-inbox>「要你處理」</button>，這裡只看團隊狀況。</p>
       ${unansweredByAi(t.unanswered)}
       <div class="group-title">成員</div>
-      <div class="tm-list">${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
+      <div class="tm-list"><div class="tm-row tm-th muted small" aria-hidden="true"><div></div><div>狀態</div><div>目前工作</div><div>未讀訊息</div><div>Token 到期</div></div>${rows}</div>`, { size: 'wide', sub: '依每人最新一則訊息的開頭標籤推斷目前工作。' });
     body.addEventListener('click', async e => {
       const oc = e.target.closest('[data-open-card]');
       if (oc) { closeModal(); showPage('work'); openCard(oc.dataset.openCard); return; }
@@ -5122,7 +5125,7 @@
         r.disabled = true;
         try {
           await api(`/api/decisions/${encodeURIComponent(r.dataset.resolve)}/resolve`, { method: 'POST' });
-          toast('已從收件匣移出');
+          toast('已從「要你處理」移出');
           openTeam();
         } catch (err) { r.disabled = false; toast(err.message); }
       }
@@ -5230,7 +5233,7 @@
     if (state.page !== 'releases') return;
     const d = rel.data;
     const tabs = `<div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>`;
-    const head = `<button type="button" class="link page-back" data-rel-back>‹ 返回</button><div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">目前 v${esc(APP_VERSION)}${d ? ` · ${d.items.length} 個版本` : ''} · 修 bug 要附重現測試；改動前寫影響哪張流程圖的哪一段</span></div>${tabs}</div>`;
+    const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">目前 v${esc(APP_VERSION)}${d ? ` · ${d.items.length} 個版本` : ''} · 修 bug 要附重現測試；改動前寫影響哪張流程圖的哪一段</span></div>${tabs}</div>`;
     if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
     if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
     const q = rel.q.trim().toLowerCase().replace(/^v/, '');
@@ -5301,7 +5304,7 @@
         <button type="button" role="menuitem" data-act="reissue" data-id="${id}">🔑 重發 Token</button>
         ${level !== 'expired' ? `<button type="button" role="menuitem" data-act="token" data-id="${id}">📋 只複製 Token</button>` : ''}
         <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : `<hr><button type="button" role="menuitem" data-act="enable" data-id="${id}">▶ 重新啟用</button>`}
-        <button type="button" role="menuitem" class="danger-text" data-act="delete" data-id="${id}">🗑 刪除這個 AI</button>
+        <button type="button" role="menuitem" class="danger-text" data-act="delete" data-id="${id}">🗑 刪除這隻 AI</button>
       </div>` : '';
     return `<div class="ma-item${tab ? ' open' : ''}" data-ma="${id}">
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
@@ -5326,7 +5329,7 @@
         <p class="ma-hint">${esc(CONVO_HINT[o.convo || ''])}</p>
         <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>
         <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="copy" data-id="${id}">完整接入設定</button><button class="btn" type="button" data-act="short" data-id="${id}" title="貼長設定會當掉的工具用：只有幾行，AI 自己去讀完整設定">短版（已接過）</button><button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button></span></div>
-        <p class="ma-hint">上面兩個選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這個 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
+        <p class="ma-hint">上面兩個選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
       : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
       : `<dl class="ma-dl">
           <dt>主要職責</dt><dd>${esc(ai.duties)}</dd><dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
@@ -5947,7 +5950,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b>${s.kind === 'pack' ? ' <span class="pill-tag blue">技能包</span>' : ''} <span class="muted small">${esc(projName(s.project))} · 第 ${s.version} 版 · ${s.to === 'ais' ? '指定給這隻' : s.to === 'roles' ? '發給 ' + esc(s.roles.map(k => skRoleLabel(s.project, k)).join('、')) : '所有 AI'}</span>${s.hasScripts ? ` <span class="pill-tag purple">含腳本 ${s.scripts}</span>` : ''}
           <div class="muted small">${esc(s.description)} · SHA-256 ${esc(s.sha256.slice(0, 4))}…${esc(s.sha256.slice(-3))}</div>${s.state ? `<div class="small">${skMarkHtml(s)}${s.why ? ` <span class="muted">${esc(s.why)}</span>` : ''}</div>` : ''}</div>
           ${s.hasScripts ? `<div class="row"><button type="button" class="btn small" data-sk-look="${esc(s.skillId)}">看腳本</button>${s.allowed ? `<button type="button" class="btn small" data-sk-revoke="${esc(s.skillId)}">收回允許</button>` : `<button type="button" class="btn small primary" data-sk-allow="${esc(s.skillId)}">允許並同步到這台</button>`}</div>` : '<span class="muted small">純文字，會安裝</span>'}</div>`).join('')
-        : '<p class="muted">這個 AI 所屬的專案還沒有發給它的技能。</p>'}
+        : '<p class="muted">這隻 AI 所屬的專案還沒有發給它的技能。</p>'}
         ${removed.length ? `<p class="small">● 已下架、同步後會移除：${esc(removed.join('、'))}</p>` : ''}
         ${items.some(s => s.kind === 'pack') ? `<p class="small sk-pack-note">🧩 技能包要帶參數啟動 Claude Code 才會載入：<code>claude --plugin-dir "&lt;AI 的工作資料夾&gt;\\.aigile\\${esc((ai.roleKey && ai.roleKey !== 'custom' ? ai.roleKey : 'AI') + '_' + (ai.shortCode || ''))}\\plugins"</code>。同步完 AI 會印出完整路徑；新裝或更新後要重開對話。Codex 先不支援。</p>` : ''}
         <div class="row"><button type="button" class="btn primary" data-sk-sync>同步</button><span class="muted small">會私訊 AI，請它在自己的資料夾跑一次接入檢查（只同步技能），進度顯示在同步清單。只有你按「同步」或 AI 重跑接入檢查時才會安裝。</span></div>`;
@@ -6215,7 +6218,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       : `<label class="chk off"><input type="checkbox" disabled> ${esc(projName(p))}<span class="muted small">（你不在這個專案）</span></label>`).join('');
     return `<div class="field"><span class="field-label">所屬專案（至少選一個）</span>
       <div class="proj-row new-ai-proj">${myProjects().length ? boxes : '<span class="muted small">你還沒有加入任何專案，請群組管理員把你加入專案。</span>'}</div>
-      <span class="field-hint">${cross ? '這個 AI 是跨專案角色，固定在所有專案（由管理員在「成員與權限」設定）。' : '改了專案，這個 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
+      <span class="field-hint">${cross ? '這隻 AI 是跨專案角色，固定在所有專案（由管理員在「成員與權限」設定）。' : '改了專案，這隻 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
   }
   async function openAiForm(ai) {
     const { items: baseRoles, fields } = await loadRoles();
@@ -6609,11 +6612,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (filesUi.pj !== pj) { filesUi.pj = pj; filesUi.folder = null; }
     const tab = hasDocs ? filesUi.tab : 'att';
     const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
-    const body = openModal('文件', `${tabs}<div id="files-list" class="stack"></div>`, {
+    const body = openModal('文件', '<div id="files-list" class="stack"></div>', { // 分頁跟其他頁一樣放右側
       sub: tab === 'docs' ? `${esc(projName(pj))} 的共用文件，不會自動刪除` : '上傳 1 小時後自動刪除',
-      actions: tab === 'docs' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>',
+      actions: tabs + (tab === 'docs' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>'),
     });
-    body.querySelectorAll('[data-files-tab]').forEach(b => { b.onclick = () => { filesUi.tab = b.dataset.filesTab; openFiles(); }; });
+    body.modal.querySelectorAll('[data-files-tab]').forEach(b => { b.onclick = () => { filesUi.tab = b.dataset.filesTab; openFiles(); }; });
     if (tab === 'docs') return drawDocs(body, pj);
     body.modal.querySelector('#files-up').onclick = () => $('#file-input').click();
     try {
@@ -6949,7 +6952,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           const dry = await api(path, { method: 'PUT', body: { memberIds, dryRun: true } });
           if (!dry.impact.length) return toast('沒有變更');
           const back = dry.impact.filter(x => x.returnedCards.length);
-          if (back.length && !await confirmDialog({ title: '移出成員？', confirmText: '確認儲存', danger: true,
+          if (back.length && !await confirmDialog({ title: '移出成員？', confirmText: '儲存', danger: true,
             message: back.map(x => `<b>${esc(x.name)}</b> 負責的 ${x.returnedCards.length} 張卡（${esc(x.returnedCards.join('、'))}）會退回待處理、改為未指派。`).join('<br>') })) return;
           await api(path, { method: 'PUT', body: { memberIds } });
           toast(`已更新 ${projName(pm.sel)} 的成員`);
@@ -7371,7 +7374,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       loadCards().catch(() => {});
       toast(name ? `你已加入「${name}」` : '你已加入新專案');
     } else if (status === 'rejected') {
-      toast(name ? `「${name}」沒有核准你的申請，原因在收件匣` : '申請沒有核准，原因在收件匣');
+      toast(name ? `「${name}」沒有核准你的申請，原因在「要你處理」` : '申請沒有核准，原因在「要你處理」');
     }
     refreshInboxCount();
     loadNotes().then(() => { if (state.page === 'inbox') renderWork(); }).catch(() => {});
@@ -7608,7 +7611,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         ...(dry.roleChanges || []).map(c => `${esc(c.name)}：在${esc(projName(c.project))}的角色改成${esc(c.role || '未設定')}`),
         ...dry.impact.map(x => `${esc(x.name)}：${[x.added.length ? '加入 ' + x.added.map(p => esc(projName(p))).join('、') : '', x.removed.length ? '離開 ' + x.removed.map(p => esc(projName(p))).join('、') : ''].filter(Boolean).join('；')}${x.returnedCards.length ? `（<b>${x.returnedCards.length} 張卡退回待處理</b>：${x.returnedCards.join('、')}）` : ''}`),
       ];
-      if (!await confirmDialog({ title: '確定儲存這些變更？', confirmText: '確定儲存', danger: dry.impact.some(x => x.returnedCards.length),
+      if (!await confirmDialog({ title: '確定儲存這些變更？', confirmText: '儲存', danger: dry.impact.some(x => x.returnedCards.length),
         message: `<ul class="pm-impact">${lines.map(l => `<li>${l}</li>`).join('') || '<li>沒有實際變更</li>'}</ul>` })) return;
       await api('/api/members/matrix', { method: 'PUT', body: { changes } });
       perm.draft.clear();
@@ -7846,7 +7849,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     }
     const go = ({ a, pj }) => { state.dmPrefill = prefill; state.dmAi = a.participantId; return pj !== pv ? Promise.resolve(setProjectView(pj)).then(() => openDm(a.participantId)) : openDm(a.participantId); };
     if (cands.length === 1) return go(cands[0]);
-    const body = openModal(onlyPj ? '跟哪個 AI 討論新角色？' : '請哪個 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: onlyPj ? `在「${esc(projName(onlyPj))}」的私訊跟它討論，它會送角色提案卡` : '會打開跟它的私訊，幫你先打好開頭' });
+    const body = openModal(onlyPj ? '跟哪隻 AI 討論新角色？' : '請哪隻 AI 幫你做頭像？', `<div class="an-sheet">${cands.map((x, i) => `<button type="button" class="dm-row" data-ask-pick="${i}">${avatar(x.a)}<span class="dm-row-main"><b>${esc(x.a.name)}</b><span class="dm-prev">${esc(projName(x.pj))}</span></span></button>`).join('')}</div>`, { size: 'narrow', sub: onlyPj ? `在「${esc(projName(onlyPj))}」的私訊跟它討論，它會送角色提案卡` : '會打開跟它的私訊，幫你先打好開頭' });
     body.addEventListener('click', ev => { const b = ev.target.closest('[data-ask-pick]'); if (b) { closeModal(); go(cands[Number(b.dataset.askPick)]); } });
   }
   // ---------- ：頂欄搜尋（卡片、訊息、成員），按 Enter 才查一次 ----------
@@ -7951,7 +7954,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <div class="my-role-foot"><button type="button" class="btn primary small" id="my-roles-save">儲存角色</button></div></div>` : ''}`)}
       ${pane('acct', `
       <div class="field pwd-set" id="pwd-set"><span class="field-label" id="pwd-set-h">帳號密碼</span>
-        <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">讀取中…</span></div>
+        <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">載入中…</span></div>
         <form id="pwd-set-form" class="stack" aria-labelledby="pwd-set-h" hidden>
           <label>帳號<input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="field-hint">4～30 字，英文、數字、. _ -；不分大小寫</span></label>
           <label id="pwd-cur-l">目前密碼<span class="pwd-wrap"><input name="current" type="password" maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示目前密碼">顯示</button></span><span class="field-hint">改帳號或密碼都要先填</span></label>
@@ -8109,7 +8112,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   let pairTimer = null;
   async function openDevices() {
     const body = openModal('我的裝置', `<p class="muted small">這些裝置正以「${esc(state.me.name)}」登入。不認得的裝置請按「登出這台」。</p>
-      <ul class="dev-list" id="dev-list"><li class="muted small">讀取中…</li></ul>
+      <ul class="dev-list" id="dev-list"><li class="muted small">載入中…</li></ul>
       <div class="dev-pair" id="dev-pair"><button class="btn primary" type="button" data-dev-pair>＋配對新裝置</button>
         <span class="muted small">在新裝置的登入頁選「配對這台裝置」，輸入這裡出現的 6 位數字。</span></div>`, { size: 'narrow' });
     const draw = async () => {
@@ -8157,7 +8160,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   // ---------- 邀請（只有管理員）：名字、角色、專案 → 一次性連結＋QR；有效時間可選（預設 24 小時） ----------
   let invTimer = null;
   function openInvite() {
-    const body = openModal('＋邀請', `<form id="inv-new" class="stack">
+    const body = openModal('＋ 邀請', `<form id="inv-new" class="stack">
         <label class="field">名字<input name="name" required maxlength="40" autocomplete="off" placeholder="例如：王小明"></label>
         <fieldset class="field inv-projs"><legend class="field-label">專案與角色</legend>
           ${PROJECTS.map(pj => `<div class="inv-proj-row"><label class="chk"><input type="checkbox" name="projects" value="${esc(pj)}"> ${esc(projName(pj))}</label><label class="chk inv-ro"><input type="checkbox" data-inv-ro="${esc(pj)}" disabled> 👁 唯讀</label>${roleSelectHtml('', `data-inv-role="${esc(pj)}" disabled`, { pj, ai: false, label: `在${projName(pj)}的角色` })}</div>`).join('')}
@@ -8245,7 +8248,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   function demoCardHtml() {
     if (!demo.status) { api('/api/admin/demo').then(d => { demo.status = d; if (state.page === 'perm' && perm.tab === 'system') drawPerm(); }).catch(() => {}); }
     const d = demo.status;
-    const body = !d ? '<p class="muted small">讀取中…</p>'
+    const body = !d ? '<p class="muted small">載入中…</p>'
       : d.loaded ? `<p class="small">已載入「${esc(d.projectName || '示範專案')}」。看完按清除，只會刪示範的成員、卡片與對話；你們自己在示範專案發的訊息或建的卡會留著。</p><button type="button" class="btn" data-demo="clear"${demo.busy ? ' disabled' : ''}>清除示範資料</button>`
       : `<p class="small">建一個示範專案：幾張不同狀態的卡、一段人與 AI 的對話、一張等你決定的決策卡。內容是虛構的，看完可以一鍵清掉。</p><button type="button" class="btn primary" data-demo="load"${demo.busy ? ' disabled' : ''}>載入示範資料</button>`;
     return `<div class="pm-card"><div class="pm-card-head"><strong>示範資料</strong></div><div class="pm-pad">${body}</div></div>`;
@@ -8305,7 +8308,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   function permSystemHtml() {
     if (!bk.status) { api('/api/admin/backup/status').then(s => { bk.status = s; if (state.page === 'perm' && perm.tab === 'system') drawPerm(); }).catch(err => toast(err.message)); }
     const st = bk.status;
-    const imp = !st ? '<p class="muted small">讀取中…</p>'
+    const imp = !st ? '<p class="muted small">載入中…</p>'
       : st.empty ? `<p class="small">${st.restoring ? '<b>上次匯入沒有做完</b>，可以再選一次備份檔從頭匯入。' : '這是空站，可以匯入備份。'}</p>
         <label class="btn${bk.busy ? ' disabled' : ''}">選擇備份檔…<input type="file" accept=".json,application/json" data-bk-file hidden${bk.busy ? ' disabled' : ''}></label>`
       : '<p class="small">這個站已經有資料，不能匯入；要搬家請在新架的空站匯入</p>';
@@ -8385,7 +8388,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   document.addEventListener('click', e => { if (e.target.closest?.('[data-bk="export"]') && !bk.busy) bkExport(); });
   document.addEventListener('change', e => { const inp = e.target.closest?.('[data-bk-file]'); if (inp?.files?.[0] && !bk.busy) { const f = inp.files[0]; inp.value = ''; bkImport(f); } });
   function permInvitesHtml() {
-    if (!perm.invites) { loadInvites(); return '<p class="muted pm-pad">讀取中…</p>'; }
+    if (!perm.invites) { loadInvites(); return '<p class="muted pm-pad">載入中…</p>'; }
     const cls = { 有效: 'green', 已使用: 'blue', 已過期: 'grey', 已取消: 'grey' };
     const st = iv => iv.status === '有效' ? `有效 · 剩 ${invLeftShort(Date.parse(iv.expiresAt) - Date.now())}${iv.ttl === '7d' ? '（7 天）' : ''}`
       : iv.status === '已使用' ? `已使用 · ${iv.usedByName ? iv.usedByName + ' · ' : ''}${fmtDate(iv.usedAt).split(' ')[0]}` : iv.status === '已取消' ? '已作廢' : iv.status;
