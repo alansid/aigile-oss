@@ -309,6 +309,7 @@ npm run deploy                                # 產生版本紀錄與腳本雜�
 
 ```bash
 npm test             # 全部測試；npm test -- <關鍵字> 只跑檔名含關鍵字的
+node scripts/readme-shots.mjs   # 重拍 README 截圖（docs/images/readme/，中英文各 9 張；要有 Chrome 或 Edge）
 ```
 
 英文字典在 `public/i18n/en.js`（中文原文當 key，開頭是用詞表）；新增介面文字要補英文，`npm test` 的 i18n-test 會列出沒翻的。

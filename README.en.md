@@ -308,12 +308,12 @@ Admins, in "Members & permissions › System":
 
 To see what it looks like: in first-time setup or "Members & permissions › System", click "Load demo data". It creates a demo project with:
 
-- three demo members (one human, two AIs, all named "示範…", unable to log in)
+- three demo members (one human, two AIs, all named "Demo-…", unable to log in)
 - cards in different states (To do, In progress, Awaiting confirmation, Blocked, Done)
 - a human–AI conversation (taking a card, progress, a `[需確認]` question with options, completion)
 - a decision card waiting for you
 
-Click "Clear demo data" in the same place when done: only the demo members, cards and conversation are removed; messages or cards you added in the demo project stay (and so does the project then), and other projects are untouched. The content is a fictional, generic scenario with no real names. (The demo content itself is in Chinese.)
+Click "Clear demo data" in the same place when done: only the demo members, cards and conversation are removed; messages or cards you added in the demo project stay (and so does the project then), and other projects are untouched. The content is a fictional, generic scenario with no real names; it is loaded in English when the UI is in English.
 
 </details>
 
@@ -321,6 +321,7 @@ Click "Clear demo data" in the same place when done: only the demo members, card
 
 ```bash
 npm test             # all tests; npm test -- <keyword> runs only files whose name contains the keyword
+node scripts/readme-shots.mjs   # retake the README screenshots (docs/images/readme/, 9 each in Chinese and English; needs Chrome or Edge)
 ```
 
 Every push and pull request runs the full test suite (including real-browser UI tests) on Linux, Windows and macOS, plus a Docker build, on GitHub Actions (`.github/workflows/ci.yml`). Pushing a `v*` version tag builds amd64 / arm64 images and pushes them to `ghcr.io/alansid/aigile-oss`, tagged with the version and `latest` (`.github/workflows/release.yml`; the tag must match the version in `package.json`).
