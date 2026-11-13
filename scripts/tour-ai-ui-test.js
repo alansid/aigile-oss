@@ -1,7 +1,8 @@
 // 聚光燈導覽（二）：說明第 1 章路線 B「讓你的 AI 加入」＋新手上路「帶我走」（真的瀏覽器，中文、英文介面都驗）
 // 第 1 章章首有入口，選「不會帶 AI」時變灰、寫「不帶 AI 可跳過」；路線 B 四步：頭像選單「我的 AI」→「＋ 新增 AI」→
 //   最新那隻接入分頁的「工具」（Claude Code｜Codex｜其他）→「複製」那一列（「複製接入文字」）；
-//   自己開表單時暫停、只留說明框，灰底只寫「表單關掉後就能繼續。」；沒有 AI 時「下一步」不能按；
+//   第 2 步「下一步」一律停用、有 AI 時給「已經有 AI 了，跳過這步」連結（平台 PLAT-319）；自己開新增表單就進表單小步（細節在 tour-form-ui-test）；
+//   其他彈窗（例：編輯 AI）蓋住時暫停，灰底只寫「表單關掉後就能繼續。」；沒有 AI 時寫「建好 AI 後就能繼續」；
 //   Token 過期改框「重發 Token」，標題「先重發 Token」、灰底「重發要你自己按…」
 // 新手上路第 1、2 項加「帶我走」（寬 ≥1000），直接開始那一章；結束回總覽、焦點回「帶我走」；導覽不碰 Token、不替人按「複製」、走完不算完成
 // 本機暫存資料庫＋無頭 Chrome／Edge，不連任何站。用法：node scripts/tour-ai-ui-test.js（找不到瀏覽器就略過）
@@ -76,14 +77,13 @@ try {
   assert.equal(await js("document.querySelector('#av-menu').hidden"), false, '回第 1 步：頭像選單開著');
   await mouse('.tour-foot [data-tour="next"]');
   p = await stepIs(2, '滑鼠按下一步回第 2 步');
+  assert.equal(await js("document.querySelector('#av-menu').hidden"), true, '回第 2 步：頭像選單收起來，不蓋住「＋ 新增 AI」');
   await key('ArrowRight'); await sleep(400);
   assert.ok((await pop()).meta.endsWith('2 / 4'), '方向鍵也不會往下');
-  await js("document.querySelector('#ai-new').click(); true");
-  await until(async () => { const q = await pop(); return q?.paused && !q.holeShown; }, 5000, '表單打開時暫停');
+  assert.ok(await js("!document.querySelector('.tour-skipline')"), '還沒有 AI：不給跳過連結');
+  await mouse('#ai-new'); // 自己開新增表單：進表單小步
+  await until(async () => { const q = await pop(); return q && !q.loading && q.meta === '第 1 章 · 第 2 步 › 表單 · 1 / 4'; }, 8000, '表單打開進表單 1/4');
   assert.ok(await js("!!document.querySelector('#modal-root .modal')"), '表單真的打開了（導覽沒有擋）');
-  p = await pop();
-  assert.deepEqual([p.tip, p.block], ['表單關掉後就能繼續。', ''], '暫停時灰底只寫「表單關掉後就能繼續。」');
-  assert.deepEqual(p.btns, ['上一步(停用)', '結束', '下一步(停用)'], '暫停時上一步／下一步不能按');
   await esc(); // Esc 給表單
   await until(async () => { const q = await pop(); return q && !q.paused && q.holeShown && q.meta.endsWith('2 / 4'); }, 5000, '表單關掉回到第 2 步');
   assert.equal(await js("!!document.querySelector('#modal-root .modal')"), false, 'Esc 關的是表單');
@@ -101,17 +101,23 @@ try {
   await stepIs(1, '有 AI 第 1 步');
   await key('ArrowRight');
   p = await stepIs(2, '有 AI 第 2 步');
-  assert.deepEqual([p.block, p.tip, p.btns], ['', '已經有 AI 的話可以直接按「下一步」。', ['上一步', '下一步']], '有 AI：可以下一步');
-  // 有 AI 時自己開表單：灰底換成「表單關掉後就能繼續」；關掉回到第 2 步，灰底恢復
-  await js("document.querySelector('#ai-new').click(); true");
-  await until(async () => (await pop())?.paused, 5000, '有 AI：表單打開時暫停');
+  const TIP2 = '按「＋ 新增 AI」開始；已經有 AI 的話按下面的連結跳過。';
+  assert.deepEqual([p.block, p.tip, p.btns], ['', TIP2, ['上一步', '下一步(停用)']], '有 AI：下一步也停用，要先走完新增 AI');
+  assert.equal(await js("document.querySelector('.tour-skipline [data-tour=\"skip\"]')?.textContent || ''"), '已經有 AI 了，跳過這步', '有 AI：給跳過連結');
+  await key('ArrowRight'); await sleep(400);
+  assert.ok((await pop()).meta.endsWith('2 / 4'), '→ 鍵也不能跳過第 2 步');
+  // 新增表單以外的彈窗（例：編輯某隻 AI）：照舊暫停，灰底換成「表單關掉後就能繼續」；關掉回到第 2 步，灰底恢復
+  await js(`document.querySelector('#ai-list .ma-more[data-id="${N}"]').click(); true`); // 說明框可能蓋住「⋯」，這裡只是要打開編輯表單，用程式點
+  await until(() => js(`!!document.querySelector('#ai-list .ma-menu [data-act="edit"]')`), 5000, '「⋯」選單');
+  await js(`document.querySelector('#ai-list .ma-menu [data-act="edit"]').click(); true`);
+  await until(async () => { const q = await pop(); return q?.paused && !q.holeShown; }, 5000, '有 AI：編輯表單打開時暫停');
   p = await pop();
   assert.deepEqual([p.tip, p.btns], ['表單關掉後就能繼續。', ['上一步(停用)', '下一步(停用)']], '有 AI 暫停時');
   await esc();
   await until(async () => { const q = await pop(); return q && !q.paused && q.meta.endsWith('2 / 4'); }, 5000, '有 AI：表單關掉回到第 2 步');
   p = await pop();
-  assert.deepEqual([p.tip, p.btns], ['已經有 AI 的話可以直接按「下一步」。', ['上一步', '下一步']], '關掉表單灰底恢復');
-  await key('ArrowRight');
+  assert.deepEqual([p.tip, p.btns], [TIP2, ['上一步', '下一步(停用)']], '關掉表單灰底恢復');
+  await mouse('.tour-skipline [data-tour="skip"]'); // 已經有 AI 了，跳過這步
   p = await stepIs(3, '第 3 步');
   assert.equal(p.title, '先選你的 AI 用哪個工具');
   assert.match(p.text, /opencode 等其他工具選「其他」/, '說明 opencode 選其他');
@@ -139,7 +145,7 @@ try {
   assert.equal((await call(chen.token, `/api/my-ais/${N}`, 'PATCH', { duties: 'y' })).status, 200, '讓平台重讀成員表（直接改資料庫有快取）');
   await toHelp(chen.token, 1);
   await start(1);
-  await stepIs(1, '過期 第 1 步'); await key('ArrowRight'); await stepIs(2, ''); await key('ArrowRight'); await stepIs(3, ''); await key('ArrowRight');
+  await stepIs(1, '過期 第 1 步'); await key('ArrowRight'); await stepIs(2, ''); await mouse('.tour-skipline [data-tour="skip"]'); await stepIs(3, ''); await key('ArrowRight');
   p = await stepIs(4, '過期 第 4 步');
   assert.deepEqual([p.title, p.text, p.tip], ['先重發 Token', '這隻 AI 的 Token 過期了，先按「重發 Token」，再複製接入文字貼給它。', '重發要你自己按；導覽不會碰你的 Token。'], 'Token 過期：' + JSON.stringify(p));
   assert.ok(await covers(p.hole, `document.querySelector('#ai-list [data-ma="${N}"] .ma-row [data-act="reissue"]')`), '框「重發 Token」');
@@ -180,13 +186,16 @@ try {
   assert.deepEqual([p.meta, p.title], ['Chapter 1: Bring your AI on board · 1 / 4', 'Your AIs live in My AIs'], '英文第 1 步：' + JSON.stringify(p));
   await key('ArrowRight');
   p = await stepIs(2, '英文第 2 步');
-  assert.deepEqual([p.title, p.tip, p.btns], ['Click "+ Add AI" to create one', 'If you already have an AI, just click "Next".', ['Back', 'Next']], '英文第 2 步');
-  await js("document.querySelector('#ai-new').click(); true");
-  await until(async () => (await pop())?.paused, 5000, '英文：表單打開時暫停');
-  assert.equal((await pop()).tip, 'You can continue once the form is closed.', '英文暫停灰底');
+  assert.deepEqual([p.title, p.tip, p.btns], ['Click "+ Add AI" to create one', 'Click "+ Add AI" to start; if you already have an AI, use the link below to skip.', ['Back', 'Next(停用)']], '英文第 2 步');
+  assert.equal(await js("document.querySelector('.tour-skipline [data-tour=\"skip\"]')?.textContent || ''"), 'I already have an AI, skip this step', '英文跳過連結');
+  await mouse('#ai-new');
+  await until(async () => { const q = await pop(); return q && !q.loading && q.meta === 'Chapter 1 · Step 2 › Form · 1 / 4'; }, 8000, '英文：表單 1/4');
+  p = await pop();
+  assert.deepEqual([p.title, p.tip], ['Pick a role template first', 'You can leave "Role display name" and "Avatar" as they are for now.'], '英文表單 1/4：' + JSON.stringify(p));
+  assert.ok(!/[㐀-鿿]/.test(p.meta + p.title + p.text + p.tip), '英文表單小步沒有中文');
   await esc();
   await until(async () => { const q = await pop(); return q && !q.paused && q.meta.endsWith('2 / 4'); }, 5000, '英文：表單關掉');
-  await key('ArrowRight');
+  await mouse('.tour-skipline [data-tour="skip"]');
   p = await stepIs(3, '英文第 3 步');
   assert.equal(p.title, 'First pick the tool your AI uses');
   assert.match(p.text, /For opencode and other tools, pick "Other"/);

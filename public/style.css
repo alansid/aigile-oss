@@ -3231,6 +3231,8 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 /* 導覽暫停（表單蓋住畫面）時說明框在左下角、沒有箭頭；「下一步」不能按時的說明 */
 .tour-pop.paused::before { display: none; }
 .tour-block { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.tour-skipline { margin: 8px 0 0; font-size: 13px; } /* 「已經有 AI 了，跳過這步」 */
+.tour-title:empty { display: none; }
 .tour-foot .btn[disabled] { opacity: .45; cursor: not-allowed; }
 .help-tour.dim { opacity: .55; }
 .help-tour .ht-skip { margin-left: 6px; }

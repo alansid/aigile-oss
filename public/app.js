@@ -66,6 +66,7 @@
     if (!r.ok) {
       const msg = data?.error?.message || `HTTP ${r.status}`;
       const err = new Error(window.aigileI18n ? window.aigileI18n.err(data?.error?.code, msg) : msg); // 英文介面：依錯誤代碼顯示英文
+      err.raw = msg; // 原文（中文）：表單用來對出錯的是哪一欄（英文介面 message 已經翻過）
       err.code = data?.error?.code; err.captchaRequired = !!data?.error?.captchaRequired; err.suggestion = data?.error?.suggestion || ''; err.field = data?.error?.field || '';
       state.lastErr = { code: err.code || `HTTP ${r.status}`, at: Date.now() };
       if (state.me && (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED')) logout(false);
@@ -2361,6 +2362,8 @@
   // 共用外框：桌面置中、手機從底部滑出。size：''、'wide'、'form'、'narrow'
   // actions：標頭 × 左邊的動作鈕；foot：底部按鈕（只有要做決定的彈窗才給）
   let modalReturnFocus = null;
+  // 新增 AI 表單最近一次建好的 AI（導覽接第 3 步用）；tourHold：建好到「已建立 AI」視窗跳出之間，導覽先別當成表單已關
+  let tourNewAiId = '', tourHold = false;
   // 點灰底不關彈窗，也不讓焦點跑出彈窗（否則之後按 Esc 收不到）
   const holdBackdrop = overlay => overlay.addEventListener('mousedown', e => { if (e.target === overlay) e.preventDefault(); });
   function modalFrame({ title, sub = '', size = '', actions = '', foot = '', body = '' }) {
@@ -5503,17 +5506,34 @@
     const menuOpen = () => !$('#av-menu').hidden;
     const atMyAi = () => state.page === 'myai';
     const goMyAi = () => { if (menuOpen()) avOpen(false); return goTop('myai'); };
-    const formOpen = () => !!$('#modal-root').firstElementChild; // 使用者自己按了「＋ 新增 AI」（建好後的「已建立 AI」也算）
+    const formOpen = () => !!$('#modal-root').firstElementChild; // 蓋住畫面的彈窗（新增 AI 表單以外的，例如編輯）：暫停
+    const newForm = () => $('#modal-root #ai-form[data-new]'); // 使用者自己按了「＋ 新增 AI」：表單裡分 4 小步帶（平台 PLAT-316）
+    const createdDlg = () => $('#modal-root .modal[data-tour-created]'); // 建好後跳出的「已建立 AI」視窗也算表單
+    // 小步：先把欄位捲到表單可見範圍的上方（frac＝離頂端的比例），再框；跟使用者自己捲一樣
+    const toField = (el, frac = 1 / 3) => { const sc = el?.closest('.modal-body'); if (!sc) return; const r = el.getBoundingClientRect(), c = sc.getBoundingClientRect(); sc.scrollTop += r.top - c.top - c.height * frac; };
+    const inForm = sel => newForm()?.querySelector(sel);
+    const SUB = { clip: () => $('#modal-root .modal-body'), sides: ['left', 'right', 'bottom', 'top'], popW: 288 }; // 寬 ≥1240 放表單旁邊，放不下就放上下
+    const sixQ = () => { const f = newForm(); return f ? [f.querySelector('.group-title')?.parentElement, f.querySelector('input[name="name"]')?.closest('label'), f.querySelector('textarea')?.closest('label')] : null; };
+    const formSteps = [ // 開源版沒有「所在環境」：4 小步
+      { ...SUB, find: () => inForm('select[name="roleKey"]')?.closest('label'), prep: () => toField(inForm('select[name="roleKey"]')),
+        title: '先選角色範本', text: '選最接近的角色。下面的名稱和六題會照範本自動填好，之後都能改。', tip: '「角色顯示名稱」和「頭像」可以先不改。' },
+      { ...SUB, find: () => inForm('.new-ai-proj')?.closest('.field'), prep: () => toField(inForm('.new-ai-proj')),
+        title: '勾它要加入的專案', text: '至少勾一個。AI 只會在勾了的專案裡收訊息、做事。' },
+      { ...SUB, find: sixQ, prep: () => toField(inForm('.group-title'), 0.02),
+        title: '六題是 AI 的工作守則', text: '範本已經幫你填好，第一次照預填的就可以。名稱、職責、要先問你的事，想改再改。', tip: '下面還有第 3～6 題，可以自己往下捲看看。' },
+      { sides: SUB.sides, popW: SUB.popW, find: () => { const ft = $('#modal-root .modal-foot'); return ft && newForm() ? [ft.querySelector('[data-close]'), ft.querySelector('button[type="submit"]')] : null; },
+        title: '確認後按「建立 AI」', text: '導覽不會替你按。按下去建好後，會自動帶你到下一步，看怎麼把 AI 接上來。', tip: '按「取消」或 × 會回到第 2 步，什麼都不會建立。' },
+    ];
     const listReady = () => { const l = $('#ai-list'); return !!l && !(l.children.length === 1 && l.firstElementChild.matches('p.muted.small')); }; // 「載入中…」那一行（不看文字，英文介面也準）
     const rows = () => [...document.querySelectorAll('#ai-list .ma-item')];
     // 最新那隻：畫面上的 AI 裡加入時間最晚的（用成員清單的時間，不另外讀含 Token 的資料）
     const latest = () => rows().map(el => el.dataset.ma).sort((a, b) => String(state.participants.get(b)?.joinedAt || '').localeCompare(String(state.participants.get(a)?.joinedAt || '')))[0];
-    let aiId = '';
+    let aiId = '', pinned = false; // pinned：導覽裡剛建好的那隻（用建立時拿到的 ID）
     const item = () => (aiId ? document.querySelector(`#ai-list [data-ma="${CSS.escape(aiId)}"]`) : null);
     // 展開那隻 AI 的「接入」分頁：跟使用者自己點那一列一樣，只是展開，不送出、不動資料
     const openConn = async () => {
-      for (let k = 0; k < 30 && !listReady(); k++) await new Promise(r => setTimeout(r, 100));
-      aiId = latest() || '';
+      for (let k = 0; k < 30 && (!listReady() || (pinned && !item())); k++) await new Promise(r => setTimeout(r, 100)); // 剛建好：等清單重畫出那隻
+      if (!pinned) aiId = latest() || '';
       const it = item();
       if (!it) return;
       if (!it.classList.contains('open')) it.querySelector('.ma-row')?.click();
@@ -5526,10 +5546,18 @@
         find: () => $('#av-menu [data-av="myai"]'),
         title: '你的 AI 都在「我的 AI」', text: '右上角頭像的選單裡有「我的 AI」，你名下的 AI 都在這裡。按「下一步」帶你過去。' },
       { at: atMyAi, go: goMyAi,
-        find: () => $('#ai-new'), pause: formOpen,
+        // 從第 1 步按「下一步」回來（已經在我的 AI 頁，不會換頁）：頭像選單還開著會蓋住「＋ 新增 AI」，先收起來
+        prep: () => { if (menuOpen()) avOpen(false); },
+        find: () => $('#ai-new'), pause: () => formOpen() && !newForm() && !createdDlg(),
+        // 表單一打開就在表單裡分 4 小步帶；取消／×／Esc 回這一步；建好後的視窗只放說明，關掉後接第 3 步、展開剛建好的那隻
+        sub: { label: '表單', open: () => !!newForm() || !!createdDlg() || tourHold, steps: formSteps, enter: () => { tourNewAiId = ''; },
+          note: () => (createdDlg() ? { text: 'AI 建好了。先關掉這個視窗，導覽接著帶你看怎麼接上它。', find: createdDlg } : null),
+          after: () => { if (tourNewAiId) { aiId = tourNewAiId; pinned = true; return 2; } } },
         block: () => (listReady() && !rows().length ? '建好 AI 後就能繼續' : ''), // 還沒有 AI：「下一步」先不能按
-        title: '按「＋ 新增 AI」建一隻', text: '選一個角色範本、勾要加入的專案，按「建立 AI」。建好後回到這裡按「下一步」。',
-        tip: '已經有 AI 的話可以直接按「下一步」。', pauseTip: '表單關掉後就能繼續。' }, // 表單打開（暫停）時灰底只寫這句
+        // 「下一步」一律停用，要先走完新增 AI；已經有 AI 的人用跳過連結到第 3 步（展開最新那隻）（平台 PLAT-319）
+        lock: () => true, skipLink: '已經有 AI 了，跳過這步',
+        title: '按「＋ 新增 AI」建一隻', text: '選一個角色範本、勾要加入的專案，按「建立 AI」。建好後導覽會接著帶你到下一步。',
+        tip: '按「＋ 新增 AI」開始；已經有 AI 的話按下面的連結跳過。', pauseTip: '表單關掉後就能繼續。' }, // 其他彈窗（暫停）時灰底只寫這句
       { at: atMyAi, go: goMyAi, prep: openConn,
         find: () => item()?.querySelector('.ma-tool')?.closest('.ma-f'),
         title: '先選你的 AI 用哪個工具', text: '選了會記住，下次不用再選。opencode 等其他工具選「其他」。下面的「對話接續」「自動待命」不確定就照預設。' },
@@ -5882,6 +5910,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
              <button class="btn primary" type="button" id="tok-short"${maTool(ai) ? '' : ' disabled'}>${label()}</button>`,
     });
     const m = body.modal, short = m.querySelector('#tok-short');
+    if (created) m.dataset.tourCreated = '1'; // 導覽：建好後的視窗也算新增 AI 表單的一部分
     m.querySelector('#tok-copy').onclick = async () => toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
     m.querySelectorAll('[data-tok-tool]').forEach(b => b.onclick = () => {
       maSetTool(ai, b.dataset.tokTool);
@@ -6579,7 +6608,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const pjRole = (d, pj) => ({ ...d, option: `${d.key}：${d.role}${d.status === 'disabled' ? '（已停用）' : ''}`, suffix: window.aigileI18n?.lang === 'en' ? `${d.key}-AI` : `${d.role}助手`, project: pj, projects: [pj] });
     const roles = [...baseRoles, ...myProjects().flatMap(pj => projRoleDefs(pj, true).filter(d => d.status !== 'disabled' || (editing && ai.roleKey === d.key)).map(d => pjRole(d, pj)))];
     const body = openModal(editing ? '編輯 AI' : '新增 AI', `
-      <form id="ai-form" class="stack">
+      <form id="ai-form" class="stack"${editing ? '' : ' data-new="1"'}>
         <label>角色範本
           <select name="roleKey">${roleOptionsHtml(roles)}</select>
           <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
@@ -6682,33 +6711,55 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
     form.addEventListener('input', () => { counts(); preview(); });
     form.roleKey.addEventListener('change', preview);
+    // 建立／儲存被擋下時，捲到第一個出錯的欄位、游標放進去，錯誤字寫在那一欄底下（平台 PLAT-317）；用中文原文對欄位（英文介面 message 已翻過）
+    const errAt = err => {
+      const m = String(err.raw || err.message || ''), c = err.code;
+      if (c === 'NAME_TAKEN' || /^名稱|是保留字/.test(m)) return form.name;
+      if (c === 'OWNER_NOT_IN_PROJECT' || /所屬專案/.test(m)) return form.querySelector('input[name="proj"]:not(:disabled)');
+      if (/角色顯示名稱/.test(m)) return form.role;
+      if (/roleKey/.test(m)) return form.roleKey;
+      const f = fields.find(x => m.includes(`「${x.label}」`));
+      return f ? form[f.key] : null;
+    };
+    const clearErr = () => { body.querySelectorAll('.field-err').forEach(x => x.remove()); body.querySelector('#ai-error').textContent = ''; };
+    const showErr = (msg, el) => {
+      clearErr();
+      const host = el && (el.closest('.field') || el.closest('label')); // 勾選框在 .field 裡：錯誤字放整欄底下，不塞進某一個勾選框
+      if (host) { const s = document.createElement('span'); s.className = 'error field-err'; s.setAttribute('role', 'alert'); s.textContent = msg; host.appendChild(s); }
+      else body.querySelector('#ai-error').textContent = msg;
+      (host || body.querySelector('#ai-error')).scrollIntoView({ block: 'center' });
+      el?.focus?.({ preventScroll: true });
+    };
+    form.addEventListener('input', () => body.querySelectorAll('.field-err').forEach(x => x.remove()));
     form.addEventListener('submit', async e => {
       e.preventDefault();
+      clearErr();
       const data = Object.fromEntries(new FormData(form));
       delete data.proj;
       for (const [k, v] of Object.entries(data)) data[k] = v.trim();
       const picked = [...form.querySelectorAll('input[name="proj"]:checked:not(:disabled)')].map(i => i.value);
       if (!editing) {
         data.projects = picked;
-        if (!data.projects.length) return toast('請至少選一個所屬專案');
+        if (!data.projects.length) return showErr('請至少選一個所屬專案', form.querySelector('input[name="proj"]:not(:disabled)'));
       } else if (!state.projMeta.crossRoleIds.includes(ai.participantId) && myProjects().length) {
         // 編輯時改了專案：先看影響（移出的專案有幾張卡會退回待處理）再確認
         const before = (ai.projects || []).filter(p => PROJECTS.includes(p));
         const next = [...picked, ...before.filter(p => !myProjects().includes(p))]; // 自己不在的專案不動
-        if (!next.length) return toast('請至少選一個所屬專案');
+        if (!next.length) return showErr('請至少選一個所屬專案', form.querySelector('input[name="proj"]:not(:disabled)'));
         if (next.slice().sort().join() !== before.slice().sort().join()) {
           try {
             const d = await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: { projects: next, dryRun: true } });
             const im = d.impact?.[0];
             if (im?.removed.length && !await confirmDialog({ title: '移出專案？', confirmText: '確定移出', danger: true,
               message: `${esc(ai.name)} 將移出「${esc(im.removed.map(projName).join('、'))}」${im.returnedCards.length ? `，它負責的 <b>${im.returnedCards.length} 張卡</b>（${esc(im.returnedCards.join('、'))}）會退回待處理、改為未指派` : '，它在那邊沒有負責的卡'}。` })) return;
-          } catch (err) { body.querySelector('#ai-error').textContent = err.message; return; }
+          } catch (err) { showErr(err.message, errAt(err)); return; }
           data.projects = next;
         }
       }
       try {
         const saved = editing ? await api(`/api/my-ais/${ai.participantId}`, { method: 'PATCH', body: data })
           : await api('/api/my-ais', { method: 'POST', body: data });
+        if (!editing) { tourNewAiId = saved.participantId; tourHold = true; } // 導覽：建好後展開「剛建好的那隻」；視窗跳出前先別當表單已關
         if (img.state === 'new') {
           const res = await fetch(`/api/my-ais/${saved.participantId}/avatar`, { method: 'PUT', headers: { Authorization: `Bearer ${state.token}`, 'Content-Type': img.blob.type }, body: img.blob });
           if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error?.message || '頭像上傳失敗');
@@ -6719,7 +6770,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         if (state.page === 'myai' || state.page === 'team') closeModal(); // 頁面模式：先關表單再重畫清單
         await openMyAi();
         if (editing) toast('已儲存'); else openTokenOnly(saved, true); // Token 只有現在看得到
-      } catch (err) { body.querySelector('#ai-error').textContent = err.message; }
+        tourHold = false;
+      } catch (err) { tourHold = false; showErr(err.message, errAt(err)); }
     });
   }
 
