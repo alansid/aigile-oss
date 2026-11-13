@@ -25,13 +25,18 @@ try {
 
   const def = await ob('');
   // 沒選＝太長才換新
-  assert.match(def, /對話接續（林志明 選的）：太長才換新（太長＝同一個對話叫醒滿 10 次，由喚醒腳本數）。opencode：WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent PG_[A-Z0-9]{4} --mode auto/, '預設太長才換新');
-  assert.match(await ob('?convo=keep'), /--mode keep/, '可以改成一直接續');
+  assert.match(def, /對話接續（林志明 選的）：太長才換新（太長＝同一個對話叫醒滿 10 次，由喚醒腳本數）。/, '預設太長才換新');
+  assert.ok(!/opencode/.test(def), 'Claude Code 版不寫 opencode（待命只給選的工具）');
+  // 其他工具（opencode）：WAKE_CMD 帶選的方式
+  assert.match(await ob('?tool=other'), /WAKE_CMD 改成 node \.aigile\/watcher\/aigile-opencode\.mjs --agent PG_[A-Z0-9]{4} --mode auto（次數由它數）/, '其他工具：opencode 喚醒腳本、預設太長才換新');
+  assert.match(await ob('?convo=keep&tool=other'), /--mode keep/, '可以改成一直接續');
+  assert.match(await ob('?convo=keep'), /：一直接續同一個對話/, 'Claude Code 版也寫選的方式');
   const defLink = (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding-link`, 'POST', { autoStandby: true })).body;
-  assert.match(await (await raw(null, new URL(defLink.url).pathname)).text(), /--mode auto/, '短版接入沒選也是太長才換新');
+  assert.match(await (await raw(null, new URL(defLink.url).pathname)).text(), /：太長才換新/, '短版接入沒選也是太長才換新');
   const fr = await ob('?convo=fresh&autoStandby=1');
-  assert.match(fr, /對話接續（林志明 選的）：每次叫醒開新對話/); assert.match(fr, /--mode fresh/); assert.match(fr, /Claude Code 照規格 3\.12 用 claude -p/);
-  assert.match(await ob('?convo=keep'), /一直接續同一個對話.*--mode keep/);
+  assert.match(fr, /對話接續（林志明 選的）：每次叫醒開新對話[^\n]*；照規格 3\.12 用 claude -p/);
+  assert.match(await ob('?convo=fresh&tool=other'), /--mode fresh/);
+  assert.ok(!/claude -p/.test(await ob('?convo=fresh&tool=codex')), 'Codex 版不寫 claude -p');
   assert.ok(!/100 回合/.test(def) && !/100 回合/.test(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8')), 'UX 退回：機器數不到的「100 回合」拿掉');
 
   // UX 退回 ：「太長才換新」要真的有東西在數。用假的 opencode 跑 aigile-opencode.mjs
@@ -67,8 +72,8 @@ if (a[0] === 'run') {
   const d4 = fs.mkdtempSync(path.join(dataDir, 'oc-'));
   await wake(d4, 'fresh'); await wake(d4, 'fresh');
   assert.deepEqual(calls(d4), ['fresh_1', 'fresh_2'], 'fresh 每次新對話，不用 -s、不用 --continue');
-  assert.match(await ob('?convo=亂寫'), /--mode auto/, '不認得的值當沒選（太長才換新）');
-  for (const q of ['', '?convo=fresh', '?convo=keep', '?convo=auto&autoStandby=1']) assert.ok(len(await ob(q)) <= 5000, `接入設定 ≤ 5,000 字（${q || '預設'}）`);
+  assert.match(await ob('?convo=亂寫&tool=other'), /--mode auto/, '不認得的值當沒選（太長才換新）');
+  for (const q of ['', '?convo=fresh', '?convo=keep', '?convo=auto&autoStandby=1', '?tool=other', '?tool=codex']) assert.ok(len(await ob(q)) <= 6500, `接入設定 ≤ 6,500 字（${q || '預設'}）`);
 
   // 短版接入：選的方式跟著一次性連結走
   const link = (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding-link`, 'POST', { autoStandby: true, convo: 'fresh' })).body;

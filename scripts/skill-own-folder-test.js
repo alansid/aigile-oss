@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
 import { openNodeDb } from '../src/db-node.js';
+import { testToken } from './test-token.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
@@ -91,8 +92,10 @@ try {
   assert.match(spec, /有指定的一律裝 `\.aigile\/<代號>\/skills\/<名稱>\/`/, '規格 3.16 寫安裝位置');
   assert.match(spec, /SKILL\.md 只放硬規則與完成判定（約 1,500 字），範本另放 templates\.md/, '規格寫角色技能寫法建議');
   const ob = (await call(boss.token, `/api/my-ais/${pg.id}/onboarding`)).body.text;
-  assert.match(ob, new RegExp(`新對話讀一次 \\.aigile/${pg.ag}/skills/\\*/SKILL\\.md（範本用到才讀）`), '第零節：新對話讀一次角色技能');
-  assert.match(ob, /同步技能（指定給你的技能裝在你的代號資料夾）/, '第四節：角色技能裝在代號資料夾');
+  assert.match(ob, /同步技能（指定給你的技能裝在你的代號資料夾）/, '第五節：角色技能裝在代號資料夾');
+  assert.equal((await call(await testToken(db, pg.id), '/api/me/state', 'PUT', { currentTask: { title: 'x' } })).status, 200);
+  const obRe = (await call(boss.token, `/api/my-ais/${pg.id}/onboarding`)).body.text;
+  assert.match(obRe, new RegExp(`新對話讀一次 \\.aigile/${pg.ag}/skills/\\*/SKILL\\.md（範本用到才讀）`), '重接版第二節：新對話讀一次角色技能');
   // 技能排在優先順序最後，不能蓋過角色設定六題
   assert.match(spec, /＞ 角色設定六題 ＞ 技能。/, '規格鐵律 7：技能排最後');
   assert.match(ob, /＞ 角色設定 ＞ 技能。/, '接入設定優先順序：技能排最後');

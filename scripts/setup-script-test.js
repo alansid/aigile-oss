@@ -120,7 +120,8 @@ try {
   assert.ok(last.includes('HTTPS_PROXY') && last.includes('如果你是 Codex') && last.includes('network_access = true'), '看不出是不是 Codex：代理與 Codex 兩種都說：' + last);
   const spec344 = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
   assert.ok(spec344.includes('**Codex 要先開網路**') && spec344.includes("codex --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'") && spec344.includes('**不用開完全權限**'), '規格 3.12 有 Codex 開網路段');
-  assert.ok((await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding`, 'POST', { token: tok })).body.text.includes('Codex → 前景跑等待腳本（網路見第三節 1，不用完全權限）'), '接入設定第四節提醒 Codex 先開網路');
+  { const cx = (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding`, 'POST', { token: tok, tool: 'codex' })).body.text; // Codex 版第二節第 1 步提醒、第五節寫做法
+    assert.ok(cx.includes('Codex 連不上先看第五節的開網路說明') && cx.includes('- 先確認網路已開') && cx.includes('不用完全權限'), '接入設定 Codex 版提醒先開網路'); }
   { const app = fs.readFileSync(pub('app.js'), 'utf8'); // 改寫成第 0 步，內容不變
     assert.ok(app.includes('sandbox_mode = "workspace-write"') && app.includes('[sandbox_workspace_write] 底下 network_access = true') && app.includes("--sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'") && app.includes('不用開完全權限'), '網頁短版接入寫明確設定'); }
 

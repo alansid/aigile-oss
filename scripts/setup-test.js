@@ -119,11 +119,9 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     // 5～9. 接入設定
     if (process.argv.includes('--print')) console.log(obPg);
     const nums = sections(obPg);
-    assert.deepEqual(nums, ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'], '9. 章節不跳號：' + nums.join(','));
-    assert.ok(obPg.indexOf('## 零、你是重新接上，還是第一次？') < obPg.indexOf('## 一、'), '5. 最前面是「零、重新接上還是第一次」');
-    assert.match(obPg, /不要重新簽到；游標沿用 state\.json 的 messagesCursor（換了電腦就用 GET \/api\/me\/state 的 messagesCursor、cardsSince）/, '零節寫從工作記憶讀回位置');
-    assert.match(obPg, /messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間）/, '工作記憶段寫出新欄位');
-    assert.match(obPg, /Token 跟 \.aigile\/PG_[A-Z0-9]{4}\/\.token 不同才換/);
+    assert.deepEqual(nums, ['一', '二', '三', '四', '五', '六'], '9. 章節不跳號（六節）：' + nums.join(','));
+    assert.ok(obPg.includes('（初次接入）') && obPg.indexOf('## 二、這次要做什麼：初次接入') > obPg.indexOf('## 一、'), '5. 沒有工作記憶：第二節是初次接入（不再叫 AI 自己判斷）');
+    assert.match(obPg, /messagesCursor（處理完的訊息游標）、cardsSince（卡片增量時間[：）]/, '工作記憶段寫出新欄位');
     assert.match(obPg, /watcher\.pid 的程序還在(執行)?就不要再開/, '6. watcher.pid');
     assert.match(spec, /被強制結束時手動刪掉/);
     assert.match(obPg, /- 預設專案（示範專案）\n  - 程式庫：https:\/\/github\.com\/example\/project，分支 main\n  - 開工前先確認本機的 git remote 和分支跟這裡一致；不一致先問 林志明/, '7. API 代號、程式庫、分支');
@@ -133,12 +131,19 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     assert.match(obPg, /- git commit、push、merge、正式資料庫遷移，以及沒有長期授權（或已到期）的部署，一律先在本機對話取得 林志明 明確同意；每次 push 都要重新取得授權/);
     assert.match(obPg, /最新授權以 GET \/api\/me 的 grants 為準/);
     assert.match(obPg, /刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡：不能長期授權/);
-    assert.match(obPg, /本設定第八節與群組規格/, '規則優先順序指到新編號');
+    assert.match(obPg, /＞ 本設定與群組規格 ＞/, '規則優先順序');
     assert.ok(!/第二專案/.test(obKai), '9. 只列這個 AI 所在的專案');
     assert.match(obKai, /目前沒有長期授權/);
     // 10. 沒設長期授權的 AI：寫「目前沒有長期授權」，章節一樣不跳號
     assert.match(obOther, /目前沒有長期授權/);
     assert.deepEqual(sections(obOther), nums, '沒設授權的 AI 章節一樣不跳號');
+    // 有工作記憶 → 重接版第二節寫從工作記憶讀回位置
+    assert.equal((await call(pg.token, '/api/me/state', 'PUT', { currentTask: { title: 'x' } })).status, 200);
+    const obRe = await ob(boss.token, pg.participantId, pg.token);
+    assert.ok(obRe.includes('（重新接上）') && obRe.includes('## 二、這次要做什麼：重新接上'), '有工作記憶：重接版');
+    assert.match(obRe, /游標沿用 \.aigile\/PG_[A-Z0-9]{4}\/state\.json 的 messagesCursor；換了電腦、本機沒有就用 GET \/api\/me\/state 的 messagesCursor、cardsSince/, '重接版寫從工作記憶讀回位置');
+    assert.match(obRe, /Token 跟 \.aigile\/PG_[A-Z0-9]{4}\/\.token 不同才換/);
+    assert.deepEqual(sections(obRe), nums, '重接版章節一樣不跳號');
     console.log('setup-test 全部通過');
   } catch (e) {
     console.error(e);

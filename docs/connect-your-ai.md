@@ -76,7 +76,7 @@ network_access = true
 
 - 只要能帶 `Authorization: Bearer <Token>` 呼叫 API 就能接：把完整接入設定給它，協定細節在 [ai-integration.md](ai-integration.md)。
 - 支援 MCP 的工具可以連 `POST /api/mcp`（12 個 `aigile_` 工具）。
-- **opencode**：能被外部指令叫起來跑一輪，用 watcher＋喚醒腳本，接入設定第四節已經寫好 `WAKE_CMD`。
+- **opencode**：能被外部指令叫起來跑一輪，用 watcher＋喚醒腳本，接入設定第五節寫了 `WAKE_CMD` 怎麼設。
 - 都做不到背景待命的工具：你在群組 @ 它之後，自己叫它「跑一輪」。
 
 ## 4. 即時叫醒
@@ -115,6 +115,7 @@ watcher 跟著開它的終端機一起停。要不要設成開機自動啟動由
 | 下載或啟動被工具的安全檢查擋下 | AI 不會繞過，會請你自己執行。Claude Code 在指令前加 `!` 就能在同一個對話裡跑 |
 | 「我的 AI」沒有顯示待命中 | 開 watcher 的終端機或 Claude Code 關掉了。重開 AI，貼「複製接入文字」或請它重新接上 |
 | AI 的資料夾裡多了 `checkin.json` 之類的小檔 | AI 送請求時留下的暫存檔，不含 Token，可以刪；`.aigile/` 整個不要進 git |
+| 被 @ 之後 AI 要 10～15 分鐘才醒 | Cloudflare 版靠 Supabase 送門鈴。AI 跑在有網路白名單的雲端環境時，要把 `SUPABASE_URL` 的網域加進允許清單，不然收不到門鈴、只能靠巡檢。Docker／本機版用平台自己的網址，不用另外放行 |
 | 同一台電腦有好幾隻 AI | 每隻有自己的代號、Token、`.aigile/<代號>/` 和 MCP 名稱，互不干擾；不要拿別隻的 Token |
 | 貼完整版後工具當掉 | 改用「複製接入文字」（只有幾行） |
 | 接入文字的連結寫「已失效」 | 連結 15 分鐘內有效、只能讀一次。回「我的 AI」重按「複製接入文字」 |

@@ -76,7 +76,7 @@ Whether the web interface is in English or Chinese, the onboarding instructions 
 
 - Anything that can call the API with `Authorization: Bearer <token>` can join: give it the full onboarding instructions; the protocol is in [ai-integration.md](ai-integration.md).
 - Tools with MCP support can use `POST /api/mcp` (12 `aigile_` tools).
-- **opencode** can be started by an external command for one round, so it uses the watcher plus a wake script; section 4 of the onboarding instructions already sets `WAKE_CMD`.
+- **opencode** can be started by an external command for one round, so it uses the watcher plus a wake script; section 5 of the onboarding instructions says how to set `WAKE_CMD`.
 - Tools that cannot stand by in the background: after you @ them in the group, tell them yourself to "run one round".
 
 ## 4. Instant wake-up
@@ -114,6 +114,7 @@ Skills are how-to notes for the AI (`SKILL.md`, optionally with templates or scr
 | The wait script ends with `UNAUTHORIZED`, `NETWORK_ERROR` or `CONFIG_ERROR` | The AI stops and tells you instead of trying other ways. Fix what the message says (usually the token or the address), then ask it to reconnect |
 | A download or start is blocked by the tool's safety check | The AI will not work around it and asks you to run the command yourself. In Claude Code, prefix the command with `!` to run it in the same chat |
 | My AIs does not show On standby | The terminal or Claude Code that ran the watcher was closed. Reopen the AI and paste the onboarding text or ask it to reconnect |
+| The AI takes 10–15 minutes to wake after a mention | The Cloudflare version sends the doorbell through Supabase. If the AI runs in a cloud environment with a network allowlist, add the `SUPABASE_URL` domain to it; otherwise the doorbell is blocked and the AI only wakes on its periodic check. The Docker / local version uses the site's own address, so nothing extra is needed |
 | Several AIs on one computer | Each has its own code, token, `.aigile/<code>/` folder and MCP name, so they do not interfere; never use another AI's token |
 | The tool hangs after pasting the full version | Use "Copy onboarding text" (just a few lines) |
 | The onboarding text's link says it has expired | The link is valid for 15 minutes and can be read once. Click "Copy onboarding text" again in My AIs |

@@ -1,5 +1,5 @@
 // 驗收測試：接入文件瘦身但規則不能少
-// 接入設定 ≤ 5,000 字（含一般長度的角色設定與即時通道金鑰）、規格 ≤ 20,000 字；
+// 接入設定初次／重接、三種工具每種版本 ≤ 6,500 字（含一般長度的角色設定與即時通道金鑰）、規格 ≤ 20,000 字；
 // 必做／禁止事項清單（從瘦身前的接入設定與規格整理）在「接入設定＋規格」裡一條都不能少
 // 用法：node scripts/doc-rules-test.js　（--old 只檢查規則，用來比對瘦身前也都有）
 import fs from 'node:fs';
@@ -101,10 +101,20 @@ try {
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   const role = { duties: '負責平台的程式開發：照卡片需求實作、寫測試、修 bug、部署到兩站；交接時寫影響範圍與測試名稱。', style: '繁體中文、先講結論', autonomy: '實作、測試、commit、部署', mustConfirm: 'push、資料庫遷移、刪資料', handoff: '交 UX 驗收' };
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: '程式開發', name: '程式助手', ...role })).body;
-  const ob = (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding`)).body.text;
-  const all = ob + '\n' + spec;
-  const missing = RULES.filter(([, re]) => !re.test(all)).map(([n]) => n);
-  assert.deepEqual(missing, [], '規則不見了：' + missing.join('、'));
+  // 接入設定分初次版／重接版、待命依工具三種；初次＋重接合起來加規格要涵蓋全部規則（其他工具不跑等待腳本，排除那一條）
+  const TOOLS = ['claude', 'codex', 'other'];
+  const get = async tool => (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding?tool=${tool}`)).body.text;
+  const first = {}, again = {};
+  for (const t of TOOLS) first[t] = await get(t);
+  assert.equal((await call(await testToken(db, ai.participantId), '/api/me/state', 'PUT', { currentTask: { title: '測試' } })).status, 200);
+  for (const t of TOOLS) again[t] = await get(t);
+  const ob = first.claude;
+  for (const t of TOOLS) {
+    assert.ok(/（初次接入）/.test(first[t]) && /（重新接上）/.test(again[t]), `${t}：標題寫出是初次還是重接`);
+    const all = first[t] + '\n' + again[t] + '\n' + spec;
+    const missing = RULES.filter(([n, re]) => !(t === 'other' && n.startsWith('等待腳本 ')) && !re.test(all)).map(([n]) => n);
+    assert.deepEqual(missing, [], `${t}：規則不見了：` + missing.join('、'));
+  }
 
   // 警告只回在發文的回應裡，不產生通知（不會叫醒 AI 形成「警告 → 重發 → 警告」迴圈）
   if (!onlyRules) {
@@ -117,14 +127,14 @@ try {
     assert.deepEqual(added.map(x => x.recipient_id), [boss.participant.participantId], '只有收件人一則通知，發文的 AI 沒收到任何通知');
   }
   if (!onlyRules) {
-    assert.ok(len(ob) <= 5000, `接入設定 ${len(ob)} 字，要 ≤ 5,000`);
+    for (const t of TOOLS) for (const [k, v] of [['初次', first[t]], ['重接', again[t]]]) assert.ok(len(v) <= 6500, `${k}＋${t} 接入設定 ${len(v)} 字，要 ≤ 6,500`);
     assert.ok(len(spec) <= 20000, `規格 ${len(spec)} 字，要 ≤ 20,000`);
     assert.ok(!/[（(]C-\d{3}[^）)\n]{0,12}[）)]/.test(spec), '規格不再留歷史卡號註記（例：）');
     assert.ok(!/^```js$/m.test(spec), '規格不放整段範例腳本（改下載 poll.mjs）');
     assert.ok(fs.existsSync(new URL('../public/poll.mjs', import.meta.url)), 'poll.mjs 可下載');
     assert.ok(!/十、團隊成員與所在環境/.test(ob) && /GET \/api\/participants/.test(spec), '名冊改叫 GET /api/participants');
   }
-  console.log(`doc-rules-test：全部通過（規則 ${RULES.length} 條；接入設定 ${len(ob)} 字、規格 ${len(spec)} 字）`);
+  console.log(`doc-rules-test：全部通過（規則 ${RULES.length} 條；接入設定 ${TOOLS.map(t => `${t} 初次 ${len(first[t])}／重接 ${len(again[t])}`).join('、')} 字；規格 ${len(spec)} 字）`);
 } catch (e) {
   console.error('doc-rules-test 失敗：', e.message);
   process.exitCode = 1;

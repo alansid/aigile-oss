@@ -219,14 +219,14 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(ob.includes('第一段只寫一句給人看的白話結論') && ob.includes('空一行之後才寫細節'), '接入設定要求結論在前');
     assert.ok(ob.includes('用 replyFrom 標出「要回覆」的人，一則最多一位') && ob.includes('[需確認] 一定要用 replyFrom'), '接入設定說明 replyFrom');
     assert.ok(ob.includes('aigile-wait.mjs --agent') && ob.includes('不要用 Monitor'), '接入設定用等待腳本');
-    assert.ok(ob.includes('私訊（規格 3.15）') && ob.includes('GET /api/dm') && ob.includes('私訊不能拿來授權 commit、push、部署'), '接入設定有私訊');
+    assert.ok(ob.includes('私訊與提案**（規格 3.15）') && ob.includes('GET /api/dm') && ob.includes('私訊不能拿來授權 commit、push、部署'), '接入設定有私訊');
     assert.ok(!ob.includes('${owner') && !ob.includes('${agent') && !ob.includes('${base'), '接入設定沒有沒替換的變數');
     assert.ok(ob.includes('新工作開新卡'), '接入設定提醒新工作開新卡');
     assert.ok(ob.includes('POST /api/avatar-proposals') && ob.includes('不要假裝'), '接入設定有頭像提案');
     // 本機跳不出選項的 AI 改用 [需確認]＋選項：或決策卡；授權仍在本機問
     assert.ok(ob.includes('不論你的本機介面跳不跳得出選項') && ob.includes('規格 3.9.1') && ob.includes('已發到網頁，請在網頁選') && ob.includes('照上面的規定仍在本機對話問'), '要人選擇一律發到網頁，授權仍在本機');
     const obOut = (await call(boss.token, `/api/my-ais/${ba.participantId}/onboarding`, 'POST', { token: ba.token, autoStandby: true })).body.text;
-    assert.ok(obOut.includes('已在網頁同意自動待命，換到新對話後直接啟動') && obOut.includes('做到第 8 步') && obOut.includes('重新接上（照第零節判斷）：直接到第四節'), '勾選 → 自動啟動待命（換新對話後啟動；重新接上不再要求換新對話）');
+    assert.ok(obOut.includes('已在網頁同意自動待命，換到新對話後直接啟動') && obOut.includes('做到第 9 步') && obOut.includes('（初次接入）'), '勾選 → 自動啟動待命（換新對話後啟動）');
     const obOutNo = (await call(boss.token, `/api/my-ais/${ba.participantId}/onboarding`, 'POST', { token: ba.token })).body.text;
     assert.ok(!obOutNo.includes('已在網頁同意自動待命') && obOutNo.includes('沒有預先同意自動啟動'), '沒勾 → 先問');
     const msg = await post(ba.token, '[AI 簽到] 我是 BA');
