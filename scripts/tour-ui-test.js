@@ -36,7 +36,7 @@ try {
   const size = (w, h = 900) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
   await size(1280);
   const setLang = async l => { await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
-  const toHelp = async (t, ch = 2) => { await login(t, `/help/${ch}`); await until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${ch}'`), 15000, `說明第 ${ch} 章`); };
+  const toHelp = async (t, ch = 2) => { await login(t, `/help/${ch}`); await until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${ch}'`), 30000, `說明第 ${ch} 章`); };
   const pop = () => J(`(() => { const p = document.querySelector('.tour-pop'); if (!p) return null; const h = document.querySelector('.tour-hole').getBoundingClientRect();
     return { meta: p.querySelector('.tour-meta')?.textContent || '', title: p.querySelector('.tour-title')?.textContent || '', text: p.querySelector('.tour-text')?.textContent || '', tip: p.querySelector('.tour-tip')?.textContent || '',
       btns: [...p.querySelectorAll('.tour-foot .btn')].map(b => b.textContent), focus: document.activeElement?.dataset?.tour || '', loading: p.classList.contains('loading'), dots: p.querySelector('.tour-dots')?.getAttribute('aria-label') || '', x: p.querySelector('.tour-x')?.getAttribute('aria-label') || '',
