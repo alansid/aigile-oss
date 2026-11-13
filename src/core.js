@@ -535,7 +535,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const TOKENISH_RE = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,64}(?![A-Za-z0-9_-])/g;
   async function assertNoSecret(text) {
     if (!text) return;
-    const leak = what => { throw new ApiError(400, 'SECRET_IN_TEXT', `這是接入用的機密${what}，不要貼群組（卡片、私訊也不行）：拿到的人就能冒用。請直接貼到你的 AI 對話；已經貼出去的話，到「我的 AI」${what === '連結' ? '重按「複製短版接入」讓舊連結失效' : '按「重發 Token」'}。`); };
+    const leak = what => { throw new ApiError(400, 'SECRET_IN_TEXT', `這是接入用的機密${what}，不要貼群組（卡片、私訊也不行）：拿到的人就能冒用。請直接貼到你的 AI 對話；已經貼出去的話，到「我的 AI」${what === '連結' ? '重按「複製接入文字」讓舊連結失效' : '按「重發 Token」'}。`); };
     if (SETUP_LINK_RE.test(text)) leak('連結');
     const cands = [...new Set(text.match(TOKENISH_RE) || [])].slice(0, 20);
     if (!cands.length) return;
@@ -1005,9 +1005,12 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   // 對話接續方式（產生接入設定時由所屬人類選）：auto 太長才換新（預設）、fresh 每次叫醒開新對話、keep 一直接續
   const CONVO_MODES = ['auto', 'fresh', 'keep'];
   const convoOf = v => (CONVO_MODES.includes(v) ? v : null); // null＝用預設
+  // 所屬人類在網頁選的工具（Claude Code／Codex／其他，opencode 等算「其他」）；null＝沒選。先收進來、存進一次性連結，接入設定內容還不分工具（opencode 那段照舊）
+  const TOOLS = ['claude', 'codex', 'other'];
+  const toolOf = v => (TOOLS.includes(v) ? v : null);
   const convoDefault = () => 'auto'; // 預設太長才換新（比一直接續省）
   // 接入設定寫的是 Token 原文：資料庫只存雜湊，所以一律由呼叫端給（剛產生的、或 AI 自己帶來的）
-  async function onboardingText(base, ai, { consent = false, convo = null, token } = {}) {
+  async function onboardingText(base, ai, { consent = false, convo = null, token, tool = null } = {}) { // tool：見 toolOf（內容還不分工具）
     const owner = await db.get('SELECT * FROM participants WHERE id = ?', ai.owner_id);
     const s = settingsOf(ai);
     const shortName = ai.name.startsWith(owner.name + '的') ? ai.name.slice(owner.name.length + 1) : ai.name;
@@ -2735,7 +2738,7 @@ ${trial
   });
   // 完整接入設定：Token 只存雜湊，看不到原本的，所以每次產生都換一組新 Token（舊的立刻失效）並寫進設定。
   // 剛重發過、手上有新 Token 的，用 POST 帶 token 來（核對是這個 AI 現在的 Token），就不會再換一次
-  async function onboardingOut(ctx, me, id, base, { consent, convo, token }) {
+  async function onboardingOut(ctx, me, id, base, { consent, convo, token, tool = null }) {
     const ai = await myAi(me, id);
     if (ai.status !== 'active') throw new ApiError(409, 'AI_DISABLED', '這個 AI 已停用，先重新啟用。');
     let rotated = false;
@@ -2748,16 +2751,16 @@ ${trial
       await db.run('UPDATE participants SET token = ?, token_expires_at = ?, updated_at = ? WHERE id = ?', await tokenKey(token), ai.token_expires_at, nowIso(), ai.id);
       invalidatePeople();
     }
-    return { text: await onboardingText(base, ai, { consent, convo, token }), token, expiresAt: iso(ai.token_expires_at), rotated };
+    return { text: await onboardingText(base, ai, { consent, convo, token, tool }), token, expiresAt: iso(ai.token_expires_at), rotated };
   }
   route('GET', '/api/my-ais/:id/onboarding', async ({ ctx, me, params, base, url }) => {
     requireHuman(me);
-    return onboardingOut(ctx, me, params.id, base, { consent: ['1', 'true'].includes(url.searchParams.get('autoStandby')), convo: url.searchParams.get('convo') });
+    return onboardingOut(ctx, me, params.id, base, { consent: ['1', 'true'].includes(url.searchParams.get('autoStandby')), convo: url.searchParams.get('convo'), tool: toolOf(url.searchParams.get('tool')) });
   });
   route('POST', '/api/my-ais/:id/onboarding', async ({ ctx, me, params, base, req }) => {
     requireHuman(me);
     const body = await readJson(req).catch(() => ({}));
-    return onboardingOut(ctx, me, params.id, base, { consent: body.autoStandby === true, convo: convoOf(body.convo), token: body.token });
+    return onboardingOut(ctx, me, params.id, base, { consent: body.autoStandby === true, convo: convoOf(body.convo), token: body.token, tool: toolOf(body.tool) });
   });
   // AI 在本機的資料夾名（.aigile/<代號>/）：角色代碼，自訂角色用 AI
   // 10/20：代號＝角色_短代碼（PG_2URQ）。原本只用角色代碼，同台電腦兩個 PG 共用 .aigile/PG/，Token 互相蓋掉
@@ -2770,11 +2773,11 @@ ${trial
     if (ai.status !== 'active') throw new ApiError(409, 'AI_DISABLED', '這個 AI 已停用，先重新啟用。');
     const body = await readJson(req).catch(() => ({})); // Token 過期也可以：AI 讀連結時會拿到新的
     const secret = newToken(), exp = Date.now() + OLINK_TTL;
-    await setJson('olink:' + ai.id, { h: await sha256(secret), exp, consent: body.autoStandby === true, convo: convoOf(body.convo) });
+    await setJson('olink:' + ai.id, { h: await sha256(secret), exp, consent: body.autoStandby === true, convo: convoOf(body.convo), tool: toolOf(body.tool) });
     return { url: `${base}/api/setup/${ai.id}.${secret}`, expiresAt: iso(exp), agent: agentDir(ai) }; // 短版存 .aigile/<代號>/setup.md
   });
   route('GET', '/api/setup/:key', async ({ params, base }) => {
-    const gone = () => new Response('這個接入連結已失效（15 分鐘內、只能讀一次）。請告訴所屬人類，請他在網頁「我的 AI」重按「複製短版接入」。', { status: 410, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    const gone = () => new Response('這個接入連結已失效（15 分鐘內、只能讀一次）。請告訴所屬人類，請他在網頁「我的 AI」重按「複製接入文字」。', { status: 410, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
     const [aiId, secret] = String(params.key || '').split('.');
     if (!aiId || !secret || !/^p_[A-Za-z0-9]+$/.test(aiId)) return gone();
     const rec = await getJson('olink:' + aiId);
@@ -2787,7 +2790,7 @@ ${trial
     const token = newToken(); ai.token_expires_at = Date.now() + AI_TOKEN_TTL_MS;
     await db.run('UPDATE participants SET token = ?, token_expires_at = ?, updated_at = ? WHERE id = ?', await tokenKey(token), ai.token_expires_at, nowIso(), ai.id);
     invalidatePeople();
-    return new Response(await onboardingText(base, ai, { consent: !!rec.consent, convo: rec.convo, token }), { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
+    return new Response(await onboardingText(base, ai, { consent: !!rec.consent, convo: rec.convo, token, tool: toolOf(rec.tool) }), { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
   }, { open: true });
   // ---------- 上傳文件（需求 v1.1） ----------
   const requireStorage = () => {

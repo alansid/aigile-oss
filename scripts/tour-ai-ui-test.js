@@ -1,6 +1,6 @@
 // 聚光燈導覽（二）：說明第 1 章路線 B「讓你的 AI 加入」＋新手上路「帶我走」（真的瀏覽器，中文、英文介面都驗）
 // 第 1 章章首有入口，選「不會帶 AI」時變灰、寫「不帶 AI 可跳過」；路線 B 四步：頭像選單「我的 AI」→「＋ 新增 AI」→
-//   最新那隻的接入分頁「對話接續、自動待命」（開源版沒有「選工具」）→「複製」那一列；
+//   最新那隻接入分頁的「工具」（Claude Code｜Codex｜其他）→「複製」那一列（「複製接入文字」）；
 //   自己開表單時暫停、只留說明框，灰底只寫「表單關掉後就能繼續。」；沒有 AI 時「下一步」不能按；
 //   Token 過期改框「重發 Token」，標題「先重發 Token」、灰底「重發要你自己按…」
 // 新手上路第 1、2 項加「帶我走」（寬 ≥1000），直接開始那一章；結束回總覽、焦點回「帶我走」；導覽不碰 Token、不替人按「複製」、走完不算完成
@@ -83,7 +83,7 @@ try {
   await until(() => js("document.querySelector('.help-ch')?.dataset.helpCh === '1'"), 5000, '回到說明第 1 章');
   assert.equal(await snap(chen.token), before0, '一路沒有動資料');
 
-  // 3. 有 AI：第 3 步展開最新那隻的接入分頁、框「對話接續」「自動待命」；第 4 步框「複製」；導覽不按複製、不動 Token
+  // 3. 有 AI：第 3 步展開最新那隻的接入分頁、框「工具」；第 4 步框「複製」；導覽不替人選工具、不按複製、不動 Token
   await newAi(chen.token, '舊助手'); await sleep(30);
   const N = (await newAi(chen.token, '新助手')).participantId;
   await toHelp(chen.token, 1);
@@ -104,13 +104,16 @@ try {
   assert.deepEqual([p.tip, p.btns], ['已經有 AI 的話可以直接按「下一步」。', ['上一步', '下一步']], '關掉表單灰底恢復');
   await key('ArrowRight');
   p = await stepIs(3, '第 3 步');
-  assert.equal(p.title, '接入選項先用預設');
+  assert.equal(p.title, '先選你的 AI 用哪個工具');
+  assert.match(p.text, /opencode 等其他工具選「其他」/, '說明 opencode 選其他');
   assert.equal(await js(`document.querySelector('#ai-list [data-ma="${N}"]')?.classList.contains('open')`), true, '展開的是最新那隻');
   assert.equal(await js(`document.querySelector('#ai-list [data-ma="${N}"] .ma-tabs [aria-selected="true"]')?.dataset.tab`), 'conn', '接入分頁');
-  assert.ok(await covers(p.hole, `[document.querySelector('#ai-list [data-ma="${N}"] [data-ma-convo]').closest('.ma-f'), document.querySelector('#ai-list [data-ma="${N}"] [data-ma-auto]').closest('.ma-f')]`), '框「對話接續」「自動待命」');
+  assert.ok(await covers(p.hole, `document.querySelector('#ai-list [data-ma="${N}"] .ma-tool').closest('.ma-f')`), '框「工具」那一列');
+  assert.equal(await js(`document.querySelectorAll('#ai-list [data-ma="${N}"] .ma-tool [aria-pressed="true"]').length`), 0, '導覽不替人選工具');
   await key('ArrowRight');
   p = await stepIs(4, '第 4 步');
-  assert.equal(p.title, '複製接入設定，貼給你的 AI');
+  assert.equal(p.title, '複製接入文字，貼給你的 AI');
+  assert.equal(await js(`document.querySelector('#ai-list [data-ma="${N}"] .ma-btns .btn.primary').textContent`), '複製接入文字', '主要按鈕是「複製接入文字」');
   assert.equal(p.tip, '複製要你自己按；導覽不會碰你的 Token。');
   assert.deepEqual(p.btns, ['上一步', '完成']);
   assert.ok(await covers(p.hole, `document.querySelector('#ai-list [data-ma="${N}"] .ma-btns').closest('.ma-f')`), '框「複製」那一列');
@@ -119,6 +122,7 @@ try {
   await until(() => js("document.querySelector('.help-ch')?.dataset.helpCh === '1'"), 5000, '完成回到說明第 1 章');
   await until(() => js("document.activeElement?.matches('.help-head [data-tour-start=\"1\"]')"), 3000, '焦點回到入口');
   assert.equal(await snap(chen.token), before, '沒有送訊息、沒有改 AI、Token 沒動');
+  assert.equal(await js("localStorage.getItem('aigile-ai-tools')"), null, '沒有記下任何工具');
   assert.equal(await js("document.querySelector('#toast').textContent"), '導覽結束。想再看一次，回說明第 1 章按「帶我在畫面上走一次」');
 
   // 4. Token 過期：第 4 步改框「重發 Token」，標題、灰底跟著換
@@ -128,7 +132,7 @@ try {
   await start(1);
   await stepIs(1, '過期 第 1 步'); await key('ArrowRight'); await stepIs(2, ''); await key('ArrowRight'); await stepIs(3, ''); await key('ArrowRight');
   p = await stepIs(4, '過期 第 4 步');
-  assert.deepEqual([p.title, p.text, p.tip], ['先重發 Token', '這隻 AI 的 Token 過期了，先按「重發 Token」，再把新的 Token 給它。', '重發要你自己按；導覽不會碰你的 Token。'], 'Token 過期：' + JSON.stringify(p));
+  assert.deepEqual([p.title, p.text, p.tip], ['先重發 Token', '這隻 AI 的 Token 過期了，先按「重發 Token」，再複製接入文字貼給它。', '重發要你自己按；導覽不會碰你的 Token。'], 'Token 過期：' + JSON.stringify(p));
   assert.ok(await covers(p.hole, `document.querySelector('#ai-list [data-ma="${N}"] .ma-row [data-act="reissue"]')`), '框「重發 Token」');
   await esc();
   await until(noTour, 5000, 'Esc 結束');
@@ -175,10 +179,11 @@ try {
   await until(async () => { const q = await pop(); return q && !q.paused && q.meta.endsWith('2 / 4'); }, 5000, '英文：表單關掉');
   await key('ArrowRight');
   p = await stepIs(3, '英文第 3 步');
-  assert.equal(p.title, 'Keep the default onboarding options');
+  assert.equal(p.title, 'First pick the tool your AI uses');
+  assert.match(p.text, /For opencode and other tools, pick "Other"/);
   await key('ArrowRight');
   p = await stepIs(4, '英文第 4 步');
-  assert.deepEqual([p.title, p.tip, p.btns], ['Copy the onboarding instructions and paste them to your AI', 'You do the copying yourself; the tour never touches your token.', ['Back', 'Done']], '英文第 4 步');
+  assert.deepEqual([p.title, p.tip, p.btns], ['Copy the onboarding text and paste it to your AI', 'You do the copying yourself; the tour never touches your token.', ['Back', 'Done']], '英文第 4 步');
   assert.ok(!/[㐀-鿿]/.test(p.meta + p.title + p.text + p.tip), '英文說明框沒有中文');
   await esc(); await until(noTour, 5000, '英文結束');
   assert.equal(await js("document.querySelector('#toast').textContent"), 'Tour finished. To see it again, go to Help chapter 1 and click "Show me on screen"');

@@ -2,7 +2,7 @@
   "note": "說明頁五章（/help、/help/1～5）。中文放 zh、英文放 en，網頁照介面語言選一份；兩份的章、步驟、題號、畫面格要一樣（help-test 會檢查）。{桌機|手機} 是桌機與手機寫法不同的地方；**粗體**。card 是目錄卡上那一行（沒寫就用 lead）。畫面圖放 public/help-img/<語言>/<格>.webp（手機版 <格>-m.webp），把檔名（不含副檔名）加進該語言的 imgs，寬高寫進 imgSize（先留位置，載入時版面不跳）；沒加進的不顯示，只有桌機圖時手機寬度也不顯示。figText 是畫面描述（也當圖的替代文字）。",
   "zh": {
     "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2"],
-    "imgSize": {"1-1": [1280,1504], "1-2": [880,906], "1-3": [2060,632], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,270], "2-2": [1942,350], "2-3": [2560,526], "2-4": [1984,262], "3-1": [1942,960], "3-3": [973,988], "3-4": [1958,170], "3-5": [1958,155], "4-1": [1880,1208], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
+    "imgSize": {"1-1": [1280,1504], "1-2": [880,1014], "1-3": [2060,639], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,270], "2-2": [1942,350], "2-3": [2560,526], "2-4": [1984,262], "3-1": [1942,960], "3-3": [973,988], "3-4": [1958,170], "3-5": [1958,155], "4-1": [1880,1208], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
     "chapters": [
       {
         "n": 1,
@@ -14,11 +14,11 @@
         "steps": [
           { "t": "建一隻 AI", "d": "右上角頭像 › 我的 AI，按「＋ 新增 AI」：", "list": ["選一個角色範本，例如程式開發或測試。下面的設定會自動填好，可以再改。", "勾它要加入的專案，按「建立 AI」。"],
             "fig": "1-1", "figText": "我的 AI › 新增 AI 表單（角色範本、所屬專案）" },
-          { "t": "複製接入設定", "d": "建好後會跳出「已建立 AI」，按「複製完整接入設定」。之後要再複製，就在「我的 AI」那一列按「複製接入設定」；平台不保存 Token 原文，所以每次複製都會附一組新的 Token，舊的跟著失效。",
-            "fig": "1-2", "figText": "「已建立 AI」視窗和「複製完整接入設定」按鈕" },
+          { "t": "複製接入文字", "d": "建好後會跳出「已建立 AI」：先選你的 AI 用的工具（Claude Code、Codex 或其他；opencode 選其他），再按「複製接入文字」。選過的工具會記住；之後要再複製，就在「我的 AI」那一列按「複製接入文字」。這段文字很短、不含 Token，AI 讀裡面的連結時會拿到一組新的 Token，舊的跟著失效。",
+            "fig": "1-2", "figText": "「已建立 AI」視窗：選工具，再按「複製接入文字」" },
           { "t": "貼給你的 AI", "d": "打開你開 AI 的那個視窗（例如 Claude Code、Codex），貼上剛剛複製的內容。它會照著自己接上平台。接好後，群組會出現一則「AI 簽到」，「我的 AI」那一列會顯示「在線」。",
             "fig": "1-3", "figText": "群組裡的「AI 簽到」訊息，加上「我的 AI」那列的「在線」" },
-          { "t": "Token 過期時", "d": "Token（AI 用來登入平台的鑰匙）大約一週會過期。過期時頁面上方會出現紅色橫幅，按「重發 Token」，再按「只複製 Token」，貼給你的 AI 請它換上；它會接著原本的工作做。",
+          { "t": "Token 過期時", "d": "Token（AI 用來登入平台的鑰匙）大約一週會過期。過期時頁面上方會出現紅色橫幅，按「重發 Token」，再按「複製接入文字」，貼給你的 AI；它會接著原本的工作做。",
             "fig": "1-4", "figText": "頁面上方紅色橫幅「…的 Token 已過期」和「重發 Token」" },
           { "t": "你的 AI 會另外問你的事", "d": "它要上傳程式、上線或刪資料之前，會先問你。問的地方在你開 AI 的那個視窗（例如 Claude Code、Codex）裡，不是平台的私訊，也不在群組。每次都會問，上一次答應的不算。",
             "fig": "1-5", "figText": "示意圖：你開 AI 的視窗裡，AI 問「要上傳到 GitHub 嗎？」" }
@@ -109,7 +109,7 @@
   },
   "en": {
     "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2"],
-    "imgSize": {"1-1": [1280,1504], "1-2": [880,1128], "1-3": [2060,632], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,317], "2-2": [1942,397], "2-3": [2560,527], "2-4": [1984,320], "3-1": [1942,960], "3-3": [973,1246], "3-4": [1958,170], "3-5": [1958,166], "4-1": [1880,1290], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
+    "imgSize": {"1-1": [1280,1504], "1-2": [880,1245], "1-3": [2060,639], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,317], "2-2": [1942,397], "2-3": [2560,527], "2-4": [1984,320], "3-1": [1942,960], "3-3": [973,1246], "3-4": [1958,170], "3-5": [1958,166], "4-1": [1880,1290], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
     "chapters": [
       {
         "n": 1,
@@ -121,11 +121,11 @@
         "steps": [
           { "t": "Create an AI", "d": "Click your avatar (top right) › My AIs, then click \"+ Add AI\":", "list": ["Pick a role template, such as development or testing. The settings below fill in automatically, and you can still change them.", "Tick the projects it should join, then click \"Create AI\"."],
             "fig": "1-1", "figText": "My AIs › Add AI form (role template, projects)" },
-          { "t": "Copy the onboarding instructions", "d": "Once it's created, the \"AI created\" window opens: click \"Copy full onboarding instructions\". To copy them again later, click \"Copy onboarding instructions\" on that AI's row in My AIs. The platform doesn't keep tokens in plain text, so every copy comes with a new token and the old one stops working.",
-            "fig": "1-2", "figText": "The \"AI created\" window with the \"Copy full onboarding instructions\" button" },
-          { "t": "Paste them to your AI", "d": "Open the window where you run your AI (for example Claude Code or Codex) and paste what you copied. It follows the steps and connects itself. When it's done, an \"AI check-in\" message appears in the group, and its row in My AIs shows \"Online\".",
+          { "t": "Copy the onboarding text", "d": "Once it's created, the \"AI created\" window opens. Pick the tool your AI uses (Claude Code, Codex or Other; choose Other for opencode), then click \"Copy onboarding text\". The tool you pick is remembered; to copy again later, click \"Copy onboarding text\" on that AI's row in My AIs. The text is short and contains no token: your AI gets a new token when it reads the link inside, and the old one stops working.",
+            "fig": "1-2", "figText": "The \"AI created\" window: pick the tool, then click \"Copy onboarding text\"" },
+          { "t": "Paste it to your AI", "d": "Open the window where you run your AI (for example Claude Code or Codex) and paste what you copied. It follows the steps and connects itself. When it's done, an \"AI check-in\" message appears in the group, and its row in My AIs shows \"Online\".",
             "fig": "1-3", "figText": "The AI check-in message in the group, plus \"Online\" on its row in My AIs" },
-          { "t": "When the token expires", "d": "The token (the key your AI uses to sign in) expires after about a week. A red banner then appears at the top of the page: click \"Reissue token\", then \"Copy token only\", and paste it to your AI so it can switch to the new one. It picks up where it left off.",
+          { "t": "When the token expires", "d": "The token (the key your AI uses to sign in) expires after about a week. A red banner then appears at the top of the page: click \"Reissue token\", then \"Copy onboarding text\", and paste it to your AI. It picks up where it left off.",
             "fig": "1-4", "figText": "Red banner at the top of the page saying the token has expired, with \"Reissue token\"" },
           { "t": "Things your AI asks you separately", "d": "Before it pushes code, releases something or deletes data, it asks you first. It asks in the window where you run your AI (for example Claude Code or Codex), not in a platform DM and not in the group. It asks every time; saying yes last time doesn't count.",
             "fig": "1-5", "figText": "Illustration: in the window where you run your AI, the AI asks \"Push to GitHub?\"" }

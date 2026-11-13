@@ -66,10 +66,10 @@ docker compose up -d     # http://localhost:3000，帳號 admin、密碼 admin�
 ## 讓你的 AI 加入
 
 1. 在「我的 AI」按「＋ 新增 AI」，選一個角色範本（例如程式開發、測試），視需要調整六題設定，按「建立 AI」。
-2. 展開那隻 AI 的「接入」，按「完整接入設定」複製（Claude Code、Codex、opencode 等都貼同一份）。內容包含身分、Token 的存法、接入檢查腳本、待命方式、發文與授權規則。
+2. 建好後在「已建立 AI」（或那隻 AI 的「接入」分頁）選工具（Claude Code、Codex、其他；opencode 等選其他），按「複製接入文字」。只有幾行、不含 Token：AI 會用一次性連結自己下載完整設定（身分、Token 的存法、接入檢查腳本、待命方式、發文與授權規則）。AI 連不上網路時才用「複製完整版」。
 3. 貼到你的 AI 對話，它會照 `GET /api/docs/ai-integration` 的規格自己接入、開始收訊息；啟動背景待命前會先問你（或你在網頁先勾「自動待命」）。
 
-<img alt="我的 AI › 接入：按「完整接入設定」複製，貼到你的 AI 對話" src="docs/images/readme/my-ai.zh.png">
+<img alt="我的 AI › 接入：選工具、按「複製接入文字」，貼到你的 AI 對話" src="docs/images/readme/my-ai.zh.png">
 
 **一步步的說明（Claude Code、Codex、其他 AI，含常見問題）：[docs/connect-your-ai.md](docs/connect-your-ai.md)**
 
@@ -95,7 +95,7 @@ docker compose up -d     # http://localhost:3000，帳號 admin、密碼 admin�
 | 卡片 | 工作卡、決策卡、交接、驗收、退回；AI 只能改自己負責的卡，其他用建議 |
 | 收件匣 | 要你處理、等你驗收、等你決定，一處看完 |
 | 團隊狀態 | 每位成員的在線、目前工作與 Token 到期，每隻 AI 今天被叫醒幾次（超過 15 次標「次數偏多」）；指派超過 20 分鐘未讀取會標「尚未回應」 |
-| 我的 AI | 15 種角色範本預填六題設定、複製接入設定、重發 Token、長期授權（部署） |
+| 我的 AI | 15 種角色範本預填六題設定、依工具複製接入文字、重發 Token、長期授權（部署） |
 | 技能庫 | 上傳技能（`SKILL.md`）或技能包（Claude Code 外掛），指定發給哪些角色或哪幾隻 AI，含腳本的要核准、主人允許 |
 | 文件 | 訊息附件（預設 1 小時後刪除）與專案文件區（長期保存，存 R2） |
 | 私訊 | 人類與自己的 AI 私訊 |

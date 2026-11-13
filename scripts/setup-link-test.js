@@ -39,8 +39,9 @@ try {
 
   // 網頁短版文字：存到自己的資料夾、一定要下載覆蓋、核對身分、接完刪掉
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  // 短版文字搬到 shortOnboardingText（按鈕呼叫它）
-  assert.match(js.slice(js.indexOf("b.dataset.act === 'short'"), js.indexOf("b.dataset.act === 'token'")), /shortOnboardingText\(ai, r\)/);
+  // 短版文字搬到 shortOnboardingText；按鈕（列上、接入分頁、建立／重發後視窗）都經 copyShortOnboarding，帶所屬人類選的工具
+  assert.match(js.slice(js.indexOf("b.dataset.act === 'short'"), js.indexOf("b.dataset.act === 'token'")), /copyShortOnboarding\(ai\)/);
+  assert.match(js.slice(js.indexOf('async function copyShortOnboarding'), js.indexOf('const AI_TOOLS')), /shortOnboardingText\(ai, r, tool\)/);
   const i0 = js.indexOf('function shortOnboardingText'), short = js.slice(i0, js.indexOf('\n  }\n', i0));
   assert.ok(!short.includes('.aigile/setup.md'), '不再用共用的 .aigile/setup.md');
   assert.match(short, /const dir = `\.aigile\/\$\{r\.agent \|\| 'AI'\}`/, '用伺服器給的代號資料夾');

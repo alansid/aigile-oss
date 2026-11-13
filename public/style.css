@@ -3236,3 +3236,18 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 @media (max-width: 999px) { .ob-tour { display: none; } }
 .ob-tour { margin-left: 2px; }
 .help-colon { white-space: pre; }
+
+/* 接入分頁的工具三格（每格至少 44px）、沒選過工具的提示；建立／重發後視窗沒選工具時複製鈕停用（灰） */
+.ma-tool { display: inline-flex; flex-wrap: wrap; gap: 4px; background: var(--surface-2); border-radius: 10px; padding: 4px; }
+.ma-tool button { font: inherit; font-size: 14px; min-height: 44px; padding: 0 16px; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.ma-tool button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, .15); }
+.ma-tool button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.ma-tool-ask { margin: 0; padding: 8px 12px; border-radius: 8px; background: #fef3c7; color: #92400e; font-weight: 600; font-size: 14px; }
+.tok-tool { display: grid; gap: 8px; margin-top: 12px; }
+.tok-tool .ma-tool { justify-self: start; }
+/* 英文按鈕字長：不在按鈕裡斷行，放不下就整顆換到下一行 */
+.modal-foot:has(#tok-short) { flex-wrap: wrap; }
+#tok-short, #tok-copy { white-space: nowrap; }
+#tok-short:disabled { background: var(--surface-2); border-color: var(--border); color: var(--muted); opacity: 1; cursor: not-allowed; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ma-tool-ask { background: #3a3013; color: #f3dc9a; } }
+:root[data-theme="dark"] .ma-tool-ask { background: #3a3013; color: #f3dc9a; }

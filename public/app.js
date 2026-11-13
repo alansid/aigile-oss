@@ -679,7 +679,7 @@
       else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p>${btns('ai', '建立 AI')}`;
       else html = `<p class="small">已建立「${esc(st.ai.name)}」。選你用的 AI 工具，按「複製」貼給它，它就會自己接入：</p>
         <div class="seg-scope sw-tool" role="group" aria-label="你的 AI 工具">${SW_TOOLS.map(([k, t]) => `<button type="button" data-sw-tool="${k}" aria-pressed="${st.tool === k}">${t}</button>`).join('')}</div>
-        <textarea class="sw-text" readonly rows="9" aria-label="接入指令">${esc(shortOnboardingText(st.ai, st.link, st.tool))}</textarea><p class="field-hint">連結 15 分鐘內有效、只能讀一次；過期到「我的 AI」按「短版（已接過）」重新產生。</p><div class="sw-actions"><span class="grow"></span><button type="button" class="btn" data-sw="done">完成</button><button type="button" class="btn primary" data-sw="copyai">${st.copied ? '✓ 已複製' : '複製'}</button></div>`;
+        <textarea class="sw-text" readonly rows="9" aria-label="接入指令">${esc(shortOnboardingText(st.ai, st.link, st.tool))}</textarea><p class="field-hint">連結 15 分鐘內有效、只能讀一次；過期到「我的 AI」按「複製接入文字」重新產生。</p><div class="sw-actions"><span class="grow"></span><button type="button" class="btn" data-sw="done">完成</button><button type="button" class="btn primary" data-sw="copyai">${st.copied ? '✓ 已複製' : '複製'}</button></div>`;
       const demoLine = st.demo ? `<p class="sw-demo small" role="status">已載入示範資料「${esc(st.demo)}」，完成設定後在專案清單看得到；看完到「成員與權限 › 系統」清除。</p>`
         : '<p class="sw-demo small">想先看看用起來的樣子？<button type="button" class="link" data-sw="demo">載入示範資料</button>（虛構的示範專案，看完可以清掉）</p>';
       el.innerHTML = head + demoLine + `<p class="error sw-err" role="alert"${msg ? '' : ' hidden'}>${esc(msg)}</p>` + html;
@@ -694,10 +694,10 @@
       if (b.dataset.swCopy !== undefined) return toast((await copyText(st.invites[+b.dataset.swCopy].url)) ? '已複製邀請連結' : '複製失敗，請手動複製');
       if (b.dataset.swTool) { if (st.tool !== b.dataset.swTool) { st.tool = b.dataset.swTool; st.copied = false; draw(); el.querySelector(`[data-sw-tool="${st.tool}"]`)?.focus(); } return; }
       if (act === 'done' && st.ai && !st.copied && !await confirmDialog({ title: '還沒複製接入指令', confirmText: '直接完成', cancelText: '回去複製', cancelPrimary: true,
-        message: '這段指令只在這裡顯示，連結 15 分鐘內有效。沒複製也沒關係：之後到「我的 AI」按「短版（已接過）」重新產生。' })) return;
+        message: '這段指令只在這裡顯示，連結 15 分鐘內有效。沒複製也沒關係：之後到「我的 AI」按「複製接入文字」重新產生。' })) return;
       if (act === 'skipall' || act === 'done') return finish(act === 'skipall');
       if (act === 'skip' || act === 'next') { st.step++; return draw(); }
-      if (act === 'copyai') { const ok = await copyText(shortOnboardingText(st.ai, st.link, st.tool)); toast(ok ? '已複製，貼到你的 AI 對話' : '複製失敗，請手動複製'); if (ok) { st.copied = true; draw(); } return; }
+      if (act === 'copyai') { maSetTool(st.ai, st.tool); /* 選的工具記下來，之後在「我的 AI」不用再選 */ const ok = await copyText(shortOnboardingText(st.ai, st.link, st.tool)); toast(ok ? '已複製，貼到你的 AI 對話' : '複製失敗，請手動複製'); if (ok) { st.copied = true; draw(); } return; }
       // 錯誤不重畫（使用者打的字留著，改了就能繼續）：對得到欄位就紅框＋欄位下小字，對不到才放上方
       const showErr = (msg, focusSel) => {
         const p = el.querySelector('.sw-err'), f = focusSel && el.querySelector(focusSel);
@@ -5485,8 +5485,8 @@
         alt: { find: () => $('#page-work .work-head'), text: 'AI 交件後，會出現在這裡的「等你驗收」，按「看回報」再決定通過或退回。', tip: '現在沒有要驗收的，等第一件交回來再試。' } },
     ];
   }
-  // 路線 B：第 1 章「讓你的 AI 加入」4 步：頭像選單「我的 AI」→「＋ 新增 AI」→ 最新那隻的接入選項 →「複製」那一列
-  // 開源版的接入分頁沒有「選工具」，第 3 步改框「對話接續」「自動待命」兩個選項。導覽不碰 Token、不替使用者按「複製」
+  // 路線 B：第 1 章「讓你的 AI 加入」4 步：頭像選單「我的 AI」→「＋ 新增 AI」→ 最新那隻接入分頁的「工具」→「複製」那一列
+  // 導覽不碰 Token、不替使用者選工具、不替使用者按「複製」
   function aiTourSteps() {
     const avBtn = () => [...document.querySelectorAll('.av-btn')].find(b => shownEl(b));
     const menuOpen = () => !$('#av-menu').hidden;
@@ -5520,15 +5520,15 @@
         title: '按「＋ 新增 AI」建一隻', text: '選一個角色範本、勾要加入的專案，按「建立 AI」。建好後回到這裡按「下一步」。',
         tip: '已經有 AI 的話可以直接按「下一步」。', pauseTip: '表單關掉後就能繼續。' }, // 表單打開（暫停）時灰底只寫這句
       { at: atMyAi, go: goMyAi, prep: openConn,
-        find: () => { const it = item(); return it ? [it.querySelector('[data-ma-convo]')?.closest('.ma-f'), it.querySelector('[data-ma-auto]')?.closest('.ma-f')] : null; },
-        title: '接入選項先用預設', text: '「對話接續」和「自動待命」會寫進你接下來複製的那份設定。不確定就照預設，之後再改也可以。' },
+        find: () => item()?.querySelector('.ma-tool')?.closest('.ma-f'),
+        title: '先選你的 AI 用哪個工具', text: '選了會記住，下次不用再選。opencode 等其他工具選「其他」。下面的「對話接續」「自動待命」不確定就照預設。' },
       { at: atMyAi, go: goMyAi, prep: openConn,
         find: () => item()?.querySelector('.ma-btns')?.closest('.ma-f'),
         altIf: expired,
-        title: '複製接入設定，貼給你的 AI', text: '按「完整接入設定」，整段貼到你開 AI 的那個視窗。AI 簽到後，這一列會顯示「在線」。',
+        title: '複製接入文字，貼給你的 AI', text: '按「複製接入文字」，整段貼到你開 AI 的那個視窗。AI 簽到後，這一列會顯示「在線」。',
         tip: '複製要你自己按；導覽不會碰你的 Token。',
         alt: { find: () => item()?.querySelector('.ma-row [data-act="reissue"]'), title: '先重發 Token', // Token 過期：改框「重發 Token」
-          text: '這隻 AI 的 Token 過期了，先按「重發 Token」，再把新的 Token 給它。', tip: '重發要你自己按；導覽不會碰你的 Token。' } },
+          text: '這隻 AI 的 Token 過期了，先按「重發 Token」，再複製接入文字貼給它。', tip: '重發要你自己按；導覽不會碰你的 Token。' } },
     ];
   }
   // 結束後焦點回到入口。頁面會重畫（總覽載完資料可能再畫一次，舊的連結被換掉、焦點掉回頁面），
@@ -5604,7 +5604,7 @@
       : maWarn(ai) ? `<span class="pill-tag yellow">Token ${esc(maWhen(ai.expiresAt))} 到期</span>` : `<span class="muted small ma-tok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>`;
     const main = !active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
       : maWarn(ai) ? `<button class="btn warn" type="button" data-act="reissue" data-id="${id}">重發<span class="ma-long"> Token</span></button>`
-      : `<button class="btn ma-copy" type="button" data-act="copy" data-id="${id}">複製接入設定</button>`;
+      : `<button class="btn ma-copy" type="button" data-act="short" data-id="${id}">複製接入文字</button>`; // 短版接入是主要做法
     const menuHtml = menu ? `<div class="ma-menu" role="menu">
         <button type="button" role="menuitem" data-act="edit" data-id="${id}">✏️ 編輯名稱、角色、專案</button>
         ${active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
@@ -5631,12 +5631,17 @@
     const tabs = [['conn', '接入'], ['skills', `技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}`], ['set', '設定']].filter(([k]) => active || k === 'set');
     const t = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
     const convoLabel = v => v ? CONVO_OPTS.find(x => x[0] === v)[1] : '太長才換新（建議）';
+    const tool = maTool(ai), ask = maAskTool.has(ai.participantId);
     const body = t === 'conn' ? `
+        ${ask ? '<p class="ma-tool-ask" role="status">第一次複製前先選工具：你的 AI 用哪一個？</p>' : ''}
+        <div class="ma-f"><b>工具</b><span class="ma-tool" role="group" aria-label="這隻 AI 用的工具">${AI_TOOLS.map(([v, l]) => `<button type="button" data-act="tool" data-tool="${v}" data-id="${id}" aria-pressed="${tool === v}">${l}</button>`).join('')}</span></div>
+        <p class="ma-hint">選了會記住，下次不用再選。opencode 等其他工具選「其他」；Codex 版會多幾行「怎麼開網路」。</p>
         <label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
         <p class="ma-hint">${esc(CONVO_HINT[o.convo || ''])}</p>
         <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>
-        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="copy" data-id="${id}">完整接入設定</button><button class="btn" type="button" data-act="short" data-id="${id}" title="貼長設定會當掉的工具用：只有幾行，AI 自己去讀完整設定">短版（已接過）</button><button class="btn" type="button" data-act="token" data-id="${id}">只複製 Token</button></span></div>
-        <p class="ma-hint">上面兩個選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
+        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="short" data-id="${id}">複製接入文字</button><button class="btn" type="button" data-act="copy" data-id="${id}">複製完整版</button></span></div>
+        <p class="ma-hint">接入文字很短、不含 Token：AI 會用一次性連結自己下載完整設定（15 分鐘內、只能讀一次），讀的那一刻拿到新 Token。第一次接入、Token 重發後重新接上都用它。AI 連不上網路時才用完整版（約 5,000 字，附一組新 Token）。</p>
+        <p class="ma-hint">上面的選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
       : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
       : `<dl class="ma-dl">
           <dt>主要職責</dt><dd>${esc(ai.duties)}</dd><dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
@@ -5759,18 +5764,24 @@
           const { text } = await api(onboardingUrl(ai));
           loadParticipants().catch(() => {});
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
-        } else if (b.dataset.act === 'short') { // 3～4 行、不含 Token，連結 15 分鐘、只能讀一次；AI 讀連結時拿到新 Token
-          if (ai.lastSeenAt && !await confirmDialog({ title: '複製短版接入？', confirmText: '複製',
+        } else if (b.dataset.act === 'short') { // 幾行、不含 Token，連結 15 分鐘、只能讀一次；AI 讀連結時拿到新 Token。主要做法、依工具出文字
+          if (!maTool(ai)) { // 沒選過工具：不複製，展開接入分頁請他先選
+            maAskTool.add(id); open.set(id, 'conn'); row(id);
+            return body.querySelector(`[data-ma="${CSS.escape(id)}"] .ma-tool button`)?.focus();
+          }
+          if (ai.lastSeenAt && !await confirmDialog({ title: '複製接入文字？', confirmText: '複製',
             message: `AI 讀這個連結時會拿到<b>一組新 Token</b>（平台不保存 Token 原文）：<b>${esc(ai.name)}</b> 現在用的會在那時失效。` })) return;
-          const o = maOpt(ai);
-          const r = await api(`/api/my-ais/${encodeURIComponent(id)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!o.auto, ...(o.convo ? { convo: o.convo } : {}) } });
-          toast((await copyText(shortOnboardingText(ai, r))) ? '已複製短版接入（連結 15 分鐘內有效、只能讀一次）' : '複製失敗，請手動複製');
+          toast(await copyShortOnboarding(ai));
+        } else if (b.dataset.act === 'tool') {
+          maSetTool(ai, b.dataset.tool); maAskTool.delete(id); row(id);
+          return body.querySelector(`[data-ma="${CSS.escape(id)}"] [data-tool="${b.dataset.tool}"]`)?.focus();
         } else if (b.dataset.act === 'token') { // 看不到原本的 Token：要複製就重發
           if (!await confirmDialog({ title: '重發 Token？', confirmText: '重發',
             message: `平台不保存 Token 原文；要複製就重發一組：<b>${esc(ai.name)}</b> 目前的 Token 會立即失效，需要把新 Token 換給它。` })) return;
           const r = await api(`/api/my-ais/${id}/reissue`, { method: 'POST' });
           loadParticipants().catch(() => {});
-          openTokenOnly(r);
+          Object.assign(ai, r); drawList(); // 列表換上新的到期時間
+          openTokenOnly(ai);
         } else if (b.dataset.act === 'edit') {
           openAiForm(ai);
         } else if (b.dataset.act === 'grants') {
@@ -5780,7 +5791,8 @@
             message: `重發後，<b>${esc(ai.name)}</b> 目前的 Token 會立即失效，需要把新 Token 換給它。` })) return;
           const r = await api(`/api/my-ais/${id}/reissue`, { method: 'POST' });
           loadParticipants().catch(() => {});
-          openTokenOnly(r);
+          Object.assign(ai, r); drawList(); // 列表換上新的到期時間（不再顯示過期）
+          openTokenOnly(ai);
         } else if (b.dataset.act === 'disable') {
           if (!await confirmDialog({ title: '停用 AI？', confirmText: '停用', danger: true,
             message: `停用後 <b>${esc(ai.name)}</b> 的 Token 會立即失效，它將無法再讀寫群組，之後可以重新啟用。` })) return;
@@ -5801,8 +5813,8 @@
     });
     await draw();
   }
-  // 短版接入：終端機下載到 .aigile/<代號>/setup.md、核對身分、接完刪掉（內容跟原本一樣）
-  // tool：'codex'／'claude'／'other'；沒給＝不知道用哪個工具，Codex 的網路說明照樣寫
+  // 短版接入（「複製接入文字」）：終端機下載到 .aigile/<代號>/setup.md、核對身分、接完刪掉（內容跟完整版一樣）
+  // tool：'codex'／'claude'／'other'（opencode 等算其他）；Codex 才帶開網路那段。沒給＝不知道用哪個工具，Codex 的網路說明照樣寫
   function shortOnboardingText(ai, r, tool = '') {
     const dir = `.aigile/${r.agent || 'AI'}`, codex = !tool || tool === 'codex';
     // Codex 沒開網路時連規格都下載不到，所以開網路的說明要寫在這段貼上的文字裡
@@ -5815,9 +5827,23 @@ sandbox_mode = "workspace-write"
 curl -s --create-dirs -o ${dir}/setup.md "${r.url}"
 2. 讀 ${dir}/setup.md：開頭寫的身分必須是「${ai.name}」，不是就停下來告訴 ${state.me.name}（讀到別的 AI 的檔）。是就照裡面的步驟接入。
 3. 接好後 Token 存在 ${dir}/.token，然後刪掉 ${dir}/setup.md（裡面有 Token）。這個檔不要進 git、不要貼到群組。
-${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒（Connection refused），就是 Codex 沒開網路，不是代理或公司網路問題。請停下來，把第 0 步原文告訴 ${state.me.name}：「請在 ~/.codex/config.toml 開 network_access 後重開 Codex」，不要說成代理問題、不要換別的寫法重試。開了網路仍連不到，才告訴 ${state.me.name} 改用「複製完整接入設定」。` : `下載失敗時：把錯誤原文告訴 ${state.me.name}，不要換別的寫法重試；連不到網址就請他確認你這台電腦開得了這個網站。`}
-檔案內容寫「已失效」，就請 ${state.me.name} 在網頁「我的 AI」重按「短版（已接過）」。這段文字與連結都不要貼到群組。`;
+${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒（Connection refused），就是 Codex 沒開網路，不是代理或公司網路問題。請停下來，把第 0 步原文告訴 ${state.me.name}：「請在 ~/.codex/config.toml 開 network_access 後重開 Codex」，不要說成代理問題、不要換別的寫法重試。開了網路仍連不到，才告訴 ${state.me.name} 改用「複製完整版」。` : `下載失敗時：把錯誤原文告訴 ${state.me.name}，不要換別的寫法重試；連不到網址就請他確認你這台電腦開得了這個網站。`}
+檔案內容寫「已失效」，就請 ${state.me.name} 在網頁「我的 AI」重按「複製接入文字」。這段文字與連結都不要貼到群組。`;
   }
+  // 產一次性連結＋複製；回傳 toast 文字（列上、接入分頁、建立／重發後的視窗共用）
+  async function copyShortOnboarding(ai) {
+    const o = maOpt(ai), tool = maTool(ai);
+    const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!o.auto, ...(o.convo ? { convo: o.convo } : {}), tool } });
+    if (!await copyText(shortOnboardingText(ai, r, tool))) return '複製失敗，請手動複製';
+    return tool === 'other' ? '已複製接入文字（連結 15 分鐘內有效、只能讀一次）' : `已複製 ${toolName(tool)} 版接入文字（連結 15 分鐘內有效、只能讀一次）`;
+  }
+  // 每隻 AI 用的工具記在這個瀏覽器（不改資料庫，換電腦再選一次）；存不了就只記到重新整理
+  const AI_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['other', '其他']];
+  const toolName = v => (AI_TOOLS.find(x => x[0] === v) || [])[1] || '';
+  const maToolMem = {}, maAskTool = new Set();
+  const maTools = () => { try { return { ...JSON.parse(store.get('aigile-ai-tools') || '{}'), ...maToolMem }; } catch { return { ...maToolMem }; } };
+  const maTool = ai => { const v = maTools()[ai.participantId]; return toolName(v) ? v : ''; };
+  const maSetTool = (ai, v) => { maToolMem[ai.participantId] = v; store.set('aigile-ai-tools', JSON.stringify(maTools())); };
 
   // 「允許 AI 自動啟動待命」預設勾選；勾選才在接入設定寫明已同意，沒勾照舊先問
   // 對話接續方式寫進接入設定；預設「太長才換新」
@@ -5829,24 +5855,32 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     fresh: '最省用量。注意：Claude Code 選這個會在背景另開對話，你在畫面上看不到它在做什麼。',
     keep: '對話越長，每次叫醒越貴；只在需要一路看紀錄時用。',
   };
-  const onboardingUrl = ai => { const o = maOpt(ai); return `/api/my-ais/${ai.participantId}/onboarding?${new URLSearchParams({ ...(o.convo ? { convo: o.convo } : {}), ...(o.auto ? { autoStandby: '1' } : {}) })}`; };
+  const onboardingUrl = ai => { const o = maOpt(ai), tool = maTool(ai); return `/api/my-ais/${ai.participantId}/onboarding?${new URLSearchParams({ ...(o.convo ? { convo: o.convo } : {}), ...(o.auto ? { autoStandby: '1' } : {}), ...(tool ? { tool } : {}) })}`; };
 
-  // 重發後：只需把新 Token 換進 AI 的環境，不用重讀整份接入設定
+  // 建立、重發後：接上（或重新接上）也走「複製接入文字」；setup.md 會依有沒有工作記憶寫「你是重新接上」。新 Token 只有這時看得到
   function openTokenOnly(ai, created = false) {
+    const label = () => maTool(ai) ? `複製接入文字（${toolName(maTool(ai))}）` : '複製接入文字';
     const body = openModal(created ? '已建立 AI' : '已重發 Token', `
-      <p>${created ? `已建立 ${esc(ai.name)}。` : `${esc(ai.name)} 的舊 Token 已立即失效。`}新 Token 到期：<b>${fmtTime(ai.expiresAt)}</b></p>
+      <p>${created ? `已建立 ${esc(ai.name)}。` : `${esc(ai.name)} 的舊 Token 已立即失效。`}新 Token 到期：<b>${shortTime(ai.expiresAt)}</b></p>
       <p class="warn-box">Token 只有現在看得到：平台不保存原文，關掉這個視窗後要再複製就得重發。</p>
-      <p class="notice">已接入的 AI：把新 Token 換進它的 Token 檔或環境變數（例如 <code>.token</code>、<code>AIGILE_TOKEN</code>）即可，不必重讀整份設定。也可以直接貼給它：「Token 已更新為 ……，請替換後繼續輪詢」。第一次接入或 AI 已忘記設定時，才用「複製完整接入設定」。</p>`, {
+      <p class="notice">${created ? '接上你的 AI：按「複製接入文字」，整段貼到你開 AI 的那個視窗，它會自己接入。' : '重新接上：按「複製接入文字」，整段貼到你開 AI 的那個視窗。AI 會讀到自己的工作記憶，接著原本的工作做，不會重新簽到。'}<span>AI 讀連結時會再拿一組新 Token；AI 還記得設定、只要換 Token 時，才用「只複製 Token」。</span></p>
+      ${maTool(ai) ? '' : `<div class="tok-tool"><p class="ma-tool-ask" role="status">第一次複製前先選工具：你的 AI 用哪一個？</p>
+        <span class="ma-tool" role="group" aria-label="這隻 AI 用的工具">${AI_TOOLS.map(([v, l]) => `<button type="button" data-tok-tool="${v}" aria-pressed="false">${l}</button>`).join('')}</span></div>`}`, {
       size: 'narrow',
-      foot: `<button class="btn" type="button" id="tok-full">複製完整接入設定</button>
-             <button class="btn primary" type="button" id="tok-copy">只複製 Token</button>`,
+      foot: `<button class="btn" type="button" id="tok-copy">只複製 Token</button>
+             <button class="btn primary" type="button" id="tok-short"${maTool(ai) ? '' : ' disabled'}>${label()}</button>`,
     });
-    const m = body.modal;
+    const m = body.modal, short = m.querySelector('#tok-short');
     m.querySelector('#tok-copy').onclick = async () => toast((await copyText(ai.token)) ? '已複製 Token' : '複製失敗，請手動複製');
-    m.querySelector('#tok-full').onclick = async () => { // 帶剛拿到的 Token，不再換一組
-      const o = maOpt(ai);
-      const { text } = await api(`/api/my-ais/${ai.participantId}/onboarding`, { method: 'POST', body: { token: ai.token, autoStandby: !!o.auto, ...(o.convo ? { convo: o.convo } : {}) } });
-      toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
+    m.querySelectorAll('[data-tok-tool]').forEach(b => b.onclick = () => {
+      maSetTool(ai, b.dataset.tokTool);
+      m.querySelectorAll('[data-tok-tool]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      m.querySelector('.tok-tool .ma-tool-ask')?.remove();
+      short.textContent = label(); short.disabled = false;
+    });
+    short.onclick = async () => {
+      if (!maTool(ai)) return m.querySelector('[data-tok-tool]')?.focus();
+      try { toast(await copyShortOnboarding(ai)); } catch (err) { toast(err.message); }
     };
   }
 

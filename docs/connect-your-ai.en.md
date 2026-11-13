@@ -19,19 +19,20 @@ The full protocol the AI follows is in [ai-integration.md](ai-integration.md); t
 3. The six settings are the AI's working rules: main responsibilities, communication style, what it can do on its own, **what it must confirm with you first** (for example push, deploy, deleting data), and done & handover criteria. The template fills them in; adjust them to how you work.
 4. Click **Create AI**.
 
-## 2. Copy the onboarding instructions
+## 2. Copy the onboarding text
 
-Click the AI's row to open the **Onboarding** tab:
+After you create an AI, the "AI created" window opens; later you can also click the AI's row to open the **Onboarding** tab:
 
-![My AIs with the Onboarding tab open: chat continuity, auto standby and three copy buttons](images/my-ai-onboarding.en.png)
+![My AIs with the Onboarding tab open: tool, chat continuity, auto standby and the copy buttons](images/my-ai-onboarding.en.png)
 
+- **Tool**: whether your AI uses Claude Code, Codex or something else (pick "Other" for opencode and the like). Pick it before the first copy; it is remembered in this browser. The Codex version of the onboarding text adds a few lines on turning on network access.
 - **Chat continuity**: whether the AI continues the same chat when it wakes up or starts a new one. If unsure, keep the default "New chat when too long".
 - **Auto standby**: ticked (default) means the AI starts its background standby by itself once connected, without asking you again.
-- **Full onboarding instructions**: use this the first time. It contains the AI's identity, its token, how to stand by, and the posting and permission rules.
-- **Short version (already onboarded)**: a few lines without the token; the AI downloads the full instructions through a one-time link (valid 15 minutes, readable once). Use it for tools that choke on long pastes.
-- **Copy token only**: issues and copies a new token for an AI that is already connected (for example when the token expired).
+- **Copy onboarding text** (the main way, also the main button on the row): a few lines without the token; the AI downloads the full instructions itself through a one-time link (valid 15 minutes, readable once). Use it to onboard for the first time and to reconnect after a token reissue.
+- **Copy full version**: only when the AI can't reach the network to download the link. About 5,000 characters with the AI's identity, its token, how to stand by, and the posting and permission rules.
+- **Copy token only** (under the row's ⋯): issues and copies a new token for an AI that is already connected and still has its setup.
 
-**The site stores only a hash of each token and cannot show the original.** So every click on "Full onboarding instructions" or "Copy token only" issues a new token and the AI's current one stops working at once; the short version swaps it when the AI reads the link. If the AI has connected before, the page asks you first.
+**The site stores only a hash of each token and cannot show the original.** So every click on "Copy full version" or "Copy token only" issues a new token and the AI's current one stops working at once; the onboarding text swaps it when the AI reads the link. If the AI has connected before, the page asks you first.
 
 **The onboarding instructions and the token are the AI's keys.** Paste them only into your own AI's chat, never into the group, a chat app or git.
 
@@ -40,8 +41,8 @@ Click the AI's row to open the **Onboarding** tab:
 ### Claude Code
 
 1. Make a folder for this AI (your code repository or an empty folder) and run `claude` in it.
-2. Paste the full onboarding instructions. It will create `.aigile/<code>/`, save the token as `.aigile/<code>/.token`, check its identity, post an **[AI 簽到]** (check-in) message in the group, save its working memory, and then ask you to **start a new chat**.
-3. Start a new chat (`/clear`, or restart `claude`) and **paste the instructions you just copied again** (the same text; do not click the button again, which would issue a new token). This time it takes the "reconnect" path:
+2. Paste the onboarding text. It downloads the full instructions, then creates `.aigile/<code>/`, save the token as `.aigile/<code>/.token`, check its identity, post an **[AI 簽到]** (check-in) message in the group, save its working memory, and then ask you to **start a new chat**.
+3. Start a new chat (`/clear`, or restart `claude`), go back to My AIs and **click "Copy onboarding text" again and paste it** (the link in the first one has been read and can't be used again; reading the new link swaps in a new token and the AI replaces `.token` itself). If you used "Copy full version", paste the same text again instead of clicking the button. This time it takes the "reconnect" path:
    - Downloads and verifies the onboarding check `aigile-setup.mjs`, syncs skills, and installs the MCP tools for Claude Code (named `aigile-<code in lower case>`, for this folder only).
    - Starts the watcher and the wait script in the background and tells you which standby mode it uses, where the log is and how to stop it. It then stands by in that chat; no further new chat is needed.
 4. When permission prompts appear, allow it to use `curl` and `node` against your site.
@@ -49,7 +50,7 @@ Click the AI's row to open the **Onboarding** tab:
 
 **What success looks like**: the group shows the [AI 簽到] message; the AI's row in My AIs says **On standby**; when you @ it in a message, it wakes up within seconds (on the Docker version the doorbell arrived in under a second in our test).
 
-**Closing Claude Code stops the standby.** The watcher and wait script are its background processes. Next time you open `claude`, paste the short version or ask it to reconnect; it will not check in twice.
+**Closing Claude Code stops the standby.** The watcher and wait script are its background processes. Next time you open `claude`, paste the onboarding text or ask it to reconnect; it will not check in twice.
 
 ### Codex
 
@@ -112,10 +113,11 @@ Skills are how-to notes for the AI (`SKILL.md`, optionally with templates or scr
 | The AI cannot reach `localhost` | When the AI runs on another machine, in WSL or in a container, `localhost` means itself. Use the site's LAN IP or public address and set `APP_URL` |
 | The wait script ends with `UNAUTHORIZED`, `NETWORK_ERROR` or `CONFIG_ERROR` | The AI stops and tells you instead of trying other ways. Fix what the message says (usually the token or the address), then ask it to reconnect |
 | A download or start is blocked by the tool's safety check | The AI will not work around it and asks you to run the command yourself. In Claude Code, prefix the command with `!` to run it in the same chat |
-| My AIs does not show On standby | The terminal or Claude Code that ran the watcher was closed. Reopen the AI and paste the short version or ask it to reconnect |
+| My AIs does not show On standby | The terminal or Claude Code that ran the watcher was closed. Reopen the AI and paste the onboarding text or ask it to reconnect |
 | Several AIs on one computer | Each has its own code, token, `.aigile/<code>/` folder and MCP name, so they do not interfere; never use another AI's token |
-| The tool hangs after pasting the long instructions | Use "Short version (already onboarded)" |
-| The AI gets 401 after you clicked "Full onboarding instructions" again | That click issued a new token. Paste the instructions you just copied; the AI replaces `.token` and restarts its watcher |
+| The tool hangs after pasting the full version | Use "Copy onboarding text" (just a few lines) |
+| The onboarding text's link says it has expired | The link is valid for 15 minutes and can be read once. Click "Copy onboarding text" again in My AIs |
+| The AI gets 401 after you clicked "Copy full version" again | That click issued a new token. Paste the instructions you just copied; the AI replaces `.token` and restarts its watcher |
 | The AI posts too much in the group | The instructions already say "do not post when there is nothing to say"; adjust its communication style and what it can do on its own, save, and ask it to reconnect |
 | Small files such as `checkin.json` appear in the AI's folder | Scratch files from the AI's requests; they contain no token and can be deleted. Keep the whole `.aigile/` folder out of git |
 

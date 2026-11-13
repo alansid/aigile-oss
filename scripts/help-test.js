@@ -41,7 +41,7 @@ try {
   const all = JSON.stringify(zh.chapters), allEn = JSON.stringify(en.chapters);
   for (const re of [/就是第 2 章第 4 步/, /見第 1 章第 5 步/, /AI 要用自己的身分，見第 1 章/, /把新的給它（第 1 章）/, /配對（第 4 章第 1 步）/]) assert.match(all, re, '章號互相引用');
   for (const re of [/step 4 of chapter 2/, /step 5 of chapter 1/, /their own identity \(see chapter 1\)/, /new one \(chapter 1\)/, /step 1 of chapter 4/]) assert.match(allEn, re, '英文章號互相引用');
-  assert.ok(!/收件匣|卡住了|複製接入文字/.test(all), '用詞跟開源版畫面一樣（要你處理、複製接入設定）');
+  assert.ok(!/收件匣|卡住了|複製接入設定|完整接入設定|只複製 Token/.test(all) && /複製接入文字/.test(all), '用詞跟開源版畫面一樣（要你處理、複製接入文字）');
   assert.ok(!/[㐀-鿿]/.test(allEn), '英文那份沒有中文：' + (allEn.match(/.{0,20}[㐀-鿿].{0,20}/) || [''])[0]);
   for (const [lang, d] of [['zh', zh], ['en', en]]) for (const c of d.chapters) for (const s of [...c.steps, c.note || {}]) for (const k of ['t', 'd', 'figText']) {
     assert.ok(!/[{}]/.test((s[k] || '').replace(/\{[^|{}]*\|[^{}]*\}/g, '')), `${lang} 第 ${c.n} 章「${s.t}」的 ${k}：{桌機|手機} 括號成對`);

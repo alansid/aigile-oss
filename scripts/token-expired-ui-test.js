@@ -31,8 +31,8 @@ try {
   assert.equal(await js(`${row(ex.id)}.querySelector('.ma-st').classList.contains('bad')`), true, '紅色');
   assert.equal(await js(`!!${row(ex.id)}.querySelector('[data-act="reissue"]')`), true, '旁邊有重發 Token');
   assert.match(await js(`${row(ok.id)}.querySelector('.ma-st').textContent`), /在線/, '正常的照舊在線');
-  // 手機也看得到「複製接入設定」與 Token 到期日（修正前只剩「⋯」）
-  assert.equal(await js(`(() => { const b = ${row(ok.id)}.querySelector('.ma-copy'); return !!b && b.offsetParent !== null && b.getBoundingClientRect().right <= innerWidth; })()`), true, '375 看得到複製接入設定');
+  // 手機也看得到「複製接入文字」與 Token 到期日（修正前只剩「⋯」）
+  assert.equal(await js(`(() => { const b = ${row(ok.id)}.querySelector('.ma-copy'); return !!b && b.offsetParent !== null && b.getBoundingClientRect().right <= innerWidth; })()`), true, '375 看得到複製接入文字');
   assert.match(await js(`${row(ok.id)}.querySelector('.ma-meta').innerText`), /Token 到 \d/, '375 看得到 Token 到期日');
   assert.equal(await js(`(() => { const t = ${row(ok.id)}.querySelector('.ma-mtok'), m = ${row(ok.id)}.querySelector('.ma-main').getBoundingClientRect(), r = t.getBoundingClientRect(); return t.getClientRects().length === 1 && r.right <= m.right + 1 && !/^·/.test(t.textContent.trim()); })()`), true, '375「Token 到 MM/DD」自己一行、不被擠斷、不超出');
   // 2. 摘要分開寫，過期的不算在線
