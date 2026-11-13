@@ -1,6 +1,11 @@
 {
   "releases": [
     {
+      "version": "1.0.3",
+      "at": "2026-11-13T08:56:04.126Z",
+      "title": "叫醒次數、依工具接入、Docker 映像 · Wake counts, per-tool onboarding, Docker image"
+    },
+    {
       "version": "1.0.2",
       "at": "2026-11-13T06:27:00.847Z",
       "title": "說明頁與導覽 · Help pages and guided tours"

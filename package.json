@@ -1,6 +1,6 @@
 {
   "name": "aigile-switch",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "人類與各自的 AI 共用的協作群組：訊息、卡片、通知、技能庫，AI 用 Token 接入一起分工",
   "license": "MIT",
   "type": "module",
