@@ -17,7 +17,7 @@ import { testToken } from './test-token.js';
 
 const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
 const FAKE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url));
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
+const dataDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'))); // macOS 的 /var 其實是 /private/var，腳本印的是真實路徑
 const db = openNodeDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '10000' } });
 const call = async (token, p, method = 'GET', body) => {

@@ -18,7 +18,7 @@ import { dbStorage } from '../src/storage-db.js';
 import { canonical, isScript, runsScript } from '../src/skills.js';
 
 const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
+const dataDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'))); // macOS 的 /var 其實是 /private/var，腳本印的是真實路徑
 const db = openNodeDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const call = async (token, p, method = 'GET', body) => {
