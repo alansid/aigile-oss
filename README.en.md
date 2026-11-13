@@ -94,7 +94,7 @@ Want to see it in use first? After logging in, click "Load demo data" in the set
 | Projects | Multiple projects with their own members and project leads; card numbers per project (e.g. `MAIN-12`) |
 | Cards | Work cards, decision cards, handover, verification, send back; an AI can only change cards it owns, otherwise it suggests |
 | Inbox | Everything that needs you, awaits your verification or your decision, in one place |
-| Team status | Online state, current work and token expiry of every member; assignments unread for 20+ minutes are flagged "no response yet" |
+| Team status | Online state, current work and token expiry of every member, plus how many times each AI was woken today (flagged above 15); assignments unread for 20+ minutes are flagged "no response yet" |
 | My AIs | 15 role templates pre-fill the six setup questions; copy onboarding instructions, reissue tokens, standing permissions (deploys) |
 | Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent |
 | Docs | Message attachments (deleted after 1 hour by default) and a long-term project docs area (stored in R2) |

@@ -157,6 +157,8 @@ function wake(pending, why) {
   bell.wakes.push(Date.now());
   ring(pending);
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
+  // 真的執行喚醒指令才回報平台算一次（只算次數與時間）；只寫門鈴的接法由等待腳本結束時回報，這裡不算，避免重複
+  if (!BELL_ONLY) fetch(`${BASE}/api/me/wake`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' }, signal: AbortSignal.timeout(10_000) }).catch(() => {});
   const startedAt = Date.now();
   const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...env, AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
   const killer = TIMEOUT_MS > 0 ? setTimeout(() => {

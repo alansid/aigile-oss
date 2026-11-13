@@ -127,7 +127,7 @@ try {
 
   // 舊資料庫升級：001 把原本的管理員（最早加入的人類）標起來
   {
-    const OLD = fs.readFileSync(new URL('../src/schema.sql', import.meta.url), 'utf8').replace(/\n\s*is_admin INTEGER[^\n]*/, '');
+    const OLD = fs.readFileSync(new URL('../src/schema.sql', import.meta.url), 'utf8').replace(/\n\s*is_admin INTEGER[^\n]*/, '').replace(/\n\s*wake_(day|count|at) [^\n]*/g, ''); // 之後的升級（002 叫醒次數）加的欄位也拿掉
     assert.ok(!OLD.includes('is_admin'), '1.0 的結構沒有 is_admin');
     const odb = new DatabaseSync(path.join(dataDir, 'old.db'));
     odb.exec(OLD);

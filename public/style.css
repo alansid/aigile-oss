@@ -588,6 +588,11 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .tm-health.h-red, .tm-token.bad { color: #b91c1c; }
 .tm-health.h-yellow, .tm-token.warn { color: #b45309; }
 .tm-state { min-width: 0; overflow-wrap: anywhere; }
+/* 今天叫醒幾次：偏多用黃底深字小標籤（不只靠黃字，淺色底才看得清楚） */
+.tm-wake .nw { white-space: nowrap; }
+.wake-high { display: inline-block; padding: 0 6px; border-radius: 4px; background: #fde68a; color: #78350f; font-weight: 600; white-space: nowrap; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .wake-high { background: #713f12; color: #fef3c7; } }
+:root[data-theme="dark"] .wake-high { background: #713f12; color: #fef3c7; }
 
 /* 我的 AI */
 .ai-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: grid; gap: 10px; }
@@ -2008,6 +2013,10 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
   .tm-who .muted.small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tm-pend { grid-area: pend; white-space: nowrap; align-self: center; }
   .tm-pend.zero, .tm-conn, .tm-token { display: none; }
+  /* 手機只露出叫醒次數那一行，在目前工作下面換行 */
+  .tm-row { grid-template-areas: "who pend" "state state" "wake wake"; }
+  .tm-conn:has(.tm-wake) { display: block; grid-area: wake; }
+  .tm-conn:has(.tm-wake) > :not(.tm-wake) { display: none; }
   .tm-state { grid-area: state; grid-column: auto; display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
   .tm-state .st { flex: none; }
   .tm-state .link { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; -webkit-line-clamp: unset; }
@@ -3077,6 +3086,8 @@ button.ask-pv:focus-visible { outline: 2px solid var(--primary); outline-offset:
 /* 團隊成員表：桌機有欄名列；窄畫面沒有欄名列，改在格子裡寫「目前工作」「Token 到期」 */
 .tm-th { padding: 0 0 6px; font-weight: 600; align-items: end; }
 .tm-lbl { display: none; }
+/* 叫醒那格：桌機分兩行、不放「·」 */
+.tm-wake { display: grid; justify-items: start; }
 @media (max-width: 899px) {
   .tm-th { display: none; }
   .tm-lbl, .tm-state .tm-lbl.muted.small { display: inline; flex: none; margin-right: 6px; }
@@ -3084,6 +3095,7 @@ button.ask-pv:focus-visible { outline: 2px solid var(--primary); outline-offset:
 @media (max-width: 640px) {
   .tm-who > div { display: grid; gap: 0; }
   .tm-who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tm-wake { display: flex; flex-wrap: wrap; gap: 0 10px; }
 }
 
 /* ---------- 新手上路（總覽最上面） ---------- */

@@ -8,6 +8,8 @@
 //   3. watcher 不在（watcher.pid 的程序不在，或門鈴檔超過 30 分鐘沒心跳）：印一次 WARN，
 //      改成每 10 分鐘問一次待處理數（備援）；watcher 回來就恢復只盯門鈴檔。
 //   4. 不讀訊息內容、不發文、不寫任何檔案；Token 不會印出。
+//   5. 叫醒 AI 的結束（PENDING、RECOVERED、TIMEOUT）先回報平台一次 POST /api/me/wake（只算次數與時間），
+//      團隊狀態顯示「今天叫醒 N 次」；回報失敗或舊平台沒有這支 API 都照常結束。
 //
 // 用法：node aigile-wait.mjs --agent PG [--max-min=110]
 //   需要 AIGILE_BASE（沒設就讀 .aigile/<代號>/watcher.env），以及 AIGILE_TOKEN 或 AIGILE_TOKEN_FILE（預設 .aigile/<代號>/.token）。
@@ -50,6 +52,19 @@ TOKEN = TOKEN || process.env.AIGILE_TOKEN || '';
 
 const finish = (line, code) => { console.log(line); process.exit(code); };
 const note = line => console.log(`${new Date().toISOString()} ${line}`);
+// 會叫醒 AI 的結束先回報一次（最多等 5 秒）；同時有兩個結束也只回報、只結束一次
+// 回報後不用 process.exit：Windows 上連線剛用完就 exit 會讓 Node 當掉（libuv UV_HANDLE_CLOSING），改成關掉計時器與檔案監看、自然結束
+let ending = false;
+const handles = [];
+async function wakeExit(line, code) {
+  if (ending) return;
+  ending = true;
+  for (const h of handles) { clearInterval(h); h?.close?.(); }
+  await fetch(`${BASE}/api/me/wake`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'wait' }, signal: AbortSignal.timeout(5_000) })
+    .then(r => r.arrayBuffer()).catch(() => {});
+  console.log(line);
+  process.exitCode = code;
+}
 if (!BASE || !TOKEN) finish('CONFIG_ERROR', 40);
 
 class Unauthorized extends Error {}
@@ -78,49 +93,52 @@ const watcherAlive = () => {
 let seq = readBell()?.seq ?? 0;
 try {
   const n = await count();
-  if (n > 0) finish(`PENDING ${n}`, 0);
+  if (n > 0) await wakeExit(`PENDING ${n}`, 0);
 } catch (e) {
   if (e instanceof Unauthorized) finish('UNAUTHORIZED', 20);
   note(`WARN 啟動時查待處理數失敗（${e.message}），先等門鈴`);
 }
 
-// 2. 只盯門鈴檔
-const onBell = () => {
-  const b = readBell();
-  if (b && b.seq > seq && b.pending > 0) finish(`PENDING ${b.pending}`, 0);
-  if (b && b.seq > seq) seq = b.seq;
-};
-try { fs.watch(DIR, (_, name) => { if (!name || String(name).startsWith('bell.json')) onBell(); }); } catch {}
-setInterval(onBell, LOOK_MS);
+// 啟動時就有待處理：已回報結束，不再盯門鈴
+if (!ending) {
+  // 2. 只盯門鈴檔
+  const onBell = () => {
+    const b = readBell();
+    if (b && b.seq > seq && b.pending > 0) return wakeExit(`PENDING ${b.pending}`, 0);
+    if (b && b.seq > seq) seq = b.seq;
+  };
+  try { handles.push(fs.watch(DIR, (_, name) => { if (!name || String(name).startsWith('bell.json')) onBell(); })); } catch {}
+  handles.push(setInterval(onBell, LOOK_MS));
 
-// 3. watcher 不在：備援每 10 分鐘問一次
-let fallback = null, fails = 0, hadError = false;
-async function poll() {
-  try {
-    const n = await count();
-    if (n > 0) finish(`PENDING ${n}`, 0);
-    if (hadError) finish('RECOVERED', 0);
-    fails = 0;
-  } catch (e) {
-    if (e instanceof Unauthorized) finish('UNAUTHORIZED', 20);
-    fails++; hadError = true;
-    note(`WARN 備援查詢失敗（${e.message}），第 ${fails} 次`);
-    if (fails >= 3) finish('NETWORK_ERROR', 30);
+  // 3. watcher 不在：備援每 10 分鐘問一次
+  let fallback = null, fails = 0, hadError = false;
+  async function poll() {
+    try {
+      const n = await count();
+      if (n > 0) return wakeExit(`PENDING ${n}`, 0);
+      if (hadError) return wakeExit('RECOVERED', 0);
+      fails = 0;
+    } catch (e) {
+      if (e instanceof Unauthorized) finish('UNAUTHORIZED', 20);
+      fails++; hadError = true;
+      note(`WARN 備援查詢失敗（${e.message}），第 ${fails} 次`);
+      if (fails >= 3) finish('NETWORK_ERROR', 30);
+    }
   }
-}
-function checkWatcher() {
-  const alive = watcherAlive();
-  if (!alive && !fallback) {
-    note(`WARN watcher 不在（${PIDF} 的程序不在，或門鈴檔超過 ${STALE_MS / 60000} 分鐘沒心跳），改成每 ${POLL_MS / 60000} 分鐘問一次待處理數`);
-    fallback = setInterval(poll, POLL_MS);
-  } else if (alive && fallback) {
-    note('watcher 回來了，恢復只盯門鈴檔');
-    clearInterval(fallback); fallback = null; fails = 0; hadError = false;
-    seq = readBell()?.seq ?? seq;
+  function checkWatcher() {
+    const alive = watcherAlive();
+    if (!alive && !fallback) {
+      note(`WARN watcher 不在（${PIDF} 的程序不在，或門鈴檔超過 ${STALE_MS / 60000} 分鐘沒心跳），改成每 ${POLL_MS / 60000} 分鐘問一次待處理數`);
+      fallback = setInterval(poll, POLL_MS); handles.push(fallback);
+    } else if (alive && fallback) {
+      note('watcher 回來了，恢復只盯門鈴檔');
+      clearInterval(fallback); fallback = null; fails = 0; hadError = false;
+      seq = readBell()?.seq ?? seq;
+    }
   }
-}
-checkWatcher();
-setInterval(checkWatcher, ALIVE_MS);
+  checkWatcher();
+  handles.push(setInterval(checkWatcher, ALIVE_MS));
 
-// 4. 時間到
-setTimeout(() => finish('TIMEOUT', 10), MAX_MS);
+  // 4. 時間到
+  handles.push(setTimeout(() => wakeExit('TIMEOUT', 10), MAX_MS));
+}

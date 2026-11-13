@@ -5142,6 +5142,14 @@
     return `<div class="group-title">AI 工作記憶 · ${ais.filter(m => m.aiState).length}／${ais.length} 已同步</div><div class="astates">${rows}</div>`;
   }
 
+  // 今天叫醒幾次（等待腳本與 watcher 回報；台灣時間 0 點切日）。從沒回報（手動、舊版等待腳本）＝不顯示；手動模式也不顯示
+  const WAKE_HIGH = 15;
+  const wakeLine = mb => {
+    if (mb.memberType !== 'ai' || mb.wakesToday == null || mb.aiState?.wakeMode === 'manual') return '';
+    if (!mb.wakesToday) return '<span class="tm-wake muted small">今天還沒叫醒</span>';
+    const d = new Date(mb.lastWakeAt), hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`; // 這台電腦的時區
+    return `<span class="tm-wake muted small"><span class="nw">今天叫醒 ${mb.wakesToday} 次</span><span class="nw">最近一次 ${hm}</span>${mb.wakesToday > WAKE_HIGH ? '<span class="wake-high">⚠ 次數偏多</span>' : ''}</span>`;
+  };
   async function openTeam() {
     await loadTeam();
     const t = state.team;
@@ -5152,7 +5160,7 @@
       const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
       return `<div class="tm-row" data-tm-id="${esc(mb.participantId)}">
         <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small"><span>${esc(roleIn(mb, pv))}</span>${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
-        <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span></div>
+        <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span>${wakeLine(mb)}</div>
         <div class="tm-state"><span class="tm-lbl muted small">目前工作</span>${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
         <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `未讀 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '未讀 0'}</div>
         <div class="tm-token small ${tokenCls}">${mb.memberType === 'ai' ? `<span class="tm-lbl">Token 到期 </span>${fmtTime(mb.tokenExpiresAt)}${mb.tokenExpired ? ' 已過期' : mb.tokenExpiringSoon ? ' 快到期' : ''}` : ''}</div>

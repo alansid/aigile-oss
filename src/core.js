@@ -225,9 +225,10 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   };
   async function refreshPresence() { // 只讀上次之後有活動的人（idx_participants_seen）
     const since = peopleCache.seenAt - 5_000, now = Date.now();
-    for (const r of await db.all('SELECT id, last_seen_at, standby_at FROM participants WHERE last_seen_at > ?', since)) {
+    for (const r of await db.all('SELECT id, last_seen_at, standby_at, wake_day, wake_count, wake_at FROM participants WHERE last_seen_at > ?', since)) {
       const p = peopleCache.map.get(r.id);
       if (p) { p.last_seen_at = Math.max(p.last_seen_at || 0, r.last_seen_at || 0); p.standby_at = Math.max(p.standby_at || 0, r.standby_at || 0); }
+      if (p && (r.wake_at || 0) >= (p.wake_at || 0)) Object.assign(p, { wake_day: r.wake_day, wake_count: r.wake_count, wake_at: r.wake_at }); // 別份程式記的叫醒次數
     }
     peopleCache.seenAt = now;
   }
@@ -1478,6 +1479,7 @@ ${trial
     }
     throw invalid('until 只能是 quarter（本季底）、30d（30 天）、none（不限）');
   }
+  const wakeDay = ms => new Date(ms + 8 * 3600_000).toISOString().slice(0, 10); // 叫醒次數的「今天」（台灣日期，跟本季底同一個時區）
   const twDate = isoStr => new Date(Date.parse(isoStr) + 8 * 3600_000).toISOString().slice(0, 10).replace(/-/g, '/');
 
   async function projectViews(ctx) {
@@ -2446,6 +2448,17 @@ ${trial
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 需要 watcher 設定。');
     return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256, 'aigile-opencode.mjs': OPENCODE_SHA256, ...(MCP_SHA256 ? { 'aigile-mcp.mjs': MCP_SHA256 } : {}) }, setup: SETUP_SHA256 }; // setup＝接入檢查自己的雜湊（不同就自己更新）
   });
+  // 叫醒次數：等待腳本叫醒 AI 的結束、watcher 真的執行喚醒指令時呼叫，記今天叫醒幾次（只存次數與時間，台灣時間 0 點切日）
+  // 同時更新 last_seen_at，別份程式的 refreshPresence 才讀得到新次數
+  route('POST', '/api/me/wake', async ({ me }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 的等待腳本與 watcher 會回報叫醒次數。');
+    const now = Date.now(), day = wakeDay(now);
+    const r = await db.get('UPDATE participants SET wake_count = CASE WHEN wake_day = ? THEN wake_count + 1 ELSE 1 END, wake_day = ?, wake_at = ?, last_seen_at = ? WHERE id = ? RETURNING wake_count', day, day, now, now, me.id);
+    const n = r?.wake_count || 1;
+    for (const p of [me, peopleCache.map?.get(me.id)]) if (p) Object.assign(p, { wake_day: day, wake_count: n, wake_at: now, last_seen_at: now });
+    invalidateTeam();
+    return { wakesToday: n, lastWakeAt: iso(now) };
+  });
   route('GET', '/api/me/state', async ({ me }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 有自己的工作記憶。');
     return (await readState(me.id)) || { state: null, updatedAt: null };
@@ -3054,6 +3067,9 @@ ${trial
         // 有 watcher 心跳的 AI（24 小時內有過）超過 60 分鐘沒任何呼叫才算可能斷線；其他 AI 維持原門檻
         stale: p.kind === 'ai' && (!p.last_seen_at || now - p.last_seen_at > (p.standby_at && now - p.standby_at < 24 * 3600_000 ? STANDBY_STALE_MS : STALE_MS)),
         standby: p.kind === 'ai' && !!p.standby_at && now - p.standby_at <= 20 * 60_000,
+        // 叫醒次數：從沒回報過＝null（手動或舊版等待腳本，畫面不顯示）；回報過但今天還沒＝0
+        wakesToday: p.kind === 'ai' && p.wake_at ? (p.wake_day === wakeDay(now) ? p.wake_count : 0) : null,
+        lastWakeAt: p.kind === 'ai' && p.wake_at ? iso(p.wake_at) : null,
         status: stateBy.get(p.id) || null,
         tokenExpiresAt: iso(p.token_expires_at),
         tokenExpired: p.kind === 'ai' && p.token_expires_at <= now,

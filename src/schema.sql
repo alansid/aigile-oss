@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS participants (
   updated_at TEXT NOT NULL,
   last_seen_at INTEGER NOT NULL DEFAULT 0,
   standby_at INTEGER NOT NULL DEFAULT 0,  -- watcher 最近一次待命心跳
+  wake_day TEXT NOT NULL DEFAULT '',       -- 叫醒次數算到哪一天（台灣日期 YYYY-MM-DD；migrations/002）
+  wake_count INTEGER NOT NULL DEFAULT 0,   -- wake_day 那天叫醒幾次
+  wake_at INTEGER NOT NULL DEFAULT 0,      -- 最近一次叫醒（0＝從沒回報過）
   projects TEXT NOT NULL DEFAULT ''  -- 所屬專案（逗號分隔，至少一個）
 );
 CREATE TABLE IF NOT EXISTS messages (
