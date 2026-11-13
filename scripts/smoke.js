@@ -66,6 +66,15 @@ async function stopServer(server) {
       for (const f of ['role', 'suffix', 'duties', 'style', 'autonomy', 'mustConfirm', 'handoff']) {
         assert.ok(r[f] && r[f].length <= 1000, `${r.key}.${f}`);
       }
+      // 英文版（英文介面預填用）：每個範本都有、全是英文、API 一起回；名稱後綴不能有空白，組成 <人類>-<suffix> 不超過 40 字
+      const api = roles.items.find(x => x.key === r.key);
+      assert.deepEqual(api.en, r.en, `${r.key}：API 回英文版`);
+      for (const f of ['option', 'role', 'suffix', 'duties', 'style', 'autonomy', 'mustConfirm', 'handoff']) {
+        assert.ok(r.en?.[f] && r.en[f].length <= 1000, `${r.key}.en.${f}`);
+        assert.ok(!/[㐀-鿿＀-￯　-〿]/.test(r.en[f]), `${r.key}.en.${f} 沒有中文：${r.en[f]}`);
+      }
+      assert.ok(r.en.role.length <= 30 && /^\S+$/.test(r.en.suffix) && `Alex-${r.en.suffix}`.length <= 40, `${r.key}.en 角色名、後綴長度`);
+      if (!['TRY', 'custom'].includes(r.key)) assert.ok(r.en.option.startsWith(r.key + ': ') && r.en.suffix === `${r.key}-AI`, `${r.key}.en 代號照原文`);
     }
 
     // 建立 AI：六題必填

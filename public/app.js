@@ -684,7 +684,7 @@
         : '<p class="sw-demo small">想先看看用起來的樣子？<button type="button" class="link" data-sw="demo">載入示範資料</button>（虛構的示範專案，看完可以清掉）</p>';
       el.innerHTML = head + demoLine + `<p class="error sw-err" role="alert"${msg ? '' : ' hidden'}>${esc(msg)}</p>` + html;
       if (st.step === 1 && pj) st.slugField = bindSlugField(el, 'sw-pj-slug', el.querySelector('#sw-pj-name'), pj.id);
-      if (st.step === 3 && !st.ai) { const sel = el.querySelector('#sw-role'), nm = el.querySelector('#sw-ai-name'); const fill = () => { const r = tpl.find(x => x.key === sel.value), en = window.aigileI18n?.lang === 'en', sfx = en ? `-${r?.key || 'AI'}-AI` : '的' + (r?.suffix || 'AI'), who = en && state.me.name === '管理員' ? 'Admin' : String(state.me.name || ''); nm.value = who.slice(0, 40 - sfx.length) + sfx; }; /* 英文介面：Admin-PG-AI（名字不能有空白） */ sel.addEventListener('change', fill); fill(); } // 預填不超過 40 字
+      if (st.step === 3 && !st.ai) { const sel = el.querySelector('#sw-role'), nm = el.querySelector('#sw-ai-name'); const fill = () => { nm.value = autoAiName(tpl.find(x => x.key === sel.value)); }; /* 英文介面：Admin-PG-AI（名字不能有空白） */ sel.addEventListener('change', fill); fill(); } // 預填不超過 40 字
       el.querySelector('input, select, textarea, button.primary')?.focus();
     };
     el.addEventListener('click', async e => {
@@ -5239,9 +5239,16 @@
   }
 
   // 我的 AI
+  // 角色範本照介面語言挑：英文介面用範本的 en（下拉、角色名、名稱後綴、五題），中文照舊。新增 AI 表單、第一次設定引導都從這裡拿
   async function loadRoles() {
-    if (!state.roles) state.roles = await api('/api/roles');
+    if (!state.roles) { const d = await api('/api/roles'), en = window.aigileI18n?.lang === 'en'; state.roles = { ...d, items: (d.items || []).map(r => (en && r.en ? { ...r, ...r.en } : r)) }; }
     return state.roles;
+  }
+  // 範本預填的 AI 名稱：中文「<人類>的<suffix>」；英文「<人類>-<suffix>」，例 Alex-PG-AI（名稱不能有空白；預設管理員「管理員」寫成 Admin）。不超過 40 字
+  function autoAiName(r) {
+    const en = window.aigileI18n?.lang === 'en', sfx = en ? `-${r?.suffix || 'AI'}` : '的' + (r?.suffix || 'AI');
+    const who = en && state.me.name === '管理員' ? 'Admin' : String(state.me.name || '');
+    return who.slice(0, 40 - sfx.length) + sfx;
   }
 
   // 第一層「我的 AI」頁：名下所有 AI，不分專案
@@ -6565,7 +6572,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const { items: baseRoles, fields } = await loadRoles();
     const editing = !!ai;
     // 加上自己所在專案的本專案角色（AI 已在用、但停用的也列出，免得選單空掉）
-    const pjRole = (d, pj) => ({ ...d, option: `${d.key}：${d.role}${d.status === 'disabled' ? '（已停用）' : ''}`, suffix: `${d.role}助手`, project: pj, projects: [pj] });
+    const pjRole = (d, pj) => ({ ...d, option: `${d.key}：${d.role}${d.status === 'disabled' ? '（已停用）' : ''}`, suffix: window.aigileI18n?.lang === 'en' ? `${d.key}-AI` : `${d.role}助手`, project: pj, projects: [pj] });
     const roles = [...baseRoles, ...myProjects().flatMap(pj => projRoleDefs(pj, true).filter(d => d.status !== 'disabled' || (editing && ai.roleKey === d.key)).map(d => pjRole(d, pj)))];
     const body = openModal(editing ? '編輯 AI' : '新增 AI', `
       <form id="ai-form" class="stack">
@@ -6652,7 +6659,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       roleHint(form.roleKey.value);
     } else {
       const r = roleHint(roles[0].key);
-      fill({ ...r, name: `${state.me.name}的${r.suffix}` }, true);
+      fill({ ...r, name: autoAiName(r) }, true);
     }
     if (editing) form.avatar.value = ai.avatar || '';
     preview();
@@ -6662,7 +6669,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (form.roleKey.value === '__ai') { form.roleKey.value = prevKey; e.stopImmediatePropagation(); const checked = [...form.querySelectorAll('input[name="proj"]:checked')].map(c => c.value); const pj = roleAiPj(checked) || await pickRoleAiPj(roleAiPjs(checked)); if (pj) askRoleAi(pj); return; }
       prevKey = form.roleKey.value;
       const r = roleHint(form.roleKey.value);
-      const autoName = `${state.me.name}的${r.suffix}`;
+      const autoName = autoAiName(r);
       // 名稱若還是自動產生的就一起換；使用者改過就保留
       const keepName = editing || form.name.value !== lastAutoName;
       fill({ ...r, name: autoName }, !keepName);
