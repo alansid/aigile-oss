@@ -9,8 +9,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
 
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
+// CI 的 macOS、Windows 機器比本機慢好幾倍：等畫面的限時一律乘 3（本機照原本的數字，測試不會變慢）
+export const WAIT_SCALE = process.env.CI ? 3 : 1;
 export const until = async (fn, ms = 15000, label = '') => {
-  const end = Date.now() + ms;
+  const end = Date.now() + ms * WAIT_SCALE;
   for (;;) { try { const v = await fn(); if (v) return v; } catch {} if (Date.now() > end) throw new Error('等太久：' + label); await sleep(150); }
 };
 // CI（GitHub 的 Ubuntu）比較慢：等伺服器、Chrome 啟動久一點
@@ -91,6 +93,8 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
   async function stop() {
     try { ws?.close(); } catch {}
     for (const k of kids) { try { k.kill(); } catch {} }
+    // Windows：只砍得到 Chrome 主程序，子程序還接著輸出管線，Node 會一直等它而不結束（CI 曾整支卡到 300 秒）
+    for (const k of kids) { try { k.stdout?.destroy(); k.stderr?.destroy(); k.stdin?.destroy(); } catch {} }
     await sleep(500);
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
