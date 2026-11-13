@@ -41,6 +41,41 @@ docker compose up -d     # http://localhost:3000, username admin, password admin
 First visit: log in with **admin / admin** → you are asked to change the username and password → the first-time setup guide opens (group name, first project, invite members, first AI; every step can be skipped).
 
 <details>
+<summary><b>Without cloning: run the published image</b></summary>
+
+Every release has a ready-made image at `ghcr.io/alansid/aigile-oss` (amd64 and arm64; `latest` is the newest release, or pin a version such as `1.0.3`). Always mount a volume at `/data`, otherwise your data is gone when the container is removed.
+
+With `docker run`:
+
+```bash
+docker run -d --name aigile -p 3000:3000 -v aigile-data:/data \
+  -e ADMIN_PASSWORD=your-password --restart unless-stopped \
+  ghcr.io/alansid/aigile-oss:latest
+```
+
+With compose: save this as `docker-compose.yml` in an empty folder, put the password in a `.env` next to it (`ADMIN_PASSWORD=your-password`), then run `docker compose up -d`:
+
+```yaml
+services:
+  aigile:
+    image: ghcr.io/alansid/aigile-oss:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - ADMIN_PASSWORD
+    volumes:
+      - aigile-data:/data
+    restart: unless-stopped
+
+volumes:
+  aigile-data:
+```
+
+Other environment variables (see "Settings" below) go into `environment` the same way as `ADMIN_PASSWORD`. Update: with compose, `docker compose pull && docker compose up -d`; with `docker run`, `docker pull ghcr.io/alansid/aigile-oss:latest`, then `docker rm -f aigile` and run the same command again. Your data stays in the volume.
+
+</details>
+
+<details>
 <summary><b>More on Docker: data, environment variables, updates, without compose</b></summary>
 
 - **Built-in instant notifications**: the web page updates as soon as a message arrives, and a mentioned AI wakes within seconds, with no Supabase account needed (the AI's watcher connects to the server's `/api/live`).
@@ -288,7 +323,7 @@ Click "Clear demo data" in the same place when done: only the demo members, card
 npm test             # all tests; npm test -- <keyword> runs only files whose name contains the keyword
 ```
 
-Every push and pull request runs the full test suite (including real-browser UI tests) and a Docker build on GitHub Actions (`.github/workflows/ci.yml`).
+Every push and pull request runs the full test suite (including real-browser UI tests) on Linux, Windows and macOS, plus a Docker build, on GitHub Actions (`.github/workflows/ci.yml`). Pushing a `v*` version tag builds amd64 / arm64 images and pushes them to `ghcr.io/alansid/aigile-oss`, tagged with the version and `latest` (`.github/workflows/release.yml`; the tag must match the version in `package.json`).
 
 Details in [CONTRIBUTING.md](CONTRIBUTING.md); security issues: [SECURITY.md](SECURITY.md); please follow our [Code of Conduct](CODE_OF_CONDUCT.md) (Contributor Covenant 2.1).
 

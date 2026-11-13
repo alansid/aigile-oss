@@ -41,6 +41,41 @@ docker compose up -d     # http://localhost:3000，帳號 admin、密碼 admin�
 第一次打開網址：用 **admin／admin** 登入 → 系統會要你改掉帳號密碼 → 跳出「第一次設定」引導（群組名稱、第一個專案、邀請成員、第一隻 AI，每步都能略過）。
 
 <details>
+<summary><b>不用 clone：直接用映像啟動</b></summary>
+
+每個正式版都有建好的映像 `ghcr.io/alansid/aigile-oss`（amd64 與 arm64；`latest` 是最新版，也可以指定版本例如 `1.0.3`）。資料一定要掛 volume 到 `/data`，不然刪掉容器資料就沒了。
+
+用 `docker run`：
+
+```bash
+docker run -d --name aigile -p 3000:3000 -v aigile-data:/data \
+  -e ADMIN_PASSWORD=換成你的密碼 --restart unless-stopped \
+  ghcr.io/alansid/aigile-oss:latest
+```
+
+用 compose：在空資料夾存成 `docker-compose.yml`，密碼寫在同資料夾的 `.env`（`ADMIN_PASSWORD=換成你的密碼`），再 `docker compose up -d`：
+
+```yaml
+services:
+  aigile:
+    image: ghcr.io/alansid/aigile-oss:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - ADMIN_PASSWORD
+    volumes:
+      - aigile-data:/data
+    restart: unless-stopped
+
+volumes:
+  aigile-data:
+```
+
+其他環境變數照下面的「設定」，跟 `ADMIN_PASSWORD` 一樣加進 `environment`。更新到新版：compose 用 `docker compose pull && docker compose up -d`；`docker run` 的話先 `docker pull ghcr.io/alansid/aigile-oss:latest`，`docker rm -f aigile` 後用同一行重開。資料在 volume 裡，不會不見。
+
+</details>
+
+<details>
 <summary><b>更多 Docker 說明：資料存哪、環境變數、更新、不用 compose</b></summary>
 
 - **內建即時通知**：網頁一有新訊息就更新、被指定的 AI 幾秒內被叫醒，不用另外申請 Supabase（AI 的 watcher 會自己連平台的 `/api/live`）。
@@ -278,7 +313,7 @@ npm test             # 全部測試；npm test -- <關鍵字> 只跑檔名含關
 
 英文字典在 `public/i18n/en.js`（中文原文當 key，開頭是用詞表）；新增介面文字要補英文，`npm test` 的 i18n-test 會列出沒翻的。
 
-每次 push 和 PR，GitHub Actions 會跑全部測試（含真的瀏覽器畫面測試）並建一次 Docker 映像（`.github/workflows/ci.yml`）。
+每次 push 和 PR，GitHub Actions 會在 Linux、Windows、macOS 各跑一次全部測試（含真的瀏覽器畫面測試），並建一次 Docker 映像（`.github/workflows/ci.yml`）。打 `v*` 版本標籤時，自動建 amd64／arm64 映像推到 `ghcr.io/alansid/aigile-oss`，標上版本號與 `latest`（`.github/workflows/release.yml`；標籤要跟 `package.json` 的版本一致）。
 
 細節見 [CONTRIBUTING.md](CONTRIBUTING.md)；安全問題請看 [SECURITY.md](SECURITY.md)；參與請遵守[行為準則](CODE_OF_CONDUCT.md)（Contributor Covenant 2.1）。
 

@@ -1,5 +1,7 @@
-# CI: run the full test suite (including the real-browser UI tests) and build the Docker image on every push and pull request.
+# CI: run the full test suite (including the real-browser UI tests) on Linux, Windows and macOS,
+# and build the Docker image, on every push and pull request.
 # The project has no npm dependencies, so there is no install step.
+# Publishing the image to ghcr.io on a version tag is in release.yml.
 name: CI
 
 on:
@@ -11,16 +13,33 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      # Windows runners set core.autocrlf=true; .gitattributes (eol=lf) must still give LF files,
+      # otherwise size checks (e.g. the spec length in doc-rules-test) and hashes fail for the wrong reason
+      - name: Check line endings (LF)
+        run: |
+          crlf=$(git ls-files --eol | grep 'w/crlf' || true)
+          if [ -n "$crlf" ]; then echo "Checked out with CRLF:"; echo "$crlf"; exit 1; fi
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
-      # UI tests drive a real Chrome; GitHub's Ubuntu image ships Google Chrome at /usr/bin/google-chrome
+      # UI tests drive a real headless Chrome (scripts/browser-kit.js looks in the usual install path of each OS;
+      # GitHub's Ubuntu, Windows and macOS images all ship Google Chrome). Fail here instead of silently skipping UI tests.
       - name: Show tool versions
-        run: node --version && google-chrome --version
+        run: |
+          node --version
+          node --input-type=module -e "const { findBrowser } = await import('./scripts/browser-kit.js'); const b = findBrowser(); console.log('browser:', b); if (!b) process.exit(1);"
       - name: Run tests
         run: npm test
         env:
@@ -31,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build image
         run: docker build -t aigile-switch:ci .
       - name: Start and check health
