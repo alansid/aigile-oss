@@ -69,7 +69,7 @@ scheduled();
 setInterval(scheduled, 10 * 60_000).unref();
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8', '.webp': 'image/webp' }; // .json、.webp：說明頁的內容與畫面圖
 
 function serveStatic(res, pathname, origin) {
   let rel;

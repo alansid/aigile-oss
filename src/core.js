@@ -1216,7 +1216,7 @@ ${trial
       readOnlyIn: roList(me, await loadReadOnly()), // 在這些專案只能看
       isOnline: true,
       expiresAt: iso(me.token_expires_at),
-      ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId, prefs: await prefsOf(me) } : {}), // 個人偏好（風格）記在帳號
+      ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId, prefs: await prefsOf(me), onboard: await onboardOf(me) } : {}), // 個人偏好（風格）、新手上路記在帳號
       ...(me.mustChangeCredentials ? { mustChangeCredentials: true } : {}), // 還在用預設帳密：網頁只顯示改帳密
       ...(me.kind === 'human' && adminOf(people)?.id === me.id && (await db.get("SELECT value FROM app_settings WHERE key = 'setup_wizard'"))?.value === 'pending' ? { setupWizard: true } : {}), // 第一次設定引導還沒做完
       // 長期授權（到期＝空的）與所在專案的程式庫
@@ -1379,14 +1379,45 @@ ${trial
   const setJson = (key, v) => db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, JSON.stringify(v));
   // 個人偏好（目前只有風格 a 清爽／b 深色側欄／c 溫暖柔和），存在 app_settings 的 prefs:<id>
   const STYLES = ['a', 'b', 'c'];
-  async function prefsOf(me) { const p = await getJson('prefs:' + me.id).catch(() => null); return { style: STYLES.includes(p?.style) ? p.style : 'a' }; }
+  // 新手上路清單的狀態也記在這裡（onboard：walkedAt 讀完說明第 2 章、dismissed 按了「不用了」、collapsed 收成一行、doneAt 三項都做完），換裝置一樣
+  const rawPrefs = async me => { const p = await getJson('prefs:' + me.id).catch(() => null); return p && typeof p === 'object' && !Array.isArray(p) ? p : {}; };
+  async function prefsOf(me) { const p = await rawPrefs(me); return { style: STYLES.includes(p.style) ? p.style : 'a' }; }
   route('PUT', '/api/me/prefs', async ({ me, req }) => {
     requireHuman(me);
     const body = await readJson(req);
-    if (!STYLES.includes(body.style)) throw invalid('style 需為 a（清爽）、b（深色側欄）、c（溫暖柔和）');
-    await setJson('prefs:' + me.id, { style: body.style });
-    return { prefs: await prefsOf(me) };
+    if (body.style === undefined && body.onboard === undefined) throw invalid('要帶 style 或 onboard');
+    if (body.style !== undefined && !STYLES.includes(body.style)) throw invalid('style 需為 a（清爽）、b（深色側欄）、c（溫暖柔和）');
+    const ob = body.onboard;
+    if (ob !== undefined) {
+      if (!ob || typeof ob !== 'object' || Array.isArray(ob)) throw invalid('onboard 需為物件，例如 { "walked": true }');
+      for (const k of Object.keys(ob)) if (!['walked', 'dismissed', 'collapsed'].includes(k)) throw invalid(`onboard 不認得欄位 ${k}；只收 walked、dismissed、collapsed`);
+      if (ob.walked !== undefined && ob.walked !== true) throw invalid('onboard.walked 只能是 true（讀完說明第 2 章）');
+      for (const k of ['dismissed', 'collapsed']) if (ob[k] !== undefined && typeof ob[k] !== 'boolean') throw invalid(`onboard.${k} 需為 true 或 false`);
+    }
+    // 合併：改風格不洗掉 onboard，改 onboard 不洗掉風格
+    const cur = await rawPrefs(me), o = { ...(cur.onboard || {}) };
+    if (ob?.walked && !o.walkedAt) o.walkedAt = nowIso();
+    for (const k of ['dismissed', 'collapsed']) if (ob?.[k] !== undefined) o[k] = ob[k];
+    await setJson('prefs:' + me.id, { ...cur, ...(body.style !== undefined ? { style: body.style } : {}), ...(ob !== undefined ? { onboard: o } : {}) });
+    return { prefs: await prefsOf(me), onboard: await onboardOf(me) };
   });
+  // 新手上路（總覽最上面）：所有人類都看得到；3 項照實際狀態打勾，全做完或按「不用了」就不出現
+  // 按了「不用了」或已經全做完（doneAt）就不再查資料庫
+  async function onboardOf(me) {
+    if (me.kind !== 'human') return { show: false };
+    const all = await rawPrefs(me), o = all.onboard || {};
+    if (o.dismissed) return { show: false, collapsed: !!o.collapsed };
+    if (o.doneAt) return { show: false, collapsed: !!o.collapsed, steps: { ai: true, walk: true, todo: true } };
+    const steps = {
+      ai: !!(await db.get("SELECT 1 AS x FROM participants WHERE owner_id = ? AND kind = 'ai' AND last_seen_at > 0 LIMIT 1", me.id)), // 名下 AI 簽到過
+      walk: !!o.walkedAt, // 說明頁第 2 章（跟著走一遍）讀到最後時記
+      // 回過一則指定他回覆的訊息（按「不用回」不算）：從他自己的通知找（有索引），不掃整張訊息表
+      todo: !!(await db.get("SELECT 1 AS x FROM notifications n JOIN messages q ON q.id = n.message_id WHERE n.recipient_id = ? AND q.reply_from LIKE ? AND EXISTS (SELECT 1 FROM messages m WHERE m.reply_to = q.id AND m.author_id = ?) LIMIT 1", me.id, `%"${me.id}"%`, me.id)),
+    };
+    const done = Object.values(steps).every(Boolean);
+    if (done) await setJson('prefs:' + me.id, { ...all, onboard: { ...o, doneAt: nowIso() } }); // 記下來，之後不用再查
+    return { show: !done, collapsed: !!o.collapsed, steps };
+  }
   async function getJson(key) {
     const r = await db.get('SELECT value FROM app_settings WHERE key = ?', key).catch(() => null);
     try { return r ? JSON.parse(r.value) : null; } catch { return null; }
