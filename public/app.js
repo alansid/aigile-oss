@@ -3384,6 +3384,24 @@
   const lastMsgOf = p => { for (let i = state.messages.length - 1; i >= 0; i--) if ((state.messages[i].project || null) === p) return state.messages[i]; return null; };
   const whenText = iso => { const d = new Date(iso); return d.toDateString() === new Date().toDateString() ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : hm(iso); };
   const oneLine = (t, n) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n) + '…' : x; };
+  // 「要你回覆」的預覽收合 2 行（CSS 截），點一下就地展開全文（保留換行）、再點收合；重畫時記得哪幾列開著
+  // 全文用訊息本身（通知的預覽伺服器已截過），還沒載入的展開時再讀；內文是使用者寫的，data-nt 讓英文介面不翻
+  const askOpen = new Set(), askFull = new Map();
+  const askText = n => askFull.get(n.messageId) || state.byId?.get(n.messageId)?.text || n.preview || '';
+  const askShown = (text, open) => open ? text.trim() : text.replace(/\s+/g, ' ').trim();
+  const askPvHtml = n => { const open = askOpen.has(n.notificationId);
+    return `<button type="button" class="ask-pv${open ? ' open' : ''}" data-ask-pv="${esc(n.notificationId)}" data-m="${esc(n.messageId)}" aria-expanded="${open}" title="${open ? '點一下收合' : '點一下看全文'}"><span class="ask-pv-t" data-nt>${esc(askShown(askText(n), open))}</span><span class="ask-more" aria-hidden="true">${open ? '收合 ▴' : '… 展開'}</span></button>`; };
+  // 只有真的超過 2 行才顯示「… 展開」（畫完再量）
+  const markAskClamp = () => requestAnimationFrame(() => document.querySelectorAll('.ask-pv:not(.open)').forEach(b => { const t = b.querySelector('.ask-pv-t'); b.classList.toggle('clamp', t.scrollHeight > t.clientHeight + 1); }));
+  async function toggleAskPv(el) {
+    const id = el.dataset.askPv, mid = el.dataset.m, n = askNotes().find(x => x.notificationId === id), open = !askOpen.has(id);
+    if (open) askOpen.add(id); else askOpen.delete(id);
+    const paint = () => { if (!n || !el.isConnected) return; el.classList.toggle('open', open); el.setAttribute('aria-expanded', String(open)); el.title = open ? '點一下收合' : '點一下看全文'; el.querySelector('.ask-pv-t').textContent = askShown(askText(n), open); el.querySelector('.ask-more').textContent = open ? '收合 ▴' : '… 展開'; markAskClamp(); };
+    paint();
+    if (open && !askFull.has(mid) && !state.byId?.get(mid)) {
+      try { const m = await api(`/api/messages/${encodeURIComponent(mid)}`); if (m?.text) { askFull.set(mid, m.text); paint(); } } catch {}
+    }
+  }
   const greeting = () => { const h = new Date().getHours(); return h >= 5 && h < 11 ? '早安' : h >= 11 && h < 18 ? '午安' : '晚安'; };
   // 問候只叫名字：三個中文字、第一個字是常見姓氏才去掉姓（「管理員」「測試員」這類不是人名的不截）
   function hubHtml() {
@@ -3480,7 +3498,7 @@
     const open = todoByView()[projectView()] || 0;
     return `<div class="work-head"><div class="work-title"><h2>收件匣</h2><span class="muted small">${open ? `${open} 件要你處理` : '沒有要你處理的事'}</span></div></div>
       <div class="inbox-block-title">要你處理</div>
-      ${todoHtml(all)}
+      ${todoHtml(all)}${(markAskClamp(), '')}
       ${noteList().length || work.sec?.length ? `<div class="inbox-block-title">給你知道的</div>
       ${notesHtml()}` : ''}`;
   }
@@ -3506,7 +3524,7 @@
     const askSection = asks.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>要你回覆</h3><span class="wcount ora">${asks.length}</span><span class="muted small">別人指定要你回覆的訊息；回覆了或按「不用回」就移走</span></div>
         ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
-          <div class="sugg-main"><b><span class="apill ask me">要你回覆</span> ${esc(n.sender.name)}</b><span class="muted small">${esc(oneLine(n.preview, 80))} · ${agoText(n.createdAt)}</span></div>
+          <div class="sugg-main"><b><span class="apill ask me">要你回覆</span> ${esc(n.sender.name)} <span class="muted small ask-when">· ${agoText(n.createdAt)}</span></b>${askPvHtml(n)}</div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">到訊息回覆</button>
             <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">不用回</button></div>
         </div>`).join('')}</section>` : '';
@@ -3605,6 +3623,8 @@
     if (tt) { work.teamTab = tt.dataset.teamTab; renderTeamPage(); return; }
     const ng = t.closest('[data-note-goto]');
     if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
+    const pv = t.closest('[data-ask-pv]');
+    if (pv) return toggleAskPv(pv);
     const na = t.closest('[data-note-ack]');
     if (na) { // 點了這列先淡出再移除
       const row = document.getElementById('fyi-' + na.dataset.noteAck);

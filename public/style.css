@@ -3003,3 +3003,17 @@ html[lang="en"] .lang-switch [data-lang="en"], html[lang="zh-Hant"] .lang-switch
 /* 總覽：還沒接入的 AI */
 .hub-newai { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 14px; border-radius: 12px; background: var(--surface-2); margin-bottom: 12px; font-size: 14px; }
 .hub-newai .link { min-height: 36px; }
+
+/* 「要你回覆」預覽：收合 2 行、點一下展開全文；看起來是文字、可以按；超過 2 行時尾端接「… 展開」 */
+.ask-when { font-weight: 400; }
+.sugg-row.ask-row-item { align-items: flex-start; } /* 展開時按鈕不跟著往下移 */
+.ask-row-item .apill { margin-right: 6px; }
+button.ask-pv { all: unset; box-sizing: border-box; display: block; position: relative; width: 100%; cursor: pointer; color: var(--muted); font-size: .85rem; line-height: 1.55; overflow-wrap: anywhere; border-radius: 6px; }
+.ask-pv .ask-pv-t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.ask-pv.open .ask-pv-t { display: block; -webkit-line-clamp: unset; line-clamp: none; white-space: pre-wrap; color: var(--text); }
+.ask-pv:hover .ask-pv-t { text-decoration: underline dotted; text-underline-offset: 3px; }
+button.ask-pv:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.ask-pv .ask-more { display: none; color: var(--primary); font-weight: 600; }
+.ask-pv.open .ask-more { display: block; margin-top: 4px; }
+.ask-pv.clamp:not(.open) .ask-more { display: block; position: absolute; right: 0; bottom: 0; padding-left: 2.2em; background: linear-gradient(90deg, transparent, var(--surface) 1.8em); }
+.ask-pv.clamp:not(.open) .ask-pv-t { -webkit-line-clamp: unset; line-clamp: none; max-height: calc(1.55em * 2); }

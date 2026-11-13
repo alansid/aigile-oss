@@ -56,6 +56,14 @@ export class ApiError extends Error {
   }
 }
 const invalid = msg => new ApiError(400, 'INVALID_REQUEST', msg);
+// 不認得的查詢參數回 400，不再默默忽略（例 cursor= 打錯成 after 以外的名字，會從頭回舊訊息）
+// 兩種句子分開寫：英文字典照整句比對，提示不接在變數後面
+const onlyParams = (url, allowed, ep) => {
+  const bad = [...new Set(url.searchParams.keys())].filter(k => !allowed.includes(k));
+  if (!bad.length) return;
+  if (bad.includes('cursor') && allowed.includes('after')) throw new ApiError(400, 'UNKNOWN_PARAM', `${ep} 不認得參數 ${bad.join('、')}；這個端點只收 ${allowed.join('、')}（游標請用 after）`);
+  throw new ApiError(400, 'UNKNOWN_PARAM', `${ep} 不認得參數 ${bad.join('、')}；這個端點只收 ${allowed.join('、')}`);
+};
 
 function decodeCursor(c) {
   try {
@@ -692,6 +700,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   }
 
   async function listMessages(ctx, url, me) {
+    onlyParams(url, ['limit', 'after', 'before', 'beforeId', 'span', 'min', 'project', 'brief'], 'GET /api/messages');
     const limit = Number(url.searchParams.get('span')) > 0 && !url.searchParams.get('after') ? parseLimit(url, 100, 300) : parseLimit(url);
     const after = url.searchParams.get('after');
     const before = url.searchParams.get('before');
@@ -762,6 +771,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   }
 
   async function listNotifications(ctx, me, url) {
+    onlyParams(url, ['status', 'limit', 'order', 'brief'], 'GET /api/notifications'); // brief：MCP 與規格會帶，收下但沒有作用
     const status = url.searchParams.get('status') || 'pending';
     if (!['pending', 'confirmed'].includes(status)) throw invalid('status 需為 pending 或 confirmed');
     const limit = parseLimit(url);
@@ -2601,6 +2611,7 @@ ${trial
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
   route('GET', '/api/notifications/count', async ({ me, ctx, url }) => {
+    onlyParams(url, ['wake'], 'GET /api/notifications/count');
     const scope = await messageScope(me, 'm');
     const r = await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''}`, me.id, ...(scope ? scope.args : [])); // 私訊通知也算
     // （UX 退回）：?wake=1 另回「要叫醒的」數量，知會類（wake:false）不算——等待腳本看這個，否則留著的知會會讓它一啟動就醒、空轉
