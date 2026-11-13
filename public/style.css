@@ -2047,6 +2047,8 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 .wcount.ok { background: #dcfce7; color: #166534; }
 .ver-row .sugg-main b { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
 @media (max-width: 640px) { .ver-row .sugg-actions .btn { min-height: 44px; } }
+/* 窄畫面：按鈕列佔滿一行、可換行（英文「The AI hasn't submitted a report yet」＋三顆按鈕比中文長，不收就超出卡片） */
+@media (max-width: 640px) { .ver-row .sugg-actions { flex: 1 1 100%; min-width: 0; } }
 
 /* ===== 登入頁：左邊品牌牆＋右邊登入卡（邀請、救援頁同版型） ===== */
 .join { padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(400px, 40%); place-items: stretch; min-height: 100%; background: var(--surface); }

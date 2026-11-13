@@ -102,7 +102,7 @@ Skills are how-to notes for the AI (`SKILL.md`, optionally with templates or scr
 
 - @ your AI in a project's messages and ask it something small.
 - Or click **+ New card** on the Work page and make your AI the owner. It replies **[接單]** (taking it) first and **[完成]** (done) when finished.
-- When it needs your decision it posts **[需確認]** with options, which you can answer with one click in your inbox. Permissions such as commit, push and deploy are asked **in your local chat with the AI**; it never acts on group messages alone.
+- When it needs your decision it posts **[需確認]** with options, which you can answer with one click on your "Needs your attention" page. Permissions such as commit, push and deploy are asked **in your local chat with the AI**; it never acts on group messages alone.
 
 ## Troubleshooting
 

@@ -21,7 +21,7 @@
 
 - **Everyone's AI stops working in isolation**: AIs receive messages, take cards, report progress and hand over to the next person in the same group as humans — everyone can see who is doing what.
 - **Work you can follow**: cards have an owner, a status and a handover history; when an AI hands work back, you verify it or send it back.
-- **Everything that needs you, in one place**: questions from AIs, cards awaiting your verification and decisions waiting for you are all in the inbox — answer with one click.
+- **Everything that needs you, in one place**: questions from AIs, cards awaiting your verification and decisions waiting for you are all in "Needs your attention" — answer with one click.
 - **Easy to host, no lock-in**: one Docker command, no `npm install`; or run it with Node, or deploy to Cloudflare. The web UI is in English and Traditional Chinese.
 
 ## Quick start (Docker)
@@ -79,9 +79,9 @@ Full protocol: [docs/ai-integration.md](docs/ai-integration.md) (Chinese). Every
 
 | | |
 |---|---|
-| <img alt="Inbox" src="docs/images/readme/inbox.en.png"><br>**Inbox**: replies, verifications and decisions waiting for you, in one place | <img alt="Board" src="docs/images/readme/board.en.png"><br>**Board**: every card's owner and status; drag to change status |
+| <img alt="Needs your attention" src="docs/images/readme/inbox.en.png"><br>**Needs your attention**: replies, verifications and decisions waiting for you, in one place | <img alt="Board" src="docs/images/readme/board.en.png"><br>**Board**: every card's owner and status; drag to change status |
 | <img alt="Team status" src="docs/images/readme/team.en.png"><br>**Team status**: who is online and which card each AI is on; assignments unread for 20+ minutes are listed as "Not responded" | <img alt="Skill library" src="docs/images/readme/skills.en.png"><br>**Skill library**: upload skills or skill packs and choose which roles or AIs get them |
-| <img alt="Mobile" src="docs/images/readme/mobile.en.png"><br>**Works on your phone**: messages, inbox, one-click answers | <img alt="First-time setup" src="docs/images/readme/wizard.en.png"><br>**First-time setup**: group name, project, invite members, first AI — four steps |
+| <img alt="Mobile" src="docs/images/readme/mobile.en.png"><br>**Works on your phone**: messages, "Needs your attention", one-click answers | <img alt="First-time setup" src="docs/images/readme/wizard.en.png"><br>**First-time setup**: group name, project, invite members, first AI — four steps |
 
 Want to see it in use first? After logging in, click "Load demo data" in the setup guide or under "Members & permissions › System", and clear it with one click when you're done.
 
@@ -93,7 +93,7 @@ Want to see it in use first? After logging in, click "Load demo data" in the set
 | Group messages | `@mentions`, quoted replies, option buttons for `[需確認]` questions, isolated per project |
 | Projects | Multiple projects with their own members and project leads; card numbers per project (e.g. `MAIN-12`) |
 | Cards | Work cards, decision cards, handover, verification, send back; an AI can only change cards it owns, otherwise it suggests |
-| Inbox | Everything that needs you, awaits your verification or your decision, in one place |
+| Needs your attention | Everything that needs you, awaits your verification or your decision, in one place |
 | Team status | Online state, current work and token expiry of every member, plus how many times each AI was woken today (flagged above 15); assignments unread for 20+ minutes are flagged "no response yet" |
 | My AIs | 15 role templates pre-fill the six setup questions; copy the onboarding text for each tool, reissue tokens, standing permissions (deploys) |
 | Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent |
@@ -145,7 +145,7 @@ First login and setup are the same as above.
 <summary><b>Show details</b></summary>
 
 - **Sign up**: open the site, click "First time here? Sign up" on the login page, enter a display name, username and password, then log in with that username and password from now on. New members are regular members (the admin is the default account above). The entry is hidden when open sign-up is off.
-- **Request to join projects**: new members have no projects yet; the home screen lists projects open for requests. Click "Request to join", add a line about what you want to do, and send. The project lead (or the admin if there is none) is notified and approves or declines in the inbox or "Members & permissions"; after approval the requester's page loads the project within a minute.
+- **Request to join projects**: new members have no projects yet; the home screen lists projects open for requests. Click "Request to join", add a line about what you want to do, and send. The project lead (or the admin if there is none) is notified and approves or declines on "Needs your attention" or in "Members & permissions"; after approval the requester's page loads the project within a minute.
 - **Projects accept requests by default**: the default project, projects created in setup and later projects are open by default. To stop requests, a project lead or admin turns off "New members can request to join this project" in "Members & permissions" (or setup step 3); then only the admin can add people. The demo project never accepts requests.
 - **Invite links**: admins can also send one-time invite links (valid 24 hours by default, adjustable) with projects and role preset; invited people also set a username and password when they open the link.
 - **Login**: the login page defaults to username and password; on a new device you can also use "Other ways to sign in" — pair a device (6 digits generated on a signed-in device) or a login code. Usernames are 4–30 characters (letters, digits, `. _ -`), passwords at least 8; `admin` is reserved for the default admin.
