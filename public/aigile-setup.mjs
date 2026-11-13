@@ -50,7 +50,7 @@ const SELF = fileURLToPath(import.meta.url);
 const SELF_SHA = (() => { try { return sha(fs.readFileSync(SELF)); } catch { return ''; } })();
 
 try {
-if (!AGENT || !BASE) fail('參數', '缺 --agent 或 --base', '照接入設定第四節的指令原樣執行');
+if (!AGENT || !BASE) fail('參數', '缺 --agent 或 --base', '照接入設定第五節的指令原樣執行');
 const major = Number(process.versions.node.split('.')[0]);
 if (major < 22) fail('Node 版本', `目前 ${process.versions.node}，要 22 以上`, '請所屬人類安裝 Node 22 以上');
 out(`✓ Node ${process.versions.node}`);

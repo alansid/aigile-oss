@@ -153,7 +153,8 @@ try {
   assert.match(setup, /addArgs = \['mcp', 'add', mcpName, '--', 'node', mcp, '--agent', AGENT\]/, '印 Claude Code 指令'); assert.match(setup, /\[mcp_servers\.\$\{mcpName\}\]/, '印 Codex 設定');
   assert.match(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), /### 3\.17 MCP/);
   const ob = JSON.stringify((await call(boss.token, `/api/my-ais/${AI}/onboarding`)).body);
-  assert.match(ob, /印出啟動指令與 MCP 指令/, '接入設定提到 MCP');
+  assert.match(ob, /印出啟動指令，並直接執行 claude mcp add 裝好平台的 MCP/, '接入設定（Claude Code 版）寫明 claude mcp add');
+  assert.match(JSON.stringify((await call(boss.token, `/api/my-ais/${AI}/onboarding?tool=codex`)).body), /印出 MCP 設定（不會自己改 Codex 設定；有就照印的加）/, '接入設定（Codex 版）提到 MCP');
   console.log('mcp-test：全部通過');
 } catch (e) {
   console.error('mcp-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('mcp-test.js')));

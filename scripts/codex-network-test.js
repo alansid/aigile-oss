@@ -25,16 +25,19 @@ try {
   assert.match(text, /不是代理/, '叫 AI 別說成代理問題');
   assert.match(text, /開 network_access 後重開 Codex/, '告訴主人的那句話寫好');
 
-  // 完整接入設定：第三節第 1 步就寫（不靠規格，AI 這時還下載不到規格）
+  // 完整接入設定（Codex 版）：第二節第 1 步提醒、第五節寫做法（不靠規格，AI 這時還下載不到規格）
   const db = openNodeDb(path.join(dataDir, 'switch.db'));
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000' } });
   const call = async (token, p, method = 'GET', body) => { const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost'); return r.json(); };
   const boss = await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' });
   const ai = await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: 'PG', name: 'codex-pg', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' });
-  const ob = (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding`)).text;
+  const ob = (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding?tool=codex`)).text;
   const step1 = /\n1\. 確認能呼叫 HTTP API[^\n]*/.exec(ob)?.[0] || '';
-  for (const k of ['127.0.0.1:9', 'curl 錯誤 7', '連線被拒', '不是代理', 'sandbox_mode = "workspace-write"', 'network_access = true']) assert.ok(step1.includes(k), '完整版第三節第 1 步有：' + k);
-  assert.ok([...ob].length <= 5000, '接入設定仍在 5,000 字內');
+  assert.ok(step1.includes('Codex 連不上先看第五節的開網路說明'), 'Codex 版第二節第 1 步提醒先看開網路');
+  const net = /\n- 先確認網路已開[^\n]*/.exec(ob)?.[0] || '';
+  for (const k of ['127.0.0.1:9', 'curl 錯誤 7', '連線被拒', '不是代理', 'sandbox_mode = "workspace-write"', 'network_access = true', '不用完全權限']) assert.ok(net.includes(k), 'Codex 版第五節開網路有：' + k);
+  assert.ok(!/先確認網路已開/.test((await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding?tool=claude`)).text), 'Claude Code 版不寫 Codex 開網路');
+  assert.ok([...ob].length <= 6500, '接入設定仍在 6,500 字內');
   console.log('codex-network-test：全部通過');
 } catch (e) {
   console.error('codex-network-test 失敗：', e.message);

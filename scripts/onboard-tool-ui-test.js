@@ -1,5 +1,5 @@
 // 短版接入依工具出文字（「複製接入文字」變主要做法；真的瀏覽器，中文、英文介面都驗）
-// 1. API：GET …/onboarding、POST …/onboarding-link 收 tool（claude／codex／other），不認得的值當沒帶；接入設定內容不分工具（opencode 那段照舊）
+// 1. API：GET …/onboarding、POST …/onboarding-link 收 tool（claude／codex／other），不認得的值當沒帶；接入設定第五節只給選的工具（PLAT-308；opencode 在「其他」版）
 // 2. 我的 AI 那一列主按鈕「複製接入文字」；接入分頁有工具三格（Claude Code｜Codex｜其他）、主要「複製接入文字」、次要「複製完整版」，
 //    「只複製 Token」只留在 ⋯；沒選過工具按複製＝不複製，展開接入分頁、黃底提示、焦點到工具
 // 3. 短版文字：Codex 才帶開網路那段；Claude Code、其他不帶；選的工具記在這個瀏覽器，重新整理還在
@@ -26,8 +26,15 @@ try {
     return (await r.text()).replace(/[A-Za-z0-9_-]{40,}/g, 'TOKEN').replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, 'TIME'); // 每次讀連結都發新 Token
   };
   const base = await linkText(undefined);
-  for (const t of ['claude', 'codex', 'other', 'bogus']) assert.equal(await linkText(t), base, `一次性連結：tool=${t} 內容跟沒帶一樣（接入設定不分工具）`);
-  assert.match(base, /aigile-opencode\.mjs/, '接入設定照舊有 opencode 的接法');
+  // PLAT-308：接入設定第五節只給選的工具；沒選＝照 Claude Code 寫並提醒選工具；不認得的值當沒帶
+  assert.match(base, /## 五、待命：Claude Code[^\n]*\n- 林志明 沒在網頁選工具/, '沒選工具：照 Claude Code 寫並提醒');
+  assert.equal(await linkText('bogus'), base, '一次性連結：tool=bogus 當沒帶');
+  const byTool = { claude: '## 五、待命：Claude Code', codex: '## 五、待命：Codex', other: '## 五、待命：其他工具' };
+  for (const [t, head] of Object.entries(byTool)) {
+    const txt = await linkText(t);
+    assert.ok(txt.includes(head) && !txt.includes('沒在網頁選工具'), `一次性連結：tool=${t} 出 ${head}`);
+    assert.equal(/aigile-opencode\.mjs/.test(txt), t === 'other', `opencode 的接法只在「其他」版（tool=${t}）`);
+  }
   for (const t of ['codex', 'bogus']) assert.equal((await call(boss.token, `/api/my-ais/${A.participantId}/onboarding?tool=${t}`)).status, 200, `完整版 GET 收 tool=${t}`);
   assert.equal((await call(boss.token, `/api/my-ais/${A.participantId}/onboarding`, 'POST', { tool: 'claude' })).status, 200, '完整版 POST 收 tool');
   console.log('onboard-tool-ui-test：API 通過');

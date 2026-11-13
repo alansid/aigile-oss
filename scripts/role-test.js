@@ -109,7 +109,7 @@ try {
   assert.equal((await raw(path1.slice(0, -2) + 'xx')).status, 410, '亂猜的不行');
   let got = await raw(path1);
   assert.equal(got.status, 200); assert.equal(got.cc, 'no-store');
-  const newTok = /Bearer ([A-Za-z0-9_-]+)（到期/.exec(got.text)?.[1];
+  const newTok = /Token（下一行整行就是 Token[^\n]*\n\n([A-Za-z0-9_-]+)\n/.exec(got.text)?.[1];
   assert.ok(newTok && newTok !== pgL.token && got.text.includes('劉的PG'), '讀到完整接入設定（含讀連結這刻發的新 Token）');
   assert.equal((await call(pgL.token, '/api/me')).status, 401, '舊 Token 失效'); assert.equal((await call(newTok, '/api/me')).status, 200, '新 Token 能用');
   pgL.token = newTok;
