@@ -35,10 +35,13 @@ try {
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const size = (w, h = 900) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
   await size(1280);
+  // 診斷用：每個頁面一載入就記下錯誤和沒接住的 Promise（CI 上說明頁卡在「載入中」，要看是不是有錯誤）
+  await cdp('Page.addScriptToEvaluateOnNewDocument', { source: "window.__errs = []; addEventListener('error', e => __errs.push('error: ' + e.message)); addEventListener('unhandledrejection', e => __errs.push('rejection: ' + (e.reason?.stack || e.reason)));" });
   const setLang = async l => { await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
   // 等不到時把當下畫面印出來（CI 上英文段曾固定等不到第 2 章，本機重現不出來）
-  const helpDiag = () => js(`JSON.stringify({ path: location.pathname, lang: document.documentElement.lang, help: document.querySelector('.help-ch')?.dataset.helpCh ?? null,
-    pages: [...document.querySelectorAll('[id^="page-"]')].filter(e => !e.hidden).map(e => e.id), work: (document.querySelector('#page-work')?.innerText || '').slice(0, 160), toast: document.querySelector('#toast')?.textContent || '' })`).catch(e => 'diag 失敗：' + e.message);
+  const helpDiag = () => js(`(async () => JSON.stringify({ path: location.pathname, lang: document.documentElement.lang, help: document.querySelector('.help-ch')?.dataset.helpCh ?? null,
+    pages: [...document.querySelectorAll('[id^="page-"]')].filter(e => !e.hidden).map(e => e.id), work: (document.querySelector('#page-work')?.innerText || '').slice(0, 160), toast: document.querySelector('#toast')?.textContent || '', errs: window.__errs || [],
+    fetch: await Promise.race([fetch('/help.json', { cache: 'no-store' }).then(r => r.status + ' ' + r.headers.get('content-type')).catch(e => 'fetch 失敗：' + e.message), new Promise(r => setTimeout(() => r('fetch 5 秒沒回'), 5000))]) }))()`).catch(e => 'diag 失敗：' + e.message);
   const toHelp = async (t, ch = 2) => {
     await login(t, `/help/${ch}`);
     await until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${ch}'`), 30000, `說明第 ${ch} 章`).catch(async e => { throw new Error(`${e.message}；畫面：${await helpDiag()}`); });
