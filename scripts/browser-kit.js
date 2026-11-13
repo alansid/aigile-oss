@@ -11,9 +11,19 @@ import { createHash, randomBytes } from 'node:crypto';
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
 // CI 的 macOS、Windows 機器比本機慢好幾倍：等畫面的限時一律乘 3（本機照原本的數字，測試不會變慢）
 export const WAIT_SCALE = process.env.CI ? 3 : 1;
+// 等太久時順便印出畫面當下的狀態（網址、畫面文字、還沒回來的請求、頁面錯誤），CI 偶發失敗才看得出卡在哪
+let diagHook = null;
 export const until = async (fn, ms = 15000, label = '') => {
   const end = Date.now() + ms * WAIT_SCALE;
-  for (;;) { try { const v = await fn(); if (v) return v; } catch {} if (Date.now() > end) throw new Error('等太久：' + label); await sleep(150); }
+  let lastErr = null;
+  for (;;) {
+    try { const v = await fn(); if (v) return v; lastErr = null; } catch (e) { lastErr = e; }
+    if (Date.now() > end) {
+      const diag = diagHook ? await Promise.race([diagHook().catch(e => '  （讀不到畫面狀態：' + e.message + '）'), sleep(5000).then(() => '  （讀畫面狀態逾時）')]) : '';
+      throw new Error('等太久：' + label + (lastErr ? '\n  最後一次檢查出錯：' + String(lastErr.message || lastErr).slice(0, 300) : '') + (diag ? '\n' + diag : ''));
+    }
+    await sleep(150);
+  }
 };
 // CI（GitHub 的 Ubuntu）比較慢：等伺服器、Chrome 啟動久一點
 export const START_MS = process.env.CI ? 45000 : 15000;
@@ -59,7 +69,9 @@ export function findBrowser() {
     '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean).find(p => fs.existsSync(p)) || null;
 }
 
+let exitGuard = null;
 export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服器環境變數（例如 AIGILE_TEST_PROJECTS: '0' ＝一般模式，有預設管理員）
+  clearTimeout(exitGuard); // 同一支測試再開一組（例如 backup-ui-test）就不用結束
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `aigile-${name}-`));
   const kids = [];
   const BASE = await startServer(kids, path.join(dir, 'data'), env);
@@ -76,9 +88,27 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
     await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = bad; });
     let seq = 0; const wait = new Map();
     const listeners = new Set(); // on(fn)：收 CDP 事件（例如 Fetch.requestPaused 攔截外部腳本）
-    ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && wait.has(m.id)) { wait.get(m.id)(m); wait.delete(m.id); } else if (m.method) for (const fn of listeners) fn(m); };
+    // 診斷用：記下還沒回來的請求、頁面錯誤（只在等太久時印）
+    const inflight = new Map(), pageErrs = [];
+    const track = m => {
+      const p = m.params || {};
+      if (m.method === 'Network.requestWillBeSent') inflight.set(p.requestId, { url: p.request.url.replace(BASE, ''), t: Date.now() });
+      else if (m.method === 'Network.loadingFinished' || m.method === 'Network.loadingFailed') inflight.delete(p.requestId);
+      else if (m.method === 'Runtime.exceptionThrown') pageErrs.push(p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || '?');
+      else if (m.method === 'Runtime.consoleAPICalled' && p.type === 'error') pageErrs.push((p.args || []).map(a => a.value ?? a.description ?? '').join(' '));
+      else if (m.method === 'Log.entryAdded' && p.entry?.level === 'error') pageErrs.push(p.entry.text + (p.entry.url ? ' ' + p.entry.url.replace(BASE, '') : ''));
+      if (pageErrs.length > 20) pageErrs.splice(0, pageErrs.length - 20);
+    };
+    ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && wait.has(m.id)) { wait.get(m.id)(m); wait.delete(m.id); } else if (m.method) { track(m); for (const fn of listeners) fn(m); } };
     const cdp = (method, params = {}) => new Promise(r => { const id = ++seq; wait.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
     const js = async expr => { const r = await cdp('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }); if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || 'JS 錯誤'); return r.result?.result?.value; };
+    await Promise.all(['Network.enable', 'Runtime.enable', 'Log.enable'].map(m => cdp(m)));
+    const DIAG_JS = "JSON.stringify({ url: location.href.replace(location.origin, ''), ready: document.readyState, vis: document.visibilityState, text: (document.body?.innerText || '').replace(/\\s+/g, ' ').slice(0, 300) })";
+    diagHook = async () => {
+      const r = await cdp('Runtime.evaluate', { expression: DIAG_JS, returnByValue: true });
+      const now = Date.now(), pend = [...inflight.values()].map(x => `${x.url}（${((now - x.t) / 1000).toFixed(1)}s）`);
+      return `  畫面：${r.result?.result?.value || JSON.stringify(r.result?.exceptionDetails?.text || r)}\n  還沒回來的請求（${pend.length}）：${pend.slice(0, 12).join('、') || '無'}\n  頁面錯誤：${pageErrs.slice(-6).join(' ｜ ').slice(0, 800) || '無'}`;
+    };
     const login = async (token, page = '/') => {
       await cdp('Page.navigate', { url: BASE + '/' });
       await until(() => js('document.readyState === "complete"'), 15000, '首頁');
@@ -97,6 +127,14 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
     for (const k of kids) { try { k.stdout?.destroy(); k.stderr?.destroy(); k.stdin?.destroy(); } catch {} }
     await sleep(500);
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+    // CI 的 Windows 曾印完「全部通過」卻卡到 300 秒才被砍：stop 後 5 秒程序還沒結束，就印出還開著什麼再結束（exitCode 照舊）
+    clearTimeout(exitGuard);
+    exitGuard = setTimeout(() => {
+      const open = (process._getActiveHandles?.() || []).map(h => h.constructor?.name || typeof h).join('、');
+      console.error(`（stop 後 5 秒程序還沒結束，強制結束；還開著：${open || '不明'}）`);
+      process.exit();
+    }, 5000);
+    exitGuard.unref();
   }
   return { BASE, call, aiToken, sql, browser, stop };
 }
