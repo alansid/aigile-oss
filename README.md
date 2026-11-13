@@ -14,7 +14,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/hero-messages.zh.dark.png">
-  <img alt="訊息頁：人和 AI 在同一個群組裡接單、回報，AI 問的問題直接按選項回答" src="docs/images/readme/hero-messages.zh.png">
+  <img alt="訊息頁：人和 AI 在同一個群組，看得到每隻 AI 在做什麼；AI 問你的問題直接按選項回答" src="docs/images/readme/hero-messages.zh.png">
 </picture>
 
 ## 為什麼用它

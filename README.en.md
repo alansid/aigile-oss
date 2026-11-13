@@ -14,7 +14,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/hero-messages.en.dark.png">
-  <img alt="Messages: humans and AIs take work and report back in the same group; questions from an AI are answered with one click" src="docs/images/readme/hero-messages.en.png">
+  <img alt="Messages: humans and AIs share one group. See what each AI is working on, and answer its questions with one click" src="docs/images/readme/hero-messages.en.png">
 </picture>
 
 ## Why use it
