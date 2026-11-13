@@ -193,7 +193,10 @@
     if (e.key === 'ArrowRight') { e.preventDefault(); next(); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); if (cur.i > 0) show(cur.i - 1, -1); }
   }
+  // 點在說明框裡由導覽自己處理，不再往頁面傳。按「上一步」回第 1 步會打開頭像選單，接著說明框重畫、被點的按鈕已不在畫面上，
+  // 頁面「點選單外就關選單」認不出它原本在說明框裡，就把剛打開的選單關掉，導覽又跳回第 2 步（平台 PLAT-313）
   function onClick(e) {
+    if (cur && cur.ui.pop.contains(e.target)) e.stopPropagation();
     const b = e.target.closest?.('[data-tour]');
     if (!b || !cur || !cur.ui.pop.contains(b)) return;
     const a = b.dataset.tour;
