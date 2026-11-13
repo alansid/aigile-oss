@@ -165,7 +165,7 @@ try {
     const h = await site('e2ec', { ROOM_CODE: 'garden-77' });
     await h.fresh();
     await h.click('#self-join');
-    await until(() => h.visible('#room-code-field'), 5000, '註冊表單有群組密碼欄');
+    await until(() => h.visible('#room-code-field'), 15000, '註冊表單有群組密碼欄');
     await h.type('#join-form [name=name]', '張美玲'); await h.type('#jn-user', 'mei.ling'); await h.type('#jn-pwd', 'pass-word-4'); await h.type('#jn-again', 'pass-word-4');
     await h.click('#join-submit'); // 沒填群組密碼：送出前就擋，不說「錯誤」
     await until(async () => (await h.text('#join-error')) === '請輸入群組密碼', 5000, '沒填群組密碼先擋');

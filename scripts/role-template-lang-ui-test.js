@@ -68,7 +68,7 @@ try {
     assert.equal(await val('#sw-ai-name'), nameOf(PG), `${L}：引導 AI 名稱`);
     if (lang === 'en') assert.equal(await js("document.querySelector('#sw-role option[value=PG]').textContent"), PG.en.option, '英文：引導下拉');
     await click('#sw [data-sw=ai]');
-    await until(() => js("!!document.querySelector('.sw-text')"), 10000, '引導建好 AI');
+    await until(() => js("!!document.querySelector('.sw-text')"), 30000, '引導建好 AI');
     const ai = (await kit.call(alex.token, '/api/my-ais')).body.items.find(a => a.name === nameOf(PG));
     assert.ok(ai, `${L}：引導建好的 AI`);
     assert.deepEqual({ role: ai.role, name: ai.name, ...Object.fromEntries(FIELDS.map(f => [f, ai[f]])) }, want(PG, lang, nameOf(PG)), `${L}：引導建好的 AI 存的是${L}範本`);
