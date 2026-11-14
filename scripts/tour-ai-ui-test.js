@@ -21,11 +21,11 @@ try {
   const newAi = async (t, name) => (await call(t, '/api/my-ais', 'POST', { projects: [P], roleKey: 'PG', role: 'PG', name, duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
   const snap = async t => JSON.stringify({ m: (await call(t, '/api/messages?limit=50')).body.items.map(m => m.messageId), ais: (await call(t, '/api/my-ais')).body.items.map(a => [a.participantId, a.status, a.expiresAt]) });
 
-  const { js, login, cdp, key } = await kit.browser(1280, 900);
+  const { js, login, cdp, key, goto } = await kit.browser(1280, 900);
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const size = (w, h = 900) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
   await size(1280);
-  const setLang = async l => { await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
+  const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
   const toHelp = async (t, ch) => { await login(t, `/help/${ch}`); await until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${ch}'`), 30000, `說明第 ${ch} 章`); };
   const pop = () => J(`(() => { const p = document.querySelector('.tour-pop'); if (!p) return null; const hh = document.querySelector('.tour-hole'), h = hh.getBoundingClientRect();
     return { meta: p.querySelector('.tour-meta')?.textContent || '', title: p.querySelector('.tour-title')?.textContent || '', text: p.querySelector('.tour-text')?.textContent || '', tip: p.querySelector('.tour-tip')?.textContent || '',

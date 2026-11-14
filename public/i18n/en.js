@@ -2066,6 +2066,8 @@ window.AIGILE_EN = {
     "跳到這則回覆": "Jump to this reply",
     "較早的訊息（{0}）": "Earlier messages ({0})",
     "載入中…": "Loading…",
+    "連不上伺服器，馬上重試…": "Can't reach the server, retrying…",
+    "載入失敗：": "Failed to load: ",
     "載入加入設定…": "Loading join settings…",
     "載入示範資料": "Load demo data",
     "載入更早": "Load earlier",

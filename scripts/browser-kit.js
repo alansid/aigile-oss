@@ -110,16 +110,22 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
       const now = Date.now(), pend = [...inflight.values()].map(x => `${x.url}（${((now - x.t) / 1000).toFixed(1)}s）`);
       return `  畫面：${r.result?.result?.value || JSON.stringify(r.result?.exceptionDetails?.text || r)}\n  還沒回來的請求（${pend.length}）：${pend.slice(0, 12).join('、') || '無'}\n  頁面錯誤：${pageErrs.slice(-6).join(' ｜ ').slice(0, 800) || '無'}`;
     };
+    // 換頁：Page.navigate 回來時，新頁面可能還沒取代舊頁面，這時查 readyState、畫面元素查到的是舊頁（CI 慢機器上偶發）。
+    // 換頁前在舊頁做記號，等到記號不見（＝新頁）而且載入完成才算到了
+    const goto = async (url, label = '換頁') => {
+      await js('window.__kitOldPage = true; true').catch(() => {});
+      await cdp('Page.navigate', { url: url.startsWith('/') ? BASE + url : url });
+      await until(() => js('!window.__kitOldPage && document.readyState === "complete"'), 15000, label);
+    };
     const login = async (token, page = '/') => {
-      await cdp('Page.navigate', { url: BASE + '/' });
-      await until(() => js('document.readyState === "complete"'), 15000, '首頁');
+      await goto('/', '首頁');
       await js(`localStorage.setItem('aigile-switch-token', ${JSON.stringify(token)}); true`);
-      await cdp('Page.navigate', { url: BASE + page });
+      await goto(page, '登入後的頁面');
       await until(() => js("!!document.querySelector('.av-btn') && document.querySelector('#join')?.hidden !== false"), 20000, '登入完成');
     };
     const key = async (k, code = k) => { for (const type of ['keyDown', 'keyUp']) await cdp('Input.dispatchKeyEvent', { type, key: k, code, windowsVirtualKeyCode: { ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, Tab: 9, Enter: 13 }[k] || 0 }); };
     const on = fn => listeners.add(fn);
-    return { cdp, js, login, key, on };
+    return { cdp, js, goto, login, key, on };
   }
   async function stop() {
     try { ws?.close(); } catch {}

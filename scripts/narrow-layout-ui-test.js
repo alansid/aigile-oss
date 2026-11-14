@@ -18,13 +18,13 @@ try {
   for (let i = 0; i < 12; i++) await kit.call(boss.token, '/api/messages', 'POST', { project: '預設專案', requestId: 'm' + i, text: `[需確認] 第 ${i} 則`, recipientIds: [ais[0].participantId] });
   for (const [i, st] of ['待處理', '進行中', '待確認', '受阻', '待處理', '進行中'].entries()) await kit.call(boss.token, '/api/cards', 'POST', { requestId: 'c' + i, project: '預設專案', title: `第 ${i + 1} 張卡：手機排版要看得到標題`, status: st });
 
-  const { js, login, cdp } = await kit.browser(1280, 900);
+  const { js, login, cdp, goto } = await kit.browser(1280, 900);
   await login(boss.token, '/');
   const open = async (w, url, ready, view = 'A') => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: w < 600 ? 812 : 800, deviceScaleFactor: 1, mobile: w < 600 });
     await js(`localStorage.setItem('aigile-switch-work-view', '${view}'); true`);
     for (let i = 0; ; i++) {
-      await cdp('Page.navigate', { url: kit.BASE + url });
+      await goto(url);
       try { await until(() => js(`!!document.querySelector(${JSON.stringify(ready)})`), 10000, url); break; } catch (e) { if (i) throw e; }
     }
     await sleep(400);

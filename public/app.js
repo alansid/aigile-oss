@@ -67,6 +67,7 @@
       const msg = data?.error?.message || `HTTP ${r.status}`;
       const err = new Error(window.aigileI18n ? window.aigileI18n.err(data?.error?.code, msg) : msg); // 英文介面：依錯誤代碼顯示英文
       err.raw = msg; // 原文（中文）：表單用來對出錯的是哪一欄（英文介面 message 已經翻過）
+      err.status = r.status;
       err.code = data?.error?.code; err.captchaRequired = !!data?.error?.captchaRequired; err.suggestion = data?.error?.suggestion || ''; err.field = data?.error?.field || '';
       state.lastErr = { code: err.code || `HTTP ${r.status}`, at: Date.now() };
       if (state.me && (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED')) logout(false);
@@ -8852,6 +8853,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const params = new URLSearchParams(location.search);
   const qrCode = params.get('login');
   // 已經登入時，?login= 連結不直接換帳號（別人寄來的連結可能讓你登進他的帳號）：先問，同意才換
+  const BOOT_RETRY = 'aigile-boot-retry'; // 啟動失敗自動重試的次數（這個分頁）
   const askSwitch = qrCode && store.get(TOKEN_KEY) && store.get(TOKEN_KEY) !== qrCode;
   if (askSwitch) history.replaceState(null, '', '/');
   if (qrCode && !askSwitch) {
@@ -8867,7 +8869,21 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   else if (state.token) start().then(async () => {
     if (askSwitch && state.me && await confirmDialog({ title: '改用這個登入碼登入？', confirmText: '改用它登入', message: `你現在登入的是 <b>${esc(state.me.name)}</b>。連結裡的登入碼會讓這台裝置換成另一個帳號；不是你自己產生的連結請按取消。` })) { store.set(TOKEN_KEY, qrCode); location.replace('/'); return; }
     if (qrCode && !askSwitch && state.me) rememberLoginTab('code');
-  }).catch(() => { store.del(TOKEN_KEY); state.token = null; if (qrCode) $('#token-error').textContent = '這個登入碼無效或已換過，請在已登入的裝置重新複製。'; showJoin(); });
+    try { sessionStorage.removeItem(BOOT_RETRY); } catch {}
+  }).catch(err => {
+    // 只有 Token 真的無效才登出。網路一時不通、伺服器忙、啟動時出錯：以前也會刪掉 Token、變回登入頁（CI 慢機器上重新整理偶發）
+    const authFail = err?.status === 401 || ['INVALID_TOKEN', 'TOKEN_EXPIRED'].includes(err?.code);
+    if (!authFail && state.token) {
+      console.error('啟動失敗', err);
+      let n = 0; try { n = +sessionStorage.getItem(BOOT_RETRY) || 0; sessionStorage.setItem(BOOT_RETRY, String(n + 1)); } catch {}
+      const boot = $('#boot'), line = boot.querySelector('.boot-line');
+      boot.hidden = false; $('#app').hidden = true;
+      if (n < 2) { line.textContent = '連不上伺服器，馬上重試…'; setTimeout(() => location.reload(), 2000); return; }
+      line.innerHTML = `<span>載入失敗：</span><code>${esc(err?.message || String(err))}</code> <button type="button" class="btn small">重新整理</button>`;
+      line.querySelector('button').addEventListener('click', () => location.reload());
+      return;
+    }
+    store.del(TOKEN_KEY); state.token = null; if (qrCode) $('#token-error').textContent = '這個登入碼無效或已換過，請在已登入的裝置重新複製。'; showJoin(); });
   else showJoin();
   if (!state.token) $('#boot').hidden = true;
 })();

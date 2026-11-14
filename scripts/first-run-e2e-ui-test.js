@@ -12,7 +12,7 @@ const kits = [];
 async function site(name, env = {}) {
   const kit = await startKit(name, { env: { ...PROD, ...env } });
   kits.push(kit);
-  const { js, cdp } = await kit.browser(1280, 900);
+  const { js, cdp, goto } = await kit.browser(1280, 900);
   const q = s => JSON.stringify(s);
   const h = {
     kit, js, cdp,
@@ -25,10 +25,9 @@ async function site(name, env = {}) {
     swErr: () => js("(() => { const e = document.querySelector('#sw .sw-err'); return [e && !e.hidden ? e.textContent.trim() : '', ...[...document.querySelectorAll('#sw .field-msg')].map(x => x.textContent.trim())].filter(Boolean).join(' '); })()"),
     fieldErr: sel => js(`(() => { const i = document.querySelector(${JSON.stringify(sel)}); const p = i && document.getElementById(i.getAttribute('aria-describedby') || ''); return i?.getAttribute('aria-invalid') === 'true' && p?.classList.contains('field-msg') ? p.textContent.trim() : ''; })()`),
     async fresh() {
-      await cdp('Page.navigate', { url: kit.BASE + '/' });
-      await until(() => js('document.readyState === "complete"'), 15000, '首頁');
+      await goto('/', '首頁');
       await js('localStorage.clear(); true');
-      await cdp('Page.navigate', { url: kit.BASE + '/' });
+      await goto('/');
       await until(() => h.visible('#pwd-form'), 15000, '登入頁');
     },
   };

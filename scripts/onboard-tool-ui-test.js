@@ -40,9 +40,9 @@ try {
   console.log('onboard-tool-ui-test：API 通過');
 
   if (!findBrowser()) { console.log('onboard-tool-ui-test：略過畫面（找不到 Chrome／Edge）'); await kit.stop(); process.exit(0); }
-  const { js, login, cdp } = await kit.browser(1280, 900);
+  const { js, login, cdp, goto } = await kit.browser(1280, 900);
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
-  const setLang = async l => { await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
+  const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
   const row = id => `document.querySelector('#ai-list [data-ma="${id}"]')`;
   // 攔下複製的內容（無頭瀏覽器沒有剪貼簿權限）
   const hookClip = () => js("Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__clip = t; } } }); window.__clip = null; true");

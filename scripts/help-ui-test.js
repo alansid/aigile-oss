@@ -16,7 +16,7 @@ try {
   const lin = await join('林志明', 'PO');
   const ai = (await call(lin.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: 'PG', name: '程式助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
   const AT = kit.aiToken(ai.participantId);
-  const { js, login, cdp } = await kit.browser(1280, 900);
+  const { js, login, cdp, goto } = await kit.browser(1280, 900);
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const size = (w, h) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: w < 600 });
   const path_ = () => js('location.pathname + location.hash');
@@ -24,7 +24,7 @@ try {
   const crumbs = () => js("document.querySelector('#crumbs').textContent.replace(/\\s+/g, '')");
   const chIs = n => until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${n}'`), 20000, `第 ${n} 章`);
   const go = sel => js(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) throw new Error('找不到 ' + ${JSON.stringify(sel)}); e.click(); return true; })()`);
-  const setLang = async l => { await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
+  const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
   const hub = async t => { await login(t, '/'); await until(() => js("!!document.querySelector('.hub .work-head') && !document.querySelector('#app').hidden"), 15000, '總覽'); await sleep(400); };
 
   // ================= 中文 =================
