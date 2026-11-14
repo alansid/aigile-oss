@@ -8874,7 +8874,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     // 只有 Token 真的無效才登出。網路一時不通、伺服器忙、啟動時出錯：以前也會刪掉 Token、變回登入頁（CI 慢機器上重新整理偶發）
     const authFail = err?.status === 401 || ['INVALID_TOKEN', 'TOKEN_EXPIRED'].includes(err?.code);
     if (!authFail && state.token) {
-      console.error('啟動失敗', err);
+      console.error('boot failed', err); // 開發者看的紀錄，不進介面字典
       let n = 0; try { n = +sessionStorage.getItem(BOOT_RETRY) || 0; sessionStorage.setItem(BOOT_RETRY, String(n + 1)); } catch {}
       const boot = $('#boot'), line = boot.querySelector('.boot-line');
       boot.hidden = false; $('#app').hidden = true;
