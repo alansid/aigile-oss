@@ -28,7 +28,7 @@ try {
   assert.ok(boss.token, '管理員');
   await kit.call(boss.token, '/api/me/password', 'PUT', { username: 'boss.lin', newPassword: 'longpassword1', newPasswordAgain: 'longpassword1' });
 
-  const { js, cdp, on } = await kit.browser(1280, 860);
+  const { js, cdp, on, goto } = await kit.browser(1280, 860);
   let external = 0;
   on(async m => {
     if (m.method !== 'Fetch.requestPaused') return;
@@ -42,16 +42,15 @@ try {
   const text = sel => js(`(document.querySelector(${JSON.stringify(sel)})?.textContent || '').trim()`);
   const home = async (w = 1280) => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: 860, deviceScaleFactor: 1, mobile: w < 600 });
-    await cdp('Page.navigate', { url: kit.BASE + '/' });
-    await until(() => js('document.readyState === "complete"'), 15000, '首頁');
+    await goto('/', '首頁');
     await js("localStorage.removeItem('aigile-switch-token'); true");
-    await cdp('Page.navigate', { url: kit.BASE + '/' });
+    await goto('/');
     await until(() => visible('#login-main'), 15000, '登入頁');
   };
 
   // 1. 自己註冊：登入頁有入口；一開始不載入驗證腳本
   await home(375);
-  assert.ok(await visible('#self-join'), '開放註冊時有「自己註冊」');
+  await until(() => visible('#self-join'), 10000, '開放註冊時有「自己註冊」'); // 要等 /api/health 回來才顯示
   assert.ok(!(await visible('#login-ts')), '登入還沒失敗：不顯示驗證');
   assert.equal(external, 0, '還沒要驗證就不載入 Turnstile');
   await click('#self-join');

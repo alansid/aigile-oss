@@ -10,14 +10,14 @@ import { startKit, findBrowser, until, sleep } from './browser-kit.js';
 if (!findBrowser()) { console.log('walkthrough-ui-test：略過（找不到 Chrome／Edge）'); process.exit(0); }
 const kit = await startKit('walk', { env: { AIGILE_TEST_PROJECTS: '' } });
 try {
-  const { js, cdp } = await kit.browser(1280, 900);
+  const { js, cdp, goto } = await kit.browser(1280, 900);
   const q = s => JSON.stringify(s);
   const visible = sel => js(`(() => { const e = document.querySelector(${q(sel)}); return !!e && !!e.offsetParent && !e.hidden; })()`);
   const type = (sel, v) => js(`(() => { const e = document.querySelector(${q(sel)}); e.value = ${q(v)}; e.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
   const open = async (token = null) => {
-    await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁');
+    await goto('/', '首頁');
     await js(`localStorage.clear(); ${token ? `localStorage.setItem('aigile-switch-token', ${q(token)});` : ''} true`);
-    await cdp('Page.navigate', { url: kit.BASE + '/' });
+    await goto('/');
   };
 
   // 1. 登入頁提示
@@ -55,7 +55,7 @@ try {
   assert.equal(acts, 'wizard,projects,invites,system,close');
   await js("document.querySelector('.hub-next [data-next=\"invites\"]').click(); true");
   await until(() => js("document.querySelector('[data-pm-tab=\"invites\"]')?.getAttribute('aria-selected') === 'true'"), 10000, '直接到邀請分頁');
-  await cdp('Page.navigate', { url: kit.BASE + '/' });
+  await goto('/');
   await until(() => visible('.hub-next'), 30000, '回主畫面還在'); // 全套一起跑時機器忙，給久一點
   await js("document.querySelector('.hub-next [data-next=\"close\"]').click(); true");
   await until(async () => !(await visible('.hub-next')), 5000, '按知道了收起');

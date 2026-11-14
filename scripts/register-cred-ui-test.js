@@ -12,7 +12,7 @@ try {
   await kit.call(boss, '/api/me/password', 'PUT', { username: 'boss.lin', currentPassword: 'admin', newPassword: 'longpassword1', newPasswordAgain: 'longpassword1' });
   await kit.call(boss, '/api/setup-wizard/done', 'POST');
 
-  const { js, cdp } = await kit.browser(1280, 900);
+  const { js, cdp, goto } = await kit.browser(1280, 900);
   const q = s => JSON.stringify(s);
   const click = sel => js(`(() => { const e = document.querySelector(${q(sel)}); if (!e) return false; e.click(); return true; })()`);
   const type = (sel, v) => js(`(() => { const e = document.querySelector(${q(sel)}); e.value = ${q(v)}; e.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
@@ -21,10 +21,9 @@ try {
   const loggedIn = () => js("document.querySelector('#join').hidden && !document.querySelector('#app').hidden");
   const logout = async (w = 1280) => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: 900, deviceScaleFactor: 1, mobile: w < 600 });
-    await cdp('Page.navigate', { url: kit.BASE + '/' });
-    await until(() => js('document.readyState === "complete"'), 15000, '首頁');
+    await goto('/', '首頁');
     await js("localStorage.clear(); true");
-    await cdp('Page.navigate', { url: kit.BASE + '/' });
+    await goto('/');
     await until(() => visible('#pwd-form'), 15000, '登入頁');
   };
   const pwdLogin = async (u, p) => {

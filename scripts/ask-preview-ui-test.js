@@ -29,8 +29,9 @@ try {
     const a = await look();
     assert.ok(!a.open && a.clamped && a.h <= a.lh * 2 + 2, `${w}：收合 2 行：` + JSON.stringify({ h: a.h, lh: a.lh, clamped: a.clamped }));
     assert.ok(a.text.startsWith('[完成] CARD-999 做完了') && !a.text.includes('\n'), `${w}：收合時換行併成一行`);
-    const more = await J(`(() => { const e = ${LONG}.querySelector('.ask-more'); return [getComputedStyle(e).display, e.textContent]; })()`);
-    assert.deepEqual(more, ['block', '… 展開'], `${w}：超過 2 行時尾端看得到「… 展開」`);
+    // 「… 展開」靠下一個畫面影格才標上 clamp；收件匣即時更新重畫時會短暫拿掉，用等的、不在固定時間點斷言
+    const MORE = `(() => { const e = ${LONG}.querySelector('.ask-more'); return getComputedStyle(e).display === 'block' && e.textContent === '… 展開'; })()`;
+    await until(() => js(MORE), 5000, `${w}：超過 2 行時尾端看得到「… 展開」`);
     // 點一下：就地展開全文、保留換行；按鈕位置不動
     await js(`${LONG}.click(); true`);
     await until(() => js(`${LONG}.getAttribute('aria-expanded') === 'true' && ${LONG}.textContent.includes('\\n')`), 5000, '展開全文');

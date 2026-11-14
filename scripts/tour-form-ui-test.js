@@ -21,11 +21,11 @@ try {
   await mk(lin.token, '林的助手'); // 別人的 AI：名稱拿來撞
   const myAis = async () => (await call(chen.token, '/api/my-ais')).body.items;
 
-  const { js, login, cdp, key } = await kit.browser(1280, 900);
+  const { js, login, cdp, key, goto } = await kit.browser(1280, 900);
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const size = (w, h = 900) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
   await size(1280);
-  const setLang = async l => { await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
+  const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
   const toHelp = async ch => { await login(chen.token, `/help/${ch}`); await until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${ch}'`), 30000, `說明第 ${ch} 章`); };
   const pop = () => J(`(() => { const p = document.querySelector('.tour-pop'); if (!p) return null; const hh = document.querySelector('.tour-hole'), h = hh.getBoundingClientRect(), pr = p.getBoundingClientRect();
     return { meta: p.querySelector('.tour-meta')?.textContent || '', title: p.querySelector('.tour-title')?.textContent || '', text: p.querySelector('.tour-text')?.textContent || '', tip: p.querySelector('.tour-tip')?.textContent || '',

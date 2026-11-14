@@ -31,7 +31,7 @@ try {
   const snap = async () => JSON.stringify({ m: (await call(chen.token, '/api/messages?limit=50')).body.items.map(m => m.messageId), c: (await call(chen.token, '/api/cards?limit=50')).body.items?.map(c => [c.cardId, c.status, c.owner?.participantId]) });
   const before = await snap();
 
-  const { js, login, cdp, key, on } = await kit.browser(1280, 900);
+  const { js, login, cdp, key, on, goto } = await kit.browser(1280, 900);
   // 診斷用：記下還沒結束的網路請求（CI 上 help.json 5 秒沒回，要看是不是連線被別的請求佔滿）
   const pending = new Map();
   on(m => { const p = m.params || {};
@@ -43,7 +43,7 @@ try {
   await size(1280);
   // 診斷用：每個頁面一載入就記下錯誤和沒接住的 Promise（CI 上說明頁卡在「載入中」，要看是不是有錯誤）
   await cdp('Page.addScriptToEvaluateOnNewDocument', { source: "window.__errs = []; addEventListener('error', e => __errs.push('error: ' + e.message)); addEventListener('unhandledrejection', e => __errs.push('rejection: ' + (e.reason?.stack || e.reason)));" });
-  const setLang = async l => { await cdp('Page.navigate', { url: kit.BASE + '/' }); await until(() => js('document.readyState === "complete"'), 15000, '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
+  const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
   // 等不到時把當下畫面印出來（CI 上英文段曾固定等不到第 2 章，本機重現不出來）
   const helpDiag = () => js(`(async () => JSON.stringify({ path: location.pathname, lang: document.documentElement.lang, help: document.querySelector('.help-ch')?.dataset.helpCh ?? null,
     pages: [...document.querySelectorAll('[id^="page-"]')].filter(e => !e.hidden).map(e => e.id), work: (document.querySelector('#page-work')?.innerText || '').slice(0, 160), toast: document.querySelector('#toast')?.textContent || '', errs: window.__errs || [],

@@ -16,7 +16,7 @@ try {
   await kit.call(boss.token, '/api/cards', 'POST', { project: '預設專案', title: '整理首頁文案', type: '工作' });
   const DATA = ['林志明', '志明', '示範助手', '預設專案', '第二專案', '[完成] 測試訊息：登入頁改好了', '整理首頁文案', '中文'];
 
-  const { js, cdp, login } = await kit.browser(1280, 900);
+  const { js, cdp, login, goto } = await kit.browser(1280, 900);
   // 畫面上看得到、又含中文的文字（排除訊息內文等不翻的區塊與上面的資料）
   const leftover = () => js(`(() => {
     const SKIP = '.msg-text,.msg-rest,.dm-text,.dmsg-text,.md-doc,.cr-title,.sw-text,code,pre,textarea,script,style,[data-nt]';
@@ -35,8 +35,7 @@ try {
   const check = async label => { await sleep(500); const l = await leftover(); assert.deepEqual(l, [], `${label} 還有中文：${l.join(' ｜ ')}`); };
 
   // 登入頁（英文）
-  await cdp('Page.navigate', { url: kit.BASE + '/' });
-  await until(() => js('document.readyState === "complete"'), 15000, '首頁');
+  await goto('/', '首頁');
   await js("localStorage.setItem('aigile-lang', 'en'); location.reload(); true");
   await until(() => js("!!document.querySelector('#pwd-form') && !document.documentElement.classList.contains('i18n-wait')"), 15000, '英文登入頁');
   assert.equal(await js('document.documentElement.lang'), 'en', 'html lang 跟著切換');

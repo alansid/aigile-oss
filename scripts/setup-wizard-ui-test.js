@@ -109,6 +109,8 @@ try {
   await set('#se-slug', 'test');
   await click('button[form="se-form"]');
   await until(async () => (await kit.call(tok, '/api/projects')).body.items.some(p => p.slug === 'test'), 8000, '改成 test');
+  // 伺服器改好了，網頁還要等回應回來才關對話框；沒等就開新增專案，晚到的關閉會把新對話框關掉（CI 慢機器上偶發）
+  await until(() => js("!document.querySelector('#se-slug')"), 8000, '網址英文名對話框關掉');
   await click('[data-pm-newproj]');
   await until(() => js("!!document.querySelector('#np-slug')"), 15000, '新增專案對話框');
   await set('#np-form [name=name]', '行銷');
