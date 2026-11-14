@@ -650,7 +650,9 @@
         if (!sf.auto && sf.slug === realSlug(p)) { closeModal(); return resolve(null); }
         try {
           const r = await api(`/api/projects/${encodeURIComponent(id)}/slug`, { method: 'PUT', body: { slug: sf.auto ? '' : sf.slug } });
-          closeModal(); resolve(r.items?.find(x => x.id === id)?.slug || sf.slug);
+          const ns = r.items?.find(x => x.id === id)?.slug || sf.slug;
+          if (p) p.slug = ns; // 本機的專案清單跟著改：馬上新增專案時，「會變成網址」才不會還當舊網址被佔用
+          closeModal(); resolve(ns);
         } catch (err) { if (!field.serverError(err)) toast(err.message); }
       });
     });

@@ -92,7 +92,8 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
     const inflight = new Map(), pageErrs = [];
     const track = m => {
       const p = m.params || {};
-      if (m.method === 'Network.requestWillBeSent') inflight.set(p.requestId, { url: p.request.url.replace(BASE, ''), t: Date.now() });
+      if (m.method === 'Network.requestWillBeSent') inflight.set(p.requestId, { url: p.request.url.replace(BASE, ''), t: Date.now(), loader: p.loaderId });
+      else if (m.method === 'Page.frameNavigated' && !p.frame?.parentId) { for (const [k, v] of inflight) if (v.loader !== p.frame.loaderId) inflight.delete(k); } // 換頁：舊頁的請求跟著頁面結束，不算還沒回來
       else if (m.method === 'Network.loadingFinished' || m.method === 'Network.loadingFailed') inflight.delete(p.requestId);
       else if (m.method === 'Runtime.exceptionThrown') pageErrs.push(p.exceptionDetails?.exception?.description || p.exceptionDetails?.text || '?');
       else if (m.method === 'Runtime.consoleAPICalled' && p.type === 'error') pageErrs.push((p.args || []).map(a => a.value ?? a.description ?? '').join(' '));
@@ -102,7 +103,7 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
     ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && wait.has(m.id)) { wait.get(m.id)(m); wait.delete(m.id); } else if (m.method) { track(m); for (const fn of listeners) fn(m); } };
     const cdp = (method, params = {}) => new Promise(r => { const id = ++seq; wait.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
     const js = async expr => { const r = await cdp('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true }); if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || 'JS 錯誤'); return r.result?.result?.value; };
-    await Promise.all(['Network.enable', 'Runtime.enable', 'Log.enable'].map(m => cdp(m)));
+    await Promise.all(['Network.enable', 'Runtime.enable', 'Log.enable', 'Page.enable'].map(m => cdp(m)));
     const DIAG_JS = "JSON.stringify({ url: location.href.replace(location.origin, ''), ready: document.readyState, vis: document.visibilityState, text: (document.body?.innerText || '').replace(/\\s+/g, ' ').slice(0, 300) })";
     diagHook = async () => {
       const r = await cdp('Runtime.evaluate', { expression: DIAG_JS, returnByValue: true });
