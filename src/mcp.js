@@ -86,6 +86,7 @@ export function slimMessage(x) {
     ...(x.replyToMessageId ? { replyTo: x.replyToMessageId } : {}), ...(x.project ? { project: x.project } : {}),
     ...(x.file ? { file: { fileId: x.file.fileId, name: x.file.name, available: x.file.available } } : {}),
     at: x.createdAt, text: x.text, ...(x.truncated ? { truncated: true } : {}),
+    ...(x.resolution ? { resolution: x.resolution } : {}), // [需確認] 被人類標已處理（未回覆）＝暫緩
   };
 }
 // 找我的（有通知、指定我、@所有人）給全文，其他一行；自己發的略過只計數；通知的全文已在 messages 裡就不再附 preview
@@ -95,7 +96,7 @@ export function slimInbox(n, m, meId) {
   for (const x of m?.items || []) {
     if (x.author?.participantId === meId) { skippedMine++; continue; }
     const forMe = withNotif.has(x.messageId) || x.audience === 'all' || (x.recipients || []).some(r => r.participantId === meId);
-    messages.push(forMe ? slimMessage(x) : { messageId: x.messageId, from: who(x.author), line: oneLine(x.text, LINE_CHARS) });
+    messages.push(forMe ? slimMessage(x) : { messageId: x.messageId, from: who(x.author), line: oneLine(x.text, LINE_CHARS), ...(x.resolution ? { resolution: x.resolution } : {}) });
   }
   const shown = new Set(messages.filter(x => x.text !== undefined).map(x => x.messageId));
   const notifications = (n?.items || []).map(x => ({
@@ -114,7 +115,7 @@ export function slimContext(items, targetId) {
   return { context: keep.sort((a, b) => a.i - b.i).map(r => r.v), ...(keep.length < rows.length ? { omitted: rows.length - keep.length } : {}) };
 }
 export function slimHistory(x) {
-  return { messageId: x.messageId, seq: x.sequence, from: who(x.author), at: x.createdAt, text: cut(x.text, HIST_CHARS), ...(x.text?.length > HIST_CHARS ? { textLength: x.text.length } : {}) };
+  return { messageId: x.messageId, seq: x.sequence, from: who(x.author), at: x.createdAt, text: cut(x.text, HIST_CHARS), ...(x.text?.length > HIST_CHARS ? { textLength: x.text.length } : {}), ...(x.resolution ? { resolution: x.resolution } : {}) };
 }
 export function slimPost(body, status) {
   return { messageId: body.messageId, sequence: body.sequence, ...(status === 200 ? { duplicate: true } : {}),

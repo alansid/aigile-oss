@@ -1094,7 +1094,7 @@
   const isFlowLine = m => !state.open.has(m.messageId) && FLOW_TAGS.includes(tagOf(m.text)) && !keepFull(m);
   const isSlim = m => !state.open.has(m.messageId) && slimMode() && !keepFull(m) && !FLOW_TAGS.includes(tagOf(m.text));
   // 提到我／回覆我、我還沒回的（需確認有人類回過也算處理了）
-  const needReply = m => mentionsMe(m) && !repliesOf(m.messageId).some(isMine) && !work.answered?.has(m.messageId);
+  const needReply = m => !m.resolution && mentionsMe(m) && !repliesOf(m.messageId).some(isMine) && !work.answered?.has(m.messageId);
   const cardIdOf = t => cardIdNorm((String(t).match(CARD_REF_G) || []).find(isCardRef) || ''); // 專案卡號或舊的 C-xxx
   // 第一句：去掉開頭的 [標籤] 和【專案名】，取第一行到第一個句號為止
   function firstSentence(t) {
@@ -1112,7 +1112,7 @@
   function slimHtml(m) {
     const tag = tagOf(m.text), card = cardIdOf(m.text), need = needReply(m);
     return `<article class="msg slim${need ? ' need-me' : ''}" id="msg-${esc(m.messageId)}"><button type="button" class="slim-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false">
-      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span>
+      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}${resolvedPill(m)}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span>
       <span class="slim-text">${esc(firstSentence(m.text))}</span><span class="sr-only">，展開全文</span></button></article>`;
   }
   function flowGroupHtml(run) {
@@ -1192,7 +1192,7 @@
     const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
     const a = m.author;
     const kid = isKid(m);
-    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false ? 'to-me' : '', needReply(m) ? 'need-me' : '', kid ? 'kid' : ''].join(' '); // 知會我的不上底色
+    const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false && !m.resolution ? 'to-me' : '', needReply(m) ? 'need-me' : '', kid ? 'kid' : ''].join(' '); // 知會我的不上底色
     const recipients = m.replyFrom ? askPillsHtml(m) : m.audience === 'all'
       ? '<span class="mention">@所有人</span>'
       : m.recipients.map(r => `<span class="mention">@${esc(r.name)}</span>`).join(' ');
@@ -1201,7 +1201,7 @@
         <div class="msg-head">
           ${avatar(state.participants.get(a.participantId) || a)}
           <div class="msg-who">
-            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time>${m.project === projectView() ? '' : projTag(m.project)}</div>
+            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time>${m.project === projectView() ? '' : projTag(m.project)}${resolvedPill(m)}</div>
             <div class="msg-line2">${esc(subLine(a, m.project || null))}</div>
           </div>
         </div>
@@ -1224,11 +1224,16 @@
   // ---------- 要回覆／知會 ----------
   // 黃＝要回覆、灰＝知會；輪到我的那顆加外框、寫「要你回覆／知會你」；@所有人一律知會
   function askPillsHtml(m) {
+    if (m.resolution) return resolvedLabel(m); // 已處理就不再寫「要你回覆」
     const pill = (ask, me, name) => `<span class="apill ${ask ? 'ask' : 'fyi'}${me ? ' me' : ''}">${ask ? (me ? '要你回覆' : '要回覆') : (me ? '知會你' : '知會')} · ${esc(name)}</span>`;
     if (m.audience === 'all') return pill(false, isToMe(m) && !isMine(m), '所有人');
     return [...m.recipients].sort((a, b) => (b.ask ? 1 : 0) - (a.ask ? 1 : 0)).map(r => pill(r.ask, r.participantId === meId(), r.name)).join(' ');
   }
-  const myAskPill = m => { const a = myAsk(m); return a === undefined || isMine(m) ? '' : `<span class="apill ${a ? 'ask' : 'fyi'} me">${a ? '要你回覆' : '知會你'}</span>`; };
+  // [需確認] 被人類按「已處理」（沒有回覆）：訊息上標出來，AI 也讀得到同一個狀態
+  const resolvedLabel = m => { const n = esc(m.resolution.by?.name || ''), t = esc(fmtTime(m.resolution.at)); return `<span class="tag resolved" title="AI 會當成暫緩，不再等、不重問">${L(`已處理（未回覆）· ${n} ${t}`, `Handled, no reply · ${n} ${t}`)}</span>`; };
+  const resolvedPill = m => m.resolution && !m.replyFrom ? `<span class="tag resolved" title="${esc(L(`${m.resolution.by?.name || ''} ${fmtTime(m.resolution.at)} 標為已處理，沒有回覆；AI 會當成暫緩`, `${m.resolution.by?.name || ''} marked it handled at ${fmtTime(m.resolution.at)} without replying; the AI treats it as on hold`))}">已處理（未回覆）</span>` : '';
+  const markResolved = ids => { const at = new Date().toISOString(), by = { participantId: state.me?.participantId, name: state.me?.name }; for (const id of ids) { const m = state.byId.get(id); if (m && !m.resolution) m.resolution = { state: '已處理（未回覆）', by, at }; } };
+  const myAskPill = m => { if (m.resolution) return resolvedLabel(m); const a = myAsk(m); return a === undefined || isMine(m) ? '' : `<span class="apill ${a ? 'ask' : 'fyi'} me">${a ? '要你回覆' : '知會你'}</span>`; };
   // ---------- 回覆縮排接在原訊息下 ----------
   // 原訊息就在上面（中間只隔同一串的回覆）才縮排；回覆的回覆不再往右（最多一層）；卡片組內外各自算；不搬順序
   function markKids(list) {
@@ -1273,7 +1278,7 @@
     const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
     const body = m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m, !!tag); // 名字旁已有標籤
     return `<article class="${cls}" id="msg-${esc(m.messageId)}">
-      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time>${ask}${unansweredTag(m)}</div>
+      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time>${ask}${resolvedPill(m)}${unansweredTag(m)}</div>
       ${re}
       ${body}
       ${authHtml(m)}
@@ -2016,6 +2021,8 @@
       document.getElementById('msg-' + id)?.querySelector('[data-fold]')?.focus({ preventScroll: true });
       return;
     }
+    const ar = e.target.closest('[data-ans-reopen]'); // 已處理的 [需確認] 還是要回答
+    if (ar) { ansOpen.add(ar.dataset.ansReopen); refreshMsg(ar.dataset.ansReopen); return; }
     const fold = e.target.closest('[data-fold]');
     if (fold) {
       const id = fold.dataset.fold, box = $('#messages'), top = box.scrollTop;
@@ -2654,7 +2661,7 @@
   const VIEW_KEY = 'aigile-switch-work-view';
   const work = {
     cards: new Map(), since: null, loaded: false, lastSync: 0,
-    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
+    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), askSel: new Set(), confSel: new Set(), q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
     showArchived: false, openId: null, detail: null, editing: false, dragId: null,
   };
   const isMeRef = r => r && r.participantId === meId();
@@ -3584,10 +3591,14 @@
     const asks = askNotes(), dms = dmNotes();
     const joins = (work.joins || []).filter(j => projectView() === 'hub' || j.project === projectView());
     if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length) return '<section class="wpanel"><p class="muted">目前沒有要你處理的事。</p></section>';
+    for (const id of [...work.askSel]) if (!asks.some(n => n.notificationId === id)) work.askSel.delete(id); // 清單變了就丟掉不在的勾選
+    const askN = work.askSel.size, askAll = asks.length > 0 && askN === asks.length;
     const askSection = asks.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>要你回覆</h3><span class="wcount ora">${asks.length}</span><span class="muted small">別人指定要你回覆的訊息；回覆了或按「不用回」就移走</span></div>
+        <div class="batch-bar ask-batch" role="group" aria-label="批次不用回"><label class="sugg-check ask-all"><input type="checkbox" data-ask-all ${askAll ? 'checked' : ''} aria-label="全選要你回覆"> <span class="small">全選</span></label><span class="small">已選 <b>${askN}</b> 則</span><button type="button" class="btn small batch-go" data-ask-done ${askN ? '' : 'disabled'}>${L(`不用回（${askN}）`, `Not needed (${askN})`)}</button></div>
         ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
-          <div class="sugg-main"><b><span class="apill ask me">要你回覆</span> ${esc(n.sender.name)} <span class="muted small ask-when">· ${agoText(n.createdAt)}</span></b>${askPvHtml(n)}</div>
+          <label class="sugg-check"><input type="checkbox" id="askchk-${esc(n.notificationId)}" data-ask-check="${esc(n.notificationId)}" ${work.askSel.has(n.notificationId) ? 'checked' : ''} aria-label="${esc(L(`勾選 ${n.sender.name} 這則`, `Select the one from ${n.sender.name}`))}"></label>
+          <div class="sugg-main"><label class="ask-head" for="askchk-${esc(n.notificationId)}"><b><span class="apill ask me">要你回覆</span> ${esc(n.sender.name)} <span class="muted small ask-when">· ${agoText(n.createdAt)}</span></b></label>${askPvHtml(n)}</div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">到訊息回覆</button>
             <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">不用回</button></div>
         </div>`).join('')}</section>` : '';
@@ -3597,9 +3608,13 @@
           <div class="sugg-main"><b>${cidHtml(c)} ${cardPTag(c)} ${esc(cardTitle(c))}</b><span class="muted small">${c.next ? '下一步：' + esc(c.next) + ' · ' : ''}<span>${agoText(c.updatedAt)}交來</span></span></div>
           <div class="sugg-actions">${reportBtn(c)}<button type="button" class="btn small primary" data-ver-ok="${esc(c.cardId)}">驗收通過</button><button type="button" class="btn small" data-ver-no="${esc(c.cardId)}">退回…</button><button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
         </div>`).join('')}</section>` : '';
+    for (const id of [...work.confSel]) if (!confirms.some(d => d.messageId === id)) work.confSel.delete(id);
+    const confN = work.confSel.size, confAll = confirms.length > 0 && confN === confirms.length;
     const confSection = confirms.length ? `
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>[需確認] 訊息</h3><span class="wcount ora">${confirms.length}</span><span class="muted small">等你回答的問題，可以直接在這裡選；要看前後文按「到訊息處理」</span></div>
+        <div class="batch-bar conf-batch" role="group" aria-label="批次標為已處理"><label class="sugg-check ask-all"><input type="checkbox" data-conf-all ${confAll ? 'checked' : ''} aria-label="全選 [需確認] 訊息"> <span class="small">全選</span></label><span class="small">已選 <b>${confN}</b> 則</span><button type="button" class="btn small batch-go" data-conf-done ${confN ? '' : 'disabled'}>${L(`標為已處理（${confN}）`, `Mark handled (${confN})`)}</button></div>
         ${confirms.map(d => { const cm = state.byId.get(d.messageId), quick = cm ? authHtml(cm, { inbox: true }) : ''; return `<div class="sugg-row conf-row" data-conf-row="${esc(d.messageId)}">
+          <label class="sugg-check"><input type="checkbox" data-conf-check="${esc(d.messageId)}" ${work.confSel.has(d.messageId) ? 'checked' : ''} aria-label="${esc(L(`勾選「${d.title || '（無標題）'}」`, `Select "${d.title || '(untitled)'}"`))}"></label>
           <div class="sugg-main"><b>${esc(d.title || '（無標題）')}</b><span class="muted small">${esc(d.author?.name || '')} · ${agoText(d.createdAt)}${d.replyCount ? ` · 後續回覆 ${d.replyCount} 則` : ''}</span></div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-todo-jump="${esc(d.messageId)}">到訊息處理</button>
             <button type="button" class="link small" data-todo-resolve="${esc(d.messageId)}" title="已經決定了，從這裡移出">已處理</button></div>
@@ -3698,9 +3713,30 @@
     if (t.closest('[data-note-ackall]')) return ackNotesNow(noteList().map(n => n.notificationId), '已全部標為已讀');
     const tj = t.closest('[data-todo-jump]');
     if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
+    if (t.closest('[data-ask-done]') && work.askSel.size) { // 只清自己的清單＝ack 自己的通知；不發文、不叫醒任何人
+      const ids = [...work.askSel];
+      const ok = await confirmDialog({ title: L(`這 ${ids.length} 則都不用回？`, `No reply needed for these ${ids.length}?`), confirmText: '不用回',
+        message: L('只會從你的「要你回覆」清單移走，不會回覆提問的人，也不會叫醒任何 AI。還在等你回覆的 AI 會繼續等；要回答請到訊息裡回覆。別人的清單不受影響。', 'They only leave your "Needs your reply" list. Nobody gets a reply and no AI is woken. An AI still waiting for you keeps waiting; to answer, reply in the message. Other people\'s lists are not affected.') });
+      if (!ok) return;
+      work.askSel.clear();
+      return ackNotesNow(ids, L(`已把 ${ids.length} 則標為不用回`, `Marked ${ids.length} as no reply needed`));
+    }
+    if (t.closest('[data-conf-done]') && work.confSel.size) { // 批次「已處理」＝跟單則一樣全團隊移掉；不發文、不叫醒，AI 讀得到「已處理（未回覆）」當暫緩
+      const ids = [...work.confSel];
+      const ok = await confirmDialog({ title: L(`把 ${ids.length} 則 [需確認] 標為已處理？`, `Mark ${ids.length} [需確認] posts as handled?`), confirmText: '標為已處理',
+        message: L('這幾則會從「所有人」的「要你處理」移走，不會回覆提問的 AI，也不會叫醒它。AI 下次讀到時會看到「已處理（未回覆）」，當成暫緩，不再等、不重問；之後要做請你再主動提。', 'They leave EVERYONE\'s To-do list. The AI that asked gets no reply and is not woken. Next time it reads them it sees that they were handled without a reply and treats them as on hold: no more waiting, no asking again. Bring it up yourself later if it should be done.') });
+      if (!ok) return;
+      const r = await Promise.allSettled(ids.map(id => api(`/api/decisions/${encodeURIComponent(id)}/resolve`, { method: 'POST' })));
+      const bad = r.filter(x => x.status === 'rejected');
+      markResolved(ids.filter((_, k) => r[k].status === 'fulfilled'));
+      work.confSel.clear();
+      toast(bad.length ? L(`${ids.length - bad.length} 則已處理，${bad.length} 則失敗：${bad[0].reason?.message || ''}`, `${ids.length - bad.length} handled, ${bad.length} failed: ${bad[0].reason?.message || ''}`) : L(`已把 ${ids.length} 則標為已處理`, `Marked ${ids.length} as handled`));
+      await loadTeam(); updateTodoBadge(); renderWork();
+      return;
+    }
     const tr = t.closest('[data-todo-resolve]');
     if (tr) {
-      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); toast('已從「要你處理」移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
+      try { await api(`/api/decisions/${encodeURIComponent(tr.dataset.todoResolve)}/resolve`, { method: 'POST' }); markResolved([tr.dataset.todoResolve]); toast('已從「要你處理」移出'); await loadTeam(); updateTodoBadge(); renderWork(); } catch (err) { toast(err.message); }
       return;
     }
     const bt = t.closest('[data-batch]');
@@ -3759,6 +3795,22 @@
   workBox.addEventListener('change', e => {
     if (e.target.id === 'card-owner') { work.owner = e.target.value; renderWork(); }
     if (e.target.id === 'card-type') { work.type = e.target.value; renderWork(); }
+  });
+  workBox.addEventListener('change', e => { // 要你回覆的勾選、全選
+    const ca = e.target.closest?.('[data-conf-check]'), call = e.target.closest?.('[data-conf-all]');
+    if (ca || call) { // [需確認] 訊息的勾選、全選
+      if (call) { work.confSel.clear(); if (call.checked) for (const d of legacyConfirms()) work.confSel.add(d.messageId); }
+      else if (ca.checked) work.confSel.add(ca.dataset.confCheck); else work.confSel.delete(ca.dataset.confCheck);
+      renderWork();
+      workBox.querySelector(call ? '[data-conf-all]' : `[data-conf-check="${CSS.escape(ca.dataset.confCheck)}"]`)?.focus();
+      return;
+    }
+    const a = e.target.closest?.('[data-ask-check]'), all = e.target.closest?.('[data-ask-all]');
+    if (!a && !all) return;
+    if (all) { work.askSel.clear(); if (all.checked) for (const n of askNotes()) work.askSel.add(n.notificationId); }
+    else if (a.checked) work.askSel.add(a.dataset.askCheck); else work.askSel.delete(a.dataset.askCheck);
+    renderWork();
+    workBox.querySelector(all ? '[data-ask-all]' : `[data-ask-check="${CSS.escape(a.dataset.askCheck)}"]`)?.focus(); // 重畫後焦點留在剛按的那格
   });
   workBox.addEventListener('change', e => {
     const c = e.target.closest?.('[data-sugg-check]');
@@ -4495,7 +4547,9 @@
     return false;
   }
 
+  const ansOpen = new Set(); // 已處理的 [需確認]，按「還是要回答」才展開選項與回答框
   function authHtml(m, { inbox = false } = {}) {
+    if (m.resolution && !inbox && !ansOpen.has(m.messageId) && /^\s*\[需確認\]/.test(m.text)) return `<button type="button" class="link small ans-reopen" data-ans-reopen="${esc(m.messageId)}">還是要回答</button>`;
     const owner = myAiMsg(m);
     const fromOther = m.author.participantId !== state.me?.participantId; // AI 或其他同仁發的都給選項按鈕，自己發的不用
     if (!owner && !(state.me?.memberType === 'human' && !m.file && fromOther && (inbox || isToMe(m)) && /^\s*\[需確認\]/.test(m.text))) return '';

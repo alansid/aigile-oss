@@ -76,6 +76,7 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
   const kids = [];
   const BASE = await startServer(kids, path.join(dir, 'data'), env);
   const call = async (t, p, m = 'GET', b) => { const r = await fetch(BASE + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
+  const get = (q, ...v) => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return d.prepare(q).get(...v); } finally { d.close(); } }; // 測試唯讀查暫存庫
   const sql = (q, ...v) => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return d.prepare(q).run(...v); } finally { d.close(); } }; // 測試直接改本機暫存庫（例如讓 Token 過期）
   // 資料庫只存 Token 的雜湊：測試要以 AI 打 API 時，換一組已知的 Token（同一位只換一次，之後拿同一組）
   const toks = new Map();
@@ -143,5 +144,5 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
     }, 5000);
     exitGuard.unref();
   }
-  return { BASE, call, aiToken, sql, browser, stop };
+  return { BASE, call, aiToken, sql, get, browser, stop };
 }

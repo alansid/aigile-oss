@@ -407,7 +407,11 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const recRows = await db.all(
       'SELECT message_id, participant_id FROM message_recipients WHERE message_id IN (SELECT value FROM json_each(?))',
       JSON.stringify(rows.map(m => m.id)));
-    const people = await peopleMap(ctx, [...rows.map(m => m.author_id), ...recRows.map(r => r.participant_id)]);
+    // [需確認] 被人類標「已處理」（沒有回覆）時附上 resolution，提問的 AI 讀得到、當暫緩；只查 [需確認] 那幾則
+    const waitIds = rows.filter(m => inferState(m.text) === 'waiting').map(m => m.id);
+    const resRows = waitIds.length ? await db.all('SELECT message_id, resolved_by, resolved_at FROM decision_resolutions WHERE message_id IN (SELECT value FROM json_each(?))', JSON.stringify(waitIds)) : [];
+    const resBy = new Map(resRows.map(r => [r.message_id, r]));
+    const people = await peopleMap(ctx, [...rows.map(m => m.author_id), ...recRows.map(r => r.participant_id), ...resRows.map(r => r.resolved_by)]);
     const fileIds = rows.map(m => m.file_id).filter(Boolean);
     const fileRows = fileIds.length
       ? await db.all('SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(fileIds)) : [];
@@ -433,7 +437,14 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       file: m.file_id ? fileView(filesById.get(m.file_id), m.file_id) : null,
       createdAt: m.created_at,
       ...(AUTO_MSG_RE.test(m.request_id || '') ? { auto: true } : {}), // 平台自動組的通知（卡片異動、退回、交接…）：網頁英文介面照固定句型翻，內容不動
+      ...(resBy.has(m.id) ? { resolution: resolutionView(resBy.get(m.id), people) } : {}),
     }; });
+  }
+
+  // 「已處理（沒有回覆）」：人類在網頁按掉，沒有回答；AI 當暫緩，不再等、不重問
+  function resolutionView(r, people) {
+    const p = people.get(r.resolved_by);
+    return { state: '已處理（未回覆）', by: p ? { participantId: p.id, name: p.name } : { participantId: r.resolved_by, name: '?' }, at: r.resolved_at };
   }
 
   // 檔案對外格式；available=false 代表已刪除或已過期
@@ -3300,8 +3311,9 @@ ${ending}`;
 
     // 指派（@ 指定）超過時限仍未讀取的 AI（人類不 ACK 通知，列出來只是收件匣的重複）
     const cutoff = new Date(now - UNANSWERED_MS).toISOString();
-    const unanswered = pending
-      .filter(n => n.created_at <= cutoff && JSON.parse(n.reasons).includes('mention') && people.get(n.recipient_id)?.status === 'active' && people.get(n.recipient_id)?.kind === 'ai')
+    const late = pending.filter(n => n.created_at <= cutoff && JSON.parse(n.reasons).includes('mention') && people.get(n.recipient_id)?.status === 'active' && people.get(n.recipient_id)?.kind === 'ai');
+    const lateResolved = new Set(late.length ? (await db.all('SELECT message_id FROM decision_resolutions WHERE message_id IN (SELECT value FROM json_each(?))', JSON.stringify([...new Set(late.map(n => n.message_id))]))).map(r => r.message_id) : []);
+    const unanswered = late.filter(n => !lateResolved.has(n.message_id))
       .map(n => ({ messageId: n.message_id, participantId: n.recipient_id, name: people.get(n.recipient_id).name, since: n.created_at, _project: n.msg_project, _at: n.msg_at }));
 
     // 等人決定：[需確認] 訊息，直到  人類直接回覆、 人類按「已處理」、 PO 角色的 AI 以 [決策紀錄] 回覆
