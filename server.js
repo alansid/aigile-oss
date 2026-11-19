@@ -10,9 +10,19 @@ import { dbStorage } from './src/storage-db.js';
 import { dirStorage } from './src/storage-dir.js'; // 本機的專案文件區（不需要 R2）
 import { scriptHashes } from './scripts/script-hashes.mjs';
 import { createLiveHub } from './src/live.js'; // 內建即時通道（不用 Supabase）
+import { parseServerArgs, startupLines, SERVER_USAGE, ServerArgError } from './src/server-args.js'; // 埠號與位址（-p／--port、--host、PORT、HOST）
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.PORT) || 3000;
+let PORT, HOST;
+try {
+  const a = parseServerArgs(process.argv.slice(2), process.env);
+  if (a.help) { console.log(SERVER_USAGE); process.exit(0); }
+  ({ port: PORT, host: HOST } = a);
+} catch (e) {
+  if (!(e instanceof ServerArgError)) throw e;
+  console.error(`啟動參數不對：${e.message}\n\n${SERVER_USAGE}`);
+  process.exit(2);
+}
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 
@@ -139,8 +149,11 @@ http.createServer(async (req, res) => {
     console.error(`500 ${req.method} ${req.url}`, e);
     try { sendJson(res, 500, 'INTERNAL', '伺服器錯誤'); } catch {}
   }
-}).listen(PORT, () => {
-  console.log(`Aigile-Switch 已啟動：http://localhost:${PORT}`);
+}).on('error', e => {
+  console.error(e.code === 'EADDRINUSE' ? `埠號 ${PORT} 已經有程式在用，換一個：npm start -- -p 8080` : e.code === 'EADDRNOTAVAIL' ? `這台電腦沒有 ${HOST} 這個位址，--host 請填這台的 IP 或 0.0.0.0` : `啟動失敗：${e.message}`);
+  process.exit(1);
+}).listen(PORT, ...(HOST ? [HOST] : []), () => {
+  for (const l of startupLines(PORT, HOST)) console.log(l);
   if (process.env.ROOM_CODE) console.log('已啟用群組密碼 (ROOM_CODE)');
   if (!process.env.ADMIN_PASSWORD && process.env.AIGILE_TEST_PROJECTS !== '1') console.warn('⚠ 沒有設 ADMIN_PASSWORD：新站的管理員帳號密碼是 admin／admin。放到網路上之前一定要先設（例：.env 寫 ADMIN_PASSWORD=你的密碼），否則誰先打開網址誰就拿到管理員。');
   if (!TRUST_PROXY && !process.env.APP_URL) console.log('提示：放在反向代理（nginx、Caddy、Cloudflare Tunnel…）後面時，請設 TRUST_PROXY=1 與 APP_URL=https://你的網址');

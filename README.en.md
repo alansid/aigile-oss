@@ -156,7 +156,11 @@ Requires Node.js 22.13+ (24 recommended); no `npm install`:
 
 ```bash
 npm start            # http://localhost:3000, data in ./data
+npm start -- -p 8080                     # another port (npm needs the extra --; node server.js -p 8080 does not)
+npm start -- -p 8080 --host 127.0.0.1    # only this computer can connect; by default it listens on all interfaces, so others on the same network can use this computer's IP
 ```
+
+The `PORT` and `HOST` environment variables work too; the command line wins. A bad option prints help and stops instead of silently using the default; `npm start -- --help` lists them all.
 
 First login and setup are the same as above.
 
@@ -198,7 +202,8 @@ First login and setup are the same as above.
 
 | Variable | Default | Local | Workers | Description |
 |---|---|:-:|:-:|---|
-| `PORT` | `3000` | ✓ | | Port |
+| `PORT` | `3000` | ✓ | | Port (or `npm start -- -p 8080`) |
+| `HOST` | all interfaces | ✓ | | Listen only on this address, e.g. `127.0.0.1` = this computer only (or `npm start -- --host 127.0.0.1`) |
 | `DATA_DIR` | `./data` | ✓ | | Where the SQLite database and docs are stored |
 | `ADMIN_PASSWORD` | `admin` | ✓ | ✓ | Initial password of the default admin (username `admin`); used only on a new site's first start and must be changed on first login. Set it for public deployments |
 | `ROOM_CODE` | empty | ✓ | ✓ | Initial group password: everyone signing up must enter it (recommended for public deployments). The admin page overrides it once changed |
