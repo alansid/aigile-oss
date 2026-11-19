@@ -3,6 +3,7 @@
 // 修正後：/api/messages、/api/notifications、/api/notifications/count 帶不認得的參數回 400 UNKNOWN_PARAM，
 //         錯誤訊息寫出不認得哪個、這個端點收哪些；網頁、watcher、等待腳本、poll、MCP、規格實際帶的組合照常；英文介面翻得到
 // 用法：node scripts/unknown-param-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

@@ -1,0 +1,206 @@
+#!/usr/bin/env node
+// Aigile-Switch 一行啟動：所屬人類在網頁「我的 AI」複製一行貼到工作資料夾的終端機；重開機貼同一行就接回。零依賴，Node 22+。
+//
+// 做的事（每步印一行；不印 Token）：
+//   1. Token：.aigile/<代號>/.token 沒有才用 --setup 的一次性接入連結拿（拿到的接入設定去掉 Token 存成 onboarding.md）
+//   2. 接入檢查：下載並核對 aigile-setup.mjs（雜湊用 Token 向平台拿），執行它——下載核對 watcher 等腳本、watcher.env、技能、
+//      通用 MCP（aigile，整台電腦裝一次）、Claude Code hook（/clear 自動接回、回合結束檢查等待腳本）
+//   3. watcher：watcher.pid 的程序不在才在背景啟動
+//   4. Claude Code：帶 AIGILE_AGENT=<代號> 開 claude 並帶入待命提示（初次＝照 onboarding.md 接入；之後＝照 reconnect.md 重新接上）
+//      Codex：也在前景開 codex（互動模式）帶入接入提示，人看得到接好沒；開著時寫 foreground.lock，背景喚醒腳本據此提醒先檢查工作樹；
+//      watcher 合併點名，送進前景對話；視窗關閉才開背景回合
+// 用法：node aigile-start.mjs --agent PG_XXXX --base https://平台網址 [--setup 一次性接入連結] [--tool claude|codex] [--no-launch]
+// 結束碼：0 完成（或 claude 的結束碼）；1 某一步失敗（最後一行寫卡在哪、怎麼辦）
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+
+const args = process.argv.slice(2);
+const opt = name => { const i = args.findIndex(a => a === `--${name}` || a.startsWith(`--${name}=`)); return i < 0 ? '' : args[i].includes('=') ? args[i].split('=').slice(1).join('=') : args[i + 1] || ''; };
+const AGENT = opt('agent');
+const BASE = (opt('base') || '').replace(/\/+$/, '');
+const SETUP_URL = opt('setup');
+const TOOL = opt('tool') || 'claude';
+const NO_LAUNCH = args.includes('--no-launch');
+const DIR = path.join('.aigile', AGENT || '_');
+const W = path.join('.aigile', 'watcher');
+const out = s => console.log(s);
+class Stop extends Error {}
+const fail = (step, why, fix) => { out(`✗ ${step}：${why}`); out(`卡在：${step}。怎麼辦：${fix}`); throw new Stop(); };
+const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+const alive = pid => { if (!(pid > 0)) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const posix = p => p.replace(/\\/g, '/');
+
+try {
+  if (!/^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)?$/.test(AGENT) || !/^https?:\/\//.test(BASE)) fail('參數', '缺 --agent 或 --base', '請所屬人類在網頁「我的 AI」重新複製一行啟動');
+  if (!['claude', 'codex'].includes(TOOL)) fail('參數', `--tool 只能是 claude 或 codex（收到 ${TOOL}）`, '請所屬人類在網頁選對工具再複製');
+  if (Number(process.versions.node.split('.')[0]) < 22) fail('Node 版本', `目前 ${process.versions.node}，要 22 以上`, '請安裝 Node 22 以上');
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(W, { recursive: true });
+
+  // 1. Token
+  const tokFile = path.join(DIR, '.token');
+  let token = ''; try { token = fs.readFileSync(tokFile, 'utf8').trim(); } catch {}
+  let first = false;
+  const NET_FIX = '公司網路多半要代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1 再貼一次';
+  const RECOPY = '請所屬人類在網頁「我的 AI」重新複製一行啟動';
+  // 用一次性連結拿 Token（連結會給目前有效的 Token）；接入設定去掉 Token 存成 onboarding.md
+  async function fromLink() {
+    const r = await fetch(SETUP_URL, { signal: AbortSignal.timeout(20_000) }).catch(e => fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, NET_FIX));
+    if (r.status === 410) fail('接入連結', '已失效（15 分鐘內、只能用一次）', RECOPY);
+    if (!r.ok) fail('接入連結', `HTTP ${r.status}`, '把這行告訴所屬人類');
+    const text = await r.text();
+    const lines = text.split(/\r?\n/);
+    const at = lines.findIndex(l => l.includes('下一行整行就是 Token'));
+    const ti = at < 0 ? -1 : lines.findIndex((l, i) => i > at && l.trim());
+    const t = ti < 0 ? '' : lines[ti].trim();
+    if (!/^[A-Za-z0-9_.~-]{16,}$/.test(t)) fail('Token', '接入設定裡找不到 Token', '把這行告訴所屬人類');
+    if (!new RegExp(`--agent ${AGENT}\\b`).test(text)) fail('身分', `這份接入設定不是 ${AGENT} 的`, '請所屬人類確認複製的是這隻 AI 的一行啟動');
+    fs.writeFileSync(tokFile, t);
+    lines[ti] = `（Token 已存在 ${posix(tokFile)}；不要印出、不要貼到群組）`;
+    fs.writeFileSync(path.join(DIR, 'onboarding.md'), lines.join('\n'));
+    first = /（初次接入）/.test(lines[0] || '');
+    return t;
+  }
+  if (!token) {
+    if (!SETUP_URL) fail('Token', `找不到 ${posix(tokFile)}`, RECOPY + '（裡面有一次性接入連結）');
+    token = await fromLink();
+    out(`✓ Token 已存好（${posix(tokFile)}），接入設定存成 ${posix(path.join(DIR, 'onboarding.md'))}`);
+  } else {
+    // 本機舊的 Token 失效（重發過或到期）而這一行帶著連結 → 用連結換新的，舊檔先備份
+    const r = await fetch(`${BASE}/api/me`, { headers: { Authorization: `Bearer ${token}`, 'X-Aigile-Source': 'start' }, signal: AbortSignal.timeout(20_000) }).catch(e => fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, NET_FIX));
+    if (r.status === 401 && SETUP_URL) {
+      const bak = `${tokFile}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      fs.copyFileSync(tokFile, bak);
+      out(`! 本機的 Token 平台不認得了（401，多半是重發過或到期），改用這一行的一次性連結拿新的；舊檔備份成 ${posix(bak)}`);
+      token = await fromLink();
+      out(`✓ 新的 Token 已存好（${posix(tokFile)}），接入設定存成 ${posix(path.join(DIR, 'onboarding.md'))}`);
+    } else if (r.status === 401) fail('Token', '平台不認得本機的 Token（401）', RECOPY + '（一行裡的連結會換新的 Token）');
+    else out(`✓ Token：${posix(tokFile)}`);
+  }
+
+  const auth = { Authorization: `Bearer ${token}`, 'X-Aigile-Source': 'start' };
+  const get = async p => {
+    const r = await fetch(BASE + p, { headers: auth, signal: AbortSignal.timeout(20_000) }).catch(e => fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, NET_FIX));
+    if (r.status === 401) fail('Token', '平台不認得這組 Token（401）', RECOPY);
+    if (!r.ok) fail('連線', `${p} 回 HTTP ${r.status}`, '把這行告訴所屬人類');
+    return r;
+  };
+
+  // 2. 接入檢查（下載核對 aigile-setup.mjs 再執行；它會自己更新這支一行啟動）
+  const cfg = await (await get('/api/me/watcher-env')).json();
+  if (cfg.agent && cfg.agent !== AGENT) fail('代號', `這個 Token 是 ${cfg.agent} 的，不是 ${AGENT}`, '請所屬人類確認複製的是這隻 AI 的一行啟動');
+  const setup = path.join(W, 'aigile-setup.mjs');
+  let have = ''; try { have = sha(fs.readFileSync(setup)); } catch {}
+  if (cfg.setup && have !== cfg.setup) {
+    const r = await fetch(`${BASE}/aigile-setup.mjs`, { signal: AbortSignal.timeout(20_000) }).catch(() => null);
+    const buf = r?.ok ? Buffer.from(await r.arrayBuffer()) : null;
+    if (!buf) fail('下載', 'aigile-setup.mjs 下載失敗', '再貼一次；還是不行就告訴所屬人類');
+    if (sha(buf) !== cfg.setup) fail('核對', 'aigile-setup.mjs 的 SHA-256 跟平台給的不一樣', '不要執行，告訴所屬人類');
+    fs.writeFileSync(setup, buf);
+  }
+  out('— 接入檢查 —');
+  const s = spawnSync(process.execPath, [setup, '--agent', AGENT, '--base', BASE, '--tool', TOOL], { stdio: 'inherit', env: { ...process.env, AIGILE_TOKEN: '' } });
+  if (s.status !== 0) fail('接入檢查', `結束碼 ${s.status}`, '照上面接入檢查最後一行做，做完再貼一次這一行');
+  out('— 接入檢查結束 —');
+
+  // 記號：這台是用一行啟動接的＝所屬人類同意待命（/clear 的 hook 拿重新接上設定時帶 start=1）
+  try { fs.writeFileSync(path.join(DIR, 'started-by-line'), new Date().toISOString()); } catch {}
+
+  // 3. watcher
+  const lock = path.join(DIR, 'foreground.lock');
+  const unlock = () => { try { if (fs.readFileSync(lock, 'utf8').trim() === String(process.pid)) fs.rmSync(lock, { force: true }); } catch {} };
+  if (TOOL === 'codex' && !NO_LAUNCH) {
+    try {
+      fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const prior = Number(fs.readFileSync(lock, 'utf8').trim());
+      if (!prior || alive(prior)) fail('Codex', '同代號已有前景視窗或正在啟動', '先使用或關閉原視窗再重新啟動');
+      fs.unlinkSync(lock);
+      fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+    }
+    process.on('exit', unlock);
+  }
+  const envFile = posix(path.join(DIR, 'watcher.env'));
+  let watcherReady = false;
+  const startWatcher = () => {
+    if (watcherReady) return;
+    let wpid = 0; try { wpid = Number(fs.readFileSync(path.join(DIR, 'watcher.pid'), 'utf8').trim()); } catch {}
+    if (alive(wpid)) out(`✓ watcher 已在執行（程序 ${wpid}）`);
+    else {
+      const logFd = fs.openSync(path.join(DIR, 'watcher.log'), 'a');
+      // --env-file 不蓋掉已經有的環境變數：watcher.env 裡有的鍵先從環境拿掉（舊的 AIGILE_TOKEN、空的 AIGILE_BASE 會讓 watcher 讀錯）
+      const wenv = { ...process.env };
+      for (const l of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) { const k = /^\s*([A-Z_][A-Z0-9_]*)=/.exec(l)?.[1]; if (k) delete wenv[k]; }
+      delete wenv.AIGILE_TOKEN;
+      const w = spawn(process.execPath, [`--env-file=${envFile}`, posix(path.join(W, 'watcher.mjs'))], { detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true, env: wenv });
+      fs.closeSync(logFd);
+      w.unref();
+      out(`✓ watcher 已在背景啟動（程序 ${w.pid}，日誌 ${posix(path.join(DIR, 'watcher.log'))}）`);
+    }
+    watcherReady = true;
+  };
+  if (TOOL !== 'codex' || NO_LAUNCH) startWatcher();
+
+  // 4. 待命提示
+  const wait = `node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;
+  // Codex 也在前景開一次做接入（人看得到接好沒）；點名由 watcher 接收，所以不開等待腳本
+  const done = '最後用一句話告訴所屬人類：「接好了，可以關掉，之後有事會在背景叫我」';
+  const codexTail = `Codex 不用前景等待、不開等待腳本：watcher 已在背景跑，支援同視窗時會把工作送入本對話，視窗關閉後才用背景回合。呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），${done}。`;
+  let prompt;
+  if (first) prompt = TOOL === 'codex'
+    ? `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做到簽到（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動同意待命。${codexTail}`
+    : `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動同意待命，watcher 已在背景跑；接好後用背景執行開等待腳本：${wait}`;
+  else {
+    const r = await get(`/api/me/reconnect?tool=${TOOL}&start=1`);
+    fs.writeFileSync(path.join(DIR, 'reconnect.md'), await r.text());
+    prompt = TOOL === 'codex'
+      ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${codexTail}`
+      : `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用）。watcher 已在背景跑；跑完一輪就用背景執行開等待腳本待命：${wait}`;
+  }
+  const say = prompt.replace(/"/g, "'");
+  if (NO_LAUNCH) { out(`✓ 待命提示：${prompt}`); out(`完成（--no-launch：沒有開 ${TOOL === 'codex' ? 'Codex' : 'Claude Code'}）。`); }
+  else if (TOOL === 'codex') {
+    out('✓ 開 Codex（互動模式，帶 AIGILE_AGENT；沙盒只開網路）。視窗開著時可接收門鈴，關閉後由 watcher 在背景叫醒');
+    const bin = process.env.AIGILE_CODEX_BIN || process.env.CODEX_BIN || 'codex';
+    const sb = ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true'];
+    const env = { ...process.env, AIGILE_AGENT: AGENT };
+    const binIsPath = fs.existsSync(bin);
+    const helper = path.resolve(W, 'aigile-codex-ui.mjs');
+    let r;
+    if (cfg.files?.['aigile-codex-ui.mjs'] && fs.existsSync(helper)) {
+      try {
+        const { launchForeground } = await import(pathToFileURL(helper).href);
+        r = await launchForeground({ dir: DIR, bin, args: sb, env, prompt, onReady: startWatcher });
+      } catch (error) {
+        out(`同視窗啟動失敗：${error.message}`);
+      }
+    }
+    if (!r) {
+      startWatcher();
+      out('此 CLI 使用一般前景視窗，門鈴交給背景回合。');
+      r = /\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, ...sb, prompt], { stdio: 'inherit', env })
+        : process.platform === 'win32' || (!binIsPath && /\s/.test(bin))
+          ? spawnSync(`${binIsPath ? `"${bin}"` : bin} ${sb.join(' ')} "${say}"`, { stdio: 'inherit', env, shell: true })
+          : spawnSync(bin, [...sb, prompt], { stdio: 'inherit', env });
+    }
+    unlock();
+    if (r.error || r.status === null) fail('Codex', `開不起來（${r.error?.message || '找不到 codex 指令'}）`, '確認已安裝 Codex CLI（codex 指令），再貼一次');
+    out('✓ Codex 已關，watcher 會在背景處理待處理通知');
+    process.exitCode = r.status;
+  } else {
+    out('✓ 開 Claude Code（帶 AIGILE_AGENT，通用 MCP 認得你）');
+    const bin = process.env.AIGILE_CLAUDE_BIN || 'claude';
+    const env = { ...process.env, AIGILE_AGENT: AGENT };
+    const r = /\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, prompt], { stdio: 'inherit', env })
+      : spawnSync(`${bin} "${say}"`, { stdio: 'inherit', env, shell: true });
+    if (r.error || r.status === null) fail('Claude Code', `開不起來（${r.error?.message || '找不到 claude 指令'}）`, '確認已安裝 Claude Code（claude 指令），再貼一次');
+    process.exitCode = r.status;
+  }
+} catch (e) {
+  if (!(e instanceof Stop)) throw e;
+  process.exitCode = 1;
+}

@@ -123,7 +123,7 @@ try {
     let out = ''; p.stdout.on('data', d => { out += d; });
     p.on('exit', code => res({ code, last: out.trim().split('\n').pop() }));
   });
-  r = await runWait(['--max-min=0.02']);
+  r = await runWait(['--exit-on-timeout', '--max-min=0.02']);
   assert.deepEqual([r.last, r.code], ['TIMEOUT', 10]);
   assert.equal((await mine()).wakesToday, 3, 'TIMEOUT 算一次');
   assert.equal((await call(HUMAN, '/api/messages', 'POST', { project: '預設專案', requestId: 'p1', text: '請看一下', recipientIds: ['p_old_ai'] })).status, 201, '升級後照樣能發文');
@@ -136,7 +136,7 @@ try {
   r = await runWait([], { AIGILE_BASE: '' });
   assert.deepEqual([r.last, r.code], ['CONFIG_ERROR', 40]);
   assert.equal((await mine()).wakesToday, 4, '錯誤結束不算');
-  r = await runWait(['--max-min=0.02'], { AIGILE_BASE: 'http://127.0.0.1:9' });
+  r = await runWait(['--exit-on-timeout', '--max-min=0.02'], { AIGILE_BASE: 'http://127.0.0.1:9' });
   assert.deepEqual([r.last, r.code], ['TIMEOUT', 10], '回報失敗（舊平台或斷線）照常結束');
 
   // ---------- 6. watcher ----------

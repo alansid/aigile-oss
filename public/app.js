@@ -4327,6 +4327,12 @@
   // ---------- ：[需確認] 快捷列——選項按鈕＋想法輸入框 ----------
   const quickMap = new Map(); // 訊息編號 → { sel, text, noOpts, busy, error }
   const quickState = id => { if (!quickMap.has(id)) quickMap.set(id, { sels: {}, text: '', busy: false, error: '' }); return quickMap.get(id); };
+  // 這則指定誰回覆（replyFrom，沒帶就看收件人的 ask）；我不在裡面＝代答，送出前確認一次、回覆標「代答（我的名字）」
+  const PROXY_RE = /^((?:代答|代為暫緩)（[^）\n]{1,30}）)[:：]?\s*/;
+  const proxyFor = m => {
+    const ids = m.replyFrom?.length ? m.replyFrom : (m.recipients || []).filter(r => r.ask).map(r => r.participantId);
+    return ids.includes(state.me?.participantId) ? [] : ids;
+  };
   const OPT_LETTER = /^\s*(?:[（(]([A-F])[）)]|([A-F])\s*[.、:：）)])\s*(\S.*)$/;
   const OPT_CIRCLE = /^\s*([①②③④⑤⑥])\s*(\S.*)$/;
   // [需確認] 的選項解析，跟伺服器 src/questions.js 同一份規則（questions-test 會比對）
@@ -4399,7 +4405,7 @@
       return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(ckeyOf(dcard))} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
       <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
-        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>先擱著（暫緩）</button></div>
+        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy || q.proxyAsk ? 'disabled' : ''}>先擱著（暫緩）</button></div>
       <p class="muted small inl-note">留言會通知提案人；先擱著會移出「要你處理」，之後可在工作頁恢復。</p>
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
     }
@@ -4419,12 +4425,18 @@
       ${qs.map(qBlock).join('')}
       <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
       <div class="inl-actions">
-        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || (missing && !textOnly) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
-        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy ? 'disabled' : ''}>暫緩處理</button>
+        <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || q.proxyAsk || (missing && !textOnly) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
+        <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy || q.proxyAsk ? 'disabled' : ''}>暫緩處理</button>
       </div>
+      ${q.proxyAsk ? (() => { // 代答確認：動態字句用 L() 直接給英文；回覆裡的標記「代答／代為暫緩（名字）」是給 AI 讀的，英文介面也照原文
+        const hold = q.proxyAsk === 'hold', who = esc(proxyFor(m).map(pid => state.participants.get(pid)?.name || pid).join('、')), tag = `${hold ? '代為暫緩' : '代答'}（${esc(state.me?.name || '')}）`;
+        return `<div class="auth-confirm" role="group" aria-label="${hold ? L('確認暫緩', 'Confirm hold') : L('確認代答', 'Confirm answering for them')}"><b>${hold ? L(`這題是問 ${who} 的，確定要幫忙暫緩嗎？`, `This question is for ${who}. Put it on hold on their behalf?`) : L(`這題是問 ${who} 的，確定要代答嗎？`, `This question is for ${who}. Answer on their behalf?`)}</b>
+        <span class="muted small">${L(`送出的回覆會標「${tag}」，讓 AI 知道不是本人回的。`, `The reply is tagged "${tag}" so the AI knows it did not come from the person asked.`)}</span>
+        <div class="row"><button type="button" class="btn primary" data-q-proxy-ok data-qm="${id}">${hold ? L('確定暫緩', 'Put on hold') : L('確定代答', 'Answer for them')}</button><button type="button" class="btn" data-q-proxy-cancel data-qm="${id}">取消</button></div></div>`;
+      })() : ''}
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
   }
-  async function quickSend(id, kind) {
+  async function quickSend(id, kind, confirmed = false) {
     const m = state.byId.get(id), q = quickState(id);
     if (!m || q.busy) return;
     const dcard = cardOfConfirm({ messageId: id });
@@ -4445,7 +4457,9 @@
     if (kind === 'send' && !textOnly && qs.some((_, i) => !q.sels[i])) return;
     const picks = qs.length === 1 && !qs[0].named ? `選 ${q.sels[0]}` : qs.map((qq, i) => `問題${qq.no} 選 ${q.sels[i]}`).join('；');
     const head = kind === 'hold' ? '暫緩處理' : qs.length ? picks : '同意照辦';
-    const text = textOnly ? `[回覆] ${q.text.trim()}` : `[回覆] ${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
+    const proxy = proxyFor(m).length ? `${kind === 'hold' ? '代為暫緩' : '代答'}（${state.me?.name || ''}）：` : '';
+    if (proxy && !confirmed) { q.proxyAsk = kind; refreshMsg(id); return; }
+    const text = textOnly ? `[回覆] ${proxy}${q.text.trim()}` : `[回覆] ${proxy}${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
     q.busy = true; q.error = ''; refreshMsg(id);
     try {
       const r = await postMsg({ text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] });
@@ -4474,6 +4488,10 @@
     if (send) { if (!send.disabled) quickSend(send.dataset.qm, 'send'); return true; }
     const hold = t.closest?.('[data-q-hold]');
     if (hold) { if (!hold.disabled) quickSend(hold.dataset.qm, 'hold'); return true; }
+    const pok = t.closest?.('[data-q-proxy-ok]'); // 確定代答
+    if (pok) { const q = quickState(pok.dataset.qm), k = q.proxyAsk; q.proxyAsk = null; quickSend(pok.dataset.qm, k, true); return true; }
+    const pno = t.closest?.('[data-q-proxy-cancel]');
+    if (pno) { quickState(pno.dataset.qm).proxyAsk = null; refreshMsg(pno.dataset.qm); return true; }
     return false;
   }
 
@@ -4524,9 +4542,9 @@
   }
   function answeredHtml(m, r) {
     const body = r.text.replace(/^\s*\[回覆\]\s*/, '');
-    const qs = parseQuestions(m.text), picks = answerPicks(qs, body);
+    const qs = parseQuestions(m.text), picks = answerPicks(qs, body.replace(PROXY_RE, '')); // 代答的選項照樣標出
     const chosen = qs.map((qq, i) => { const o = picks[i] && qq.opts.find(x => x.key === picks[i]); return o ? `<span class="ans-pick">${qs.length > 1 ? `問題${qq.no} ` : ''}<b>${esc(o.key)}</b> ${esc(o.label)}<span class="ans-tag">已選</span></span>` : ''; }).join('');
-    return `<div class="auth-row sent answered"><button type="button" class="ans-jump" data-jump="${esc(r.messageId)}" title="跳到這則回覆"><b>已回覆：</b><span class="ans-text">${esc(oneLine(body, 60))}</span><span class="muted small">· ${esc(r.author.name)} · ${esc(shortTime(r.createdAt))}</span></button>${chosen ? `<div class="ans-picks">${chosen}</div>` : ''}</div>`;
+    return `<div class="auth-row sent answered"><button type="button" class="ans-jump" data-jump="${esc(r.messageId)}" title="跳到這則回覆"><b>已回覆：</b><span class="ans-text">${esc(oneLine(body.replace(PROXY_RE, ''), 60))}</span><span class="muted small">· ${esc(body.match(PROXY_RE)?.[1] || r.author.name)} · ${esc(shortTime(r.createdAt))}</span></button>${chosen ? `<div class="ans-picks">${chosen}</div>` : ''}</div>`;
   }
   // 收件匣要顯示 [需確認] 的完整題目與選項，原文不在目前載入範圍的先抓回來（只放進 byId，不插進訊息串）
   async function loadConfirmMsgs() {
@@ -5681,7 +5699,9 @@
         <label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
         <p class="ma-hint">${esc(CONVO_HINT[o.convo || ''])}</p>
         <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>
-        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="short" data-id="${id}">複製接入文字</button><button class="btn" type="button" data-act="copy" data-id="${id}">複製完整版</button></span></div>
+        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="short" data-id="${id}">複製接入文字</button>${tool === 'claude' || tool === 'codex' ? `<button class="btn" type="button" data-act="start" data-id="${id}">複製一行啟動</button>` : ''}<button class="btn" type="button" data-act="copy" data-id="${id}">複製完整版</button></span></div>
+        ${tool === 'codex' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝通用 MCP 與技能、在背景開 watcher，最後開 Codex 帶入接入提示（視窗開著時被點名會在同一個視窗回覆；關掉後有事在背景叫它）。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。</p>'
+          : tool === 'claude' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝通用 MCP 與技能、在背景開 watcher，最後開 Claude Code 並帶入待命提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。/clear 後會自動接回，不用再貼。</p>' : ''}
         <p class="ma-hint">接入文字很短、不含 Token：AI 會用一次性連結自己下載完整設定（15 分鐘內、只能讀一次），讀的那一刻拿到新 Token。第一次接入、Token 重發後重新接上都用它。AI 連不上網路時才用完整版（約 5,000 字，附一組新 Token）。</p>
         <p class="ma-hint">上面的選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
       : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
@@ -5806,6 +5826,12 @@
           const { text } = await api(onboardingUrl(ai));
           loadParticipants().catch(() => {});
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
+        } else if (b.dataset.act === 'start') { // 一行啟動：裡面帶一次性連結，本機沒有可用的 .token 才會用（用了才換新 Token）
+          if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
+          const o = maOpt(ai), tool = maTool(ai);
+          const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: true, start: true, ...(o.convo ? { convo: o.convo } : {}), tool } });
+          if (!r.startLine) return toast('這個工具沒有一行啟動，請用「複製接入文字」');
+          toast((await copyText(r.startLine)) ? '已複製一行啟動：貼到這隻 AI 工作資料夾的終端機（第一次 15 分鐘內貼；重開機貼同一行）' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'short') { // 幾行、不含 Token，連結 15 分鐘、只能讀一次；AI 讀連結時拿到新 Token。主要做法、依工具出文字
           if (!maTool(ai)) { // 沒選過工具：不複製，展開接入分頁請他先選
             maAskTool.add(id); open.set(id, 'conn'); row(id);

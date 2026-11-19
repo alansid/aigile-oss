@@ -103,7 +103,7 @@ try {
   assert.match(show(expect.建卡等決定), /created this card, waiting for 陳大文 to decide$/);
   assert.match(show(expect.決定), /decided "上線": 先上測試站$/);
   assert.match(show(/首頁改版：第二版/), /首頁改版：第二版: created this card, owner 陳大文$/, '標題裡的全形冒號不會被當成分隔');
-  assert.match(show(expect.交接), /status Triage → To do, waiting for 開發助手 to pick it up\)\n• Progress: 畫面做好\n• Next step: 接 API\n• Caution: 別動樣式$/);
+  assert.match(show(expect.交接), /status Triage → To do, waiting for 開發助手 to pick it up\)\n• Next step: 接 API\n• Caution: 別動樣式$/);
   assert.match(show(expect.刪除AI), /^\[通知\] 【All projects】AI "暫時助手" was deleted\. Its cards are unassigned now \(back to To do\), 1 card: MAIN-9\./);
   if (process.env.SHOW) for (const m of autos) console.log(en.autoMsg(m.text));
   console.log('✓ 英文：' + autos.length + ' 則都換成英文，人名、卡號、標題、原因照原文');

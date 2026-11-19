@@ -112,7 +112,7 @@ try {
   for (const t of TOOLS) {
     assert.ok(/（初次接入）/.test(first[t]) && /（重新接上）/.test(again[t]), `${t}：標題寫出是初次還是重接`);
     const all = first[t] + '\n' + again[t] + '\n' + spec;
-    const missing = RULES.filter(([n, re]) => !(t === 'other' && n.startsWith('等待腳本 ')) && !re.test(all)).map(([n]) => n);
+    const missing = RULES.filter(([n, re]) => !(t !== 'claude' && n.startsWith('等待腳本 ')) && !re.test(all)).map(([n]) => n);
     assert.deepEqual(missing, [], `${t}：規則不見了：` + missing.join('、'));
   }
 

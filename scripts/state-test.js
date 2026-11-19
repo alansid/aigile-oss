@@ -47,13 +47,29 @@ const call = async (token, p, method = 'GET', body, raw) => {
     assert.equal((await put(boss.token, good)).status, 403, '人類不能寫');
     assert.equal((await call(boss.token, '/api/me/state')).status, 403, '人類沒有自己的工作記憶');
     assert.equal((await put(plat.token, null, '{壞掉')).status, 400, '非法 JSON');
-    assert.equal((await put(plat.token, { x: 1 })).status, 400, '未知欄位');
-    assert.equal((await put(plat.token, { currentTask: { title: 'a', foo: 1 } })).status, 400, 'currentTask 未知欄位');
     assert.equal((await put(plat.token, { currentTask: { title: 'a', sha: 'abc' } })).status, 400, 'sha 要完整 40 碼');
     assert.equal((await put(plat.token, { currentTask: { title: 'a', cardId: 'X1' } })).status, 400, 'cardId 格式');
     assert.equal((await put(plat.token, { wakeMode: 'x' })).status, 400, 'wakeMode 只能三種');
     assert.equal((await put(plat.token, { backlog: Array.from({ length: 21 }, (_, i) => ({ title: 't' + i })) })).status, 400, 'backlog 最多 20');
-    assert.equal((await put(plat.token, { currentTask: { title: 'x'.repeat(101) } })).status, 400, 'title 上限');
+
+    // 格式錯附正確範例；超長截斷、不認得的欄位略過，都只回 warnings
+    const strBacklog = await put(plat.token, { backlog: ['C-107 批次'] });
+    assert.equal(strBacklog.status, 400, 'backlog 給字串仍擋');
+    assert.match(strBacklog.body.error.message, /backlog\[0\] 需為物件[\s\S]*正確範例：\{"currentTask"/, '錯誤訊息附正確範例');
+    assert.match((await put(plat.token, { currentTask: 'C-108' })).body.error.message, /正確範例/, 'currentTask 型別錯也附範例');
+    const loose = await put(plat.token, { participantId: 'p_x', currentTask: { title: '長'.repeat(130), stage: '段'.repeat(60), status: '進行中' }, backlog: [{ title: 'b', trigger: '等'.repeat(120), cardId: 'MAIN-13', note: 1 }] });
+    assert.equal(loose.status, 200, '超長與不認得的欄位不整個拒絕');
+    assert.equal(loose.body.state.currentTask.title, '長'.repeat(100), 'title 截到 100 字');
+    assert.equal(loose.body.state.currentTask.stage, '段'.repeat(60), 'stage 放寬到 100 字（60 字照存）');
+    assert.equal(loose.body.state.currentTask.status, undefined, 'currentTask.status 略過');
+    assert.equal(loose.body.state.participantId, undefined, 'state.participantId 略過');
+    assert.deepEqual(loose.body.state.backlog, [{ title: 'b', trigger: '等'.repeat(100), cardId: 'MAIN-13' }], 'backlog 收 cardId、trigger 截斷、note 略過');
+    const lw = loose.body.warnings.join('\n');
+    for (const s of ['state 不認得欄位 participantId', 'currentTask 不認得欄位 status', 'currentTask.title 超過 100 字，已截斷', 'backlog[0].trigger 超過 100 字，已截斷', 'backlog[0] 不認得欄位 note'])
+      assert.ok(lw.includes(s), `warnings 提到：${s}（實得 ${lw}）`);
+    assert.ok(!lw.includes('currentTask.stage'), 'stage 沒超過 100 不警告');
+    assert.match((await put(plat.token, { currentTask: { title: 'a', stage: '段'.repeat(101) } })).body.warnings[0], /currentTask\.stage 超過 100 字/, 'stage 超過 100 才截斷');
+    assert.equal((await put(plat.token, { backlog: [{ title: 'b', cardId: 'X1' }] })).status, 400, 'backlog.cardId 格式錯擋');
     assert.equal((await put(plat.token, null, JSON.stringify({ currentTask: { title: 'a' }, pad: 'x'.repeat(17000) }))).status, 413, '超過 16KB 回 413');
 
     // 寫入、讀回、相同內容不重寫
@@ -96,7 +112,9 @@ const call = async (token, p, method = 'GET', body, raw) => {
     assert.equal((await put(plat.token, { ...good, messagesCursor: 'Bearer abc' })).status, 400, '游標格式不對擋');
     assert.equal((await put(plat.token, { ...good, messagesCursor: 'cur_' + 'x'.repeat(70) })).status, 400, '游標太長擋');
     assert.equal((await put(plat.token, { ...good, cardsSince: '昨天' })).status, 400, '時間格式不對擋');
-    assert.equal((await put(plat.token, { ...good, token: plat.token })).status, 400, '不能多塞欄位');
+    const extra = (await put(plat.token, { ...good, token: plat.token })).body; // 多塞的欄位略過不存（原本是 400）
+    assert.ok(extra.state && !('token' in extra.state) && !JSON.stringify(extra).includes(plat.token), '多塞的欄位不會存進去，回應也不回顯內容');
+    assert.match(extra.warnings[0], /state 不認得欄位 token/, '多塞欄位有警告');
     const sneak = (await put(plat.token, { ...good, currentTask: { title: '記一下 ' + plat.token } })).body;
     assert.equal(sneak.error?.code, 'SECRET_LIKE', '文字裡像 Token 的長字串擋下');
     assert.equal((await put(plat.token, { ...good, currentTask: { title: '做 MAIN-8', sha } })).status, 200, '40 碼 SHA 照常可以');

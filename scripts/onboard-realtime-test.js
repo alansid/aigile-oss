@@ -1,4 +1,4 @@
-// 接入設定的門鈴說明（PLAT-308，UX msg_ViS6Vez3n8YXNkYj）
+// 接入設定的門鈴說明（UX msg_ViS6Vez3n8YXNkYj）
 // 修正前：Cloudflare 版用 Supabase 送門鈴，AI 跑在有網路白名單的雲端環境時被擋，只能巡檢、慢 10～15 分鐘，接入設定沒提
 // 修正後：有設 Supabase → 寫「雲端環境要放行 <Supabase 網域>」；本機／Docker 內建即時通道 → 寫幾秒內就醒、不提 Supabase；
 //         都沒設 → 寫每 15 分鐘巡檢。Codex 版沒有 watcher，不寫門鈴那句

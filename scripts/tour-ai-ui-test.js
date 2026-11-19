@@ -68,7 +68,7 @@ try {
   assert.equal(p.title, '按「＋ 新增 AI」建一隻');
   assert.deepEqual([p.block, p.tip], ['建好 AI 後就能繼續', ''], '還沒有 AI：寫「建好 AI 後就能繼續」，不同時寫「可以直接按下一步」');
   assert.deepEqual(p.btns, ['上一步', '結束', '下一步(停用)'], '下一步不能按、可以結束');
-  // 平台 PLAT-313：用真的滑鼠（CDP）按「上一步」，會觸發頁面上「點選單外就關選單」；回第 1 步後頭像選單要開著、1 秒後還停在第 1 步
+  // 平台 用真的滑鼠（CDP）按「上一步」，會觸發頁面上「點選單外就關選單」；回第 1 步後頭像選單要開著、1 秒後還停在第 1 步
   const mouse = async sel => { const r = await J(`(() => { const b = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`);
     for (const type of ['mousePressed', 'mouseReleased']) await cdp('Input.dispatchMouseEvent', { type, x: r.x, y: r.y, button: 'left', clickCount: 1 }); };
   await mouse('.tour-foot [data-tour="prev"]');

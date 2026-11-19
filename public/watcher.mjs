@@ -25,11 +25,15 @@
 //   WAKE_MAX_PER_HOUR  每小時最多叫醒幾次；WAKE_MAX_PER_DAY 每 24 小時最多幾次（0＝不限）。預設依接法：
 //                      WAKE_CMD 是 echo（Claude Code：只寫門鈴，等待腳本醒）每小時 12、每天 60；其他（opencode 等，每次都跑模型）每小時 3、每天 15
 //                      到上限就先不叫醒，時段過了自動補叫，並私訊所屬人類一次；次數記在門鈴檔，重開 watcher 不歸零
+//                      PO 預設較高：echo 每小時 30、每天 150；其他每小時 6、每天 30（啟動時查 GET /api/me 的角色）。
+//                      上限通知由平台私訊所屬人類（一天一次），不貼專案群組
+//   WAKE_MERGE_SEC     收到門鈴後等幾秒再查（預設 25，0＝不等）：期間新到的通知合併成一次叫醒
 //   WAKE_TIMEOUT_MIN   單次喚醒最多跑幾分鐘，預設 10（0＝不限）；超過就把喚醒指令連同它開的程序停掉，並私訊所屬人類
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
 import { spawn } from 'node:child_process';
-import { readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
+import { createHash, createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 
 const env = process.env;
 const BASE = (env.AIGILE_BASE || '').replace(/\/+$/, '');
@@ -48,9 +52,13 @@ const BELL_FILE = env.BELL_FILE || '';
 const PID_FILE = env.PID_FILE || '';
 const num = (v, d) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Math.max(0, Number(v)));
 const BELL_ONLY = /^\s*echo\b/i.test(WAKE_CMD); // 只寫門鈴的接法，叫醒本身不耗模型用量
-const MAX_HOUR = num(env.WAKE_MAX_PER_HOUR, BELL_ONLY ? 12 : 3), MAX_DAY = num(env.WAKE_MAX_PER_DAY, BELL_ONLY ? 60 : 15);
+let MAX_HOUR = num(env.WAKE_MAX_PER_HOUR, BELL_ONLY ? 12 : 3), MAX_DAY = num(env.WAKE_MAX_PER_DAY, BELL_ONLY ? 60 : 15);
+// 角色預設（環境變數有設就以環境變數為準）。PO 一輪常被多人找，原本每小時 12 次很快就被暫停
+const ROLE_MAX = { PO: { bell: [30, 150], run: [6, 30] } };
+const MERGE_MS = num(env.WAKE_MERGE_SEC, 25) * 1000;
 const TIMEOUT_MS = num(env.WAKE_TIMEOUT_MIN, 10) * 60_000;
 const HOUR_MS = 3_600_000, DAY_MS = 24 * HOUR_MS;
+const SID = randomUUID(); // 會跑模型的接法向平台登記這個 watcher（後登記的算數）；只寫門鈴的由等待腳本登記
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 if (!BASE || !TOKEN || !ME || (!WAKE_CMD && !WATCH_ONLY)) {
@@ -80,10 +88,47 @@ function writeBell(patch = {}) {
 }
 function ring(pending) { writeBell({ seq: bell.seq + 1, pending, bellAt: new Date().toISOString() }); }
 const woken = new Set(); // 已經為它喚醒過的通知 ID：只要有「沒喚醒過的新通知」就喚醒，不靠未讀數或時間間隔判斷
+const uiDir = PID_FILE && /aigile-codex\.mjs\b/.test(WAKE_CMD) ? path.dirname(PID_FILE) : null;
+let uiTimer;
+let uiFailureSince;
+async function foregroundStatus() {
+  if (!uiDir || !existsSync(path.join(uiDir, 'foreground-ui.json'))) {
+    uiFailureSince = undefined;
+    return 'closed';
+  }
+  try {
+    const { inspectForeground } = await import('./aigile-codex-ui.mjs');
+    const status = await inspectForeground(uiDir);
+    uiFailureSince = undefined;
+    return status;
+  } catch (error) {
+    if (uiFailureSince === undefined) {
+      uiFailureSince = Date.now();
+      log('檢查前景對話失敗，稍後重試：', error.message);
+    }
+    return Date.now() - uiFailureSince >= 60_000 ? 'unavailable' : 'busy';
+  }
+}
+function waitForIdle() {
+  if (uiTimer) return;
+  uiTimer = setTimeout(async function poll() {
+    if (await foregroundStatus() === 'busy') { uiTimer = setTimeout(poll, 2000); return; }
+    uiTimer = null;
+    check('前景對話已可接收');
+  }, 2000);
+}
 
+// Token 檔換過（人類在網頁重發）就換用新的：401 時重讀一次 AIGILE_TOKEN_FILE，不用重開 watcher
+function reloadToken() {
+  if (!env.AIGILE_TOKEN_FILE) return false;
+  let t = ''; try { t = readFileSync(env.AIGILE_TOKEN_FILE, 'utf8').trim(); } catch { return false; }
+  if (!t || t === TOKEN) return false;
+  TOKEN = t; log('Token 檔換過了，改用新的 Token'); return true;
+}
 // 用自己的 Token 查未讀數（0 token）；同時就是待命心跳
 async function unread() {
-  const r = await fetch(`${BASE}/api/notifications/count`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } });
+  let r = await fetch(`${BASE}/api/notifications/count`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } });
+  if (r.status === 401 && reloadToken()) r = await fetch(`${BASE}/api/notifications/count`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } });
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(`未讀數 HTTP ${r.status} ${body.slice(0, 120)}`);
@@ -108,12 +153,32 @@ async function check(why) {
   ids = ids.map(n => n.notificationId);
   if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理${fyi ? `（${fyi} 則只是知會）` : ''}，沒有新的要處理，不叫醒`); }
   if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
+  let backgroundOnly = false;
+  if (uiDir) {
+    const status = await foregroundStatus();
+    if (status === 'busy') {
+      if (!uiTimer) log(`[${why}] 前景對話忙碌，等待空閒後重查通知`);
+      return waitForIdle();
+    }
+    // Concurrent checks may already have delivered the same notification.
+    if (fresh.every(id => woken.has(id))) return;
+    backgroundOnly = status === 'unavailable';
+  }
   if (running) { queued = true; return log(`[${why}] 有 ${fresh.length} 則新的待處理，但 AI 正在執行，排隊補跑`); }
   const cap = capped();
   if (cap) return holdForCap(cap, pending, why);
   fresh.forEach(id => woken.add(id));
   for (const id of woken) if (!ids.includes(id)) woken.delete(id); // 已處理掉的不用再記
-  wake(pending, why);
+  wake(pending, why, fresh, backgroundOnly);
+}
+
+// 門鈴先等 MERGE_MS 再查，期間再來的門鈴併進同一次（幾十秒內 3 則回覆只叫醒一次）
+let mergeTimer = null, mergedBells = 0;
+function merged(why) {
+  if (MERGE_MS <= 0) return check(why);
+  mergedBells++;
+  if (mergeTimer) return;
+  mergeTimer = setTimeout(() => { mergeTimer = null; const n = mergedBells; mergedBells = 0; check(n > 1 ? `${why}×${n}` : why); }, MERGE_MS);
 }
 
 // ---------- 叫醒上限 ----------
@@ -131,15 +196,25 @@ function holdForCap(cap, pending, why) {
   writeBell({ pending });
   log(`[${why}] 有 ${pending} 則待處理，但叫醒已達${cap.kind}上限 ${cap.max} 次，${hhmm(cap.until)} 後再叫醒`);
   if (!capTimer) capTimer = setTimeout(() => { capTimer = null; check('上限解除'); }, Math.max(1000, cap.until - Date.now() + 1000));
-  if (capNotified < cap.until) { capNotified = cap.until; tellOwner(`[通知] watcher 叫醒已達${cap.kind}上限（${cap.max} 次），先暫停，${hhmm(cap.until)} 後自動恢復；目前有 ${pending} 則待處理。要提早恢復請重開 watcher 並調高 ${cap.kind === '每天' ? 'WAKE_MAX_PER_DAY' : 'WAKE_MAX_PER_HOUR'}。`, 'cap-' + cap.until); }
+  if (capNotified < cap.until) { capNotified = cap.until; capNotice(cap, pending); }
+}
+// 上限通知交給平台私訊所屬人類（一天一次、不貼群組）；舊平台沒有這支 API 才退回私訊（仍不貼群組）
+async function capNotice(cap, pending) {
+  try {
+    const r = await fetch(`${BASE}/api/me/wake-cap`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'watcher' }, body: JSON.stringify({ kind: cap.kind, max: cap.max, until: new Date(cap.until).toISOString(), pending }) });
+    if (r.ok) { const j = await r.json().catch(() => ({})); return log(j.notified ? '已請平台私訊所屬人類（上限通知）' : '上限通知今天已發過，不再通知'); }
+    if (r.status !== 404) return log(`上限通知失敗：HTTP ${r.status}`);
+  } catch (e) { return log('上限通知失敗：', e.message); }
+  tellOwner(`[通知] watcher 叫醒已達${cap.kind}上限（${cap.max} 次），先暫停，${hhmm(cap.until)} 後自動恢復；目前有 ${pending} 則待處理。`, 'cap-' + cap.until, { group: false });
 }
 // 告訴所屬人類：先私訊；專案沒開私訊就在自己第一個專案發 [通知] 指定他（只是知會）。失敗只記日誌
-async function tellOwner(text, key) {
+async function tellOwner(text, key, { group = true } = {}) {
   const post = (p, body) => fetch(`${BASE}${p}`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'watcher' }, body: JSON.stringify(body) });
   const requestId = `watcher-${ME}-${key}`;
   try {
     const r = await post('/api/dm', { text, requestId });
     if (r.ok) return log('已私訊所屬人類');
+    if (!group) return log(`私訊沒開放（HTTP ${r.status}），不貼群組，只記日誌`);
     const me = await (await fetch(`${BASE}/api/me`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' } })).json();
     const project = me.projects?.[0] || 'all', owner = me.ownerParticipantId;
     const g = await post('/api/messages', { project, requestId, text, recipientIds: owner ? [owner] : [], replyFrom: [] });
@@ -152,15 +227,26 @@ function killTree(child) {
   else { try { process.kill(-child.pid, 'SIGTERM'); } catch {} setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 5000).unref(); }
 }
 
-function wake(pending, why) {
+async function wake(pending, why, fresh, backgroundOnly) {
   running = true;
+  const routedToUI = uiDir && existsSync(path.join(uiDir, 'foreground-ui.json'));
+  const retryUI = () => {
+    if (!routedToUI) return;
+    for (const id of fresh) woken.delete(id);
+    setTimeout(() => check('重查前景通知'), 30_000).unref();
+  };
+  // 真的執行喚醒指令才回報平台算一次（只算次數與時間）；只寫門鈴的接法由等待腳本結束時回報，這裡不算，避免重複
+  // 帶 sid；同代號後來有別的 watcher 接上（superseded）就不叫醒、這個 watcher 停止
+  if (!BELL_ONLY) {
+    const w = await fetch(`${BASE}/api/me/wake`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'watcher' }, body: JSON.stringify({ sid: SID }), signal: AbortSignal.timeout(10_000) }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    if (w?.superseded) { log(`同代號後來有別的 watcher 接上（${w.since || '時間不明'}）：這個 watcher 不叫醒、停止待命`); running = false; return bye(); }
+  }
   bell.wakes.push(Date.now());
   ring(pending);
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
-  // 真的執行喚醒指令才回報平台算一次（只算次數與時間）；只寫門鈴的接法由等待腳本結束時回報，這裡不算，避免重複
-  if (!BELL_ONLY) fetch(`${BASE}/api/me/wake`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' }, signal: AbortSignal.timeout(10_000) }).catch(() => {});
   const startedAt = Date.now();
-  const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...env, AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
+  if (backgroundOnly) log('前景連線持續失敗滿一分鐘，這一輪改用 codex exec');
+  const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...env, AIGILE_WAKE_BACKGROUND: backgroundOnly ? '1' : '0', AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
   const killer = TIMEOUT_MS > 0 ? setTimeout(() => {
     log(`喚醒指令跑超過 ${TIMEOUT_MS / 60000} 分鐘，停掉它`);
     killTree(child);
@@ -172,11 +258,13 @@ function wake(pending, why) {
     clearTimeout(killer);
     if (!running) return;
     running = false;
+    retryUI();
     if (queued) { queued = false; check('排隊補跑'); }
   });
   child.on('exit', code => {
     clearTimeout(killer);
     running = false;
+    if (code !== 0) retryUI();
     log(`喚醒指令結束（exit ${code}）`);
     if (queued) { queued = false; check('排隊補跑'); }
   });
@@ -266,7 +354,7 @@ function connect() {
     if (m.event === 'broadcast' && m.payload?.event === 'doorbell') {
       const p = m.payload.payload;
       if (!Array.isArray(p?.ids) || !p.ids.includes(ME)) return;
-      if (bellOk(p)) { log('收到門鈴，命中自己'); check('門鈴'); } else badBell();
+      if (bellOk(p)) { log('收到門鈴，命中自己'); merged('門鈴'); } else badBell();
     }
   };
   ws.onerror = e => log('即時通道錯誤：', e.message || e.type);
@@ -280,7 +368,27 @@ function fail(reason) {
 }
 
 if (PID_FILE) { try { writeFileSync(PID_FILE, String(process.pid)); log(`程序編號 ${process.pid} 已寫入 ${PID_FILE}`); } catch (e) { log('寫 pid 檔失敗：', e.message); } }
-const bye = () => { ws?.close(); liveCtl?.abort(); if (PID_FILE) { try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE); } catch {} } process.exit(0); };
+const bye = () => { ws?.close(); liveCtl?.abort(); if (PID_FILE) { try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE); } catch {} } setTimeout(() => process.exit(0), 300); }; // 關連線後稍等再結束（Windows libuv 斷言）
+// 依角色調整預設上限（只在環境變數沒設時）；查不到就用原本的預設
+async function roleDefaults() {
+  if (env.WAKE_MAX_PER_HOUR !== undefined && env.WAKE_MAX_PER_DAY !== undefined) return;
+  try {
+    const me = await (await fetch(`${BASE}/api/me`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'watcher' }, signal: AbortSignal.timeout(10_000) })).json();
+    const d = ROLE_MAX[me.roleKey]?.[BELL_ONLY ? 'bell' : 'run'];
+    if (!d) return;
+    if (env.WAKE_MAX_PER_HOUR === undefined) MAX_HOUR = d[0];
+    if (env.WAKE_MAX_PER_DAY === undefined) MAX_DAY = d[1];
+    log(`角色 ${me.roleKey}：叫醒上限每小時 ${MAX_HOUR}、每天 ${MAX_DAY}`);
+  } catch {}
+}
+await roleDefaults();
+if (!BELL_ONLY && !WATCH_ONLY) {
+  try {
+    const r = await fetch(`${BASE}/api/me/online`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'watcher' }, body: JSON.stringify({ sid: SID }), signal: AbortSignal.timeout(10_000) });
+    const j = r.ok ? await r.json() : null;
+    if (j?.previous) log(`這個代號先前有別的 watcher 在待命（${j.previous.at}）：改由這個接手，舊的下次要叫醒時會自己停`);
+  } catch {}
+}
 connectLive(); // 先試平台內建即時通道，沒有才連 Supabase
 setInterval(() => check('保底巡檢'), HEARTBEAT_MS);
 if (BELL_FILE) setInterval(() => writeBell(), 5 * 60_000); // 本機心跳，不連平台

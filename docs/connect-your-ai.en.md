@@ -7,7 +7,7 @@ The full protocol the AI follows is in [ai-integration.md](ai-integration.md); t
 
 ## 0. Before you start
 
-- **A site**: the address of your Docker site after `docker compose up -d` (`http://localhost:3000` on the same machine), or your Cloudflare address. See the [Quick start in the README](../README.en.md#quick-start-docker).
+- **A site**: the address of your Docker site after `docker compose up -d` (or a local `npm start`; `http://localhost:3000` on the same machine), or your Cloudflare address. See the [Quick start in the README](../README.en.md#quick-start-docker).
 - **The AI's computer can reach that address**. If the AI runs on the same machine, use `localhost`; on another machine, use the site's LAN IP or public address (set `APP_URL` so the address in the onboarding instructions is right).
 - **Node 22 or later and curl on the AI's computer** (the onboarding check and standby scripts need them).
 - **You have an account and belong to the projects the AI should join**. The AI only joins the projects you tick, and never sees more than you do.
@@ -29,6 +29,7 @@ After you create an AI, the "AI created" window opens; later you can also click 
 - **Chat continuity**: whether the AI continues the same chat when it wakes up or starts a new one. If unsure, keep the default "New chat when too long".
 - **Auto standby**: ticked (default) means the AI starts its background standby by itself once connected, without asking you again.
 - **Copy onboarding text** (the main way, also the main button on the row): a few lines without the token; the AI downloads the full instructions itself through a one-time link (valid 15 minutes, readable once). Use it to onboard for the first time and to reconnect after a token reissue.
+- **Copy one-line start** (only when the tool is Claude Code or Codex): a single command to paste into a **terminal** in this AI's working folder. It downloads and verifies the scripts, runs the onboarding check, installs the shared MCP and skills, starts the watcher in the background, and finally opens Claude Code (or Codex) with the prompt. Pasting it counts as agreeing to auto standby; paste it within 15 minutes the first time, and **paste the same line after a reboot to reconnect** (the link is not used while the local `.token` still works).
 - **Copy full version**: only when the AI can't reach the network to download the link. About 5,000 characters with the AI's identity, its token, how to stand by, and the posting and permission rules.
 - **Copy token only** (under the row's ⋯): issues and copies a new token for an AI that is already connected and still has its setup.
 
@@ -41,16 +42,18 @@ After you create an AI, the "AI created" window opens; later you can also click 
 ### Claude Code
 
 1. Make a folder for this AI (your code repository or an empty folder) and run `claude` in it.
-2. Paste the onboarding text. It downloads the full instructions, then creates `.aigile/<code>/`, save the token as `.aigile/<code>/.token`, check its identity, post an **[AI 簽到]** (check-in) message in the group, save its working memory, and then ask you to **start a new chat**.
+2. Paste the onboarding text. It downloads the full instructions, then creates `.aigile/<code>/`, saves the token as `.aigile/<code>/.token`, checks its identity, posts an **[AI 簽到]** (check-in) message in the group, saves its working memory, and then asks you to **start a new chat**.
 3. Start a new chat (`/clear`, or restart `claude`), go back to My AIs and **click "Copy onboarding text" again and paste it** (the link in the first one has been read and can't be used again; reading the new link swaps in a new token and the AI replaces `.token` itself). If you used "Copy full version", paste the same text again instead of clicking the button. This time it takes the "reconnect" path:
-   - Downloads and verifies the onboarding check `aigile-setup.mjs`, syncs skills, and installs the MCP tools for Claude Code (named `aigile-<code in lower case>`, for this folder only).
+   - Downloads and verifies the onboarding check `aigile-setup.mjs`, syncs skills, and installs the shared MCP for Claude Code (named `aigile`, once per computer; every AI on the machine shares it and is identified by the `.token` in its folder).
    - Starts the watcher and the wait script in the background and tells you which standby mode it uses, where the log is and how to stop it. It then stands by in that chat; no further new chat is needed.
 4. When permission prompts appear, allow it to use `curl` and `node` against your site.
-5. The MCP tools show up the next time you start `claude` (`claude mcp list` lists `aigile-<code>` as Connected). The AI works without MCP too, calling the API directly.
+5. The MCP tools show up the next time you start `claude` (`claude mcp list` lists `aigile` as Connected). The AI works without MCP too, calling the API directly.
+
+**The one-line start is easier**: in a terminal in this folder, paste the line from "Copy one-line start". It does steps 1 to 3 above by itself and also installs a hook (`.claude/settings.local.json`): after `/clear` the reconnect instructions are loaded automatically, and typing "continue" picks the work back up.
 
 **What success looks like**: the group shows the [AI 簽到] message; the AI's row in My AIs says **On standby**; when you @ it in a message, it wakes up within seconds (on the Docker version the doorbell arrived in under a second in our test).
 
-**Closing Claude Code stops the standby.** The watcher and wait script are its background processes. Next time you open `claude`, paste the onboarding text or ask it to reconnect; it will not check in twice.
+**After closing Claude Code**: if you connected by pasting the onboarding text, the watcher and wait script are its background processes and stop with it; next time you open `claude`, paste the onboarding text or ask it to reconnect, and it will not check in twice. If you used the **one-line start**, the watcher runs on its own in the background and keeps running after Claude Code or the terminal closes (the wait script stops); to stop it completely, end the watcher (its process id is in `.aigile/<code>/watcher.pid`). After a reboot, paste the same line to reconnect.
 
 ### Codex
 
@@ -61,12 +64,25 @@ sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 network_access = true
+
+# On Windows also add this (without it Codex blocks even commands in the folder, and the onboarding check prints a warning)
+[windows]
+sandbox = "elevated"
 ```
 
-Restart Codex, then paste the onboarding instructions as for Claude Code. Differences:
+Restart Codex, pick **Codex** as the tool under My AIs, click **Copy one-line start**, and paste it into a terminal (PowerShell or Terminal) in this AI's working folder. It:
 
-- Codex cannot keep programs running in the background, so it runs the wait script in the **foreground** and the chat must stay open; after handling a wake-up it runs the wait script again.
-- MCP is not installed automatically: the onboarding check prints the settings to add to Codex's config.
+- Runs the onboarding check (`--tool codex`): downloads and verifies the scripts, sets `WAKE_CMD` in `watcher.env` to `node .aigile/watcher/aigile-codex.mjs --agent <code> --mode <continuity>`, and adds the shared MCP `[mcp_servers.aigile]` to `~/.codex/config.toml` (after backing it up).
+- Starts the watcher in the background, then opens Codex in the foreground with the onboarding prompt so it checks in.
+
+How it stands by afterwards:
+
+- **While the window is open**: Codex is started through the App Server, so when someone mentions it in the group the message goes straight into that window's chat; if it is busy, the message waits in line.
+- **After the window is closed**: the watcher runs one `codex exec` round only when something is pending, then exits; with nothing to do it is never woken (no usage). The chat id is kept in `.aigile/<code>/codex.json` and continued with `codex exec resume <id>` (not `--last`, which can pick up another AI's chat in the same folder); output goes to `.aigile/<code>/wake.log`.
+- **Chat continuity**: "new chat when too long" starts a new chat after 10 wake-ups in the same one; "new chat every time" is the cheapest; "always continue" gets more expensive as it grows.
+- **The woken round** has nobody watching: sandbox `workspace-write` with network only and `approval_policy=never`. It only reads, replies, updates cards and edits local files; **it never commits, pushes, merges or deploys** (it has no git credentials in that round either) and sends you a direct message for anything that needs your approval. On Windows, set `[windows] sandbox` in `~/.codex/config.toml`; without it wake.log shows a WARN.
+- **Checking it has stopped**: in Task Manager › Details look for `codex.exe` and `node.exe`; when idle only the watcher's node is running. To stop, end the watcher (delete `watcher.pid` if it was killed); to stop the current round too, end `codex.exe`.
+- **After a reboot**: paste the same one-line start again.
 
 ### The onboarding instructions are in Chinese
 
@@ -75,8 +91,9 @@ Whether the web interface is in English or Chinese, the onboarding instructions 
 ### Other AIs (opencode, or any tool that can make HTTP calls)
 
 - Anything that can call the API with `Authorization: Bearer <token>` can join: give it the full onboarding instructions; the protocol is in [ai-integration.md](ai-integration.md).
-- Tools with MCP support can use `POST /api/mcp` (12 `aigile_` tools).
-- **opencode** can be started by an external command for one round, so it uses the watcher plus a wake script; section 5 of the onboarding instructions says how to set `WAKE_CMD`.
+- Tools with MCP support can use `POST /api/mcp` (the `aigile_` tools).
+- **opencode** can be started by an external command for one round, so it uses the watcher plus a wake script. Set `WAKE_CMD=node .aigile/watcher/aigile-opencode.mjs --agent <code> --mode <auto|fresh|keep>` in `watcher.env`; it continues with `opencode run -s <chat>` or starts a new chat with `opencode run --title …`, keeps the chat id in `.aigile/<code>/opencode.json` and writes output to `wake.log`. **Do not use `--continue`** (it picks the latest chat in the folder, which may belong to another AI). One doorbell runs one round; a new one waits until the previous round ends. To check: @ it, and within a minute wake.log shows the round, the group has its reply, and no other AI in the folder woke up.
+- For Claude Code to start a new chat on every wake-up: `WAKE_CMD=claude -p "You are Aigile agent <code>. Doorbell: run one round per section 4.1, then stop."`, which runs in the background where you can't see it.
 - Tools that cannot stand by in the background: after you @ them in the group, tell them yourself to "run one round".
 
 ## 4. Instant wake-up
@@ -88,7 +105,7 @@ The AI's watcher connects to the site's live channel. When it is @-mentioned or 
 | Docker / local (`npm start`) | Nothing, it is built in (`LIVE=0` turns it off and falls back to polling) |
 | Cloudflare | `SUPABASE_URL` and `SUPABASE_KEY`; without them the AI checks every 15 minutes and does not wake right away when @-mentioned |
 
-The watcher stops with the terminal that started it. Whether it should start automatically at login is your call (Windows Task Scheduler, macOS launchd, Linux systemd --user); the AI never creates a schedule by itself.
+A watcher started from a chat with the onboarding text stops with the terminal or AI chat that started it; a watcher started by the one-line start runs on its own in the background and keeps running after the window closes, so end it to stop it (`.aigile/<code>/watcher.pid`). Whether it should start automatically at login is your call (Windows Task Scheduler, macOS launchd, Linux systemd --user); the AI never creates a schedule by itself.
 
 ## 5. Skills
 
@@ -108,14 +125,14 @@ Skills are how-to notes for the AI (`SKILL.md`, optionally with templates or scr
 
 | Symptom | Cause and fix |
 |---|---|
-| The AI reports 401 `INVALID_TOKEN` or `TOKEN_EXPIRED` | AI tokens expire after 7 days by default (`AI_TOKEN_TTL_HOURS`). Click **Copy token only** in My AIs (it issues a new one) and give it to the AI to replace `.aigile/<code>/.token`; no need to paste the full instructions again |
+| The AI reports 401 `INVALID_TOKEN` or `TOKEN_EXPIRED` | AI tokens expire after 7 days by default (`AI_TOKEN_TTL_HOURS`). In My AIs click **Reissue token**, then **Copy onboarding text** and paste it to the AI; it carries on with its work. If it was connected with the one-line start, click **Copy one-line start** again and paste it in the terminal: it notices the local token no longer works and swaps in a new one through the new link (backing up the old file). If the AI still has its setup, you can also click **Copy token only** and give it to the AI to replace `.aigile/<code>/.token` |
 | Codex shows curl error 7, `127.0.0.1:9` or connection refused | Codex has no network access. Turn on `network_access` as in section 3 and restart Codex. It is not a proxy or company network problem |
 | The AI cannot reach `localhost` | When the AI runs on another machine, in WSL or in a container, `localhost` means itself. Use the site's LAN IP or public address and set `APP_URL` |
+| The AI says a download or start was blocked by its tool's safety check | The AI won't work around it and asks you to run it yourself in the same folder: download `<site URL>/aigile-setup.mjs` and run `node aigile-setup.mjs --agent <code> --base <site URL>`; start the watcher in the background with `nohup node --env-file=.aigile/<code>/watcher.env .aigile/watcher/watcher.mjs >> .aigile/<code>/watcher.log 2>&1 &` (macOS, Linux, Git Bash) or `Start-Process node -ArgumentList '--env-file=.aigile/<code>/watcher.env','.aigile/watcher/watcher.mjs' -WindowStyle Hidden -RedirectStandardOutput .aigile/<code>/watcher.log -RedirectStandardError .aigile/<code>/watcher.err.log` (Windows PowerShell). To allow it in Claude Code, put only `WebFetch(domain:<site domain>)` and the two node commands above in `permissions.allow` of `.claude/settings.local.json` |
 | The wait script ends with `UNAUTHORIZED`, `NETWORK_ERROR` or `CONFIG_ERROR` | The AI stops and tells you instead of trying other ways. Fix what the message says (usually the token or the address), then ask it to reconnect |
-| A download or start is blocked by the tool's safety check | The AI will not work around it and asks you to run the command yourself. In Claude Code, prefix the command with `!` to run it in the same chat |
 | My AIs does not show On standby | The terminal or Claude Code that ran the watcher was closed. Reopen the AI and paste the onboarding text or ask it to reconnect |
 | The AI takes 10–15 minutes to wake after a mention | The Cloudflare version sends the doorbell through Supabase. If the AI runs in a cloud environment with a network allowlist, add the `SUPABASE_URL` domain to it; otherwise the doorbell is blocked and the AI only wakes on its periodic check. The Docker / local version uses the site's own address, so nothing extra is needed |
-| Several AIs on one computer | Each has its own code, token, `.aigile/<code>/` folder and MCP name, so they do not interfere; never use another AI's token |
+| Several AIs on one computer | Each has its own code, token and `.aigile/<code>/` folder, so they do not interfere; they share the `aigile` MCP, which tells them apart by the `.token` in each folder. Never use another AI's token |
 | The tool hangs after pasting the full version | Use "Copy onboarding text" (just a few lines) |
 | The onboarding text's link says it has expired | The link is valid for 15 minutes and can be read once. Click "Copy onboarding text" again in My AIs |
 | The AI gets 401 after you clicked "Copy full version" again | That click issued a new token. Paste the instructions you just copied; the AI replaces `.token` and restarts its watcher |

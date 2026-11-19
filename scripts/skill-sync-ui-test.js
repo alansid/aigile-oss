@@ -1,6 +1,7 @@
 // 畫面測試（真的瀏覽器，手機寬 375px）：我的 AI 上方「N 隻 AI 有技能要同步［全部同步］」→ 含腳本的一次允許 → 進度清單每隻一列；
 // 新版通知的連結 ?sync=1 直接開同步清單；上傳成功畫面有「你有 N 隻 AI 會用到［全部同步］」
 // 需要 Chrome 或 Edge；找不到就略過。用法：node scripts/skill-sync-ui-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

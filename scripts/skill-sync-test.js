@@ -4,6 +4,7 @@
 // 測：全部同步（一次允許含腳本的、每隻一則叫醒私訊帶 --tool 與 SHA-256）、進度（等叫醒／同步中／已裝／失敗／離線／10 分鐘沒回應）、
 //     ✓ 最新／● 有新版／⚠ 要處理、主人每次上傳一則通知、失敗才私訊、腳本跑前比對版本自己更新、規格 3.16
 // 用法：node scripts/skill-sync-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

@@ -4,6 +4,7 @@
 //     五處用同一個判斷（安裝、私訊主人、待允許數、安裝統計、同名檢查）、AI 移出專案或停用就不發、
 //     安裝位置（指定 → 代號資料夾；改回所有 AI → 搬回共用區，不兩邊都留）、規格 3.16
 // 用法：node scripts/skill-target-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

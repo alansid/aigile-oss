@@ -1,5 +1,6 @@
 // 接入設定補齊驗收測試：程式庫連結、長期授權、/api/me 的 grants／repos、接入設定（重新接上、watcher.pid、API 代號、章節編號）。
 // 用法：node scripts/setup-test.js（加 --print 印出一份接入設定）
+import './test-home.mjs'; // 不寫到真的家目錄
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -98,10 +99,11 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     assert.match(spec, /先停掉你自己用舊檔在跑的 watcher[^\n]*重新下載一次[^\n]*重下仍不符才停止並回報/, '規格：舊 watcher 先重下');
     assert.ok(!/不符就停止並告訴/.test(obPg + spec), '不再「一不符就停」');
     // opencode 改用 aigile-opencode.mjs（它數次數、接續或開新對話），不用自己寫 wake.cmd
+    const guideDoc = fs.readFileSync(new URL('../docs/connect-your-ai.md', import.meta.url), 'utf8'); // opencode 細節在 connect-your-ai，規格只留規則
     assert.match(spec, /WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent <代號> --mode/, 'opencode：WAKE_CMD 指向喚醒腳本');
-    assert.match(spec, /opencode run -s <對話>/, 'opencode：接續用對話編號');
-    assert.match(spec, /wake\.log/, 'opencode：輸出寫 wake.log');
-    assert.match(spec, /工作排程器/, 'opencode：說明背景常駐');
+    assert.match(spec + guideDoc, /opencode run -s <對話>/, 'opencode：接續用對話編號（細節在 connect-your-ai）');
+    assert.match(spec + guideDoc, /wake\.log/, 'opencode：輸出寫 wake.log');
+    assert.match(spec + guideDoc, /工作排程器/, 'opencode：說明背景常駐');
     assert.ok(!/WAKE_CMD=opencode run --continue/.test(obPg + spec), '不再用 --continue');
     // 到期：直接把資料改成過去
     const { DatabaseSync } = await import('node:sqlite');

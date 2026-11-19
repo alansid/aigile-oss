@@ -49,6 +49,6 @@ export function optionWarnings(text) {
   const qs = parseQuestions(text), heads = new Set(lines.map(l => Q_HEAD.exec(l)?.[1]).filter(Boolean));
   const missing = [...heads].filter(n => !qs.some(q => q.named && String(q.no) === n));
   if (optLike >= 2 && !qs.length) return ['這則 [需確認] 有 A./B. 選項，但沒有變成按鈕：每題用「問題N：」開頭，下一行寫「選項：」，再緊接 2～6 行 A.～F.（中間不要空行、不要加粗或項目符號）。訊息已送出，請照規格 3.9.1 重發一次。'];
-  if (missing.length && optLike >= 2) return [`這則 [需確認] 的問題${missing.join('、')}沒有解析到選項（不會出按鈕）：請在該題下一行寫「選項：」，再緊接 2～6 行 A.～F.，照規格 3.9.1 重發一次。`];
+  if (missing.length && optLike >= 2) return [`這則 [需確認] 的問題${missing.join('、')}沒有解析到選項，不會出按鈕。這題本來就要人自由回答的話不用改；要出按鈕，下次在該題下一行寫「選項：」，再緊接 2～6 行 A.～F.（規格 3.9.1）。`];
   return [];
 }

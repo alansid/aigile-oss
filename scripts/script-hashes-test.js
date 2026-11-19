@@ -4,6 +4,7 @@
 //   - 23 個 cf:db:migrate-* 指令；50 多個測試沒有單一入口，容易漏跑
 //   - 規格與 README 寫「15 分鐘」標可能斷線／尚未回應，程式是 20 分鐘；README 寫邀請連結 15 分鐘， 起預設 24 小時
 // 用法：node scripts/script-hashes-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,7 +51,7 @@ try {
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: 'PG', name: '甲助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
   const aiTok = (await testToken(db, ai.participantId));
   const wenv = (await call(aiTok, '/api/me/watcher-env')).body;
-  assert.deepEqual(wenv.files, { 'watcher.mjs': h['watcher.mjs'], 'aigile-wait.mjs': h['aigile-wait.mjs'], 'aigile-opencode.mjs': h['aigile-opencode.mjs'], 'aigile-mcp.mjs': h['aigile-mcp.mjs'] }, 'watcher-env 的雜湊');
+  assert.deepEqual(wenv.files, { 'watcher.mjs': h['watcher.mjs'], 'aigile-wait.mjs': h['aigile-wait.mjs'], 'aigile-opencode.mjs': h['aigile-opencode.mjs'], 'aigile-mcp.mjs': h['aigile-mcp.mjs'], 'aigile-codex.mjs': h['aigile-codex.mjs'], 'aigile-codex-ui.mjs': h['aigile-codex-ui.mjs'], 'aigile-start.mjs': h['aigile-start.mjs'], 'aigile-hook.mjs': h['aigile-hook.mjs'] }, 'watcher-env 的雜湊');
 
   // C5：migration 只剩一個指令；npm test 是單一入口
   const scripts = JSON.parse(read('package.json')).scripts;

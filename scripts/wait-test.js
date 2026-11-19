@@ -58,7 +58,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     const badTok = path.join(dir, 'bad.token'); fs.writeFileSync(badTok, 'bad-token');
     r = await runWait([], { AIGILE_TOKEN_FILE: badTok });
     assert.equal(r.last, 'UNAUTHORIZED'); assert.equal(r.code, 20, 'Token 錯：UNAUTHORIZED 結束碼 20');
-    r = await runWait(['--max-min=0.02'], { AIGILE_TOKEN: 'bad-token' });
+    r = await runWait(['--exit-on-timeout', '--max-min=0.02'], { AIGILE_TOKEN: 'bad-token' });
     assert.notEqual(r.last, 'UNAUTHORIZED', '環境變數是舊的、檔案是對的 → 用檔案');
 
     // 啟動時就有待處理
@@ -69,20 +69,20 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
     // watcher 在、沒事：時間到 TIMEOUT，不印 WARN、不連平台
     alive(); writeBell(5, 0);
-    r = await runWait(['--max-min=0.05']);
+    r = await runWait(['--exit-on-timeout', '--max-min=0.05']);
     assert.equal(r.last, 'TIMEOUT'); assert.equal(r.code, 10);
     assert.ok(!r.lines.some(l => l.includes('WARN')), 'watcher 在就不改備援');
 
     // 門鈴響：馬上醒
     alive(); writeBell(5, 0);
-    const p1 = runWait(['--max-min=0.5', '--look-sec=1']);
+    const p1 = runWait(['--exit-on-timeout', '--max-min=0.5', '--look-sec=1']);
     await sleep(1200); writeBell(6, 2);
     r = await p1;
     assert.equal(r.last, 'PENDING 2', '門鈴檔 seq 增加就醒'); assert.ok(r.ms < 6000, `門鈴後很快醒（${r.ms}ms）`);
 
     // watcher 不在：印 WARN，改備援輪詢
     noWatcher();
-    const p2 = runWait(['--max-min=0.5', '--poll-sec=1']);
+    const p2 = runWait(['--exit-on-timeout', '--max-min=0.5', '--poll-sec=1']);
     await sleep(1500); await ping();
     r = await p2;
     assert.ok(r.lines.some(l => l.includes('WARN watcher 不在')), '沒有 watcher 印 WARN');
@@ -91,12 +91,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
     // 門鈴檔心跳太舊也算 watcher 不在
     alive(); writeBell(7, 0, 31 * 60_000);
-    r = await runWait(['--max-min=0.03', '--poll-sec=60']);
+    r = await runWait(['--exit-on-timeout', '--max-min=0.03', '--poll-sec=60']);
     assert.ok(r.lines.some(l => l.includes('WARN watcher 不在')), '心跳超過 30 分鐘＝不在');
 
     // 連不上：備援連續 3 次失敗 NETWORK_ERROR
     noWatcher();
-    r = await runWait(['--max-min=0.5', '--poll-sec=1'], { AIGILE_BASE: 'http://127.0.0.1:9' });
+    r = await runWait(['--exit-on-timeout', '--max-min=0.5', '--poll-sec=1'], { AIGILE_BASE: 'http://127.0.0.1:9' });
     assert.equal(r.last, 'NETWORK_ERROR'); assert.equal(r.code, 30);
 
     // 真的 watcher（只記錄模式＋門鈴檔）＋等待腳本：有人 @ 就醒
@@ -106,7 +106,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     let wlog = ''; watcher.stdout.on('data', d => { wlog += d; });
     for (let i = 0; i < 50 && !fs.existsSync(path.join(dir, 'bell.json')); i++) await sleep(100);
     assert.equal(fs.readFileSync(path.join(dir, 'watcher.pid'), 'utf8').trim(), String(watcher.pid), 'watcher 自己寫 pid 檔');
-    const p3 = runWait(['--max-min=0.5', '--look-sec=1']);
+    const p3 = runWait(['--exit-on-timeout', '--max-min=0.5', '--look-sec=1']);
     await sleep(1000); await ping();
     r = await p3;
     assert.equal(r.last, 'PENDING 1', 'watcher 寫門鈴 → 等待腳本醒');

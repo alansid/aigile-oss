@@ -44,7 +44,7 @@ try {
   const mk = async name => { const a = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: 'PG', name, duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body; return { id: a.participantId, tok: (await testToken(db, a.participantId)) }; };
   const notify = (ai, i) => call(boss.token, '/api/messages', 'POST', { project: '預設專案', requestId: `n-${ai.id}-${i}`, recipientIds: [ai.id], text: `[通知] 第 ${i} 則` });
   // 告訴所屬人類：私訊（專案有開）或群組 [通知]（沒開時退回）；這裡的專案沒開私訊，走群組
-  const dmsTo = async ai => [...await db.all('SELECT text FROM dms WHERE from_id = ? ORDER BY seq', ai.id), ...await db.all('SELECT text FROM messages WHERE author_id = ? ORDER BY seq', ai.id)].map(r => r.text);
+  const dmsTo = async ai => [...await db.all("SELECT text FROM dms WHERE (from_id = ? OR (from_id = 'system' AND ai_id = ?)) ORDER BY seq", ai.id, ai.id), ...await db.all('SELECT text FROM messages WHERE author_id = ? ORDER BY seq', ai.id)].map(r => r.text);
 
   // 1) 預設每小時上限 3（從 4 改 3）：來 4 則新通知，第 4 次被擋，只叫醒 3 次，其他的等時段過了才補；私訊所屬人類一次
   const a = await mk('上限助手'), wa = fs.mkdtempSync(path.join(dataDir, 'a-'));
@@ -62,7 +62,8 @@ try {
   await sleep(1500);
   const dm = await dmsTo(a);
   assert.equal(dm.length, 1, '同一段上限只私訊一次');
-  assert.match(dm[0], /已達每小時上限（3 次）.*自動恢復/);
+  assert.equal((await db.all('SELECT 1 FROM messages WHERE author_id = ?', a.id)).length, 0, '上限通知不貼群組（平台私訊）');
+  assert.match(dm[0], /這一小時被叫醒太多次（3 次），先暫停到 \d\d:\d\d 自動恢復/);
   const bell = JSON.parse(fs.readFileSync(path.join(wa, 'bell.json'), 'utf8'));
   assert.equal(bell.wakes.length, 3, '叫醒時間記在門鈴檔');
 
@@ -100,7 +101,7 @@ try {
   // 會跑模型的接法（這裡的 WAKE_CMD 是 node）維持 3／15；Claude Code（echo）12／60 見 wake-fyi-test
   assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, BELL_ONLY \? 12 : 3\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, BELL_ONLY \? 60 : 15\)/); assert.match(src, /num\(env\.WAKE_TIMEOUT_MIN, 10\)/);
   const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
-  assert.match(spec, /每小時最多叫醒 3 次、每天 15 次、單次最多 10 分鐘/, '規格寫明上限');
+  assert.match(spec, /會跑模型的（opencode、Codex）每小時 3、每天 15 次、每次最多跑 10 分鐘，超時停掉[^\n]*都只私訊所屬人類/, '規格寫明上限');
   console.log('watcher-limit-test：全部通過');
 } catch (e) {
   console.error('watcher-limit-test 失敗：', e.message);
