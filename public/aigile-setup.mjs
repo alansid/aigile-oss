@@ -261,7 +261,7 @@ if (cfg.files['aigile-mcp.mjs']) {
     // AIGILE_CLAUDE_BIN 給測試用假的 claude
     const bin = process.env.AIGILE_CLAUDE_BIN || '';
     const q = s => `"${String(s).replace(/"/g, '\\"')}"`;
-    const claude = a => (/\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, ...a], { encoding: 'utf8', timeout: 60_000 })
+    const claude = a => (/\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...a], { encoding: 'utf8', timeout: 60_000 })
       : spawnSync([bin || 'claude', ...a].map(q).join(' '), { shell: true, encoding: 'utf8', timeout: 60_000 }));
     const manual = `claude ${addArgs.join(' ')}`;
     if (claude(['mcp', 'get', 'aigile']).status === 0) out('✓ MCP：Claude Code 已裝通用的 aigile（整台電腦一次，不重裝）');
@@ -332,9 +332,9 @@ function codexMcp(mcpPath, manual) {
     if (bak) fs.writeFileSync(bak, had);
     fs.writeFileSync(file, (had || '') + block);
   } catch (e) { restore(); out(`! MCP：寫不進 ${file}（${e.code || e.message}）：請自己加`); return out(manual); }
-  const bin = process.env.AIGILE_CODEX_BIN || 'codex';
+  const bin = process.env.AIGILE_CODEX_BIN || process.env.CODEX_BIN || 'codex'; // 跟一行啟動、喚醒腳本同一個順序
   const binIsPath = fs.existsSync(bin);
-  const r = /\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, 'mcp', 'get', 'aigile'], { encoding: 'utf8', timeout: 60_000 })
+  const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, 'mcp', 'get', 'aigile'], { encoding: 'utf8', timeout: 60_000 })
     : process.platform === 'win32' || (!binIsPath && /\s/.test(bin))
       ? spawnSync(`${binIsPath ? `"${bin}"` : bin} mcp get aigile`, { shell: true, encoding: 'utf8', timeout: 60_000 })
       : spawnSync(bin, ['mcp', 'get', 'aigile'], { encoding: 'utf8', timeout: 60_000 });

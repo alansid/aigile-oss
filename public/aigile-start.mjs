@@ -209,7 +209,7 @@ try {
     if (!r) {
       startWatcher();
       out('此 CLI 使用一般前景視窗，門鈴交給背景回合。');
-      r = /\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, ...sb, prompt], { stdio: 'inherit', env })
+      r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...sb, prompt], { stdio: 'inherit', env })
         : process.platform === 'win32' || (!binIsPath && /\s/.test(bin))
           ? spawnSync(`${binIsPath ? `"${bin}"` : bin} ${sb.join(' ')} "${say}"`, { stdio: 'inherit', env, shell: true })
           : spawnSync(bin, [...sb, prompt], { stdio: 'inherit', env });
@@ -222,7 +222,7 @@ try {
     out('✓ 開 Claude Code（帶 AIGILE_AGENT，通用 MCP 認得你）');
     const bin = process.env.AIGILE_CLAUDE_BIN || 'claude';
     const env = { ...process.env, AIGILE_AGENT: AGENT };
-    const r = /\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, prompt], { stdio: 'inherit', env })
+    const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, prompt], { stdio: 'inherit', env })
       : spawnSync(`${bin} "${say}"`, { stdio: 'inherit', env, shell: true });
     if (r.error || r.status === null) fail('Claude Code', `開不起來（${r.error?.message || '找不到 claude 指令'}）`, '確認已安裝 Claude Code（claude 指令），再貼一次');
     process.exitCode = r.status;

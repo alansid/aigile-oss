@@ -92,7 +92,7 @@ try {
     for (const k of ['--json', '--skip-git-repo-check', 'sandbox_mode=workspace-write', 'sandbox_workspace_write.network_access=true', 'approval_policy=never']) assert.ok(c.includes(k), `帶 ${k}：${JSON.stringify(c)}`);
     for (const k of ['--last', '--dangerously-bypass-approvals-and-sandbox', 'danger-full-access']) assert.ok(!c.join(' ').includes(k), `不帶 ${k}`);
     assert.match(c[c.length - 1], /^You are Aigile agent PG\. /, '提示帶代號');
-    assert.match(c[c.length - 1], /do not git commit, push, merge or deploy/, '提示寫明叫醒的這一輪不 commit／push／部署');
+    assert.match(c[c.length - 1], /Never do these in a watcher round[^.]*: git commit, push, merge, deploy/, '提示寫明叫醒的這一輪不 commit／push／部署');
   }
   // Token 不進 wake.log、codex.json
   const log1 = fs.readFileSync(path.join(d1, '.aigile/PG/wake.log'), 'utf8');

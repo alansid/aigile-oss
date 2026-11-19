@@ -19,12 +19,13 @@ const dir = path.join(tmp, '.aigile', agent);
 const lock = path.join(dir, 'foreground.lock');
 const thread = '11111111-1111-4111-8111-111111111111';
 const env = { ...process.env, CODEX_BIN: bin, CODEX_HOME: path.join(tmp, 'codex-home'),
+  AIGILE_CODEX_MODEL: '', AIGILE_CODEX_EFFORT: '',
   FAKE_CODEX_THREAD: thread, FAKE_CODEX_LOG: log, FAKE_CODEX_NODE: process.execPath, FAKE_CODEX_SCRIPT: fake };
 let child, server;
 
-function runWake(expected = 0) {
+function runWake(expected = 0, settings = {}) {
   const r = spawnSync(process.execPath, [wake, '--agent', agent, '--mode', 'keep'],
-    { cwd: tmp, env, encoding: 'utf8', timeout: 10_000 });
+    { cwd: tmp, env: { ...env, ...settings }, encoding: 'utf8', timeout: 10_000 });
   assert.equal(r.status, expected, r.error?.message || r.stderr || fs.readFileSync(path.join(dir, 'wake.log'), 'utf8'));
 }
 
@@ -34,10 +35,14 @@ try {
     : '#!/bin/sh\nexec "$FAKE_CODEX_NODE" "$FAKE_CODEX_SCRIPT" "$@"\n', { mode: 0o755 });
   fs.writeFileSync(lock, String(process.pid));
   runWake();
-  runWake();
+  runWake(0, { AIGILE_CODEX_MODEL: 'test-custom-model', AIGILE_CODEX_EFFORT: 'medium' });
   fs.unlinkSync(lock);
   const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.equal(calls.length, 2);
+  assert.equal(calls[0][calls[0].indexOf('-m') + 1], 'gpt-6.1-terra');
+  assert.ok(calls[0].includes('model_reasoning_effort="low"'));
+  assert.equal(calls[1][calls[1].indexOf('-m') + 1], 'test-custom-model');
+  assert.ok(calls[1].includes('model_reasoning_effort="medium"'));
   const catalog = await mcpDispatch({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { me: { role_key: 'PG' } });
   const expectedTools = [...catalog.result.tools.map(({ name }) => name), 'aigile_use'];
   const expectedOverrides = [
@@ -50,6 +55,8 @@ try {
     assert.deepEqual(overrides.sort(), expectedOverrides, 'Review the wake overrides when the platform or bridge catalog changes');
     assert.ok(args.includes('sandbox_mode=workspace-write'));
     assert.match(args.at(-1), /git status/);
+    assert.match(args.at(-1), /A card assigned to you \(by anyone\) is authorized work[\s\S]*\[需確認\][\s\S]*do not send DMs/, '交給你的卡直接做完、要人決定發 [需確認]');
+    assert.doesNotMatch(args.at(-1), /Send your owner a DM/, '叫醒指令不再叫 Codex 私訊等同意');
   }
   assert.deepEqual(calls[0].slice(0, 3), ['exec', '--json', '--skip-git-repo-check']);
   assert.deepEqual(calls[1].slice(0, 3), ['exec', 'resume', '--json']);
@@ -115,11 +122,12 @@ try {
   assert.equal(wakes, 1);
   assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').length, 2);
   const received = JSON.parse(fs.readFileSync(path.join(tmp, 'deliveries'), 'utf8'));
+  assert.ok(!('model' in received) && !('effort' in received));
   assert.equal(received.threadId, 'target');
   assert.match(received.input[0].text, /You are Aigile agent PG_TEST/);
   assert.match(received.input[0].text, /foreground session is open/);
   assert.doesNotMatch(received.input[0].text, /unattended|No human/i);
-  assert.match(received.input[0].text, /do not git commit, push, merge or deploy/);
+  assert.match(received.input[0].text, /Never do these in a watcher round[^.]*: git commit, push, merge, deploy/);
   fs.writeFileSync(path.join(tmp, 'unreachable'), '');
   output = '';
   notificationId = 'notif_unreachable';
@@ -144,6 +152,28 @@ try {
   const backgroundCalls = fs.readFileSync(log, 'utf8').trim().split('\n');
   assert.equal(backgroundCalls.length, 4);
   assert.match(JSON.parse(backgroundCalls.at(-1)).at(-1), /unattended background round/);
+  const readCalls = () => fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const unavailable = { FAKE_CODEX_ERROR: 'The selected model is not supported on this account' };
+  for (const fresh of [false, true]) {
+    if (fresh) fs.unlinkSync(path.join(dir, 'codex.json'));
+    const before = readCalls().length;
+    runWake(0, unavailable);
+    const [first, retry, ...extra] = readCalls().slice(before);
+    assert.equal(extra.length, 0);
+    const modelIndex = first.indexOf('-m');
+    assert.deepEqual(first.slice(modelIndex, modelIndex + 4), ['-m', 'gpt-6.1-terra', '-c', 'model_reasoning_effort="low"']);
+    assert.deepEqual(retry, first.toSpliced(modelIndex, 4));
+    assert.equal(retry.includes('resume'), !fresh);
+  }
+  assert.match(fs.readFileSync(path.join(dir, 'wake.log'), 'utf8'), /WARN 背景模型/);
+  for (const settings of [{ FAKE_CODEX_ERROR: 'authentication failed' }, { ...unavailable, FAKE_CODEX_AFTER_TOOL: '1' }]) {
+    const before = readCalls().length;
+    runWake(1, settings);
+    assert.equal(readCalls().length, before + 1);
+  }
+  const beforeFailure = readCalls().length;
+  runWake(1, { ...unavailable, FAKE_CODEX_FAIL_FALLBACK: '1' });
+  assert.equal(readCalls().length, beforeFailure + 2);
   if (win) {
     env.FAKE_CODEX_FALSE_COMPLETION = '1';
     runWake(23);

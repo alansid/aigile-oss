@@ -71,16 +71,16 @@ const runNode = (args, cwd, env = {}) => new Promise(ok => execFile(process.exec
   (e, out, err) => ok({ code: e ? (e.code ?? 1) : 0, out: String(out) + String(err) })));
 
 try {
-  const liu = (await api(null, '/api/join', 'POST', { name: '王大明', role: 'PO' })).body;
+  const boss = (await api(null, '/api/join', 'POST', { name: '王大明', role: 'PO' })).body;
   const r0 = ROLES.find(x => x.key === 'PG');
-  const ai = (await api(liu.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: r0.role, name: '程式助手', duties: r0.duties, style: r0.style, autonomy: r0.autonomy, mustConfirm: r0.mustConfirm, handoff: r0.handoff })).body;
+  const ai = (await api(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: r0.role, name: '程式助手', duties: r0.duties, style: r0.style, autonomy: r0.autonomy, mustConfirm: r0.mustConfirm, handoff: r0.handoff })).body;
   const tok = await tokenOf(ai.participantId);
   const AG = (await api(tok, '/api/me/watcher-env')).body.agent;
-  const other = (await api(liu.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'QA', role: 'QA', name: '品質助手', duties: 'd', style: 's', autonomy: 'a', mustConfirm: 'm', handoff: 'h' })).body;
+  const other = (await api(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'QA', role: 'QA', name: '品質助手', duties: 'd', style: 's', autonomy: 'a', mustConfirm: 'm', handoff: 'h' })).body;
   const otherTok = await tokenOf(other.participantId);
 
   // 1～2. 網頁給的 Codex 一行啟動
-  const link = (await api(liu.token, `/api/my-ais/${ai.participantId}/onboarding-link`, 'POST', { tool: 'codex', autoStandby: true, start: true })).body;
+  const link = (await api(boss.token, `/api/my-ais/${ai.participantId}/onboarding-link`, 'POST', { tool: 'codex', autoStandby: true, start: true })).body;
   assert.ok(link.startLine, 'Codex 也有一行啟動');
   const code = link.startLine.slice('node -e "'.length, -1);
   assert.match(code, /'--tool','codex'/);

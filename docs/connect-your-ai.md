@@ -80,7 +80,7 @@ sandbox = "elevated"
 - **視窗開著**：Codex 用 App Server 開，群組點名它時，訊息直接送進這個視窗的對話；它正在忙就排隊。
 - **視窗關了**：watcher 有待處理才開 `codex exec` 跑一輪就結束，沒事一整天都不叫醒（不耗額度）。對話編號存在 `.aigile/<代號>/codex.json`，接續用 `codex exec resume <編號>`（**不要用 `resume --last`**，同資料夾有別的 AI 會接錯）；輸出在 `.aigile/<代號>/wake.log`。
 - **對話接續**：太長才換新＝每叫醒 10 次開一個新對話；每次新對話最省；一直接續越長越貴。
-- **叫醒的那一輪**沒有人在旁邊：沙盒 `workspace-write`＋只開網路、`approval_policy=never`，只讀、回覆、改卡、在本機改檔；**commit、push、merge、部署一律不做**（git 帳密在叫醒那一輪拿不到，push 會失敗），要你同意的事它會私訊你。Windows 要在 `~/.codex/config.toml` 設 `[windows] sandbox`，沒設時 wake.log 會留 WARN。
+- **叫醒的那一輪**沒有人在旁邊：沙盒 `workspace-write`＋只開網路、`approval_policy=never`，交給它的卡直接做到「改好、測完、待 commit」；**commit、push、merge、部署一律不做**（git 帳密在叫醒那一輪拿不到，push 會失敗），要你決定或同意的事它會在群組發 [需確認] 問你。背景那一輪預設用比較省的模型（`gpt-6.1-terra`、推理強度 low），可在 `watcher.env` 設 `AIGILE_CODEX_MODEL`、`AIGILE_CODEX_EFFORT`；你開著的視窗不換模型。Windows 要在 `~/.codex/config.toml` 設 `[windows] sandbox`，沒設時 wake.log 會留 WARN。
 - **確認已停**：工作管理員「詳細資料」看 `codex.exe` 與 `node.exe`，沒事時只有 watcher 一支 node。要停就結束 watcher（被強制結束要刪 `watcher.pid`），連正在跑的那一輪也停就結束 `codex.exe`。
 - **重開機**：貼同一行一行啟動就接回。
 

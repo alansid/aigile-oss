@@ -121,7 +121,7 @@ export async function deliverForeground(dir, prompt) {
 }
 
 function launch(bin, args, options) {
-  if (/\.m?js$/i.test(bin)) return spawn(process.execPath, [bin, ...args], options);
+  if (/\.m?js$/i.test(bin) && fs.existsSync(bin)) return spawn(process.execPath, [bin, ...args], options);
   if (process.platform !== 'win32' || /\.exe$/i.test(bin)) return spawn(bin, args, options);
   // npm installs codex.cmd on Windows. Pass only launcher-generated arguments.
   const command = [fs.existsSync(bin) ? '"' + bin + '"' : bin, ...args.map(s => '"' + s.replace(/"/g, "'") + '"')].join(' ');
