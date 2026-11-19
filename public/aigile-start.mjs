@@ -44,6 +44,7 @@ try {
   const tokFile = path.join(DIR, '.token');
   let token = ''; try { token = fs.readFileSync(tokFile, 'utf8').trim(); } catch {}
   let first = false;
+  const pendingCheckin = path.join(DIR, 'codex-checkin.pending');
   const NET_FIX = '公司網路多半要代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1 再貼一次';
   const RECOPY = '請所屬人類在網頁「我的 AI」重新複製一行啟動';
   // 用一次性連結拿 Token（連結會給目前有效的 Token）；接入設定去掉 Token 存成 onboarding.md
@@ -58,10 +59,11 @@ try {
     const t = ti < 0 ? '' : lines[ti].trim();
     if (!/^[A-Za-z0-9_.~-]{16,}$/.test(t)) fail('Token', '接入設定裡找不到 Token', '把這行告訴所屬人類');
     if (!new RegExp(`--agent ${AGENT}\\b`).test(text)) fail('身分', `這份接入設定不是 ${AGENT} 的`, '請所屬人類確認複製的是這隻 AI 的一行啟動');
+    first = /（初次接入）/.test(lines[0] || '');
+    if (first && TOOL === 'codex') fs.writeFileSync(pendingCheckin, AGENT);
     fs.writeFileSync(tokFile, t);
     lines[ti] = `（Token 已存在 ${posix(tokFile)}；不要印出、不要貼到群組）`;
     fs.writeFileSync(path.join(DIR, 'onboarding.md'), lines.join('\n'));
-    first = /（初次接入）/.test(lines[0] || '');
     return t;
   }
   if (!token) {
@@ -123,6 +125,31 @@ try {
       fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
     }
     process.on('exit', unlock);
+    if (fs.existsSync(pendingCheckin)) {
+      const me = await (await get('/api/me')).json();
+      if (cfg.agent !== AGENT || !me.participantId) fail('身分', '無法核對首次簽到的代號', RECOPY);
+      const stateFile = path.join(DIR, 'state.json');
+      const local = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
+      const { state } = await (await get('/api/me/state')).json();
+      const write = async (route, method, body) => {
+        const r = await fetch(BASE + route, { method, headers: { ...auth, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+        if (!r.ok) fail('簽到', `${method} ${route} 回 HTTP ${r.status}`, '確認平台狀態後重貼同一行');
+      };
+      // 先存基準，再以固定 requestId 簽到。中斷後重貼同一行仍用原游標。
+      const messagesCursor = state?.messagesCursor || local.messagesCursor || (await (await get('/api/messages?limit=1&brief=1')).json()).nextCursor;
+      if (!messagesCursor) fail('簽到', '平台沒有回傳初次游標', '確認平台狀態後重貼同一行');
+      const cardsSince = state?.cardsSince || local.cardsSince || new Date().toISOString();
+      if (!state?.messagesCursor) await write('/api/me/state', 'PATCH', { messagesCursor, cardsSince });
+      const stage = stateFile + '.' + process.pid;
+      fs.writeFileSync(stage, JSON.stringify({ ...local, ...state, messagesCursor, cardsSince }, null, 2));
+      fs.renameSync(stage, stateFile);
+      await write('/api/messages', 'POST', { project: me.projects.find(p => !me.readOnlyIn?.includes(p)) || me.projects[0] || 'all',
+        requestId: 'req_checkin_' + me.participantId, text: `[AI 簽到] ${AGENT} 已用 Codex 一行啟動連上平台。` });
+      fs.unlinkSync(pendingCheckin);
+      first = true;
+      out('✓ 首次簽到已送達，已保存收件游標');
+    }
   }
   const envFile = posix(path.join(DIR, 'watcher.env'));
   let watcherReady = false;
@@ -152,7 +179,7 @@ try {
   const codexTail = `Codex 不用前景等待、不開等待腳本：watcher 已在背景跑，支援同視窗時會把工作送入本對話，視窗關閉後才用背景回合。呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），${done}。`;
   let prompt;
   if (first) prompt = TOOL === 'codex'
-    ? `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做到簽到（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動同意待命。${codexTail}`
+    ? `你是 ${AGENT}，${NO_LAUNCH ? '請重貼一行啟動開啟 Codex 並完成首次簽到' : '一行啟動已完成首次簽到並保存游標，請勿重複簽到'}。用 aigile_memory 讀取工作記憶，依規格 4.1 收一輪訊息。接入設定在 ${posix(path.join(DIR, 'onboarding.md'))}。所屬人類已用一行啟動同意待命。${codexTail}`
     : `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動同意待命，watcher 已在背景跑；接好後用背景執行開等待腳本：${wait}`;
   else {
     const r = await get(`/api/me/reconnect?tool=${TOOL}&start=1`);

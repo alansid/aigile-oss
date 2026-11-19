@@ -25,12 +25,17 @@ const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-p325-'));
 const db = openNodeDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '10000' } });
+let loseCheckinResponse = true;
 const server = http.createServer(async (req, res) => {
   const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const base = `http://${req.headers.host}`;
   const r = await app(new Request(new URL(req.url, base), { method: req.method, headers: req.headers, body: chunks.length ? Buffer.concat(chunks) : undefined }), base);
+  if (loseCheckinResponse && req.method === 'POST' && req.url === '/api/messages' && r.ok) {
+    loseCheckinResponse = false;
+    res.writeHead(503); res.end(); return;
+  }
   res.writeHead(r.status, Object.fromEntries(r.headers)); res.end(Buffer.from(await r.arrayBuffer()));
 });
 await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -82,6 +87,10 @@ try {
   const wd = fs.mkdtempSync(path.join(dataDir, 'w-'));
   const D = path.join(wd, '.aigile', AG);
   const LOCK = path.join(D, 'foreground.lock');
+  const interrupted = await runNode(['-e', code], wd, { FAKE_LOCK_FILE: LOCK });
+  assert.equal(interrupted.code, 1);
+  assert.match(interrupted.out, /HTTP 503/);
+  const initialState = JSON.parse(fs.readFileSync(path.join(D, 'state.json'), 'utf8'));
   let r = await runNode(['-e', code], wd, { FAKE_LOCK_FILE: LOCK, HEARTBEAT_MIN: '0.02', FAKE_APP_SERVER_HANG: '1' });
   const readPid = () => { try { return Number(fs.readFileSync(path.join(D, 'watcher.pid'), 'utf8').trim()) || 0; } catch { return 0; } };
   for (let i = 0; i < 50 && !readPid(); i++) await new Promise(ok => setTimeout(ok, 200));
@@ -95,7 +104,14 @@ try {
   assert.equal(fg.agent, AG, '帶 AIGILE_AGENT');
   assert.deepEqual(fg.args.slice(0, 4), ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true'], '沙盒只開網路（不開完全權限）');
   const prompt = fg.args[fg.args.length - 1];
-  assert.match(prompt, new RegExp(`照 \\.aigile/${AG}/onboarding\\.md 做到簽到`), '初次：照接入設定做到簽到');
+  assert.match(prompt, /已完成首次簽到/);
+  const checkins = () => db.get('SELECT COUNT(*) AS n FROM messages WHERE author_id = ? AND request_id = ?', ai.participantId, 'req_checkin_' + ai.participantId);
+  assert.equal((await checkins()).n, 1, '啟動器負責簽到，模型不必先核准讀檔');
+  const cursor = JSON.parse(fs.readFileSync(path.join(D, 'state.json'), 'utf8')).messagesCursor;
+  assert.ok(cursor);
+  assert.equal(cursor, initialState.messagesCursor, '重試保留原本的基準');
+  const installedToken = fs.readFileSync(path.join(D, '.token'), 'utf8').trim();
+  assert.equal((await api(installedToken, '/api/me/state')).body.state.messagesCursor, cursor);
   assert.match(prompt, /呼叫 MCP 工具 aigile_me 確認 MCP 能用/, '確認 MCP 能用');
   assert.match(prompt, /「接好了，可以關掉，之後有事會在背景叫我」/, '最後告訴人可以關掉');
   assert.ok(!/aigile-wait\.mjs/.test(prompt), 'Codex 不開等待腳本');
@@ -148,6 +164,7 @@ try {
   assert.ok(calls().some(c => c.args[0] === 'exec' && c.agent === AG), '背景補跑叫了 codex exec');
   assert.ok(!fs.existsSync(LOCK));
   console.log('✓ 4 前景重接時背景執行工作回合');
+  assert.equal((await checkins()).n, 1, '重接不會重複簽到');
 
   // 5. Windows 沒設 Codex 沙盒 → 印清楚、不幫忙改
   const cxHome = fs.mkdtempSync(path.join(dataDir, 'cxh-'));

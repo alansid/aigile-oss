@@ -144,6 +144,16 @@ try {
   const backgroundCalls = fs.readFileSync(log, 'utf8').trim().split('\n');
   assert.equal(backgroundCalls.length, 4);
   assert.match(JSON.parse(backgroundCalls.at(-1)).at(-1), /unattended background round/);
+  if (win) {
+    env.FAKE_CODEX_FALSE_COMPLETION = '1';
+    runWake(23);
+    delete env.FAKE_CODEX_FALSE_COMPLETION;
+    env.FAKE_CODEX_LINGER = path.join(tmp, 'linger.pid');
+    runWake();
+    const pid = Number(fs.readFileSync(env.FAKE_CODEX_LINGER, 'utf8'));
+    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    assert.ok(!fs.existsSync(path.join(dir, 'codex-run.lock')));
+  }
   console.log('codex-wake: foreground reply, launch, and resume passed');
 } finally {
   if (child?.exitCode === null) {

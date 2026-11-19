@@ -13,7 +13,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.findIndex(a => a === `--${name}` || a.startsWith(`--${name}=`)); return i < 0 ? def : args[i].includes('=') ? args[i].split('=').slice(1).join('=') : args[i + 1] ?? def; };
@@ -59,21 +60,40 @@ const ID_RE = /"(?:thread_id|session_id|conversation_id)"\s*:\s*"([0-9a-fA-F-]{3
 // 跑 codex：輸出一行一行過濾 Token 後寫進 wake.log，順便找對話編號
 function codex(list) {
   return new Promise(resolve => {
-    const options = { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...NO_GIT_CREDS, AIGILE_AGENT: AGENT } };
+    const options = { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...NO_GIT_CREDS, AIGILE_AGENT: AGENT } };
     // Windows 的 codex.cmd 需要 shell；CODEX_BIN 也接受既有的複合指令。
     const child = BIN_IS_SCRIPT
       ? spawn(process.execPath, [BIN, ...list], options)
       : shellCommand
       ? spawn(`${binIsPath ? q(BIN) : BIN} ${list.map(q).join(' ')}`, { ...options, shell: true })
       : spawn(BIN, list, options);
-    let id = null, blocked = 0;
-    const pipe = stream => { let buf = ''; stream.setEncoding('utf8');
-      stream.on('data', d => { buf += d; const lines = buf.split('\n'); buf = lines.pop(); for (const l of lines) { id ||= ID_RE.exec(l)?.[1] || null; if (/blocked by policy/.test(l)) blocked++; fs.appendFileSync(LOG, redact(l) + '\n'); } });
-      stream.on('end', () => { if (buf) { id ||= ID_RE.exec(buf)?.[1] || null; fs.appendFileSync(LOG, redact(buf) + '\n'); } }); };
-    pipe(child.stdout); pipe(child.stderr);
+    child.stdin.end(); // 提示已在 argv，明確送出 EOF。
+    let id = null, blocked = 0, shutdownTimer, reaped = false;
+    for (const stream of [child.stdout, child.stderr]) {
+      createInterface({ input: stream, crlfDelay: Infinity }).on('line', line => {
+        id ||= ID_RE.exec(line)?.[1] || null;
+        if (/blocked by policy/.test(line)) blocked++;
+        fs.appendFileSync(LOG, redact(line) + '\n');
+        if (process.platform !== 'win32' || stream !== child.stdout) return;
+        let event;
+        try { event = JSON.parse(line); } catch { return; }
+        if (event?.type === 'turn.started' || event?.type === 'turn.failed') clearTimeout(shutdownTimer);
+        if (event?.type !== 'turn.completed') return;
+        clearTimeout(shutdownTimer);
+        shutdownTimer = setTimeout(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          const taskkill = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+          const result = spawnSync(taskkill, ['/PID', String(child.pid), '/T', '/F'],
+            { windowsHide: true, stdio: 'ignore', timeout: 5000 });
+          reaped = result.status === 0;
+          note(reaped ? '回合已完成，已結束逾時未退出的 Codex 程序樹' : 'WARN 未能結束已完成的 Codex 程序樹');
+        }, 5000);
+      });
+    }
+    child.once('exit', () => clearTimeout(shutdownTimer));
     child.on('error', e => { note(`codex 啟動失敗：${e.message}`); resolve({ code: 1, id }); });
     // 實測：Windows 沒設 Codex 沙盒（~/.codex/config.toml 的 [windows] sandbox）時，連資料夾裡的指令都被拒，這一輪等於白跑
-    child.on('close', code => { if (blocked) note(`WARN 有 ${blocked} 行「blocked by policy」：Codex 沙盒擋下指令。Windows 請所屬人類在 ~/.codex/config.toml 設 [windows] sandbox（例如 "elevated"），AI 不要自己改`); resolve({ code: code ?? 1, id }); });
+    child.on('close', code => { if (blocked) note(`WARN 有 ${blocked} 行「blocked by policy」：Codex 沙盒擋下指令。Windows 請所屬人類在 ~/.codex/config.toml 設 [windows] sandbox（例如 "elevated"），AI 不要自己改`); resolve({ code: reaped ? 0 : code ?? 1, id }); });
   });
 }
 
