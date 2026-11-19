@@ -289,7 +289,7 @@ try {
   assert.deepEqual(st.permissions, { allow: ['Bash(ls:*)'] }, '原本的設定保留');
   assert.deepEqual(st.hooks.SessionStart.map(g => g.matcher), ['clear', 'compact']);
   assert.equal(st.hooks.Stop.length, 2, '原本的 Stop hook 保留＋加一個');
-  const absHook = path.join(sw, '.aigile', 'watcher', 'aigile-hook.mjs').replace(/\\/g, '/');
+  const absHook = path.join(fs.realpathSync.native(sw), '.aigile', 'watcher', 'aigile-hook.mjs').replace(/\\/g, '/'); // 腳本寫的是實際路徑（macOS 暫存資料夾 /var 實為 /private/var）
   assert.ok(st.hooks.Stop.some(g => g.hooks[0].command === `node "${absHook}" stop`), 'hook 用絕對路徑（PO 驗收建議：從子資料夾開對話也找得到）：' + JSON.stringify(st.hooks.Stop));
   // 照設定檔裡的指令，從子資料夾用 shell 實際執行（Claude Code 從子資料夾開時 hook 的工作目錄就是子資料夾）
   const sessCmd = st.hooks.SessionStart.find(g => g.matcher === 'clear').hooks[0].command;
