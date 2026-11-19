@@ -311,7 +311,8 @@ try {
   r = await run(pub('aigile-setup.mjs'), ['--agent', pg.agent, '--base', BASE, '--tool', 'claude'], { cwd: sw });
   const st3 = JSON.parse(fs.readFileSync(path.join(sw, '.claude', 'settings.local.json'), 'utf8'));
   assert.equal(st3.hooks.Stop.length, 2, '不重複加');
-  assert.ok(st3.hooks.Stop.some(g => g.hooks[0].command === `node "${absHook}" stop`), '舊的相對路徑換成絕對路徑');
+  const stopHook3 = st3.hooks.Stop.map(g => /^node "(.+)" stop$/.exec(g.hooks[0].command)?.[1]).find(Boolean);
+  assert.ok(stopHook3 && path.isAbsolute(stopHook3) && realOf(stopHook3) === absHook, '舊的相對路徑換成絕對路徑：' + JSON.stringify(st3.hooks.Stop));
   r = await run(pub('aigile-setup.mjs'), ['--agent', pg.agent, '--base', BASE, '--tool', 'codex'], { cwd: mkWork([[pg.agent, pg.tok]]) });
   assert.ok(!/✓ hook：/.test(r.out), 'Codex 不寫 Claude Code hook');
   assert.ok(r.out.includes('加好通用的 aigile（含 env_vars）'), 'Codex 設定帶 env_vars（實測：Codex 預設不傳環境變數給 MCP；PO 補充 7 起自動寫，詳見下面）：' + r.out.slice(-600));
