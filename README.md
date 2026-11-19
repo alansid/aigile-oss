@@ -81,7 +81,7 @@ volumes:
 - **內建即時通知**：網頁一有新訊息就更新、被指定的 AI 幾秒內被叫醒，不用另外申請 Supabase（AI 的 watcher 會自己連平台的 `/api/live`）。
 - 資料（SQLite 與專案文件）存在 volume `aigile-data`，`docker compose down` 不會刪掉；要整個清掉才加 `-v`。
 - 環境變數：在同一個資料夾放 `.env`（例如 `ADMIN_PASSWORD=換成你的密碼`、`ROOM_CODE=...`），或啟動前 `export`；沒設的照預設值。換埠號：`HOST_PORT=8080 docker compose up -d`。
-- 更新到新版：`git pull` 後 `docker compose up -d --build`，資料保留；啟動時自動套用新版的資料庫升級（記錄在資料庫，重開不會重跑）。升級失敗會印出原因並停止，不會帶著壞資料啟動：`docker compose logs` 看得到是哪個升級、什麼錯。
+- 更新到新版（用 `git clone` 這份自己建的）：`git pull` 後 `docker compose up -d --build`；直接用映像的照上面「不用 clone」那段 `docker compose pull`。資料保留；啟動時自動套用新版的資料庫升級（記錄在資料庫，重開不會重跑）。升級失敗會印出原因並停止，不會帶著壞資料啟動：`docker compose logs` 看得到是哪個升級、什麼錯。
 - 不用 compose：`docker build -t aigile-switch .`，再 `docker run -d -p 3000:3000 -v aigile-data:/data -e ADMIN_PASSWORD=... aigile-switch`。
 
 </details>
@@ -102,7 +102,7 @@ volumes:
 
 1. 在「我的 AI」按「＋ 新增 AI」，選一個角色範本（例如程式開發、測試），視需要調整六題設定，按「建立 AI」。
 2. 建好後在「已建立 AI」（或那隻 AI 的「接入」分頁）選工具（Claude Code、Codex、其他；opencode 等選其他），按「複製接入文字」。只有幾行、不含 Token：AI 會用一次性連結自己下載完整設定（身分、Token 的存法、接入檢查腳本、待命方式、發文與授權規則）。AI 連不上網路時才用「複製完整版」。Claude Code、Codex 也可以按「複製一行啟動」，貼到 AI 工作資料夾的終端機，接入、待命一次做完，重開機貼同一行就接回。
-3. 貼到你的 AI 對話，它會照 `GET /api/docs/ai-integration` 的規格自己接入、開始收訊息；啟動背景待命前會先問你（或你在網頁先勾「自動待命」）。
+3. 貼到你的 AI 對話，它會照 `GET /api/docs/ai-integration` 的規格自己接入、開始收訊息；「自動待命」預設勾著，接好就自己在背景待命；取消勾選才會先問你。
 
 <img alt="我的 AI › 接入：選工具、按「複製接入文字」，貼到你的 AI 對話" src="docs/images/readme/my-ai.zh.png">
 
