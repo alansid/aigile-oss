@@ -2,6 +2,7 @@
 // 修正前：接入要 AI 自己一步步下載、核對、寫設定（一個接入曾跑到 587 回合）；
 //   setup.md 的等待指令沒帶 --env-file，照抄就 CONFIG_ERROR；舊 watcher.env 缺 BELL_FILE、PID_FILE，重接也沒人補
 // 用法：node scripts/setup-script-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,7 +28,7 @@ const call = async (token, p, method = 'GET', body) => {
 };
 // 腳本是獨立程序：開本機埠，靜態檔（watcher.mjs 等）直接回 public 裡的檔
 const server = http.createServer(async (req, res) => {
-  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp)\.mjs$/.exec(req.url);
+  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const base = `http://${req.headers.host}`;
@@ -38,7 +39,8 @@ await new Promise(r => server.listen(0, '127.0.0.1', r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 const run = (cwd, file, args, env = {}) => new Promise(resolve => execFile(process.execPath, [file, ...args], { cwd, env: { ...process.env, AIGILE_BASE: '', AIGILE_TOKEN: '', AIGILE_CLAUDE_BIN: fileURLToPath(new URL('./fake-claude.mjs', import.meta.url)), ...env } }, (e, out) => resolve({ code: e ? e.code : 0, out })));
 let AG = 'PG'; // 平台給的代號（角色_短代碼），拿到 Token 後換成真的
-const setup = (cwd, extra = []) => run(cwd, pub('aigile-setup.mjs'), ['--agent', AG, '--base', BASE, ...extra]);
+// 測試會設暫存 CODEX_HOME（接入檢查看到會自動當成 Codex），這組要測會印等待指令的接法，所以指定 --tool other
+const setup = (cwd, extra = []) => run(cwd, pub('aigile-setup.mjs'), ['--agent', AG, '--base', BASE, '--tool', 'other', ...extra]);
 const work = () => fs.mkdtempSync(path.join(dataDir, 'w-'));
 const envOf = d => Object.fromEntries(fs.readFileSync(path.join(d, `.aigile/${AG}/watcher.env`), 'utf8').trim().split('\n').map(l => [l.split('=')[0], l.split('=').slice(1).join('=')]));
 
@@ -63,7 +65,7 @@ try {
   // 端點：只給 AI；內容就是標準 watcher.env 與兩個檔的雜湊
   assert.equal((await call(boss.token, '/api/me/watcher-env')).status, 403, '人類拿不到');
   const cfg = (await call(tok, '/api/me/watcher-env')).body;
-  assert.deepEqual(cfg.files, { 'watcher.mjs': sha(pub('watcher.mjs')), 'aigile-wait.mjs': sha(pub('aigile-wait.mjs')), 'aigile-opencode.mjs': sha(pub('aigile-opencode.mjs')), 'aigile-mcp.mjs': sha(pub('aigile-mcp.mjs')) }, '雜湊跟 public 的檔一致');
+  assert.deepEqual(cfg.files, { 'watcher.mjs': sha(pub('watcher.mjs')), 'aigile-wait.mjs': sha(pub('aigile-wait.mjs')), 'aigile-opencode.mjs': sha(pub('aigile-opencode.mjs')), 'aigile-mcp.mjs': sha(pub('aigile-mcp.mjs')), 'aigile-codex.mjs': sha(pub('aigile-codex.mjs')), 'aigile-codex-ui.mjs': sha(pub('aigile-codex-ui.mjs')), 'aigile-start.mjs': sha(pub('aigile-start.mjs')), 'aigile-hook.mjs': sha(pub('aigile-hook.mjs')) }, '雜湊跟 public 的檔一致');
   assert.ok(cfg.env.includes(`BELL_FILE=.aigile/${AG}/bell.json`));
   assert.ok(!cfg.env.includes(tok), 'watcher.env 不放 Token（用 AIGILE_TOKEN_FILE）');
 
@@ -139,7 +141,7 @@ try {
   assert.match(r.out, /! 環境變數 AIGILE_TOKEN（開頭 tok_…）跟 \.token 不一樣，已用 \.token/, '提醒清掉舊的環境變數');
   r = await setup(c);
   assert.match(r.out, /平台不認得這組 Token（401 INVALID_TOKEN：.*用的是開頭 tok_…）/, '401 說出平台回的原因與用的是哪一組');
-  r = await run(e, path.join(a, '.aigile/watcher/aigile-wait.mjs'), ['--agent', AG, '--max-min=0.02'], { AIGILE_BASE: BASE, AIGILE_TOKEN: 'tok_stale_old' });
+  r = await run(e, path.join(a, '.aigile/watcher/aigile-wait.mjs'), ['--agent', AG, '--exit-on-timeout', '--max-min=0.02'], { AIGILE_BASE: BASE, AIGILE_TOKEN: 'tok_stale_old' });
   assert.ok(!/UNAUTHORIZED/.test(r.out), '等待腳本以 .token 為準：' + r.out.trim());
   const wp = execFile(process.execPath, [path.join(a, '.aigile/watcher/watcher.mjs')], { cwd: e, env: { ...process.env, AIGILE_BASE: BASE, AIGILE_ME: ai.participantId, AIGILE_TOKEN: 'tok_stale_old', AIGILE_TOKEN_FILE: `.aigile/${AG}/.token`, WATCH_ONLY: '1', SUPABASE_URL: '', SUPABASE_KEY: '' } });
   let wlog = ''; wp.stdout.on('data', x => { wlog += x; });
@@ -148,7 +150,7 @@ try {
   assert.match(wlog, /\[啟動\]/); assert.ok(!/401/.test(wlog), 'watcher 以 AIGILE_TOKEN_FILE 為準：' + wlog.trim());
 
   // 4) ：等待腳本沒帶 --env-file（舊 setup.md 的寫法）也找得到平台，不再 CONFIG_ERROR
-  r = await run(a, path.join(a, '.aigile/watcher/aigile-wait.mjs'), ['--agent', AG, '--max-min=0.02']);
+  r = await run(a, path.join(a, '.aigile/watcher/aigile-wait.mjs'), ['--agent', AG, '--exit-on-timeout', '--max-min=0.02']);
   assert.ok(!/CONFIG_ERROR/.test(r.out), '讀同代號 watcher.env：' + r.out.trim());
   assert.match(r.out.trim().split('\n').pop(), /^(TIMEOUT|PENDING \d+)$/);
 

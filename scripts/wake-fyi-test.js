@@ -103,7 +103,7 @@ try {
   const cnt = (await call(e.tok, '/api/notifications/count?wake=1')).body;
   assert.deepEqual(cnt, { pending: 2, wake: 0 }, 'count?wake=1：2 則待處理、0 則要叫醒');
   assert.deepEqual((await call(e.tok, '/api/notifications/count')).body, { pending: 2 }, '不帶參數照舊');
-  const runWait = env2 => new Promise(ok => { const p = spawn(process.execPath, [fileURLToPath(new URL('../public/aigile-wait.mjs', import.meta.url)), '--agent', 'E', '--max-min=0.03'], { cwd: we, env: { ...process.env, AIGILE_BASE: BASE, AIGILE_TOKEN: e.tok, AIGILE_TOKEN_FILE: path.join(we, 'none'), ...env2 } }); let o = ''; p.stdout.on('data', d => { o += d; }); p.on('exit', code => ok({ code, last: o.trim().split('\n').pop() })); });
+  const runWait = env2 => new Promise(ok => { const p = spawn(process.execPath, [fileURLToPath(new URL('../public/aigile-wait.mjs', import.meta.url)), '--agent', 'E', '--exit-on-timeout', '--max-min=0.03'], { cwd: we, env: { ...process.env, AIGILE_BASE: BASE, AIGILE_TOKEN: e.tok, AIGILE_TOKEN_FILE: path.join(we, 'none'), ...env2 } }); let o = ''; p.stdout.on('data', d => { o += d; }); p.on('exit', code => ok({ code, last: o.trim().split('\n').pop() })); });
   let wr = await runWait();
   assert.equal(wr.last, 'TIMEOUT', '只剩知會類：等待腳本不醒（修正前一啟動就 PENDING 2）：' + wr.last);
   await send(b.tok, { text: '請處理 MAIN-10', recipientIds: [e.id] });
@@ -126,7 +126,7 @@ try {
   const src = fs.readFileSync(WATCHER, 'utf8');
   assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, BELL_ONLY \? 12 : 3\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, BELL_ONLY \? 60 : 15\)/);
   const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
-  assert.match(spec, /Claude Code（`WAKE_CMD` 是 echo，只寫門鈴）每小時 12 次、每天 60 次/); assert.match(spec, /`wake`（[^\n]{0,80}`false`＝知會類/); assert.match(spec, /count\?wake=1/);
+  assert.match(spec, /只寫門鈴的（Claude Code）每小時 12、每天 60 次/); assert.match(spec, /`wake`（[^\n]{0,80}`false`＝知會類/); assert.match(spec, /count\?wake=1/);
   console.log('wake-fyi-test：全部通過');
 } catch (e) {
   console.error('wake-fyi-test 失敗：', e.message);

@@ -81,7 +81,7 @@ try {
   assert.ok(!d.log.some(l => l.via === '交接'), '四欄的原始資料不混在 log 裡');
   assert.ok(d.log.some(l => l.text.startsWith('交接 甲PG → 丙UX：做到哪：登入頁改完')), 'log 照舊有一行交接');
   const hm = (await call(C.tok, `/api/messages/${r.body.handoverMessageId}`)).body.text;
-  assert.match(hm, /• 做到哪：登入頁改完/); assert.match(hm, /• 改了什麼：public\/app\.js/); assert.match(hm, /• 下一步：手機 Safari/); assert.match(hm, /• 注意：別動/);
+  assert.match(hm, /→ @丙UX：登入頁改完/); assert.doesNotMatch(hm, /• 做到哪/, '做到哪只出現在標題'); assert.match(hm, /• 改了什麼：public\/app\.js/); assert.match(hm, /• 下一步：手機 Safari/); assert.match(hm, /• 注意：別動/);
   assert.deepEqual(d.untrusted_content.filter(k => ['progress', 'changes', 'nextStep', 'caution'].includes(k)), ['progress', 'changes', 'nextStep', 'caution'], '四欄算人寫內容');
   r = await post(C, '[接單] 收到，接著測手機', card.cardId);
   assert.equal(r.body.cardClaim, undefined, '交接後接手的人 [接單] 不用再 takeover');

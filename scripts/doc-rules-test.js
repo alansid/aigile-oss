@@ -112,7 +112,7 @@ try {
   for (const t of TOOLS) {
     assert.ok(/（初次接入）/.test(first[t]) && /（重新接上）/.test(again[t]), `${t}：標題寫出是初次還是重接`);
     const all = first[t] + '\n' + again[t] + '\n' + spec;
-    const missing = RULES.filter(([n, re]) => !(t === 'other' && n.startsWith('等待腳本 ')) && !re.test(all)).map(([n]) => n);
+    const missing = RULES.filter(([n, re]) => !(t !== 'claude' && n.startsWith('等待腳本 ')) && !re.test(all)).map(([n]) => n);
     assert.deepEqual(missing, [], `${t}：規則不見了：` + missing.join('、'));
   }
 
@@ -133,6 +133,12 @@ try {
     assert.ok(!/^```js$/m.test(spec), '規格不放整段範例腳本（改下載 poll.mjs）');
     assert.ok(fs.existsSync(new URL('../public/poll.mjs', import.meta.url)), 'poll.mjs 可下載');
     assert.ok(!/十、團隊成員與所在環境/.test(ob) && /GET \/api\/participants/.test(spec), '名冊改叫 GET /api/participants');
+  }
+  // Codex 版：每一輪的步驟用 MCP 工具，不寫 HTTP 端點
+  for (const setup of [first.codex, again.codex]) {
+    const round = setup.split('## 三、每一輪怎麼做')[1].split('## 四、')[0];
+    for (const tool of ['aigile_me', 'aigile_inbox', 'aigile_read', 'aigile_card_get', 'aigile_ack', 'aigile_memory']) assert.ok(round.includes(tool), `Codex 每輪操作須列出 ${tool}`);
+    assert.doesNotMatch(round, /(?:GET|PUT) \/api\//, 'Codex 日常一輪透過 MCP 即可完成');
   }
   console.log(`doc-rules-test：全部通過（規則 ${RULES.length} 條；接入設定 ${TOOLS.map(t => `${t} 初次 ${len(first[t])}／重接 ${len(again[t])}`).join('、')} 字；規格 ${len(spec)} 字）`);
 } catch (e) {

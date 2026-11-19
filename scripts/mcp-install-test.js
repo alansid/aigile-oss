@@ -1,7 +1,8 @@
 // 重現測試：接入檢查只印 MCP 指令，AI 讀成「不能跟別人同資料夾並存」而停下；以為腳本會自己裝
-// 修正後：--tool claude 時腳本直接 claude mcp add aigile-<代號小寫>（已裝跳過、失敗印指令且不中斷）；Codex 照舊印設定
+// 修正後：--tool claude 時腳本直接裝通用 MCP aigile（使用者範圍，整台電腦一次；已裝跳過、失敗印指令且不中斷）；Codex 寫進 config.toml（先備份）
 // 用假的 claude（scripts/fake-claude.mjs）記錄呼叫，絕不動真的 Claude Code 設定
 // 用法：node scripts/mcp-install-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,7 +26,7 @@ const call = async (token, p, method = 'GET', body) => {
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
 const server = http.createServer(async (req, res) => {
-  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp)\.mjs$/.exec(req.url);
+  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const base = `http://${req.headers.host}`;
@@ -39,36 +40,36 @@ try {
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: 'PG', name: '程式助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
   const tok = (await testToken(db, ai.participantId));
-  const AG = (await call(tok, '/api/me/watcher-env')).body.agent, NAME = 'aigile-' + AG.toLowerCase();
+  const AG = (await call(tok, '/api/me/watcher-env')).body.agent, NAME = 'aigile';
+  const HOME = path.join(dataDir, 'home'), CODEX_HOME = path.join(dataDir, 'codexhome'); fs.mkdirSync(CODEX_HOME, { recursive: true }); // 暫存家目錄，不碰真的設定
   const wd = fs.mkdtempSync(path.join(dataDir, 'w-'));
   fs.mkdirSync(path.join(wd, '.aigile', AG), { recursive: true });
   fs.writeFileSync(path.join(wd, '.aigile', AG, '.token'), tok);
   const log = path.join(dataDir, 'claude.log');
   const setup = (tool, env = {}) => { fs.rmSync(log, { force: true }); return new Promise(ok => execFile(process.execPath, [pub('aigile-setup.mjs'), '--agent', AG, '--base', BASE, '--tool', tool],
-    { cwd: wd, env: { ...process.env, AIGILE_BASE: '', AIGILE_TOKEN: '', CLAUDECODE: '', AIGILE_CLAUDE_BIN: FAKE, FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_HAS: '', FAKE_CLAUDE_FAIL: '', ...env } },
+    { cwd: wd, env: { ...process.env, AIGILE_BASE: '', AIGILE_TOKEN: '', CLAUDECODE: '', AIGILE_CLAUDE_BIN: FAKE, FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_HAS: '', FAKE_CLAUDE_FAIL: '', AIGILE_HOME: HOME, CODEX_HOME, AIGILE_CODEX_BIN: fileURLToPath(new URL('./fake-codex.mjs', import.meta.url)), ...env } },
     (e, out) => ok({ code: e ? e.code : 0, out, calls: fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l)) : [] }))); };
-  const mcp = path.resolve(wd, '.aigile', 'watcher', 'aigile-mcp.mjs').replace(/\\/g, '/');
+  const mcp = path.join(HOME, '.aigile', 'aigile-mcp.mjs').replace(/\\/g, '/'); // 通用轉接腳本放家目錄
 
-  // 1. Claude Code、還沒裝 → 腳本直接裝（名稱帶代號、絕對路徑、這個資料夾）
+  // 1. Claude Code、還沒裝 → 腳本直接裝（通用 aigile、使用者範圍、家目錄的轉接腳本）
   let r = await setup('claude');
   assert.equal(r.code, 0, r.out);
-  assert.deepEqual(r.calls, [['mcp', 'get', NAME], ['mcp', 'add', NAME, '--', 'node', mcp, '--agent', AG]], '先查再裝：' + JSON.stringify(r.calls));
-  assert.match(r.out, new RegExp(`✓ MCP：已幫 Claude Code 裝好 ${NAME}`));
-  assert.match(r.out, /同資料夾多個 AI 可並存/, '文字改成可並存');
-  assert.ok(!/只掛自己的/.test(r.out), '不再寫容易誤讀的「只掛自己的」');
+  assert.deepEqual(r.calls, [['mcp', 'get', NAME], ['mcp', 'add', '-s', 'user', NAME, '--', 'node', mcp], ['mcp', 'get', 'aigile-' + AG.toLowerCase()]], '先查再裝：' + JSON.stringify(r.calls));
+  assert.match(r.out, /✓ MCP：已幫 Claude Code 裝好通用的 aigile（使用者範圍，整台電腦一次/);
+  assert.ok(fs.existsSync(mcp), '轉接腳本複製到家目錄');
   // 2. 已裝 → 跳過、印已裝
   r = await setup('claude', { FAKE_CLAUDE_HAS: NAME });
-  assert.deepEqual(r.calls, [['mcp', 'get', NAME]], '已裝就不再 add');
-  assert.match(r.out, /✓ MCP：Claude Code 已裝 .*（不重裝）/);
+  assert.deepEqual(r.calls, [['mcp', 'get', NAME], ['mcp', 'get', 'aigile-' + AG.toLowerCase()]], '已裝就不再 add（另查舊名稱還在不在）');
+  assert.match(r.out, /✓ MCP：Claude Code 已裝通用的 aigile（整台電腦一次，不重裝）/);
   // 3. 裝失敗 → 印指令讓 AI 手動裝，不中斷（照樣跑完、結束碼 0）
   r = await setup('claude', { FAKE_CLAUDE_FAIL: '1' });
   assert.equal(r.code, 0, '不中斷');
-  assert.match(r.out, new RegExp(`! MCP 沒裝成（fake claude: add failed）：請自己在這個資料夾執行 claude mcp add ${NAME} -- node`));
+  assert.match(r.out, /! MCP 沒裝成（fake claude: add failed）：請自己執行 /);
   assert.match(r.out, /完成：/, '其他檢查照樣做完');
-  // 4. Codex：不呼叫 claude，照舊印設定（全機共用，不由腳本改）
+  // 4. Codex：寫進 config.toml（整台電腦一個，含 env_vars）
   r = await setup('codex');
-  assert.deepEqual(r.calls, [], 'Codex 不碰 claude');
-  assert.match(r.out, new RegExp(`\\[mcp_servers\\.${NAME}\\]`));
+  assert.equal(r.code, 0, r.out);
+  assert.match(fs.readFileSync(path.join(CODEX_HOME, 'config.toml'), 'utf8'), /\[mcp_servers\.aigile\]\ncommand = "node"\nargs = \[".*aigile-mcp\.mjs"\]\nenv_vars = \["AIGILE_AGENT"\]/, 'config.toml 有 [mcp_servers.aigile]');
   console.log('mcp-install-test：全部通過');
 } catch (e) {
   console.error('mcp-install-test 失敗：', e.message);

@@ -1050,6 +1050,17 @@ body.drawer-docked #app { padding-right: 400px; }
 .batch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; margin: 6px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .sugg-check { display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; cursor: pointer; }
 .sugg-check input { width: 20px; height: 20px; }
+.ask-batch .ask-all { gap: 6px; min-width: 0; padding-right: 4px; } /* 要你回覆：全選 */
+.ask-row-item { align-items: flex-start; }
+.ask-head { display: flex; align-items: center; min-height: 44px; cursor: pointer; } /* 標題列也能勾 */
+.batch-go:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+@media (max-width: 600px) {
+  .ask-row-item { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 4px; }
+  .ask-row-item > .sugg-check { grid-column: 1; grid-row: 1; align-self: start; }
+  .ask-row-item > .sugg-main { grid-column: 2; grid-row: 1; }
+  .ask-row-item > .sugg-actions { grid-column: 1 / -1; }
+}
+.tag.resolved { background: var(--surface-2); color: var(--muted); border: 1px dashed var(--border); } /* 已處理（未回覆） */
 .sugg-row { align-items: center; }
 @media (max-width: 600px) { .batch-bar .btn { min-height: 44px; } }
 
@@ -1584,7 +1595,9 @@ span.pm-star.on-true { display: inline-flex; width: 32px; justify-content: cente
 }
 
 /* ===== 收件匣直接回答 [需確認]、抽屜相關訊息 ===== */
-.conf-row { display: grid; gap: 8px; }
+.conf-row { display: grid; gap: 8px; grid-template-columns: auto minmax(0, 1fr); }
+.conf-row > .sugg-check { grid-column: 1; grid-row: 1 / span 6; align-self: start; } /* 勾選框在左，其他內容疊在右欄 */
+.conf-row > :not(.sugg-check) { grid-column: 2; }
 .conf-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; }
 .conf-row .auth-box { margin: 0; }
 .dmsg { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 8px; }

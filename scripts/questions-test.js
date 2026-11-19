@@ -50,8 +50,14 @@ try {
   const call = async (token, p, method = 'GET', body) => { const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost'); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PO', role: '產品負責', name: 'claude-PO', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
+  // AI 發錯格式先擋（附範例），同一草稿第 3 次照送，只說明、不再叫它重發
   let r = await call(ai.token, '/api/messages', 'POST', { requestId: 'q1', project: '預設專案', recipientIds: [boss.participant.participantId], text: CASES[2][0] });
-  assert.equal(r.status, 201); assert.ok(r.body.warnings?.some(w => /沒有變成按鈕/.test(w)), 'AI 發錯格式：回應帶提醒');
+  assert.equal(r.status, 400, 'AI 發錯格式：先擋'); assert.match(r.body.error.message, /沒有變成按鈕[\s\S]*範例[\s\S]*選項：\nA\. /, '附正確範例');
+  await call(ai.token, '/api/messages', 'POST', { requestId: 'q1b', project: '預設專案', recipientIds: [boss.participant.participantId], text: CASES[2][0] });
+  r = await call(ai.token, '/api/messages', 'POST', { requestId: 'q1c', project: '預設專案', recipientIds: [boss.participant.participantId], text: CASES[2][0] });
+  assert.equal(r.status, 201, '第 3 次照送'); assert.ok(r.body.warnings.some(w => /已擋過 2 次，這次照送/.test(w)) && !r.body.warnings.some(w => /重發/.test(w)), '照送只說明、不叫它重發');
+  r = await call(ai.token, '/api/messages', 'POST', { requestId: 'q3', project: '預設專案', recipientIds: [boss.participant.participantId], replyFrom: [boss.participant.participantId], text: '[需確認] 等你在網頁重發 Token，好了回我一聲' });
+  assert.equal(r.status, 201, '完全沒選項的 [需確認]（等人做事）照舊放行'); assert.ok(!r.body.warnings?.length);
   r = await call(ai.token, '/api/messages', 'POST', { requestId: 'q2', project: '預設專案', recipientIds: [boss.participant.participantId], text: CASES[0][0] });
   assert.ok(!r.body.warnings?.length, '放寬後認得的寫法：不提醒');
   console.log('questions-test：全部通過');

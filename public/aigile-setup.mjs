@@ -8,13 +8,14 @@
 //   5. git 資料夾就確認 .gitignore 有 .aigile/（沒有就補一行）
 //   6. watcher 已在跑、但檔案或設定剛更新 → 提醒要重開（不會自己停掉它）
 //   7. 同步技能：下載專案已上架的技能、核對雜湊、裝到工具的技能資料夾；含腳本的要主人允許才裝；下架的移除（只移除自己裝的）
-//   8. Claude Code：直接裝 MCP（claude mcp add aigile-<代號小寫>，這個資料夾；已裝就跳過）；Codex 印設定讓你自己加
+//   8. Claude Code：裝通用 MCP aigile（使用者範圍，整台電腦一次；已裝就跳過）與 hook（.claude/settings.local.json）；Codex 印設定讓你自己加
 //   9. 先比對自己跟平台的 SHA-256，不同就下載、核對後用新版重跑；同步開始、結束、失敗都回報平台（主人的同步清單看得到）
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
-// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|other] [--skills-only]
+// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|other] [--mode auto|fresh|keep] [--skills-only]
 //   --tool 決定沒勾角色的技能裝哪裡：claude → .claude/skills、codex → .agents/skills、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
 //   有指定（角色或 AI）的技能一律裝 .aigile/<代號>/skills（同資料夾別的 AI 不會載入）
+//   --mode（只有 codex 用）：對話接續方式；--tool codex 時把 watcher.env 的 WAKE_CMD 設成 Codex 喚醒腳本（有事才開 codex exec 跑一輪）
 //   --skills-only 只同步技能（主人在網頁按「同步」時用），不動 watcher
 //   Token 先讀 .aigile/<代號>/.token；沒有檔才用環境變數 AIGILE_TOKEN_<代號>（例 AIGILE_TOKEN_PG）或 AIGILE_TOKEN。
 //   環境變數跟檔案不一樣會提醒（舊的環境變數會蓋掉 watcher 讀的檔案，換了 Token 還是 401）。代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1。
@@ -22,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -97,9 +99,9 @@ if (cfg.setup && SELF_SHA !== cfg.setup) {
   if (process.env.AIGILE_SETUP_UPDATED) fail('同步工具', '更新後還是跟平台給的雜湊不一樣', '把這行告訴所屬人類');
   const r = await fetch(`${BASE}/aigile-setup.mjs`, { signal: AbortSignal.timeout(20_000) }).catch(() => null);
   const buf = r?.ok ? Buffer.from(await r.arrayBuffer()) : null;
-  if (!buf) fail('同步工具', `${BASE}/aigile-setup.mjs 下載失敗`, '請所屬人類照規格 3.12 自己下載');
+  if (!buf) fail('同步工具', `${BASE}/aigile-setup.mjs 下載失敗`, '請所屬人類照 api-reference 3.12 自己下載');
   if (sha(buf) !== cfg.setup) fail('同步工具', '下載的 aigile-setup.mjs 雜湊跟平台給的不一樣', '不要執行，告訴所屬人類');
-  try { fs.writeFileSync(SELF, buf); } catch (e) { fail('同步工具', `寫不進 ${SELF}（${e.code || e.message}）`, '請所屬人類照規格 3.12 自己下載到這個位置'); }
+  try { fs.writeFileSync(SELF, buf); } catch (e) { fail('同步工具', `寫不進 ${SELF}（${e.code || e.message}）`, '請所屬人類照 api-reference 3.12 自己下載到這個位置'); }
   out('✓ 同步工具跟平台版本不同，已下載新版（SHA-256 相符），用新版重跑');
   const again = spawnSync(process.execPath, [SELF, ...args], { stdio: 'inherit', env: { ...process.env, AIGILE_SETUP_UPDATED: '1' } });
   process.exitCode = again.status ?? 1;
@@ -192,7 +194,7 @@ for (const [f, want] of Object.entries(cfg.files)) {
   if (have === want) { out(`✓ ${f} 已是最新`); continue; }
   const r = await fetch(`${BASE}/${f}`, { signal: AbortSignal.timeout(20_000) }).catch(() => null);
   const buf = r?.ok ? Buffer.from(await r.arrayBuffer()) : null;
-  if (!buf) fail('下載', `${f} 下載失敗`, '請所屬人類照規格 3.12 自己下載');
+  if (!buf) fail('下載', `${f} 下載失敗`, '請所屬人類照 api-reference 3.12 自己下載');
   if (sha(buf) !== want) fail('核對', `${f} 的 SHA-256 跟平台給的不一樣`, '不要執行這個檔，告訴所屬人類');
   fs.writeFileSync(dest, buf); changed = true;
   out(`✓ ${f} ${have ? '已更新' : '已下載'}，SHA-256 相符`);
@@ -208,6 +210,15 @@ const merged = new Map(std);
 if (old) for (const [k, v] of old) if (k === 'WAKE_CMD' || !std.has(k)) merged.set(k, v);
 const added = old ? [...std.keys()].filter(k => !old.has(k)) : [];
 const fixed = old ? ['AIGILE_BASE', 'AIGILE_ME'].filter(k => old.has(k) && old.get(k) !== std.get(k)) : [];
+// Codex 不前景常駐，watcher 有待處理才叫 Codex 喚醒腳本跑一輪。原本是 echo（只寫門鈴）或已是 Codex 腳本才改，自己寫的 WAKE_CMD 不動
+const CODEX_MODE = ['auto', 'fresh', 'keep'].includes(opt('mode')) ? opt('mode') : '';
+const codexCmd = m => `node .aigile/watcher/aigile-codex.mjs --agent ${AGENT} --mode ${m}`;
+if (TOOL === 'codex') {
+  const cur = merged.get('WAKE_CMD') || '';
+  const curMode = /aigile-codex\.mjs\b.*--mode[ =](\w+)/.exec(cur)?.[1];
+  const want = /^\s*echo\b/i.test(cur) || !cur ? codexCmd(CODEX_MODE || 'auto') : curMode && CODEX_MODE && curMode !== CODEX_MODE ? codexCmd(CODEX_MODE) : cur;
+  if (want !== cur) { merged.set('WAKE_CMD', want); fixed.push('WAKE_CMD'); }
+}
 if (!old || added.length || fixed.length) {
   fs.writeFileSync(envPath, [...merged].map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
   changed = true;
@@ -228,28 +239,109 @@ out('');
 if (running && changed) out(`! watcher（程序 ${pid}）用的是舊檔或舊設定：先停掉它，再用下面的指令重開`);
 else if (running) out(`✓ watcher 已在執行（程序 ${pid}），不用再開`);
 out(`啟動 watcher：node ${envArg} .aigile/watcher/watcher.mjs >> ${DIR.replace(/\\/g, '/')}/watcher.log 2>&1`);
-out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT} --max-min=110`);
-// 平台有 MCP 就印安裝指令（用絕對路徑，MCP 從哪個資料夾啟動都找得到；Token 由轉接腳本每次讀 .token，不寫進設定）
+if (TOOL === 'codex') out(`Codex 不用前景等待：watcher 有待處理才執行 WAKE_CMD=${merged.get('WAKE_CMD')}（開 codex exec 跑一輪就結束，輸出在 ${DIR.replace(/\\/g, '/')}/wake.log）`);
+else out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}（沒事不會結束，結束就是有事）`);
+// 通用 MCP（aigile，整台電腦裝一次）：轉接腳本複製到家目錄 ~/.aigile/aigile-mcp.mjs，Claude Code 裝在使用者範圍（-s user）。
+// 從哪個資料夾開都用同一個；身分由轉接腳本看環境變數 AIGILE_AGENT 或資料夾裡唯一的 Token 決定，新增 AI、換角色、加專案不用重裝。
+// 舊的 aigile-<代號>不動、照樣能用。Token 由轉接腳本每次讀 .token，不寫進設定。
 if (cfg.files['aigile-mcp.mjs']) {
-  const mcp = path.resolve('.aigile', 'watcher', 'aigile-mcp.mjs').replace(/\\/g, '/');
-  const mcpName = `aigile-${AGENT.toLowerCase()}`; // 名稱帶代號，同台多個 AI 不撞名、不用到別人的身分
-  const addArgs = ['mcp', 'add', mcpName, '--', 'node', mcp, '--agent', AGENT];
-  out(`MCP 名稱 ${mcpName}：名稱帶代號，同資料夾多個 AI 可並存；每輪改用 aigile_ 工具（不用自己組 curl），只呼叫 ${mcpName} 這組，不用別人代號的`);
+  const home = path.join(process.env.AIGILE_HOME || os.homedir(), '.aigile');
+  const mcp = path.join(home, 'aigile-mcp.mjs');
+  const src = path.join('.aigile', 'watcher', 'aigile-mcp.mjs');
+  let copied = false;
+  try {
+    const want = fs.readFileSync(src);
+    let cur = null; try { cur = fs.readFileSync(mcp); } catch {}
+    if (!cur || sha(cur) !== sha(want)) { fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(mcp, want); copied = true; }
+  } catch (e) { fail('MCP', `複製轉接腳本到 ${mcp} 失敗（${e.code || e.message}）`, '把這行告訴所屬人類'); }
+  const mcpPath = mcp.replace(/\\/g, '/');
+  out(`✓ 通用 MCP 轉接腳本：${mcpPath}${copied ? '（已更新）' : '（已是最新）'}`);
+  const addArgs = ['mcp', 'add', '-s', 'user', 'aigile', '--', 'node', mcpPath];
   if (TOOL === 'claude') {
-    // 直接裝（這個資料夾）；已有同名就跳過；失敗印指令讓 AI 手動裝，不中斷其他檢查。AIGILE_CLAUDE_BIN 給測試用假的 claude
+    // AIGILE_CLAUDE_BIN 給測試用假的 claude
     const bin = process.env.AIGILE_CLAUDE_BIN || '';
     const q = s => `"${String(s).replace(/"/g, '\\"')}"`;
-    const claude = a => (/\.m?js$/.test(bin) ? spawnSync(process.execPath, [bin, ...a], { encoding: 'utf8', timeout: 60_000 })
+    const claude = a => (/\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...a], { encoding: 'utf8', timeout: 60_000 })
       : spawnSync([bin || 'claude', ...a].map(q).join(' '), { shell: true, encoding: 'utf8', timeout: 60_000 }));
-    const manual = `claude ${addArgs.map(a => (/\s/.test(a) ? q(a) : a)).join(' ')}`;
-    if (claude(['mcp', 'get', mcpName]).status === 0) out(`✓ MCP：Claude Code 已裝 ${mcpName}（不重裝）`);
+    const manual = `claude ${addArgs.join(' ')}`;
+    if (claude(['mcp', 'get', 'aigile']).status === 0) out('✓ MCP：Claude Code 已裝通用的 aigile（整台電腦一次，不重裝）');
     else {
       const r = claude(addArgs);
-      if (r.status === 0) out(`✓ MCP：已幫 Claude Code 裝好 ${mcpName}（這個資料夾；重開 Claude Code 對話後生效）`);
-      else out(`! MCP 沒裝成（${String(r.stderr || r.stdout || r.error?.message || '').trim().split('\n').pop().slice(0, 120) || '找不到 claude 指令'}）：請自己在這個資料夾執行 ${manual}`);
+      if (r.status === 0) out('✓ MCP：已幫 Claude Code 裝好通用的 aigile（使用者範圍，整台電腦一次；新開的對話就有 mcp__aigile__* 工具）');
+      else out(`! MCP 沒裝成（${String(r.stderr || r.stdout || r.error?.message || '').trim().split('\n').pop().slice(0, 120) || '找不到 claude 指令'}）：請自己執行 ${manual}`);
+    }
+    out(`  工具名稱 mcp__aigile__*；這個資料夾有多隻 AI 時先呼叫 aigile_use(${AGENT})（一個對話只能選一次）。舊的 aigile-${AGENT.toLowerCase()} 照樣能用`);
+    // 舊的還在：同一個對話會看到兩套工具，講清楚現在用哪一套；舊的先不移除（要不要移除之後問所屬人類）
+    const old = `aigile-${AGENT.toLowerCase()}`;
+    if (claude(['mcp', 'get', old]).status === 0) out(`! 舊的 ${old} 也還在：同一個對話會看到 mcp__aigile__* 和 mcp__${old}__* 兩套，兩套都是你、功能一樣。從現在起用 mcp__aigile__*（新的）；舊的先不移除，要不要移除之後由所屬人類決定`);
+    // Claude Code hook：寫在這個資料夾的 .claude/settings.local.json（不進 git、不動全機設定）
+    if (cfg.files['aigile-hook.mjs']) {
+      const sp = path.join('.claude', 'settings.local.json');
+      let j = {}, ok = true;
+      try { j = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') ok = false; }
+      if (!ok || typeof j !== 'object' || Array.isArray(j)) out(`! ${sp.replace(/\\/g, '/')} 不是合法的 JSON，沒有加 hook（/clear 後要自己貼接入設定）`);
+      else {
+        const hooks = j.hooks && typeof j.hooks === 'object' ? j.hooks : (j.hooks = {});
+        let add = 0;
+        const ensure = (event, matcher, mode) => {
+          const list = Array.isArray(hooks[event]) ? hooks[event] : (hooks[event] = []);
+          // 絕對路徑＋引號：從子資料夾開對話也找得到（不靠 $CLAUDE_PROJECT_DIR，Windows 的 hook 不一定經過 bash）；這個設定檔只在這台電腦、不進 git
+          const cmd = `node "${path.resolve('.aigile', 'watcher', 'aigile-hook.mjs').replace(/\\/g, '/')}" ${mode}`;
+          const mine = h => new RegExp(`aigile-hook\\.mjs"?\\s+${mode}\\b`).test(String(h.command || ''));
+          const same = list.filter(g => (g.matcher || '') === (matcher || '') && (g.hooks || []).some(mine));
+          if (same.length) { for (const g of same) for (const h of g.hooks) if (mine(h) && h.command !== cmd) { h.command = cmd; add++; } return; } // 舊的相對路徑換成絕對路徑
+          list.push({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
+          add++;
+        };
+        ensure('SessionStart', 'clear', 'session');
+        ensure('SessionStart', 'compact', 'session');
+        ensure('Stop', '', 'stop');
+        if (add) { fs.mkdirSync('.claude', { recursive: true }); fs.writeFileSync(sp, JSON.stringify(j, null, 2) + '\n'); }
+        out(`✓ hook：${sp.replace(/\\/g, '/')}${add ? ` 加了 ${add} 個` : ' 已有'}（/clear 後自動帶入重新接上；回合結束等待腳本不在會提醒一次）`);
+      }
     }
   } else out(`  Claude Code → claude ${addArgs.join(' ')}`);
-  out(`  Codex → ~/.codex/config.toml 加 [mcp_servers.${mcpName}]，command = "node"，args = ["${mcp}", "--agent", "${AGENT}"]（這檔全機共用：同台每個 AI 用自己的名稱，不要蓋掉別人的）`);
+  // Codex 預設不把環境變數傳給 MCP 子程序，要 env_vars 才帶得到 AIGILE_AGENT（喚醒腳本會設）
+  const codexManual = `  Codex → ~/.codex/config.toml 加 [mcp_servers.aigile]，command = "node"，args = ["${mcpPath}"]，env_vars = ["AIGILE_AGENT"]（整台電腦一個；env_vars 那行一定要有，Codex 預設不傳環境變數給 MCP；資料夾有多隻 AI 又沒帶 AIGILE_AGENT 時先呼叫 aigile_use）`;
+  if (TOOL === 'codex') codexMcp(mcpPath, codexManual); else out(codexManual);
+}
+
+// Codex 也自動裝通用 MCP：~/.codex/config.toml 附加 [mcp_servers.aigile]。
+// 已有就跳過；改之前先備份；只附加這一段、不動其他段落；改完用 codex mcp get aigile 驗證，失敗或寫不進去就還原備份、印設定請人貼。
+// 沒開網路的沙盒設定只偵測、印清楚，不幫忙改。AIGILE_CODEX_BIN 給測試用假的 codex
+function codexMcp(mcpPath, manual) {
+  // AIGILE_TEST_CODEX_HOME：測試的保險（CODEX_HOME 被設成空字串時也不會落到真的 ~/.codex）；一般使用不會設
+  const dir = process.env.CODEX_HOME || process.env.AIGILE_TEST_CODEX_HOME || path.join(os.homedir(), '.codex');
+  const file = path.join(dir, 'config.toml');
+  let had = null; try { had = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') { out(`! 讀不到 ${file}（${e.code}）：請自己加`); return out(manual); } }
+  const net = had && /^\s*network_access\s*=\s*true\b/m.test(had);
+  if (!net && !process.env.AIGILE_SETUP_QUIET_NET) out(`! Codex 網路：${file.replace(/\\/g, '/')} 沒看到 network_access = true。${CODEX_FIX}`);
+  // Windows 沒設 Codex 沙盒（[windows] sandbox）時連資料夾裡的指令都會被擋：只印清楚，不幫忙改
+  const winSandbox = had && /^\s*\[windows\]\s*$/m.test(had) && /^\s*sandbox\s*=/m.test(had.split(/^\s*\[windows\]\s*$/m)[1].split(/^\s*\[/m)[0]);
+  if ((process.platform === 'win32' || process.env.AIGILE_SETUP_FAKE_WIN) && !winSandbox) out(`! Codex 沙盒（Windows）：${file.replace(/\\/g, '/')} 沒看到 [windows] 底下的 sandbox 設定，Codex 會連資料夾裡的指令都擋。請所屬人類在那個檔加 [windows] 與 sandbox = "elevated"（照 Codex 說明設定）後重開 Codex；接入檢查不會幫你改`);
+  if (had !== null && /^\s*\[mcp_servers\.aigile\]\s*$/m.test(had)) {
+    const sec = had.split(/^\s*\[mcp_servers\.aigile\]\s*$/m)[1].split(/^\s*\[/m)[0];
+    out(/env_vars\s*=.*AIGILE_AGENT/.test(sec) ? '✓ MCP：Codex 已有 [mcp_servers.aigile]（不改）' : `! MCP：Codex 已有 [mcp_servers.aigile]，但沒有 env_vars = ["AIGILE_AGENT"]：請在那一段加上這行（沒有的話資料夾多隻 AI 時認不出你）`);
+    return;
+  }
+  const block = `${had && !had.endsWith('\n') ? '\n' : ''}\n# aigile 接入檢查加的（整台電腦一個）\n[mcp_servers.aigile]\ncommand = "node"\nargs = ["${mcpPath}"]\nenv_vars = ["AIGILE_AGENT"]\n`;
+  const bak = had !== null ? `${file}.aigile-bak-${new Date().toISOString().replace(/[:.]/g, '-')}` : '';
+  const restore = () => { try { if (had !== null) fs.writeFileSync(file, had); else fs.rmSync(file, { force: true }); } catch {} };
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    if (bak) fs.writeFileSync(bak, had);
+    fs.writeFileSync(file, (had || '') + block);
+  } catch (e) { restore(); out(`! MCP：寫不進 ${file}（${e.code || e.message}）：請自己加`); return out(manual); }
+  const bin = process.env.AIGILE_CODEX_BIN || process.env.CODEX_BIN || 'codex'; // 跟一行啟動、喚醒腳本同一個順序
+  const binIsPath = fs.existsSync(bin);
+  const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, 'mcp', 'get', 'aigile'], { encoding: 'utf8', timeout: 60_000 })
+    : process.platform === 'win32' || (!binIsPath && /\s/.test(bin))
+      ? spawnSync(`${binIsPath ? `"${bin}"` : bin} mcp get aigile`, { shell: true, encoding: 'utf8', timeout: 60_000 })
+      : spawnSync(bin, ['mcp', 'get', 'aigile'], { encoding: 'utf8', timeout: 60_000 });
+  if (r.status === 0) return out(`✓ MCP：已在 ${file.replace(/\\/g, '/')} 加好通用的 aigile（含 env_vars）${bak ? `，原檔備份在 ${bak.replace(/\\/g, '/')}` : ''}；重開 Codex 後生效`);
+  restore();
+  out(`! MCP：加了之後 codex mcp get aigile 驗證失敗（${String(r.stderr || r.stdout || r.error?.message || '').trim().split('\n').pop().slice(0, 120) || '找不到 codex 指令'}），已還原 ${file.replace(/\\/g, '/')}：這版 Codex 可能不認得這些設定，請自己加`);
+  out(manual);
 }
 out('完成：照上面兩行啟動（要先取得所屬人類同意的就先問）。');
 }

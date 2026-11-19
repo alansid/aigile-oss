@@ -5,6 +5,7 @@
 // 3. 主人叫 AI 同步的指令（給 AI 的私訊），私訊面板的預覽寫成白話
 // 4. 給 AI 的內容不變：AI 用 API 讀到完整指令
 // 需要 Chrome 或 Edge；找不到就略過。用法：node scripts/system-dm-gist-ui-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import assert from 'node:assert';
 import { startKit, findBrowser, until } from './browser-kit.js';
 

@@ -3,6 +3,7 @@
 // 修正後：POST /api/mcp 提供 12 個 aigile_ 工具，參數錯當場擋；轉接腳本每次讀 .token，換 Token 不用改設定；原 API 不動
 // 驗收：1 用工具完成一輪（收件→接單→發文→ACK） 2 換 Token 檔不用改設定 3 欄位帶錯當場擋 4 原 API 與 watcher 不變（npm test 全跑） 5 附測試
 // 用法：node scripts/mcp-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,13 +48,13 @@ try {
   const AI = ai.participantId;
   let T = (await testToken(db, AI));
 
-  // 0) 協定：initialize、通知不回、tools/list 12 個；只收 POST、只給 AI
+  // 0) 協定：initialize、通知不回、tools/list 16 個；只收 POST、只給 AI
   let r = await rpc(T, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
   assert.equal(r.body.result.protocolVersion, '2025-06-18'); assert.ok(r.body.result.capabilities.tools); assert.match(r.body.result.instructions, /untrusted_content/);
   assert.equal((await rpc(T, 'initialize', { protocolVersion: '1999-01-01' })).body.result.protocolVersion, '2025-06-18', '不認得的版本回最新');
   assert.equal((await rpc(T, 'notifications/initialized', null, { note: true })).status, 202, '通知回 202、沒有內容');
   const tools = (await rpc(T, 'tools/list')).body.result.tools;
-  assert.deepEqual(tools.map(t => t.name), ['aigile_inbox', 'aigile_read', 'aigile_ack', 'aigile_post', 'aigile_card_get', 'aigile_cards', 'aigile_card_update', 'aigile_card_handover', 'aigile_dm', 'aigile_memory', 'aigile_me', 'aigile_team'], '12 個工具');
+  assert.deepEqual(tools.map(t => t.name), ['aigile_inbox', 'aigile_read', 'aigile_ack', 'aigile_post', 'aigile_card_get', 'aigile_cards', 'aigile_card_update', 'aigile_card_handover', 'aigile_dm', 'aigile_memory', 'aigile_card_create', 'aigile_doc_upload', 'aigile_history', 'aigile_batch', 'aigile_me', 'aigile_team'], '16 個工具（建卡、上傳文件、讀歷史、批次）');
   for (const t of tools) assert.ok(t.description && t.inputSchema?.type === 'object', `${t.name} 有說明與參數格式`);
   assert.equal((await rpc(T, 'ping')).body.result && true, true);
   assert.equal((await rpc(T, 'resources/list')).body.error.code, -32601, '不支援的方法回 -32601');
@@ -150,11 +151,11 @@ try {
   const wenv = (await call(T, '/api/me/watcher-env')).body;
   assert.equal(wenv.files['aigile-mcp.mjs'], scriptHashes()['aigile-mcp.mjs'], 'watcher-env 帶 aigile-mcp.mjs 雜湊');
   const setup = fs.readFileSync(new URL('../public/aigile-setup.mjs', import.meta.url), 'utf8');
-  assert.match(setup, /addArgs = \['mcp', 'add', mcpName, '--', 'node', mcp, '--agent', AGENT\]/, '印 Claude Code 指令'); assert.match(setup, /\[mcp_servers\.\$\{mcpName\}\]/, '印 Codex 設定');
+  assert.match(setup, /addArgs = \['mcp', 'add', '-s', 'user', 'aigile', '--', 'node', mcpPath\]/, 'Claude Code 裝通用 aigile（使用者範圍）'); assert.match(setup, /\[mcp_servers\.aigile\]/, 'Codex 寫 [mcp_servers.aigile]');
   assert.match(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), /### 3\.17 MCP/);
   const ob = JSON.stringify((await call(boss.token, `/api/my-ais/${AI}/onboarding`)).body);
-  assert.match(ob, /印出啟動指令，並直接執行 claude mcp add 裝好平台的 MCP/, '接入設定（Claude Code 版）寫明 claude mcp add');
-  assert.match(JSON.stringify((await call(boss.token, `/api/my-ais/${AI}/onboarding?tool=codex`)).body), /印出 MCP 設定（不會自己改 Codex 設定；有就照印的加）/, '接入設定（Codex 版）提到 MCP');
+  assert.match(ob, /裝好通用 MCP aigile（全機一次，工具 mcp__aigile__\*）/, '接入設定（Claude Code 版）寫明通用 MCP');
+  assert.match(JSON.stringify((await call(boss.token, `/api/my-ais/${AI}/onboarding?tool=codex`)).body), /裝好通用 MCP aigile（先備份 config.toml）/, '接入設定（Codex 版）：接入檢查自動裝 MCP');
   console.log('mcp-test：全部通過');
 } catch (e) {
   console.error('mcp-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('mcp-test.js')));

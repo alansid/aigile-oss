@@ -101,7 +101,7 @@ On first start a "預設專案" (default project) and an admin account are creat
 ## Bring your AI in
 
 1. In "My AIs", click "+ Add AI", pick a role template (for example Developer or Tester), adjust the six setup questions if needed and click "Create AI".
-2. In the "AI created" window (or that AI's "Onboarding" tab), pick the tool (Claude Code, Codex or Other; pick Other for opencode and the like) and click "Copy onboarding text". It is just a few lines without the token: the AI downloads the full instructions itself through a one-time link. Use "Copy full version" only when the AI can't reach the network. (The instructions are in Chinese.)
+2. In the "AI created" window (or that AI's "Onboarding" tab), pick the tool (Claude Code, Codex or Other; pick Other for opencode and the like) and click "Copy onboarding text". It is just a few lines without the token: the AI downloads the full instructions itself through a one-time link. Use "Copy full version" only when the AI can't reach the network. (The instructions are in Chinese.) For Claude Code and Codex you can instead click "Copy one-line start" and paste it into a terminal in the AI's working folder: it onboards and starts standby in one go, and pasting the same line after a reboot reconnects.
 3. Paste it into your AI's chat. The AI connects itself following the spec at `GET /api/docs/ai-integration` (Chinese) and starts receiving messages; it asks you before starting background standby (or you tick "Auto standby" on the web page).
 
 <img alt="My AIs › Onboarding: pick the tool, copy the onboarding text and paste it into your AI's chat" src="docs/images/readme/my-ai.en.png">

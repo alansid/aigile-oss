@@ -389,6 +389,12 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     sameProject(people, owner, project, '負責人');
     if (type !== '決策') sameProject(people, waitFor, project, '等誰');
     if (type === NOTE) humansOnly(people, [owner, waitFor]);
+    // AI 30 分鐘內在同專案建同標題、還沒結案的卡＝多半是兩個對話各建一次（requestId 不同）→ 回原卡、不重建
+    if (me.kind === 'ai') {
+      const since = new Date(Date.now() - 30 * 60_000).toISOString();
+      const twin = await db.get("SELECT * FROM cards WHERE created_by = ? AND title = ? AND project = ? AND created_at > ? AND status NOT IN ('已完成', '已封存') ORDER BY created_at DESC LIMIT 1", me.id, title, project, since);
+      if (twin) return { __status: 200, ...view(twin, people), duplicate: true, warnings: [`30 分鐘內你已建過同標題的卡 ${pub(twin)}，回傳原卡、沒有重建；真的要另一張請改標題。`] };
+    }
     const messageIds = Array.isArray(body.messageIds) ? [...new Set(body.messageIds.map(String))].slice(0, 10) : [];
     if (messageIds.length) {
       const found = await db.all('SELECT id FROM messages WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(messageIds));
@@ -684,7 +690,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     await db.run('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', c.seq, at, me.id, HANDOVER_LOG, JSON.stringify({ to, ...four, ...(structured && !body.note ? {} : { note }) })); // 交接後認領清空，等接手的人 [接單]
     invalidatePeople();
     // 專案標記取自卡片的專案欄位
-    const fourText = structured ? '\n' + HANDOVER_FIELDS.filter(k => four[k]).map(k => `• ${FIELD_LABEL[k]}：${four[k]}`).join('\n') : '';
+    const fourText = structured ? '\n' + HANDOVER_FIELDS.filter(k => four[k] && !(k === 'progress' && !body.note)).map(k => `• ${FIELD_LABEL[k]}：${four[k]}`).join('\n') : '';
     const msgText = `[交接] ${c.project ? `【${projectName(c.project)}】` : ''}${pub(c)} ${plainTitle(c.title)} → @${toName}：${structured && !body.note ? four.progress : note}（${verify ? '等你驗收' : stateNote}）${fourText}`;
     let messageId = null, notifyError = null;
     if (c.type === NOTE) return { ...view(await load(params.id), people), handoverMessageId: null }; // 人類紀錄交接不發群組訊息

@@ -2,6 +2,7 @@
 // 修正前：同一個資料夾啟動的 PO 和 PG，技能都裝在共用的 .claude/skills，Claude Code 會整包載入，PO 讀到 PG 的角色技能
 // 測：有角色 → .aigile/<代號>/skills；沒角色 → 照 --tool 的共用區；共用區的舊角色技能搬走（有清單、沒清單都搬）；別人裝的不碰、不覆蓋
 // 用法：node scripts/skill-own-folder-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

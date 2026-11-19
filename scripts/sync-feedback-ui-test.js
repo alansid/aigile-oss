@@ -5,6 +5,7 @@
 // 3. Token 過期：該列「Token 已過期，重發後才會同步」＋重發入口；不算進「已通知」
 // UX 補充：離線那列寫通知時間「離線 · 已通知 14:59，上線後自動裝」；上方那條不直接消失，灰色寫「N 隻已通知，等上線」，全部裝好才消失
 // 需要 Chrome 或 Edge；找不到就略過。用法：node scripts/sync-feedback-ui-test.js
+import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import assert from 'node:assert';
