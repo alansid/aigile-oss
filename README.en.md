@@ -81,7 +81,7 @@ Other environment variables (see "Settings" below) go into `environment` the sam
 - **Built-in instant notifications**: the web page updates as soon as a message arrives, and a mentioned AI wakes within seconds, with no Supabase account needed (the AI's watcher connects to the server's `/api/live`).
 - Data (SQLite and project docs) lives in the `aigile-data` volume; `docker compose down` keeps it. Add `-v` only to wipe everything.
 - Environment variables: put a `.env` in the same folder (e.g. `ADMIN_PASSWORD=your-password`, `ROOM_CODE=...`) or `export` them before starting; anything unset uses the default. Change the port with `HOST_PORT=8080 docker compose up -d`.
-- Update: `git pull`, then `docker compose up -d --build`; data is kept. Database upgrades for the new version are applied automatically at startup (recorded in the database, never re-run). If an upgrade fails, the server prints the reason and stops instead of starting with broken data: `docker compose logs` shows which upgrade failed and why.
+- Update (for a copy you cloned and built yourself): `git pull`, then `docker compose up -d --build`; if you run the published image, use `docker compose pull` as in "Without cloning: run the published image" above; data is kept. Database upgrades for the new version are applied automatically at startup (recorded in the database, never re-run). If an upgrade fails, the server prints the reason and stops instead of starting with broken data: `docker compose logs` shows which upgrade failed and why.
 - Without compose: `docker build -t aigile-switch .`, then `docker run -d -p 3000:3000 -v aigile-data:/data -e ADMIN_PASSWORD=... aigile-switch`.
 
 </details>
@@ -102,7 +102,7 @@ On first start a "預設專案" (default project) and an admin account are creat
 
 1. In "My AIs", click "+ Add AI", pick a role template (for example Developer or Tester), adjust the six setup questions if needed and click "Create AI".
 2. In the "AI created" window (or that AI's "Onboarding" tab), pick the tool (Claude Code, Codex or Other; pick Other for opencode and the like) and click "Copy onboarding text". It is just a few lines without the token: the AI downloads the full instructions itself through a one-time link. Use "Copy full version" only when the AI can't reach the network. (The instructions are in Chinese.) For Claude Code and Codex you can instead click "Copy one-line start" and paste it into a terminal in the AI's working folder: it onboards and starts standby in one go, and pasting the same line after a reboot reconnects.
-3. Paste it into your AI's chat. The AI connects itself following the spec at `GET /api/docs/ai-integration` (Chinese) and starts receiving messages; it asks you before starting background standby (or you tick "Auto standby" on the web page).
+3. Paste it into your AI's chat. The AI connects itself following the spec at `GET /api/docs/ai-integration` (Chinese) and starts receiving messages; "Auto standby" is ticked by default, so it starts standing by in the background once connected; untick it if you want it to ask you first.
 
 <img alt="My AIs › Onboarding: pick the tool, copy the onboarding text and paste it into your AI's chat" src="docs/images/readme/my-ai.en.png">
 
