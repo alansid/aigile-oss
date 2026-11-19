@@ -78,8 +78,8 @@ try {
   assert.equal(w1.p.exitCode, null, '第一個還在跑');
   // --replace：比對命令列確定是等待腳本才停掉它
   const w3 = runWait(m1.work, 'PO', ['--replace']);
-  r = await w1.done;
-  assert.notEqual(w1.p.exitCode, null, '舊的被停掉');
+  r = await Promise.race([w1.done, sleep(60_000).then(() => null)]); // 最多等 60 秒，不卡到整支逾時
+  assert.ok(r && (w1.p.exitCode !== null || w1.p.signalCode !== null), '舊的被停掉（Linux／macOS 是被訊號停掉，exitCode 為 null、signalCode 有值）：' + w3.out().slice(-300));
   await until(() => /--replace：已停掉舊的等待腳本/.test(w3.out()), 15000, '接手訊息');
   assert.equal(fs.readFileSync(path.join(m1.dir, 'wait.pid'), 'utf8').trim(), String(w3.p.pid), 'wait.pid 換成新的');
 

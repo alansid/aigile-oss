@@ -39,7 +39,8 @@ await new Promise(r => server.listen(0, '127.0.0.1', r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 const run = (cwd, file, args, env = {}) => new Promise(resolve => execFile(process.execPath, [file, ...args], { cwd, env: { ...process.env, AIGILE_BASE: '', AIGILE_TOKEN: '', AIGILE_CLAUDE_BIN: fileURLToPath(new URL('./fake-claude.mjs', import.meta.url)), ...env } }, (e, out) => resolve({ code: e ? e.code : 0, out })));
 let AG = 'PG'; // 平台給的代號（角色_短代碼），拿到 Token 後換成真的
-const setup = (cwd, extra = []) => run(cwd, pub('aigile-setup.mjs'), ['--agent', AG, '--base', BASE, ...extra]);
+// 測試會設暫存 CODEX_HOME（接入檢查看到會自動當成 Codex），這組要測會印等待指令的接法，所以指定 --tool other
+const setup = (cwd, extra = []) => run(cwd, pub('aigile-setup.mjs'), ['--agent', AG, '--base', BASE, '--tool', 'other', ...extra]);
 const work = () => fs.mkdtempSync(path.join(dataDir, 'w-'));
 const envOf = d => Object.fromEntries(fs.readFileSync(path.join(d, `.aigile/${AG}/watcher.env`), 'utf8').trim().split('\n').map(l => [l.split('=')[0], l.split('=').slice(1).join('=')]));
 

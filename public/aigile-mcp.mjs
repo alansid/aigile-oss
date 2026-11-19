@@ -36,9 +36,11 @@ function findWork() {
   // watcher 從自己的工作目錄啟動，不能往上層尋找其他身分。
   if (wakeAgent !== undefined) return process.cwd();
   const start = path.resolve(process.env.AIGILE_DIR || process.cwd());
-  const home = path.resolve(os.homedir()); // 真的家目錄（AIGILE_HOME 只管轉接腳本放哪，不影響往上找到哪裡停）
+  // 真的家目錄（AIGILE_HOME 只管轉接腳本放哪，不影響往上找到哪裡停）。比對實際路徑：macOS 的 /var 其實是 /private/var，家目錄也可能是捷徑
+  const real = p => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  const homes = new Set([path.resolve(os.homedir()), real(os.homedir())]);
   for (let d = start; ; d = path.dirname(d)) {
-    if (d === home && d !== start) return null; // 家目錄的 .aigile 只給在家目錄開的對話
+    if ((homes.has(d) || homes.has(real(d))) && d !== start) return null; // 家目錄的 .aigile 只給在家目錄開的對話
     if (agentsIn(d).length) return d;
     if (path.dirname(d) === d) return null;
   }
