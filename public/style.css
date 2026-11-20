@@ -3274,3 +3274,26 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 .pm-dels summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
 .pm-dels-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 8px; }
 .pm-dels-list li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--border); }
+
+/* 專案設定入口：專案卡 ⚙、切換清單最下面、專案管理 ⇄ 成員管理、回報收件與群組名稱同一套 */
+.ph-gear { width: 36px; height: 36px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--sb-line, var(--border)); border-radius: 10px; background: var(--surface); color: inherit; font-size: 16px; cursor: pointer; }
+.ph-gear:hover { border-color: var(--sb-active, var(--primary)); }
+.ph-gear:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.ph-gear[aria-expanded="true"] { border-color: var(--primary); }
+.pset-menu { min-width: 240px; }
+.pset-head { padding: 8px 10px 6px; font-size: 14px; }
+.pset-menu .pset-danger { color: var(--danger, #c0392b); }
+.ps-list .ps-sep { min-height: 0; height: 0; padding: 0; margin: 4px 6px; border-top: 1px solid var(--border); border-radius: 0; cursor: default; }
+.ps-list .ps-act { color: var(--primary); font-weight: 600; justify-content: flex-start; }
+.pm-switch { flex: none; }
+.pm-switch button { font-size: 15px; }
+.work-title .pm-switch + .muted { align-self: center; }
+.m-newproj .m-plus { display: inline-flex; width: 22px; justify-content: center; font-size: 18px; }
+.pm-setrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px; }
+.pm-setrow > label { font-weight: 500; font-size: 14px; }
+.pm-setrow > input, .pm-setrow > select { flex: 1; min-width: 160px; height: 36px; min-height: 36px; box-sizing: border-box; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.pm-setrow > .muted { flex-basis: 100%; }
+@media (max-width: 640px) {
+  .pm-setrow > label { flex-basis: 100%; }
+  .pm-setrow > input, .pm-setrow > select { min-width: 0; }
+}

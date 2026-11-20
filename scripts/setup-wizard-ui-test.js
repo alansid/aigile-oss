@@ -98,8 +98,8 @@ try {
 
   // 管理頁改網址英文名（同一個欄位）：改成 test；新增專案留空
   await login(tok, '/members');
-  await until(() => js("!!document.querySelector('[data-pm-tab=\"projects\"]')"), 10000, '成員與權限');
-  await click('[data-pm-tab="projects"]');
+  await until(() => js("!!document.querySelector('[data-pm-page=\"projects\"]')"), 10000, '成員與權限');
+  await click('[data-pm-page="projects"]');
   await until(() => js("!!document.querySelector('[data-pm-more]')"), 8000, '專案表格');
   await click('[data-pm-more]');
   await until(() => js("!!document.querySelector('[data-pp=\"slug\"]')"), 5000, '⋯ 選單');

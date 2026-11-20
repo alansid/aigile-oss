@@ -100,8 +100,8 @@
           { "id": "2", "t": "AI 做錯了", "d": "驗收時按「退回」，寫一句哪裡不對，卡片會回到它手上。還沒做完就發現方向錯了，直接在那張卡的訊息串回覆它。" },
           { "id": "3", "t": "訊息太多，找不到", "list": ["訊息頁上方可以選「給我的」或「與我相關」，只看跟你有關的", "{右上角|上方的 🔍}搜尋可以找卡號、訊息和成員", "真正要你做的，都在「要你處理」"],
             "fig": "5-2", "figText": "訊息頁上方「全部／給我的／與我相關」" },
-          { "id": "4", "t": "換了電腦或手機，登不進去", "d": "用帳號密碼登入，或用還能登入的那台配對（第 4 章第 1 步）。都不行，就請管理員在「成員與權限」幫你按「重設登入」，會給你一個新的邀請連結。" },
-          { "id": "5", "t": "手機能做什麼", "d": "看訊息、回覆、按選項、驗收、做決定都可以。新增 AI、管理技能、成員與權限，建議用電腦。" },
+          { "id": "4", "t": "換了電腦或手機，登不進去", "d": "用帳號密碼登入，或用還能登入的那台配對（第 4 章第 1 步）。都不行，就請管理員在「成員管理」幫你按「重設登入」，會給你一個新的邀請連結。" },
+          { "id": "5", "t": "手機能做什麼", "d": "看訊息、回覆、按選項、驗收、做決定都可以。新增 AI、管理技能、專案管理與成員管理，建議用電腦。" },
           { "id": "6", "t": "有問題，或想要新功能", "d": "先在群組裡告訴管理員。這套平台是開源軟體，管理員可以到它的 GitHub 頁面回報問題或提出想要的功能。" }
         ]
       }
@@ -207,7 +207,7 @@
           { "id": "2", "t": "The AI got it wrong", "d": "When verifying, click \"Send back\" and say in a sentence what's wrong; the card goes back to the AI. If you notice it's heading the wrong way before it's done, reply to it in that card's thread." },
           { "id": "3", "t": "Too many messages to find anything", "list": ["At the top of the messages page, choose \"For me\" or \"Related to me\" to see only what concerns you", "Search {at the top right|with 🔍 at the top} finds card numbers, messages and members", "Everything you actually need to do is in \"Needs your attention\""],
             "fig": "5-2", "figText": "\"All / For me / Related to me\" at the top of the messages page" },
-          { "id": "4", "t": "New computer or phone and you can't sign in", "d": "Sign in with your username and password, or pair from a device that's still signed in (step 1 of chapter 4). If neither works, ask the admin to click \"Reset login\" for you in \"Members & permissions\"; you'll get a new invite link." },
+          { "id": "4", "t": "New computer or phone and you can't sign in", "d": "Sign in with your username and password, or pair from a device that's still signed in (step 1 of chapter 4). If neither works, ask the admin to click \"Reset login\" for you in \"Member management\"; you'll get a new invite link." },
           { "id": "5", "t": "What works on a phone", "d": "Reading messages, replying, choosing options, verifying and deciding all work. Adding AIs, managing skills, and members & permissions are best done on a computer." },
           { "id": "6", "t": "A problem, or a feature you'd like", "d": "Tell the admin in the group first. The platform is open-source software, so the admin can report problems or suggest features on its GitHub page." }
         ]

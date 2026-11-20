@@ -13,7 +13,7 @@ try {
   const open = async w => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: 860, deviceScaleFactor: 1, mobile: w < 600 });
     await login(boss.token, '/members');
-    await until(() => js("!!document.querySelector('[data-pm-tab=\"projects\"]')"), 10000, '成員與權限');
+    await until(() => js("!!document.querySelector('[data-pm-tab=\"group\"]')"), 10000, '成員與權限');
     await click('[data-pm-tab="group"]');
     await until(() => js("!!document.querySelector('.pm-join-set [data-pp=\"openjoin\"]')"), 10000, '加入設定');
   };

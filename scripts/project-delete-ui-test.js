@@ -20,8 +20,8 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
   const openProjects = async () => {
     await login(liu.token, '/members');
-    await until(() => js("!!document.querySelector('[data-pm-tab=\"projects\"]')"), 10000, '成員與權限');
-    await js("document.querySelector('[data-pm-tab=\"projects\"]').click(); true");
+    await until(() => js("!!document.querySelector('[data-pm-page=\"projects\"]')"), 10000, '成員與權限');
+    await js("document.querySelector('[data-pm-page=\"projects\"]').click(); true");
     await until(() => js("!!document.querySelector('.pm-ptable')"), 8000, '專案表格');
     await sleep(300);
   };

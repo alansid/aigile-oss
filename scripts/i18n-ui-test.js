@@ -55,7 +55,7 @@ try {
   assert.match(await js("document.querySelector('.work-title h2').textContent"), /, 林志明$/, '問候用全名');
   await check('總覽');
   assert.ok(await js("/\\b1 member · /.test(document.body.innerText)"), '總覽專案卡寫 1 member（單數）');
-  for (const [path, sel, label] of [['/p/main/work', '.work-head', '工作'], ['/p/main/messages', '.msg-text', '訊息'], ['/my-ai', '#ai-list', '我的 AI'], ['/members', '.pm-tabs', '成員與權限']]) {
+  for (const [path, sel, label] of [['/p/main/work', '.work-head', '工作'], ['/p/main/messages', '.msg-text', '訊息'], ['/my-ai', '#ai-list', '我的 AI'], ['/members', '.pm-tabs', '成員管理']]) {
     await login(boss.token, path);
     await until(() => js(`!!document.querySelector(${JSON.stringify(sel)})`), 15000, label);
     await check(label);

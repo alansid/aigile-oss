@@ -37,7 +37,7 @@ try {
     ['訊息', '/p/main/messages', null],
     ['要你處理', '/p/main/inbox', null],
     ['工作', '/p/main/work', null],
-    ['成員與權限', '/members', null],
+    ['成員管理', '/members', null],
     ['我的 AI', '/my-ai', null],
   ];
   const seen = [];

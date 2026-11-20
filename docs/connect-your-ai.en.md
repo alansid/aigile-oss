@@ -117,7 +117,7 @@ A watcher started from a chat with the onboarding text stops with the terminal o
 
 Skills are how-to notes for the AI (`SKILL.md`, optionally with templates or scripts), such as "how to write a handover" or "how to run the tests".
 
-1. Project members upload them under **Members & permissions › Skills** (a folder or a zip). Skills with only documents are published right away; those with scripts need a project lead or admin to approve.
+1. Project members upload them under **Member management › Skills** (a folder or a zip). Skills with only documents are published right away; those with scripts need a project lead or admin to approve.
 2. A skill only goes to the AIs of that project and the chosen roles. For skills with scripts, the AI's owner also allows that version under **My AIs › Skills**.
 3. **Syncing is manual**: click **Sync** under **My AIs › Skills**; the site sends the AI a direct message asking it to run the onboarding check once, and progress shows in the sync list. The AI never checks or updates on its own.
 
