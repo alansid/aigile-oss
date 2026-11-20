@@ -2522,6 +2522,109 @@ ${ending}`;
     }
     return projectsResponse(ctx);
   });
+  // 永久刪除已封存的專案：只有群組管理員、要先封存、要輸入專案名稱；刪掉就救不回來
+  // 刪：卡片與紀錄、訊息與通知、決策、上傳檔與文件（含檔案本體）、技能、加入申請、私訊、專案事件與設定；人和 AI 帳號留著，只是不再屬於這個專案
+  // 只屬於這個專案的 AI（AI 至少要一個專案）一起刪除：跟「刪除 AI」一樣，狀態改 deleted、Token 失效
+  // 跨專案頻道（project=all）的訊息不動。D1：每張表一句（沒有索引的表只掃一次），不逐筆刪
+  const DEL_LOG = 'pdel:'; // 全站紀錄：app_settings 的 pdel:<時間>:<專案 id>（專案事件會跟著刪掉，所以另外記）
+  async function deletableProject(ctx, me, id) {
+    await requireAdmin(ctx, me);
+    await loadProjects(true);
+    const row = projectRows.find(r => r.id === id);
+    if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    if (!row.archived) throw new ApiError(409, 'NOT_ARCHIVED', '要先封存才能永久刪除');
+    const blockers = [];
+    const people = [...(await peopleMap(ctx)).values()].filter(p => p.kind !== 'system');
+    const onlyHere = people.filter(p => p.kind === 'ai' && p.status !== 'deleted' && listOf(p).length === 1 && listOf(p)[0] === row.id);
+    return { row, people, blockers, onlyHere };
+  }
+  async function projectFootprint(id) {
+    const n = async (sql, ...a) => (await db.get(sql, ...a))?.n || 0;
+    return {
+      messages: await n('SELECT COUNT(*) AS n FROM messages WHERE project = ?', id),
+      cards: await n('SELECT COUNT(*) AS n FROM cards WHERE project = ?', id),
+      docs: await n('SELECT COUNT(*) AS n FROM docs WHERE project = ? AND deleted_at IS NULL', id),
+      files: await n('SELECT COUNT(*) AS n FROM files WHERE deleted_at IS NULL AND (message_id IN (SELECT id FROM messages WHERE project = ?) OR id IN (SELECT file_id FROM messages WHERE project = ? AND file_id IS NOT NULL))', id, id),
+      skills: await n("SELECT COUNT(DISTINCT name) AS n FROM skills WHERE project = ? AND status != 'removed'", id),
+    };
+  }
+  route('GET', '/api/projects/:id/delete-preview', async ({ ctx, me, params }) => {
+    const { row, people, blockers, onlyHere } = await deletableProject(ctx, me, params.id);
+    const members = people.filter(p => p.status === 'active' && listOf(p).includes(row.id) && !onlyHere.includes(p)).length;
+    return { projectId: row.id, name: row.name, counts: { ...(await projectFootprint(row.id)), members }, aisToDelete: onlyHere.map(p => p.name), blockers };
+  });
+  route('POST', '/api/projects/:id/delete', async ({ ctx, me, req, params }) => {
+    const { row, people, blockers, onlyHere } = await deletableProject(ctx, me, params.id);
+    const body = await readJson(req);
+    if (String(body.confirmName ?? '').trim() !== row.name) throw invalid(`請輸入專案名稱「${row.name}」確認`);
+    if (blockers.length) throw new ApiError(409, 'DELETE_BLOCKED', blockers.join('；'));
+    const id = row.id, counts = await projectFootprint(id), at = nowIso();
+    // 檔案本體先刪（資料庫列刪了就找不到 id）
+    const fileIds = (await db.all('SELECT id FROM files WHERE message_id IN (SELECT id FROM messages WHERE project = ?) OR id IN (SELECT file_id FROM messages WHERE project = ? AND file_id IS NOT NULL)', id, id)).map(r => r.id);
+    const docIds = (await db.all('SELECT id FROM docs WHERE project = ?', id)).map(r => r.id);
+    if (storage) for (const fid of fileIds) await storage.delete(fid).catch(() => {});
+    if (docStorage) for (const did of docIds) await docStorage.delete(`docs/${did}`).catch(() => {});
+    const PM = 'SELECT id FROM messages WHERE project = ?', PC = 'SELECT seq FROM cards WHERE project = ?', PS = 'SELECT id FROM skills WHERE project = ?';
+    await db.batch([ // 先刪掛在訊息、卡片、技能底下的
+      [`DELETE FROM notifications WHERE message_id IN (${PM})`, [id]],
+      [`DELETE FROM message_recipients WHERE message_id IN (${PM})`, [id]],
+      [`DELETE FROM decision_resolutions WHERE message_id IN (${PM})`, [id]],
+      [`DELETE FROM card_msgs WHERE card_seq IN (${PC}) OR message_id IN (${PM})`, [id, id]],
+      [`DELETE FROM card_log WHERE card_seq IN (${PC})`, [id]],
+      [`DELETE FROM suggestions WHERE card_seq IN (${PC}) OR (kind = 'create' AND state = 'pending' AND json_valid(payload) AND json_extract(payload, '$.project') = ?)`, [id, id]],
+      [`DELETE FROM skill_allows WHERE skill_id IN (${PS})`, [id]],
+      [`DELETE FROM skill_installs WHERE skill_id IN (${PS})`, [id]],
+      ['DELETE FROM file_chunks WHERE file_id IN (SELECT value FROM json_each(?))', [JSON.stringify(fileIds)]], // dbStorage 的本體（其他儲存上面已刪）
+      ['DELETE FROM files WHERE id IN (SELECT value FROM json_each(?))', [JSON.stringify(fileIds)]],
+    ]);
+    const dmIds = (await db.all('SELECT id FROM dms WHERE project = ?', id)).map(r => r.id);
+    await db.batch([
+      ['DELETE FROM notifications WHERE message_id IN (SELECT value FROM json_each(?))', [JSON.stringify(dmIds)]],
+      ['DELETE FROM dms WHERE project = ?', [id]],
+      ['DELETE FROM messages WHERE project = ?', [id]],
+      ['DELETE FROM cards WHERE project = ?', [id]],
+      ['DELETE FROM docs WHERE project = ?', [id]],
+      ['DELETE FROM doc_folders WHERE project = ?', [id]],
+      ['DELETE FROM skills WHERE project = ?', [id]],
+      ['DELETE FROM join_requests WHERE project = ?', [id]],
+      ['DELETE FROM project_events WHERE project_id = ?', [id]],
+    ]);
+    // 專案設定：單一鍵與 { 專案: … } 的 JSON
+    const settings = [['DELETE FROM app_settings WHERE key IN (SELECT value FROM json_each(?))', [JSON.stringify(['pcode:', 'slug:', 'repo:', 'roles:', 'pnomax:', 'dm:'].map(k => k + id))]],
+      ["DELETE FROM app_settings WHERE key >= 'pcodeold:' AND key < 'pcodeold;' AND value = ?", [id]]];
+    const upsert = 'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
+    for (const key of ['read_only', 'project_leaders', 'join_settings']) {
+      const r = await db.get('SELECT value FROM app_settings WHERE key = ?', key).catch(() => null);
+      let v; try { v = JSON.parse(r?.value || 'null'); } catch { v = null; }
+      if (v && typeof v === 'object' && id in v) { delete v[id]; settings.push([upsert, [key, JSON.stringify(v)]]); }
+    }
+    const roles = await loadProjectRoles(true);
+    if (Object.values(roles).some(m => m && id in m)) {
+      const next = Object.fromEntries(Object.entries(roles).map(([pid, m]) => [pid, Object.fromEntries(Object.entries(m || {}).filter(([pj]) => pj !== id))]));
+      settings.push([upsert, ['project_roles', JSON.stringify(next)]]);
+    }
+    // 人（含停用的）與還沒用的邀請連結：從專案清單拿掉
+    for (const p of people) if (listOf(p).includes(id) && !onlyHere.includes(p)) settings.push(['UPDATE participants SET projects = ?, updated_at = ? WHERE id = ?', [listOf(p).filter(x => x !== id).join(','), at, p.id]]);
+    for (const ai of onlyHere) settings.push( // 跟 POST /api/my-ais/:id/delete 一樣；它在別的專案負責的未結案卡改成未指派
+      ["UPDATE participants SET status = 'deleted', token = ?, token_expires_at = 0, projects = '', updated_at = ? WHERE id = ?", ['deleted_' + ai.id, at, ai.id]],
+      ["UPDATE notifications SET status = 'acked', acked_at = ? WHERE recipient_id = ? AND status = 'pending'", [at, ai.id]],
+      ['DELETE FROM ai_state WHERE participant_id = ?', [ai.id]],
+      ["UPDATE cards SET owner_id = NULL, status = '待處理', updated_at = ?, version = version + 1 WHERE owner_id = ? AND project != ? AND status IN ('待整理','待處理','進行中','待確認','受阻')", [at, ai.id, id]]);
+    for (const inv of await db.all("SELECT id, projects FROM invites WHERE used_at IS NULL AND revoked_at IS NULL AND (',' || projects || ',') LIKE ?", `%,${id},%`))
+      settings.push(['UPDATE invites SET projects = ? WHERE id = ?', [String(inv.projects).split(',').filter(x => x && x !== id).join(','), inv.id]]);
+    const log = { projectId: id, name: row.name, code: projCodes[id] || null, by: me.id, byName: me.name, at, counts, aisDeleted: onlyHere.map(p => p.name) };
+    settings.push(['DELETE FROM projects WHERE id = ?', [id]], [upsert, [`${DEL_LOG}${at}:${id}`, JSON.stringify(log)]]);
+    await db.batch(settings);
+    projRolesAt = 0; roAt = 0; leadersAt = 0;
+    invalidatePeople(); invalidateProjects();
+    return projectsResponse(ctx, { deleted: log });
+  });
+  route('GET', '/api/project-deletions', async ({ ctx, me }) => {
+    await requireAdmin(ctx, me);
+    const rows = await db.all("SELECT value FROM app_settings WHERE key >= ? AND key < ? ORDER BY key DESC LIMIT 50", DEL_LOG, 'pdel;');
+    const items = rows.map(r => { try { return JSON.parse(r.value); } catch { return null; } }).filter(Boolean);
+    return { items };
+  });
   // ---------- AI 工作記憶：換電腦或關機後可從雲端讀回；依專案可見 ----------
   const STATE_MAX_BYTES = 16 * 1024;
   const STATE_WAKE = ['watcher', 'cron', 'manual'];

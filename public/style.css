@@ -3268,3 +3268,9 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 #tok-short:disabled { background: var(--surface-2); border-color: var(--border); color: var(--muted); opacity: 1; cursor: not-allowed; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ma-tool-ask { background: #3a3013; color: #f3dc9a; } }
 :root[data-theme="dark"] .ma-tool-ask { background: #3a3013; color: #f3dc9a; }
+
+/* 永久刪除已封存的專案 */
+.pm-arch-acts { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.pm-dels summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+.pm-dels-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 8px; }
+.pm-dels-list li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--border); }
