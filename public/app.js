@@ -6189,7 +6189,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const used = d.items.filter(s => live(s) && s.status !== 'rejected' && s.template?.name === t.name && (!skv.filter || s.project === skv.filter));
       return `<div class="sk-tpl"><span class="sk-tt"><b class="sk-nm">${esc(t.title)}</b><span class="muted small"><code>${esc(t.name)}</code> · v${t.version}</span></span>
         <span class="sk-ds">${esc(t.description)}</span>
-        ${used.length ? `<span class="sk-tags">${used.map(s => `<span class="pill-tag ${s.template.outdated ? 'yellow' : 'green'}">${esc(pjName(s.project))}${s.template.outdated ? '：範本有新版' : '：已套用'}</span>`).join(' ')}</span>` : ''}
+        ${used.length ? `<span class="sk-tags">${used.map(s => `<span class="pill-tag ${s.template.outdated ? 'yellow' : 'green'}"><span>${esc(pjName(s.project))}</span>${s.template.outdated ? '：範本有新版' : '：已套用'}</span>`).join(' ')}</span>` : ''}
         <span class="sk-tpl-go"><button type="button" class="btn small" data-sktpl="${esc(t.name)}">套用</button></span></div>`;
     };
     return `<section class="sk-tpl-sec" aria-label="範本技能"><div class="sk-tpl-h"><b>📚 範本技能</b><span class="muted small">內建的做事方法。按「套用」複製到專案，可以先改內容再上架；範本出新版時會提示，不會自動蓋掉你改過的內容。</span></div>
