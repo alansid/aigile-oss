@@ -300,7 +300,7 @@ Recommended for public deployments with open sign-up, to stop bots from mass sig
 <details>
 <summary><b>Expand</b></summary>
 
-SQLite is the default (a single file, no database to install). For bigger teams, or to use your existing database backups and monitoring, you can switch to Postgres (14 or later):
+SQLite is the default (a single file, no database to install). For bigger teams, or to use your existing database backups and monitoring, you can switch to Postgres (16 or later):
 
 - **How to choose**: set `DATABASE_URL=postgres://user:password@host:5432/database` to use Postgres; leave it unset and it is SQLite, exactly as before.
 - **Only Postgres needs `npm install`** (it installs the pg driver, pinned in package-lock.json); SQLite still needs nothing installed. The Docker image already includes it.

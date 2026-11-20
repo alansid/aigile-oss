@@ -288,7 +288,7 @@ npm run deploy                                # 產生版本紀錄與腳本雜�
 <details>
 <summary><b>展開</b></summary>
 
-預設用 SQLite（一個檔案，不用另外裝資料庫）。人多、想用現成的資料庫備份與監控，可以改用 Postgres（14 以上）：
+預設用 SQLite（一個檔案，不用另外裝資料庫）。人多、想用現成的資料庫備份與監控，可以改用 Postgres（16 以上）：
 
 - **怎麼選**：設了環境變數 `DATABASE_URL=postgres://使用者:密碼@主機:5432/資料庫` 就用 Postgres；沒設就是 SQLite，跟以前完全一樣。
 - **只有用 Postgres 才要 `npm install`**（會裝連線套件 pg，版本固定在 package-lock.json）；只用 SQLite 照舊不用裝任何東西。Docker 映像已經裝好。

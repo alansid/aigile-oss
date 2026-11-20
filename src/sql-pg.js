@@ -1,6 +1,6 @@
 // Postgres 轉接用的 SQL 轉譯（純函式）：業務程式照寫 SQLite／D1 的 SQL，連 Postgres 時在這裡換成 Postgres 寫法。
 // 只改字串常值與註解以外的部分。查詢（queryToPg）與建表（ddlToPg）分開：
-//   查詢：? → $1…、IN (SELECT value FROM json_each(?)) → = ANY($n)（參數改成陣列）、INSERT OR IGNORE → ON CONFLICT DO NOTHING、
+//   查詢：? → $1…、IN (SELECT value FROM json_each(?)) → = ANY($n)（參數改成陣列）、INSERT OR IGNORE → ON CONFLICT DO NOTHING、instr → strpos、json_valid、
 //         LIKE → ILIKE（SQLite 的 LIKE 本來就不分英文大小寫）、索引提示 +欄位 拿掉、CAST(… AS INTEGER) → BIGINT、PRAGMA table_info
 //   建表：INTEGER → BIGINT（毫秒時間戳記超過 int4）、AUTOINCREMENT → IDENTITY、BLOB → BYTEA、
 //         TEXT 用 "C" 排序（跟 SQLite 一樣逐位元組比較）、COLLATE NOCASE → 不分大小寫的 nocase 排序規則、
@@ -56,6 +56,8 @@ export function queryToPg(sql) {
       arrays.push(n); return (not ? '<> ALL($' : '= ANY($') + ++n + ')';
     })
     .replace(/\bLIKE\b/gi, 'ILIKE')
+    .replace(/\binstr\(/gi, 'strpos(') // 一樣從 1 起算、找不到回 0
+    .replace(/\bjson_valid\(([^()]*)\)/gi, "pg_input_is_valid($1, 'json')") // Postgres 16 以上
     .replace(/\b(AND|OR|WHERE|ON)(\s+)\+(?=[A-Za-z_])/gi, '$1$2')
     .replace(/\bAS\s+INTEGER\s*\)/gi, 'AS BIGINT)'));
   if (orIgnore) text = appendOnConflict(text);

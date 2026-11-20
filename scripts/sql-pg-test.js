@@ -32,6 +32,7 @@ const schema = fs.readFileSync(path.join(root, 'src', 'schema.sql'), 'utf8');
   assert.equal(queryToPg("SELECT CAST(value AS INTEGER) FROM s").text, 'SELECT CAST(value AS BIGINT) FROM s');
   assert.match(queryToPg('PRAGMA table_info(cards)').text, /information_schema\.columns[\s\S]*table_name = 'cards'[\s\S]*column_name <> 'rowid'/);
   assert.equal(queryToPg("SELECT json_extract(s.payload, '$.project') FROM s").text, "SELECT (s.payload::json ->> 'project') FROM s");
+  assert.equal(queryToPg("SELECT instr(files, 'x') FROM s WHERE json_valid(payload)").text, "SELECT strpos(files, 'x') FROM s WHERE pg_input_is_valid(payload, 'json')", 'instr、json_valid');
   assert.equal(queryToPg("SELECT 'it''s ?' FROM t WHERE a = ?").text, "SELECT 'it''s ?' FROM t WHERE a = $1", "字串裡的 '' 跳脫");
 }
 
