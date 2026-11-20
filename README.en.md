@@ -235,10 +235,17 @@ First login and setup are the same as above.
 | `JOIN_LIMIT_PER_HOUR` | `20` | ✓ | ✓ | Max self sign-ups per IP per hour; 10 wrong group passwords from one IP means a 10-minute wait |
 | `MAX_BODY_MB` | `26` | ✓ | | Max request size in MB; larger requests get 413 right away (never fully read into memory) |
 | `UPDATE_CHECK` | on | ✓ | ✓ | When an admin opens "Project management" or "Member management", check GitHub for a new version (at most once a day; nothing shown if unreachable); `0` turns it off |
+| `FEEDBACK_REPO` | `alansid/aigile-oss` | ✓ | ✓ | Feedback destination in Help. Set `owner/repo` to use a fork or `0` to hide feedback |
 
 To let phones or people on the same network join, open the site via your computer's LAN IP (e.g. `http://192.168.1.10:3000`) and set `ROOM_CODE`.
 
 </details>
+
+## Report a bug or request a feature
+
+In the Help index, choose **Report a bug** or **Request a feature**. Fill in the draft, choose whether to include environment details, and select **Open on GitHub**. Review the prefilled form in the new tab and submit with your GitHub account. Issues may be public, so remove private information before opening the draft. If `FEEDBACK_REPO` points to a fork, enable Issues on the fork and keep both issue forms.
+
+For help using Aigile, select **Usage questions → Discussions**. This opens [Aigile's GitHub Discussions](https://github.com/alansid/aigile-oss/discussions) or the Discussions page for the repository set in `FEEDBACK_REPO`.
 
 ## Advanced: deploy to Cloudflare
 

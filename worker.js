@@ -41,6 +41,7 @@ const app = env => {
       supabaseKey: env.SUPABASE_KEY,
       supabaseTopic: env.SUPABASE_TOPIC,
       updateCheck: env.UPDATE_CHECK, // 管理頁查新版本；設 0 關掉
+      feedbackRepo: env.FEEDBACK_REPO,
     },
   });
   return handle;

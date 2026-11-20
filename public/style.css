@@ -3162,6 +3162,22 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 /* 目錄 */
 .help-index { width: 100%; max-width: 960px; display: grid; gap: 14px; }
 .help-ask { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; font-weight: 600; }
+.help-feedback { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.help-feedback h3 { flex-basis: 100%; margin: 0; font-size: 1rem; }
+.help-feedback a.btn { text-decoration: none; }
+.issue-feedback, .issue-feedback label { display: grid; gap: 6px; min-width: 0; }
+.issue-feedback { gap: 12px; }
+.issue-feedback p { margin: 0; }
+.issue-feedback-warning { padding: 8px 12px; background: var(--mine-bg); border: 1px solid var(--mine-border); border-radius: 8px; }
+.issue-feedback input:not([type=checkbox]), .issue-feedback textarea { width: 100%; min-width: 0; }
+.issue-feedback .issue-env-toggle { display: flex; align-items: center; gap: 8px; }
+.issue-env-toggle input[type=checkbox] { width: auto; padding: 0; margin: 0; flex: none; }
+.issue-env-preview { margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.issue-feedback-actions { display: flex; width: 100%; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; }
+.issue-feedback-actions p { flex: 1 1 15rem; margin: 0; }
+@media (max-width: 600px) {
+  .issue-feedback textarea { block-size: 4.25rem; }
+}
 .help-toc { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
 @media (min-width: 900px) { .help-toc { grid-template-columns: 1fr 1fr; } }
 .help-toc a { height: 100%; box-sizing: border-box; display: grid; align-content: start; gap: 4px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); text-decoration: none; }

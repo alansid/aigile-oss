@@ -33,6 +33,7 @@ services:
       - SUPABASE_KEY
       - SUPABASE_TOPIC
       - UPDATE_CHECK
+      - FEEDBACK_REPO
       # Postgres（選用）：沒設＝SQLite（資料在 volume）；設了 postgres://… 就改用 Postgres，專案文件照樣放 volume
       - DATABASE_URL
       - DATABASE_SCHEMA

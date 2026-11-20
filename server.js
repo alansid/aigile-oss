@@ -81,6 +81,7 @@ const handle = createApp({
     supabaseKey: process.env.SUPABASE_KEY,
     supabaseTopic: process.env.SUPABASE_TOPIC,
     updateCheck: process.env.UPDATE_CHECK ?? (process.env.AIGILE_TEST_PROJECTS === '1' ? '0' : undefined), // 管理頁查新版本；設 0 關掉（測試模式不連 GitHub）
+    feedbackRepo: process.env.FEEDBACK_REPO,
   },
 });
 

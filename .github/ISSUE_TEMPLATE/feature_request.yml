@@ -19,3 +19,7 @@ body:
     id: alternatives
     attributes:
       label: Alternatives you considered / 想過的其他做法
+  - type: textarea
+    id: extra
+    attributes:
+      label: Environment details / 環境資訊

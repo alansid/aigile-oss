@@ -223,10 +223,17 @@ npm start -- -p 8080 --host 127.0.0.1    # 只給這台電腦連；沒指定就�
 | `JOIN_LIMIT_PER_HOUR` | `20` | ✓ | ✓ | 每個 IP 每小時最多自己註冊幾個帳號；群組密碼同一個 IP 錯 10 次要等 10 分鐘 |
 | `MAX_BODY_MB` | `26` | ✓ | | 單一請求最大幾 MB，超過直接回 413（不整段讀進記憶體） |
 | `UPDATE_CHECK` | 開 | ✓ | ✓ | 管理員打開「專案管理」或「成員管理」時查 GitHub 有沒有新版本（一天最多一次，查不到就不顯示）；設 `0` 關掉 |
+| `FEEDBACK_REPO` | `alansid/aigile-oss` | ✓ | ✓ | 「說明」頁的回報目標。用 `擁有者/儲存庫` 指向 fork，設 `0` 隱藏回報入口 |
 
 要讓手機或同網段的人加入，用電腦的區網 IP 開啟（例如 `http://192.168.1.10:3000`），並建議設定 `ROOM_CODE`。
 
 </details>
+
+## 回報問題與許願
+
+在「說明」目錄點「回報問題」或「許願」，填好草稿，確認是否附上環境資訊，再用「在 GitHub 開啟」。GitHub 會在新分頁顯示預填表單，由你用自己的帳號檢查並送出。送出的 issue 可能公開，請先移除機密和個資。若將 `FEEDBACK_REPO` 設為 fork，請啟用該儲存庫的 Issues 並保留兩份 issue 表單。
+
+想問怎麼使用，可點「使用問題 → 到討論區問」。預設開啟 [Aigile 的 GitHub Discussions](https://github.com/alansid/aigile-oss/discussions)，設定 `FEEDBACK_REPO` 後會開啟該儲存庫的討論區。
 
 ## 進階：部署到 Cloudflare
 

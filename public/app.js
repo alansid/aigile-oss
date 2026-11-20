@@ -5513,12 +5513,82 @@
   async function renderHelpPage() {
     const box = $('#page-work');
     box.classList.remove('is-board');
-    if (!help.data) {
+    if (!help.data || help.feedbackRepo === undefined) {
       box.innerHTML = '<p class="muted">載入中…</p>';
-      help.data = await fetch('/help.json').then(r => (r.ok ? r.json() : null)).catch(() => null);
+      const [data, feedback] = await Promise.all([
+        help.data || fetch('/help.json').then(r => (r.ok ? r.json() : null)).catch(() => null),
+        help.feedbackRepo === undefined ? api('/api/feedback-config', { timeoutMs: 4000 }).catch(() => null) : { repo: help.feedbackRepo },
+      ]);
+      help.data = data;
+      if (feedback) help.feedbackRepo = feedback.repo ?? null;
       if (state.page !== 'help') return;
     }
     drawHelp();
+  }
+  async function openIssueFeedback(type, trigger) {
+    const { buildIssueUrl, issueEnvironment } = await import('/issue-feedback.js');
+    if (!trigger.isConnected) return;
+    const bug = type === 'bug';
+    const labels = {
+      title: L('標題', 'Title'),
+      steps: L('重現步驟', 'Steps to reproduce'),
+      expected: L('預期與實際結果', 'Expected and actual results'),
+      problem: L('想解決的問題', 'Problem to solve'),
+      idea: L('希望怎麼改', 'Suggested change'),
+    };
+    const contentKeys = bug ? ['steps', 'expected'] : ['problem', 'idea'];
+    const submitLabel = L('在 GitHub 開啟 ↗', 'Open on GitHub ↗');
+    const { browser, system, width } = issueEnvironment(navigator.userAgent, Math.round(innerWidth));
+    const extra = [
+      ...(bug ? [] : [`${L('版本', 'Version')}: ${APP_VERSION}`]),
+      `${L('瀏覽器', 'Browser')}: ${browser || L('未知', 'Unknown')}`,
+      `${L('作業系統', 'Operating system')}: ${system || L('未知', 'Unknown')}`,
+      `${L('畫面寬度', 'Viewport width')}: ${width} px`,
+    ].join('\n');
+    const preview = bug ? `${L('版本', 'Version')}: ${APP_VERSION}\n${extra}` : extra;
+    const body = openModal(bug ? L('回報問題', 'Report a bug') : L('許願', 'Request a feature'), `
+      <form id="issue-feedback-form" class="issue-feedback" data-nt>
+        <p class="issue-feedback-warning">${L('GitHub issue 可能公開。請先移除機密和個資，再到 GitHub 檢查並送出。', 'GitHub issues may be public. Remove private information, then review and submit on GitHub.')}</p>
+        <label>${labels.title}<input name="title" required maxlength="256"></label>
+        ${contentKeys.map(key => `<label>${labels[key]}<textarea name="${key}" required rows="3"></textarea></label>`).join('')}
+        <label class="issue-env-toggle"><input name="includeEnv" type="checkbox" checked>${L('附上環境資訊', 'Include environment details')}</label>
+        <pre class="issue-env-preview">${esc(preview)}</pre>
+        <p class="issue-feedback-notice" role="status" hidden></p>
+      </form>`, { size: 'form', foot: `
+        <div class="issue-feedback-actions" data-nt>
+          <p id="issue-feedback-submit-hint" class="muted small">${L('會開新分頁，需要 GitHub 帳號。在 GitHub 按 Submit 才會送出。', 'Opens a new tab and requires a GitHub account. Select Submit on GitHub to send it.')}</p>
+          <button id="issue-feedback-submit" type="submit" form="issue-feedback-form" class="btn primary" aria-describedby="issue-feedback-submit-hint">${submitLabel}</button>
+        </div>` });
+    const form = body.querySelector('form');
+    const includeEnv = form.elements.includeEnv;
+    const notice = form.querySelector('[role=status]');
+    const submit = body.modal.querySelector('#issue-feedback-submit');
+    let acceptedHref = '';
+    form.addEventListener('input', () => {
+      form.querySelector('.issue-env-preview').hidden = !includeEnv.checked;
+      acceptedHref = '';
+      submit.textContent = submitLabel;
+      notice.hidden = true;
+    });
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const fields = Object.fromEntries(['title', ...contentKeys].map(key => [key, form.elements[key].value.trim()]));
+      const blank = Object.keys(fields).find(key => !fields[key]);
+      if (blank) { form.elements[blank].value = ''; form.elements[blank].reportValidity(); return; }
+      if (includeEnv.checked) {
+        if (bug) fields.version = APP_VERSION;
+        fields.extra = extra;
+      }
+      const { href, truncated } = buildIssueUrl(help.feedbackRepo, type, fields);
+      if (truncated && acceptedHref !== href) {
+        acceptedHref = href;
+        notice.textContent = L('內容超過網址長度上限。可以縮短內容，或連同截短的草稿繼續並在 GitHub 補上。', 'The draft is too long for the link. Shorten it or continue with the shortened draft and add the rest on GitHub.');
+        notice.hidden = false;
+        submit.textContent = L('開啟截短的草稿 ↗', 'Open shortened draft ↗');
+        return;
+      }
+      window.open(href, '_blank', 'noopener,noreferrer');
+    });
   }
   // 畫面圖：有放進 imgs 的才顯示；imgs 寫 "1-1"＝桌機、"1-1-m"＝手機；中英各一套（/help-img/zh、/help-img/en）
   // 只有桌機圖時，手機寬度不顯示（不拿桌機圖硬縮）；寬高先寫進去，圖還沒載完就留好位置，下面的字不會被一路推下去
@@ -5549,6 +5619,12 @@
         <div class="help-ask"><span id="help-ask-q">你會帶自己的 AI 嗎？</span><div class="seg-scope" role="group" aria-labelledby="help-ask-q"><button type="button" data-help-mode="ai" aria-pressed="${mode === 'ai'}">會</button><button type="button" data-help-mode="work" aria-pressed="${mode === 'work'}">不會</button></div></div>
         <ol class="help-toc">${chs.map(x => { const dim = x.forAi && mode === 'work';
           return `<li class="${dim ? 'dim' : ''}"><a href="/help/${x.n}"><span class="ht-n">${helpMeta(x)}${dim ? '<span class="ht-skip">不帶 AI 可跳過</span>' : ''}</span><b class="ht-t">${esc(x.title)}</b><span class="ht-goal">${helpText(x.card || x.lead || '')}</span></a></li>`; }).join('')}</ol>
+        ${help.feedbackRepo ? `<section class="help-feedback" aria-labelledby="help-feedback-heading" data-nt>
+          <h3 id="help-feedback-heading">${L('找不到答案？', 'Still need help?')}</h3>
+          <button class="btn" type="button" data-issue-feedback="bug">${L('回報問題', 'Report a bug')}</button>
+          <button class="btn" type="button" data-issue-feedback="feature">${L('許願', 'Request a feature')}</button>
+          <a class="btn" href="https://github.com/${esc(help.feedbackRepo)}/discussions" target="_blank" rel="noopener noreferrer">${L('使用問題 → 到討論區問', 'Usage questions → Discussions')} ↗</a>
+        </section>` : ''}
       </div>`;
       return;
     }
@@ -5753,6 +5829,8 @@
     if (cp) { const url = `${location.origin}/help/${cp.dataset.helpCopy}`; return (navigator.clipboard?.writeText(url) || Promise.reject(new Error())).then(() => toast('已複製這一題的連結'), () => toast(url)); }
     const md = e.target.closest?.('[data-help-mode]');
     if (md) { store.set(HELP_MODE_KEY, md.dataset.helpMode); return drawHelp(); }
+    const feedback = e.target.closest?.('[data-issue-feedback]');
+    if (feedback) return openIssueFeedback(feedback.dataset.issueFeedback, feedback).catch(() => toast(L('回報表單載入失敗，請重試。', 'Could not load the feedback form. Try again.')));
     const ts = e.target.closest?.('[data-tour-start]');
     if (ts) return startHelpTour(Number(ts.dataset.tourStart), ts);
     const t = e.target.closest?.('[data-help-try]');

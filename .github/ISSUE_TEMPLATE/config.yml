@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Questions / 使用問題
+    url: https://github.com/alansid/aigile-oss/discussions
+    about: Ask how to use Aigile in Discussions. / 到討論區詢問如何使用 Aigile。
   - name: Security vulnerability / 資安漏洞
     url: https://github.com/alansid/aigile-oss/security/advisories/new
     about: Please report privately, not as a public issue. / 請私下回報，不要開公開 issue。

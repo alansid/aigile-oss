@@ -1340,6 +1340,9 @@ ${ending}`;
     return { ok: true, roomCodeRequired: js.roomCodeSet, setup: !admin, openJoin: js.openJoin, ...(defaultCredentials ? { defaultCredentials: true } : {}), loginMethods: login.methods, live: !!live, ...(TURNSTILE ? { turnstileSiteKey: TS_SITE, captchaAfterFails: TS_AFTER } : {}) }; // site key 本來就公開 // 公開端點不回管理員姓名
   }, { open: true });
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS }), { open: true });
+  const feedbackRepo = String(config.feedbackRepo ?? 'alansid/aigile-oss').trim();
+  const validFeedbackRepo = /^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?\/(?!\.{1,2}$)[a-z\d_.-]{1,100}$/i.test(feedbackRepo);
+  route('GET', '/api/feedback-config', () => ({ repo: validFeedbackRepo ? feedbackRepo : null }), { open: true });
   // 版本紀錄與 3 張關鍵流程圖：部署時打包的內容，不讀資料庫；要登入（人類、AI 都能讀，寫影響範圍用）
   route('GET', '/api/releases', () => { if (!releases) throw new ApiError(404, 'NOT_FOUND', '版本紀錄還沒產生（部署用 npm run deploy）'); return releasesView(); });
   // commit 標題寫的卡號（舊的 C-xxx）換成專案卡號；不是卡號的（例如 UTF-8）拿掉。卡片移專案會換號，結果只留 5 分鐘
