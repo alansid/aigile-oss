@@ -353,6 +353,8 @@ window.AIGILE_EN = {
     "（來自範本第 {0} 版）": " (from template version {0})",
     "，其他 {0} 個檔照留": "; the other {0} files are kept",
     "看目前的 SKILL.md（第 {0} 版）": "View the current SKILL.md (version {0})",
+    "新內容（範本第 {0} 版，可先改）": "New content (template version {0}; you can edit it)",
+    "更新": "Update",
     "{0}離開{1}": "{0} leaves {1}",
     "「{0}」上限 {1} 字": "\"{0}\" is limited to {1} characters",
     "「{0}」下架後，主人按「同步」時會從 AI 的技能資料夾移除。": "After \"{0}\" is unpublished, it is removed from AIs' skills folders when owners click \"Sync\".",

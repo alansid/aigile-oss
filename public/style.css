@@ -2643,6 +2643,12 @@ html, body { overflow-x: clip; }
 .sk-tpl { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); min-width: 0; }
 .sk-tpl-go { display: flex; justify-content: flex-end; margin-top: auto; }
 .sk-tpl .sk-tt { flex: 0 0 auto; } /* 卡片是直排：標題不撐高，說明緊接在下 */
+.sk-card .sk-nm { white-space: normal; overflow-wrap: anywhere; } /* 英文狀態標籤較長：名稱換行，不擠成「commit-convent…」 */
+.sk-ct > .pill-tag { flex: none; }
+.sk-ap-old summary::before { content: '▸'; flex: none; margin-right: 2px; } /* summary 是 flex，原生三角形不見了：自己畫，看得出可以展開 */
+.sk-ap-old[open] summary::before { content: '▾'; }
+.sk-file.sk-ap-old summary { justify-content: flex-start; gap: 4px; color: var(--primary); }
+.sk-ap-new { display: block; margin: 8px 0 4px; font-size: 13px; }
 .sk-ap-text { width: 100%; box-sizing: border-box; min-height: 260px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
 .sk-drawer-wrap { position: fixed; inset: 0; z-index: 11; background: rgba(15, 23, 42, .35); display: flex; justify-content: flex-end; }
 .sk-drawer { width: 520px; max-width: 100vw; height: 100%; overflow-y: auto; box-sizing: border-box; background: var(--surface); color: var(--text); padding: 22px; display: flex; flex-direction: column; gap: 14px; box-shadow: -8px 0 24px rgba(15, 23, 42, .15); }

@@ -6187,10 +6187,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const pjName = id => d.projects.find(p => p.id === id)?.name || projName(id);
     const card = t => {
       const used = d.items.filter(s => live(s) && s.status !== 'rejected' && s.template?.name === t.name && (!skv.filter || s.project === skv.filter));
+      const stale = used.find(s => s.template.outdated && d.projects.some(p => p.id === s.project && p.canManage)); // 有新版：按鈕改「更新」，直接帶到那個專案
       return `<div class="sk-tpl"><span class="sk-tt"><b class="sk-nm">${esc(t.title)}</b><span class="muted small"><code>${esc(t.name)}</code> · v${t.version}</span></span>
         <span class="sk-ds">${esc(t.description)}</span>
         ${used.length ? `<span class="sk-tags">${used.map(s => `<span class="pill-tag ${s.template.outdated ? 'yellow' : 'green'}"><span>${esc(pjName(s.project))}</span>${s.template.outdated ? '：範本有新版' : '：已套用'}</span>`).join(' ')}</span>` : ''}
-        <span class="sk-tpl-go"><button type="button" class="btn small" data-sktpl="${esc(t.name)}">套用</button></span></div>`;
+        <span class="sk-tpl-go"><button type="button" class="btn small${stale ? ' primary' : ''}" data-sktpl="${esc(t.name)}"${stale ? ` data-sktpl-pj="${esc(stale.project)}"` : ''}>${stale ? '更新' : '套用'}</button></span></div>`;
     };
     return `<section class="sk-tpl-sec" aria-label="範本技能"><div class="sk-tpl-h"><b>📚 範本技能</b><span class="muted small">內建的做事方法。按「套用」複製到專案，可以先改內容再上架；範本出新版時會提示，不會自動蓋掉你改過的內容。</span></div>
       <div class="sk-grid">${tpls.map(card).join('')}</div></section>`;
@@ -6438,7 +6439,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       pick = skTargetPicker(() => target, cur || {});
       body.querySelector('#sk-to').innerHTML = pick.html();
       const old = cur?.files.find(f => f.path === 'SKILL.md')?.text;
-      body.querySelector('#sk-ap-cur').innerHTML = cur ? `<div class="sk-alert" role="status">這個專案已經有「${esc(cur.name)}」第 ${cur.version} 版${cur.template ? `（來自範本第 ${cur.template.version} 版）` : ''}。上架後會成為第 ${cur.version + 1} 版、取代原本的 SKILL.md${cur.files.length > 1 ? `，其他 ${cur.files.length - 1} 個檔照留` : ''}；改過的地方請先對照。</div>${old ? `<details class="sk-file"><summary>看目前的 SKILL.md（第 ${cur.version} 版）</summary><pre class="sk-pre">${esc(old)}</pre></details>` : ''}` : '';
+      body.querySelector('#sk-ap-cur').innerHTML = cur ? `<div class="sk-alert" role="status">這個專案已經有「${esc(cur.name)}」第 ${cur.version} 版${cur.template ? `（來自範本第 ${cur.template.version} 版）` : ''}。上架後會成為第 ${cur.version + 1} 版、取代原本的 SKILL.md${cur.files.length > 1 ? `，其他 ${cur.files.length - 1} 個檔照留` : ''}；改過的地方請先對照。</div>${old ? `<details class="sk-file sk-ap-old"><summary>看目前的 SKILL.md（第 ${cur.version} 版）</summary><pre class="sk-pre">${esc(old)}</pre></details>` : ''}<b class="sk-ap-new">新內容（範本第 ${tpl.version} 版，可先改）</b>` : '';
       drawFoot();
     };
     body.addEventListener('change', e => {
@@ -6482,7 +6483,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (lib) return openSkillsView(lib.dataset.skillsLib);
     if (!e.target.closest('.sk-view')) return;
     const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), rule = e.target.closest('[data-skrule]'), tp = e.target.closest('[data-sktpl]');
-    if (tp) return skOpenApply(tp.dataset.sktpl, skv.filter);
+    if (tp) return skOpenApply(tp.dataset.sktpl, skv.filter || tp.dataset.sktplPj || '');
     if (f) { skv.filter = f.dataset.skf; skv.redraw?.(); }
     else if (c) skOpenDrawer(c.dataset.skc);
     else if (up) skOpenUpload(up.dataset.skup);

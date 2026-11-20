@@ -82,6 +82,10 @@ try {
   await openLib(boss);
   await until(() => js("[...document.querySelectorAll('.sk-card')].some(c => c.textContent.includes('範本有新版'))"), 8000, '卡片標範本有新版');
   await shot('PLAT-365-4a-卡片範本有新版-1280.png', '.sk-card');
+  // 範本卡的按鈕變「更新」，帶到有新版的那個專案（UX 小提醒 1）
+  assert.equal(await txt('[data-sktpl="commit-convention"]'), '更新');
+  assert.equal(await js(`document.querySelector('[data-sktpl="commit-convention"]').dataset.sktplPj`), '預設專案');
+  assert.equal(await txt('[data-sktpl="testing-rules"]'), '套用', '沒套用過的照舊是「套用」');
   await js(`document.querySelector('[data-skc="${up.body.skillId}"]').click(), true`);
   await until(() => js("!!document.querySelector('[data-sktplup]')"), 8000, '抽屜有看範本新版');
   assert.match(await txt('.sk-drawer'), /來自範本第 0 版，範本已經有第 1 版：commit-convention/);
@@ -93,6 +97,10 @@ try {
   assert.equal(await js("document.querySelector('#sk-to [data-sk-mode=\"roles\"]').getAttribute('aria-checked')"), 'true', '發給誰沿用原本的（指定角色）');
   assert.equal(await js("document.querySelector('#sk-to [data-skrole=\"PG\"]').getAttribute('aria-pressed')"), 'true');
   assert.match(await txt('#sk-up-note'), /會成為「commit-convention」第 3 版/);
+  // 「看目前的」預設收起、有展開箭頭；編輯框上有標題講清楚框裡是範本新內容（UX 4c）
+  assert.equal(await js("document.querySelector('#sk-ap-cur .sk-ap-old').open"), false, '目前版本預設收起');
+  assert.equal(await js("getComputedStyle(document.querySelector('#sk-ap-cur .sk-ap-old summary'), '::before').content"), '"▸"');
+  assert.equal(await txt('#sk-ap-cur .sk-ap-new'), '新內容（範本第 1 版，可先改）');
   await shot('PLAT-365-4c-更新時對照目前版本-1280.png');
   await click('[data-sksend]');
   await until(() => js("!!document.querySelector('.sk-ok')"), 8000, '更新成功');
@@ -121,6 +129,9 @@ try {
   assert.match(await txt('.sk-tpl-sec'), /Default project: applied/, '已套用的標籤也是英文');
   assert.ok(!/已套用|範本有新版/.test(await txt('.sk-tpl-sec')), '範本區沒有中文殘留');
   await shot('PLAT-365-5-範本區-英文-1280.png', '.sk-tpl-sec');
+  // 英文狀態標籤（Published）較長：卡名換行、不被截成「commit-convent…」（UX 小提醒 2）
+  assert.ok(await js("[...document.querySelectorAll('.sk-card .sk-nm')].every(e => e.scrollWidth <= e.clientWidth + 1)"), '英文卡名完整顯示');
+  await shot('PLAT-365-6-卡片-英文-1280.png', '.sk-card');
   await click('[data-sktpl="security-checklist"]');
   await until(() => js("!!document.querySelector('#sk-ap-text')"), 8000, '英文套用彈窗');
   assert.match(await js("document.querySelector('#sk-ap-text').value"), /# Security basics/, '英文介面給英文範本');
