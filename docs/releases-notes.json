@@ -1,6 +1,11 @@
 {
   "releases": [
     {
+      "version": "1.0.5",
+      "at": "2026-11-20T21:26:55.000Z",
+      "title": "技能範本、退回可附檔、專案設定好找、刪除封存專案、Codex 叫醒不跳視窗 · Skill templates, attachments when sending a card back, easier project settings, delete archived projects, no console window on Codex wake"
+    },
+    {
       "version": "1.0.4",
       "at": "2026-11-20T00:58:37.447Z",
       "title": "Codex 有事才叫醒、一行啟動、批次標記 · Codex wakes only when needed, one-line start, batch marking"
