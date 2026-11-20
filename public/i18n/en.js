@@ -2934,6 +2934,21 @@ window.AIGILE_EN = {
     "請先勾選附件聲明": "Confirm the attachment declaration first",
     "附檔退回失敗：": "Could not return with attachment:",
     "附件表單格式錯誤": "Invalid attachment form",
-    "請選擇附件": "Choose an attachment"
+    "請選擇附件": "Choose an attachment",
+    // 訊息顯示改版：頂端等你回、上次看到的地方、換日、收件人在標頭、AI 上線一行、卡片串收起
+    "🔔 {0} 則等你回": "🔔 {0} waiting for your reply",
+    "看 ›": "View ›",
+    "以下是新訊息": "New messages below",
+    "今天 {0}": "Today {0}",
+    "昨天 {0}": "Yesterday {0}",
+    "📣 全體": "📣 Everyone",
+    "（要回覆）": " (reply needed)",
+    "{0} 個 AI 上線": "{0} AIs online",
+    "{0} 個 AI 上線：{1}，展開": "{0} AIs online: {1}, expand",
+    "{0} {1} {2}，{3}，展開": "{0} {1} {2}, {3}, expand",
+    "留言": "Comment",
+    "{0} 則 · {1} ›": "{0} messages · {1} ›",
+    "▸ 前面 {0} 則：": "▸ {0} earlier messages: ",
+    "▾ 收起前面 {0} 則": "▾ Hide {0} earlier messages"
   },
 };

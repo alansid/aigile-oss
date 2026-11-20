@@ -1070,9 +1070,7 @@
     return r || '人類';
   }
   function statusTags(m, toMe, replyMe) {
-    const tags = [
-      m.audience === 'all' ? '<span class="tag all">全體通知</span>' : '',
-      toMe && m.audience !== 'all' && !isMine(m) && !m.replyFrom ? '<span class="tag me">指定給我</span>' : '',
+    const tags = [ // 「全體通知」「指定給我」改寫在標頭（toHtml）
       replyMe && !isMine(m) ? '<span class="tag reply">回覆我</span>' : '',
       toMyAi(m) ? '<span class="tag my-ai">給我的 AI</span>' : '',
       unansweredTag(m),
@@ -1107,36 +1105,116 @@
     const cut = line.search(/[。！？!?]/);
     return cut > 0 ? line.slice(0, cut + 1) : line;
   }
+  // ---------- 訊息顯示改版（精簡／完整共用）----------
+  // 時間只寫時分（滑過看完整）；換日畫一條「今天 11/20」；收件人併進標頭（📣 全體、→ 你、→ 某某）
+  const tOnly = iso => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const timeHtml = m => `<time class="msg-time" datetime="${esc(m.createdAt)}" title="${esc(fmtTime(m.createdAt))}">${tOnly(m.createdAt)}</time>`;
+  const dayKey = d => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  function dayLabel(iso) {
+    const d = new Date(iso), now = new Date(), y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1), md = `${d.getMonth() + 1}/${d.getDate()}`;
+    return dayKey(d) === dayKey(now) ? `今天 ${md}` : dayKey(d) === dayKey(y) ? `昨天 ${md}` : md;
+  }
+  const dayDivHtml = iso => `<div class="day-div" role="separator"><span>${esc(dayLabel(iso))}</span></div>`;
+  const isCheckin = m => tagOf(m.text) === 'AI 簽到' && authorKind(m) === 'ai' && !state.open.has(m.messageId) && !keepFull(m);
+  function roleChip(a, m) {
+    const p = state.participants.get(a.participantId) || a;
+    if (p.memberType === 'ai') return '<span class="msg-role ai">AI</span>';
+    const r = p.memberType === 'human' ? (m.project ? roleIn(p, m.project) : roleNoPj(p)) : '';
+    return r ? `<span class="msg-role">${esc(r)}</span>` : '';
+  }
+  function toHtml(m) {
+    if (m.audience === 'all') return '<span class="to-h to-all">📣 全體</span>';
+    if (!m.recipients?.length) return '';
+    const me = meId(), asked = new Set(m.replyFrom ? m.recipients.filter(r => r.ask).map(r => r.participantId) : []);
+    const names = [...m.recipients].sort((a, b) => (b.participantId === me) - (a.participantId === me))
+      .map(r => (r.participantId === me ? L('你', 'you') : r.name) + (asked.has(r.participantId) && r.participantId !== me && !m.resolution ? L('（要回覆）', ' (reply needed)') : '')); // 名字之外的字直接寫英文，名字不給畫面翻譯碰
+    const askMe = m.recipients.some(r => r.participantId === me) && !isMine(m) && myAsk(m) !== false && !m.resolution; // 要你回覆＝橘色；知會你＝灰色
+    return `<span class="to-h${askMe ? ' to-you' : ''}" title="${esc(m.replyFrom ? (askMe ? '要你回覆' : '知會') : '')}">→ <span data-nt>${esc(names.join(L('、', ', ')))}</span></span>${m.resolution ? resolvedLabel(m) : ''}`;
+  }
+  // 細行：接單、AI 簽到（完整模式、卡片串裡）；點了看全文
+  function thinLineHtml(m) {
+    const tag = tagOf(m.text), a = m.author, text = tag === 'AI 簽到' ? '' : firstSentence(m.text);
+    return `<article class="msg thin" id="msg-${esc(m.messageId)}"><button type="button" class="thin-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${a.name} ${tag} ${text}，${tOnly(m.createdAt)}，展開`)}">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}${text ? `<span class="thin-text" data-nt>${esc(text)}</span>` : ''}${timeHtml(m)}</button></article>`;
+  }
+  // 精簡：連續 AI 簽到收一行「🤖 3 個 AI 上線：…」，點了逐則展開
+  function checkinGroupHtml(run) {
+    const names = run.map(m => m.author.name);
+    for (const m of run) state.ciOf.set(m.messageId, run[0].messageId);
+    return `<button type="button" class="flow-line ci-line" id="ci-${esc(run[0].messageId)}" data-open-msgs="${esc(run.map(m => m.messageId).join(','))}" aria-label="${esc(`${run.length} 個 AI 上線：${names.join('、')}，展開`)}"><span class="fl-icon" aria-hidden="true">🤖</span><span class="fl-text"><b>${run.length} 個 AI 上線</b>${L('：', ': ')}<span data-nt>${esc(names.join(L('、', ', ')))}</span> <time datetime="${esc(run[0].createdAt)}">${tOnly(run[run.length - 1].createdAt)}</time></span></button>`;
+  }
+  // 頂端「🔔 N 則等你回」：沒有就不出現；固定在訊息區最上面（在捲動區外面）
+  function drawAskBar() {
+    const bar = $('#ask-bar');
+    if (!bar) return;
+    const list = state.ctx ? [] : state.messages.filter(m => visible(m) && needReply(m));
+    bar.hidden = !list.length;
+    if (!list.length) { bar.innerHTML = ''; return; }
+    const m = list[0];
+    bar.innerHTML = `<button type="button" class="ask-bar-btn" data-ask-jump="${esc(m.messageId)}"><span class="ab-n">🔔 ${list.length} 則等你回</span><span class="ab-txt" data-nt>${esc(m.author.name)}${L('：', ': ')}${esc(firstSentence(m.text))}</span><span class="ab-go">看 ›</span></button>`;
+  }
+  // 上次看到的地方：記在這台裝置（每個頻道最後看過的訊息序號）
+  const seenKey = () => 'aigile-seen:' + (projectView() || '_all');
+  const markSeen = seq => { if (seq && seq > (Number(store.get(seenKey())) || 0)) store.set(seenKey(), String(seq)); };
+  // 卡片串內文不重寫卡號：開頭的「MAIN-1」（標籤、【專案】之後）拿掉
+  function stripCardKey(t, cid) {
+    const keys = [...new Set([ckey(cid), cid])].map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const out = String(t).replace(new RegExp(`^(\\s*\\[[^\\]\\n]{1,40}\\]\\s*)?(【[^】\\n]{1,20}】\\s*)?(?:${keys})(?![\\d])[\\s：:，,、-]*`), '$1$2');
+    return out.replace(/^(\s*\[[^\]\n]{1,40}\]\s*)?(【[^】\n]{1,20}】\s*)?$/, '').trim() ? out : t;
+  }
+  // 需確認：選項（選項：、問題N：與 A.～F. 那幾行）只出現在按鈕區，內文不重複
+  function stripOptions(t) {
+    const lines = String(t).split('\n'), out = [];
+    let cue = false;
+    for (const l of lines) {
+      if (OPT_HEAD.test(l) || Q_HEAD.test(l)) { cue = true; continue; }
+      if (cue && (OPT_LETTER.test(l) || OPT_CIRCLE.test(l))) continue;
+      if (l.trim()) cue = false;
+      out.push(l);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  const hasOptBtns = m => /^\s*\[需確認\]/.test(m.text) && parseQuestions(m.text).length > 0 && authHtml(m).includes('data-q-opt');
   function flowLineHtml(m) {
     const tag = tagOf(m.text), card = cardIdOf(m.text);
     const to = tag === '交接' ? (m.audience === 'all' ? '所有人' : m.recipients.map(r => r.name).join('、')) : '';
     const desc = [tag, card, to ? '給 ' + to : ''].filter(Boolean).join(' ');
-    return `<button type="button" class="flow-line" id="msg-${esc(m.messageId)}" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${m.author.name} ${desc}，${fmtTime(m.createdAt)}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text"><b>${esc(m.author.name)}</b> ${esc(desc)} · <time datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span></button>`;
+    return `<button type="button" class="flow-line" id="msg-${esc(m.messageId)}" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${m.author.name} ${desc}，${tOnly(m.createdAt)}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text"><b>${esc(m.author.name)}</b> ${esc(desc)} · <time datetime="${esc(m.createdAt)}" title="${esc(fmtTime(m.createdAt))}">${tOnly(m.createdAt)}</time></span></button>`;
   }
   function slimHtml(m) {
     const tag = tagOf(m.text), card = cardIdOf(m.text), need = needReply(m);
     return `<article class="msg slim${need ? ' need-me' : ''}" id="msg-${esc(m.messageId)}"><button type="button" class="slim-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false">
-      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}${resolvedPill(m)}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time></span>
+      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}${resolvedPill(m)}${timeHtml(m)}</span>
       <span class="slim-text">${esc(firstSentence(m.text))}</span><span class="sr-only">，展開全文</span></button></article>`;
   }
   function flowGroupHtml(run) {
     const tags = [...new Set(run.map(m => tagOf(m.text)))].join('、');
-    const t1 = fmtTime(run[0].createdAt), t2 = fmtTime(run[run.length - 1].createdAt);
+    const t1 = tOnly(run[0].createdAt), t2 = tOnly(run[run.length - 1].createdAt);
     return `<button type="button" class="flow-line flow-group" data-flow-group="${esc(run[0].messageId)}" aria-expanded="false" aria-label="${esc(`${run.length} 則流程訊息（${tags}），${t1} 到 ${t2}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text">${run.length} 則流程訊息（${esc(tags)}）· ${t1 === t2 ? t1 : t1 + '–' + t2}</span><span aria-hidden="true">▸</span></button>`;
   }
   // 整串清單：連續 3 則以上的一行流程訊息合成一列
   function listHtml(list) {
     state.groupOf = new Map();
     state.grpHidden = new Map();
+    state.ciOf = new Map();
     state.lastCard = '';
     markKids(list);
     const out = [];
+    let lastDay = '';
+    const day = m => { const k = dayKey(new Date(m.createdAt)); if (k !== lastDay) { lastDay = k; out.push(dayDivHtml(m.createdAt)); } }; // 時間只寫時分，換日畫一條
     for (let i = 0; i < list.length;) {
+      day(list[i]);
       const cid = effCard(list[i]);
       if (cid) { // B
         let k = i;
         while (k < list.length && effCard(list[k]) === cid) k++;
         out.push(cardGroupHtml(cid, list.slice(i, k)));
+        i = k; continue;
+      }
+      if (isCheckin(list[i])) { // 精簡＝連續 AI 簽到收一行；完整＝每則一條細行
+        let k = i;
+        while (k < list.length && isCheckin(list[k]) && dayKey(new Date(list[k].createdAt)) === lastDay) k++;
+        const run = list.slice(i, k);
+        out.push(slimMode() ? checkinGroupHtml(run) : run.map(thinLineHtml).join(''));
         i = k; continue;
       }
       let j = i;
@@ -1165,6 +1243,7 @@
   function revealMsg(id) {
     const m = state.byId.get(id);
     if (!m) return null;
+    if (state.ciOf?.has(id) && !document.getElementById('msg-' + id)) { const f = state.ciOf.get(id); for (const [k, v] of state.ciOf) if (v === f) state.open.add(k); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; } // 在「AI 上線」那一行裡就展開
     if (state.grpHidden?.has(id)) { state.grpOpen.add(state.grpHidden.get(id)); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
     if (state.groupOf.has(id) || isFlowLine(m) || isSlim(m)) { state.open.add(id); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
     return document.getElementById('msg-' + id);
@@ -1197,25 +1276,21 @@
     const a = m.author;
     const kid = isKid(m);
     const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false && !m.resolution ? 'to-me' : '', needReply(m) ? 'need-me' : '', kid ? 'kid' : ''].join(' '); // 知會我的不上底色
-    const recipients = m.replyFrom ? askPillsHtml(m) : m.audience === 'all'
-      ? '<span class="mention">@所有人</span>'
-      : m.recipients.map(r => `<span class="mention">@${esc(r.name)}</span>`).join(' ');
+    // 標頭壓成一行（拿掉角色那行）；收件人併進標頭；時間只寫時分
     return `
       <article class="${cls}" id="msg-${esc(m.messageId)}">
         <div class="msg-head">
           ${avatar(state.participants.get(a.participantId) || a)}
           <div class="msg-who">
-            <div class="msg-line1"><span class="msg-author">${esc(a.name)}</span><time class="msg-time" datetime="${esc(m.createdAt)}" title="seq ${m.sequence}">${fmtTime(m.createdAt)}</time>${m.project === projectView() ? '' : projTag(m.project)}${resolvedPill(m)}</div>
-            <div class="msg-line2">${esc(subLine(a, m.project || null))}</div>
+            <div class="msg-line1"><span class="msg-author" title="${esc(subLine(a, m.project || null))}">${esc(a.name)}</span>${roleChip(a, m)}${toHtml(m)}${m.project === projectView() ? '' : projTag(m.project)}${m.replyFrom ? '' : resolvedPill(m)}${timeHtml(m)}</div>
           </div>
         </div>
         ${statusTags(m, toMe, replyMe)}
-        ${recipients ? `<div class="recipients"><span class="muted">給</span> ${recipients}</div>` : ''}
         ${cardRefHtml(m, prevCard)}
         ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
         ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, ai) : textHtml(m)}
         ${authHtml(m)}
-        <div class="msg-foot">
+        <div class="msg-foot${linkedCapsules(m) || state.open.has(m.messageId) || (!m.file && !ai && isLong(m.text)) || repliesOf(m.messageId).length ? '' : ' acts-only'}">
           <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
           ${m.file ? '' : `<button class="reply-btn newcard" type="button" data-newcard="${esc(m.messageId)}">＋建卡</button>`}
           ${linkedCapsules(m)}
@@ -1259,21 +1334,27 @@
   function cardGroupHtml(cid, msgs) {
     const c = work.cards.get(cid), key = msgs[0].messageId;
     const ids = new Set(msgs.map(m => m.messageId));
-    const many = msgs.length > 4 && !state.grpOpen.has(key);
-    const shown = many ? msgs.slice(-3) : msgs;
-    if (many) for (const m of msgs.slice(0, -3)) state.grpHidden.set(m.messageId, key);
+    // 精簡只露最新一則，前面收成「▸ 前面 N 則：誰 標籤…」；完整全部顯示
+    const n = msgs.length - 1, many = slimMode() && n > 0 && !state.grpOpen.has(key);
+    const shown = many ? msgs.slice(-1) : msgs;
+    if (many) for (const m of msgs.slice(0, -1)) state.grpHidden.set(m.messageId, key);
     for (const m of shown) if (state.grpHidden.has(m.replyToMessageId)) state.kids?.delete(m.messageId); // 原訊息被收起的回覆不縮排（不然像接在組標題下）
-    const title = c ? cardTitle(c) : '';
-    return `<section class="cgrp" aria-label="${esc(`卡片 ${cid}${title ? ' ' + title : ''}，${msgs.length} 則訊息`)}">
-      <button type="button" class="cg-head" data-cap="${cid}"><span class="cg-dot ${c ? ST_DOT[c.status] || 'todo' : 'todo'}" aria-hidden="true"></span><b>${esc(ckey(cid))}</b><span class="cg-title">${esc(title)}</span><span class="cg-meta">${c ? esc(shownName(c.status)) + ' · ' : ''}${msgs.length} 則 ›</span></button>
-      ${many ? `<button type="button" class="cg-more" data-grp-open="${esc(key)}">展開較早 ${msgs.length - 3} 則</button>` : ''}
-      ${shown.map(m => groupMsgHtml(m, ids)).join('')}
+    const title = c ? cardTitle(c) : '', last = msgs[msgs.length - 1];
+    const who = msgs.slice(0, -1).map(m => `${m.author.name} ${shownName(tagOf(m.text) || '留言')}`); // 標籤照畫面語言（英文介面顯示英文），名字照原文
+    const earlier = [...new Set(who)].slice(0, 4).join(L('、', ', ')) + (new Set(who).size > 4 ? '…' : '');
+    return `<section class="cgrp" data-grp="${esc(key)}" aria-label="${esc(`卡片 ${cid}${title ? ' ' + title : ''}，${msgs.length} 則訊息`)}">
+      <button type="button" class="cg-head" data-cap="${cid}"><span class="cg-dot ${c ? ST_DOT[c.status] || 'todo' : 'todo'}" aria-hidden="true"></span><b>${esc(ckey(cid))}</b><span class="cg-title">${esc(title)}</span>${c ? `<span class="cg-st">${esc(shownName(c.status))}</span>` : ''}<span class="cg-meta">${msgs.length} 則 · ${tOnly(last.createdAt)} ›</span></button>
+      ${many ? `<button type="button" class="cg-more" data-grp-open="${esc(key)}" aria-expanded="false">▸ 前面 ${n} 則：<span class="cg-who" data-nt>${esc(earlier)}</span></button>` : slimMode() && n > 0 ? `<button type="button" class="cg-more" data-grp-close="${esc(key)}" aria-expanded="true">▾ 收起前面 ${n} 則</button>` : ''}
+      ${shown.map(m => groupMsgHtml(m, ids, cid)).join('')}
       <button type="button" class="cg-reply" data-grp-reply="${esc(msgs[msgs.length - 1].messageId)}">回覆這張卡…</button>
     </section>`;
   }
   // 組內每則精簡：小頭像、名字、標籤、時間、要你回覆；AI 結論＋細節照原樣；不顯示角色行、卡片列、底部卡號
-  function groupMsgHtml(m, ids) {
-    const a = m.author, tag = tagOf(m.text), parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
+  function groupMsgHtml(m0, ids, cid) {
+    const tag = tagOf(m0.text);
+    if (!state.open.has(m0.messageId) && !needReply(m0) && !m0.file && (tag === '接單' || (tag === 'AI 簽到' && authorKind(m0) === 'ai'))) return thinLineHtml(cid ? { ...m0, text: stripCardKey(m0.text, cid) } : m0); // 接單、簽到變細行（不重寫卡號）
+    const m = cid ? { ...m0, text: stripCardKey(m0.text, cid) } : m0; // 卡片串內文不重寫卡號
+    const a = m.author, parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
     const ai = aiParts(m);
     const re = !m.replyToMessageId ? '' : isKid(m) ? kidSr(m) : parent && ids.has(parent.messageId)
       ? `<button type="button" class="gm-re" data-jump="${esc(parent.messageId)}">↩ ${esc(shortOf(parent.author.name))}</button>`
@@ -1282,7 +1363,7 @@
     const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
     const body = m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m, !!tag); // 名字旁已有標籤
     return `<article class="${cls}" id="msg-${esc(m.messageId)}">
-      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}<time class="msg-time" datetime="${esc(m.createdAt)}">${fmtTime(m.createdAt)}</time>${ask}${resolvedPill(m)}${unansweredTag(m)}</div>
+      <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}${timeHtml(m)}${ask}${resolvedPill(m)}${unansweredTag(m)}</div>
       ${re}
       ${body}
       ${authHtml(m)}
@@ -1321,6 +1402,7 @@
     return { tag, head: head.trim(), rest: rest.trim(), keep: /需確認|受阻/.test(tag) }; // 需確認的選項、受阻的原因不收
   }
   function aiTextHtml(m, p) {
+    if (p.keep && p.rest && hasOptBtns(m)) p = { ...p, rest: stripOptions(p.rest) }; // 選項只在按鈕區
     const lead = (p.tag ? leadPill(p.tag) : '') + renderText(p.head);
     if (!p.rest) return `<div class="msg-text ai-text"><div class="msg-lead plain">${lead}</div></div>`; // 只有一段：不必加粗
     if (p.keep || state.open.has(m.messageId)) return `<div class="msg-text ai-text"><div class="msg-lead">${lead}</div><div class="msg-rest">${renderText(p.rest)}</div></div>`;
@@ -1841,6 +1923,9 @@
     state.mobileWin = mobile;
     state.byId = state.byId || new Map();
     setMessages(d.items);
+    const seen = Number(store.get(seenKey())) || 0; // 上次看到的地方（這台裝置）
+    state.seenId = seen ? (d.items.find(x => x.sequence > seen && !isMine(x) && visible(x))?.messageId || null) : null;
+    markSeen(Math.max(0, ...d.items.map(x => x.sequence || 0)));
     state.nextCursor = state.nextCursor && !state.ctx ? state.nextCursor : d.nextCursor;
     Object.assign(state, { hasOlder: d.hasMore, winFrom: d.from, winExpanded: false, winTruncated: d.hasMore && d.items.length >= WIN_MAX, ctx: null, newCount: 0, newMention: 0, firstNewId: null });
     renderMessages(true); drawNewPill();
@@ -1869,9 +1954,16 @@
       ? `${state.ctx ? '這段沒有符合篩選條件的訊息。' : `最近 ${WIN_H} 小時沒有符合的訊息`}${!state.ctx && state.hasOlder ? ' · <button type="button" class="link" id="load-older-empty">載入更早</button>' : ''}`
       : !state.ctx && state.hasOlder ? '最近沒有訊息 · <button type="button" class="link" id="load-older-empty">載入更早</button>' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。';
     const tail = state.ctx && state.ctx.hasNewer ? '<button type="button" class="load-older" id="ctx-newer">再往後</button>' : '';
+    $('#messages').classList.toggle('slim-view', slimMode()); // 精簡每則不要框
     $('#messages').innerHTML = headHtml(list) + (list.length ? listHtml(list) : `<div class="empty">${empty}</div>`) + tail;
     const nl = state.firstNewId && document.getElementById('msg-' + state.firstNewId);
     if (nl && state.newCount) nl.insertAdjacentHTML('beforebegin', `<div class="new-line" id="new-line"><span>以下 ${state.newCount} 則是新的</span></div>`);
+    else if (state.seenId) { // 上次看到的地方畫紅線
+      const id = state.seenId, el = document.getElementById('msg-' + id) || (state.ciOf?.has(id) && document.getElementById('ci-' + state.ciOf.get(id)))
+        || (state.grpHidden?.has(id) && document.querySelector(`[data-grp="${CSS.escape(state.grpHidden.get(id))}"]`));
+      if (el) el.insertAdjacentHTML('beforebegin', '<div class="new-line seen-line" id="seen-line"><span>以下是新訊息</span></div>');
+    }
+    drawAskBar();
     syncScrollbar();
     if (toBottom) scrollBottom();
     drawLatestBtn();
@@ -1941,7 +2033,7 @@
     p.setAttribute('aria-label', `有 ${state.newCount} 則新訊息${state.newMention ? `，${state.newMention} 則提到你` : ''}，跳到最新`);
     drawLatestBtn();
   }
-  function clearNew() { if (!state.newCount) return; Object.assign(state, { newCount: 0, newMention: 0, firstNewId: null }); $('#new-line')?.remove(); drawNewPill(); }
+  function clearNew() { markSeen(state.ctx ? 0 : state.messages[state.messages.length - 1]?.sequence); /* 看到最新了就記下來 */ if (!state.newCount) return; Object.assign(state, { newCount: 0, newMention: 0, firstNewId: null }); $('#new-line')?.remove(); drawNewPill(); }
 
   function onNewMessage(m) {
     if (state.byId.has(m.messageId) && (state.ctx || state.messages.some(x => x.messageId === m.messageId))) return;
@@ -1965,7 +2057,9 @@
       state.newCount++;
       if (isToMe(m) || isReplyToMe(m)) state.newMention++;
     }
-    if ((m.replyToMessageId && state.byId.has(m.replyToMessageId)) || (visible(m) && (isFlowLine(m) || effCard(m)))) {
+    if (stick && visible(m)) markSeen(m.sequence);
+    const prevVis = state.messages.slice(0, -1).reverse().find(visible);
+    if ((m.replyToMessageId && state.byId.has(m.replyToMessageId)) || (visible(m) && (isFlowLine(m) || effCard(m) || isCheckin(m) || needReply(m) || (prevVis && dayKey(new Date(prevVis.createdAt)) !== dayKey(new Date(m.createdAt)))))) { // 簽到合併、等你回、換日都要重畫
       const box = $('#messages'), top = box.scrollTop;
       renderMessages(stick);
       if (stick) trimWindow(); else box.scrollTop = top;
@@ -1979,6 +2073,7 @@
     if (!stick && state.firstNewId === m.messageId) box.insertAdjacentHTML('beforeend', `<div class="new-line" id="new-line"><span>以下 ${state.newCount} 則是新的</span></div>`);
     else if (!stick) { const nl = $('#new-line'); if (nl) nl.firstElementChild.textContent = `以下 ${state.newCount} 則是新的`; }
     box.insertAdjacentHTML('beforeend', messageHtml(m));
+    drawAskBar();
     if (stick) { scrollBottom(); trimWindow(); }
     drawNewPill();
     if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
@@ -1999,6 +2094,7 @@
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
     e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
   });
+  $('#ask-bar')?.addEventListener('click', e => { const b = e.target.closest('[data-ask-jump]'); if (b) jumpTo(b.dataset.askJump); }); // 「🔔 N 則等你回」看 ›
   // 記住哪些「細節」打開了，重畫後維持
   $('#messages').addEventListener('toggle', e => {
     const d = e.target.closest?.('details[data-detail]');
@@ -2008,6 +2104,10 @@
   $('#messages').addEventListener('click', e => {
     const go = e.target.closest?.('[data-grp-open]');
     if (go) { state.grpOpen.add(go.dataset.grpOpen); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; return; }
+    const gc = e.target.closest?.('[data-grp-close]'); // 精簡的卡片串可以再收起
+    if (gc) { state.grpOpen.delete(gc.dataset.grpClose); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; return; }
+    const ci = e.target.closest?.('[data-open-msgs]'); // AI 上線那一行逐則展開
+    if (ci) { for (const id of ci.dataset.openMsgs.split(',')) state.open.add(id); const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; return; }
     const gr = e.target.closest?.('[data-grp-reply]');
     if (gr) { const m = state.byId.get(gr.dataset.grpReply); if (m) { setReply(m); input.focus(); } return; }
     if (e.target.closest('#load-older, #load-older-empty')) return loadOlder().catch(err => toast(err.message));
