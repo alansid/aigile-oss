@@ -3282,7 +3282,6 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 .ph-gear[aria-expanded="true"] { border-color: var(--primary); }
 .pset-menu { min-width: 240px; }
 .pset-head { padding: 8px 10px 6px; font-size: 14px; }
-.pset-menu .pset-danger { color: var(--danger, #c0392b); }
 .ps-list .ps-sep { min-height: 0; height: 0; padding: 0; margin: 4px 6px; border-top: 1px solid var(--border); border-radius: 0; cursor: default; }
 .ps-list .ps-act { color: var(--primary); font-weight: 600; justify-content: flex-start; }
 .pm-switch { flex: none; }

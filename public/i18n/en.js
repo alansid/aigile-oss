@@ -1710,8 +1710,6 @@ window.AIGILE_EN = {
     "成員與本專案角色": "Members and roles in this project",
     "封存…": "Archive…",
     "專案改名為「{0}」": "Project renamed to \"{0}\"",
-    "」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以到「專案管理」還原或永久刪除。": "\", it can't be chosen for messages or new cards. History is kept; you can restore or permanently delete it later in \"Project management\".",
-    "已封存「{0}」": "Archived \"{0}\"",
     "📁 專案管理": "📁 Project management",
     "👥 成員管理": "👥 Member management",
     "管理頁": "Admin pages",

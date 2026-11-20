@@ -1,5 +1,5 @@
 // 專案設定入口好找：從專案頁就能改名、管成員、設程式庫
-// - 專案卡多一個 ⚙「專案設定」：管理員有改名、程式庫與分支、成員與本專案角色、封存；該專案 leader 只有成員與本專案角色；一般成員沒有
+// - 專案卡多一個 ⚙「專案設定」：管理員有改名、程式庫與分支、成員與本專案角色（封存只在專案管理頁）；該專案 leader 只有成員與本專案角色；一般成員沒有
 // - ⇅ 切換清單最下面「＋ 新增專案」「管理專案…」（只有管理員）
 // - 頭像選單「成員與權限」拆成「📁 專案管理」（只有管理員）「👥 成員管理」；兩頁頂端可以互切，麵包屑跟著換名字
 // - 手機：總覽與選單有「＋ 新增專案」（只有管理員）
@@ -37,7 +37,7 @@ try {
   // 1. 管理員：專案卡 ⚙ 四項
   await login(liu.token, '/p/main/messages');
   await openGear();
-  assert.equal(await menuItems(), 'rename,repo,members,archive', '管理員四項');
+  assert.equal(await menuItems(), 'rename,repo,members', '管理員三項（封存只在專案管理頁）');
   assert.match(await text('#pset-menu .pset-head'), /預設專案 · 專案設定/);
   // 成員與本專案角色 → 成員管理、選好預設專案
   await click('#pset-menu [data-pset-act="members"]');
@@ -86,14 +86,17 @@ try {
   await until(() => js("!!document.querySelector('.pm-tabs')"), 8000, '頭像 › 成員管理');
   assert.match(await crumbs(), /成員管理/);
 
-  // 5. 從齒輪封存：回到總覽、專案變已封存
+  // 5. 封存不在齒輪選單；只在專案管理頁的「⋯」
   await login(liu.token, '/p/' + (arc.slug || arc.id) + '/messages');
   await openGear();
-  await click('#pset-menu [data-pset-act="archive"]');
-  await until(() => js("!!document.querySelector('.confirm-root [data-ok]')"), 5000, '封存確認');
-  assert.match(await text('.confirm-root'), /封存「要封存的」[\s\S]*永久刪除/);
-  await click('.confirm-root [data-ok]');
-  await until(async () => (await kit.call(liu.token, '/api/projects')).body.items.find(p => p.id === arc.id)?.archived === true, 8000, '已封存');
+  assert.ok(!(await menuItems()).includes('archive'), '齒輪選單沒有封存');
+  await js("document.body.click(); true");
+  await login(liu.token, '/members');
+  await until(() => js("!!document.querySelector('[data-pm-page=\"projects\"]')"), 8000, '管理頁');
+  await click('[data-pm-page="projects"]');
+  await until(() => js(`!!document.querySelector('[data-pm-more="${arc.id}"]')`), 8000, '專案管理的 ⋯');
+  await click(`[data-pm-more="${arc.id}"]`);
+  await until(() => js("!!document.querySelector('.pm-more-menu [data-pp=\"archive\"]')"), 5000, '⋯ 裡有封存');
 
   // 6. 手機 375：總覽與選單的新增專案
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
@@ -133,7 +136,7 @@ try {
   await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.proj-switch [data-pset]')"), 15000, '英文介面');
   await openGear();
   const enMenu = await text('#pset-menu');
-  assert.match(enMenu, /Project settings[\s\S]*Rename[\s\S]*Repository and branch[\s\S]*Members and roles in this project[\s\S]*Archive…/, '英文齒輪選單：' + enMenu);
+  assert.match(enMenu, /Project settings[\s\S]*Rename[\s\S]*Repository and branch[\s\S]*Members and roles in this project/, '英文齒輪選單：' + enMenu);
   await js("document.body.click(); true");
   av = await avItems();
   assert.match(av, /pm-projects=📁Project managementadd, rename, archive/, '英文頭像選單：' + av);

@@ -7473,12 +7473,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     Object.assign(perm, { picker: false, addOpen: false, moreOpen: null }, extra);
     if (state.page === 'perm') { drawPerm(); drawChrome(); } else goTop('perm');
   }
-  // 專案卡的 ⚙：管理員全部；該專案 leader 只有成員與本專案角色
+  // 專案卡的 ⚙：管理員有改名、程式庫、成員；該專案 leader 只有成員與本專案角色；封存只在專案管理頁
   function psetItems(pj) {
     const admin = isAdmin(), it = [];
     if (admin) it.push(['rename', '✏️', '改名'], ['repo', '🔗', '程式庫與分支']);
     it.push(['members', '👥', '成員與本專案角色']);
-    if (admin) it.push(['archive', '🗄️', '封存…']);
     return it;
   }
   function psetOpen(btn, open) {
@@ -7489,7 +7488,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const pj = btn.dataset.pset;
     m.dataset.pj = pj;
     m.setAttribute('aria-label', `${projName(pj)} 專案設定`);
-    m.innerHTML = `<div class="pset-head"><b>${esc(projName(pj))}</b> · 專案設定</div>` + psetItems(pj).map(([k, ico, t]) => `<button type="button" role="menuitem" data-pset-act="${k}"${k === 'archive' ? ' class="pset-danger"' : ''}><span class="av-ico" aria-hidden="true">${ico}</span>${t}</button>`).join('');
+    m.innerHTML = `<div class="pset-head"><b>${esc(projName(pj))}</b> · 專案設定</div>` + psetItems(pj).map(([k, ico, t]) => `<button type="button" role="menuitem" data-pset-act="${k}"><span class="av-ico" aria-hidden="true">${ico}</span>${t}</button>`).join('');
     m.hidden = false;
     btn.setAttribute('aria-expanded', 'true');
     const r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
@@ -7498,7 +7497,6 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     m.querySelector('button')?.focus();
   }
   async function psetAct(k, pj) {
-    const row = state.projectList.find(p => p.id === pj);
     try {
       if (k === 'members') return openPermTab('members', { tab: 'members', memView: 'byProject', selProj: pj, mobileDetail: true, pq: '' });
       if (k === 'repo') return openRepoEditor(pj);
@@ -7507,13 +7505,6 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         if (!name || name === projName(pj)) return;
         await api(`/api/projects/${encodeURIComponent(pj)}`, { method: 'PATCH', body: { name } });
         toast(`專案改名為「${name}」`);
-      } else if (k === 'archive') {
-        if (row?.openCards > 0) return toast(`還有 ${row.openCards} 張未結案卡，請先結案或移到別的專案`);
-        if (!await confirmDialog({ title: '封存專案？', confirmText: '封存', danger: true, message: `封存「<b>${esc(projName(pj))}</b>」後，不能再選它來發訊息或建卡；歷史內容保留，之後可以到「專案管理」還原或永久刪除。` })) return;
-        await api(`/api/projects/${encodeURIComponent(pj)}/archive`, { method: 'POST' });
-        toast(`已封存「${projName(pj)}」`);
-        await Promise.all([loadProjectList(), loadParticipants()]);
-        return setProjectView('hub');
       }
       await Promise.all([loadProjectList(), loadParticipants()]);
       drawProjSwitch(); drawPerm();
