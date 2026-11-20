@@ -223,7 +223,7 @@ async function tellOwner(text, key, { group = true } = {}) {
 }
 // 停掉喚醒指令與它開的所有程序（shell 底下的 AI 工具也要停）
 function killTree(child) {
-  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => {});
+  if (process.platform === 'win32') spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
   else { try { process.kill(-child.pid, 'SIGTERM'); } catch {} setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 5000).unref(); }
 }
 
@@ -246,7 +246,10 @@ async function wake(pending, why, fresh, backgroundOnly) {
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
   const startedAt = Date.now();
   if (backgroundOnly) log('前景連線持續失敗滿一分鐘，這一輪改用 codex exec');
-  const child = spawn(WAKE_CMD, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...env, AIGILE_WAKE_BACKGROUND: backgroundOnly ? '1' : '0', AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) } });
+  const child = spawn(WAKE_CMD, {
+    shell: true, stdio: 'inherit', detached: process.platform !== 'win32', windowsHide: true,
+    env: { ...env, AIGILE_WAKE_BACKGROUND: backgroundOnly ? '1' : '0', AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) },
+  });
   const killer = TIMEOUT_MS > 0 ? setTimeout(() => {
     log(`喚醒指令跑超過 ${TIMEOUT_MS / 60000} 分鐘，停掉它`);
     killTree(child);

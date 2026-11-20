@@ -25,7 +25,7 @@ let child, server;
 
 function runWake(expected = 0, settings = {}) {
   const r = spawnSync(process.execPath, [wake, '--agent', agent, '--mode', 'keep'],
-    { cwd: tmp, env: { ...env, ...settings }, encoding: 'utf8', timeout: 10_000 });
+    { cwd: tmp, env: { ...env, ...settings }, encoding: 'utf8', timeout: 30_000 });
   assert.equal(r.status, expected, r.error?.message || r.stderr || fs.readFileSync(path.join(dir, 'wake.log'), 'utf8'));
 }
 

@@ -58,7 +58,7 @@ const ID_RE = /"(?:thread_id|session_id|conversation_id)"\s*:\s*"([0-9a-fA-F-]{3
 // 跑 codex：輸出一行一行過濾 Token 後寫進 wake.log，順便找對話編號
 function codex(list) {
   return new Promise(resolve => {
-    const options = { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...NO_GIT_CREDS, AIGILE_AGENT: AGENT } };
+    const options = { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, ...NO_GIT_CREDS, AIGILE_AGENT: AGENT } };
     // Windows 的 codex.cmd 需要 shell；CODEX_BIN 也接受既有的複合指令。
     const child = BIN_IS_SCRIPT
       ? spawn(process.execPath, [BIN, ...list], options)
