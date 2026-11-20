@@ -1,6 +1,11 @@
 {
   "releases": [
     {
+      "version": "1.0.4",
+      "at": "2026-11-20T00:58:37.447Z",
+      "title": "Codex 有事才叫醒、一行啟動、批次標記 · Codex wakes only when needed, one-line start, batch marking"
+    },
+    {
       "version": "1.0.3",
       "at": "2026-11-13T08:56:04.126Z",
       "title": "叫醒次數、依工具接入、Docker 映像 · Wake counts, per-tool onboarding, Docker image"
