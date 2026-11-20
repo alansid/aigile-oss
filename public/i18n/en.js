@@ -2868,6 +2868,16 @@ window.AIGILE_EN = {
     "這幾則會從「所有人」的「要你處理」移走，不會回覆提問的 AI，也不會叫醒它。AI 下次讀到時會看到「已處理（未回覆）」，當成暫緩，不再等、不重問；之後要做請你再主動提。": "They leave EVERYONE's To-do list. The AI that asked gets no reply and is not woken. Next time it reads them it sees that they were handled without a reply and treats them as on hold: no more waiting, no asking again. Bring it up yourself later if it should be done.",
     "{0} 則已處理，{1} 則失敗：{2}": "{0} handled, {1} failed: {2}",
     "已把 {0} 則標為已處理": "Marked {0} as handled",
-    "還是要回答": "Answer anyway"
+    "還是要回答": "Answer anyway",
+    "卡片已退回，但未能發送回覆：": "Card returned, but the reply could not be sent:",
+    "已退回給": "Sent back to",
+    "附檔（選填）": "Attachment (optional)",
+    "上限 2 MB，1 小時後自動刪除。": "Maximum 2 MB. Automatically deleted after one hour.",
+    "移除附件": "Remove attachment",
+    "請選擇 2 MB 以內的有效檔案：PDF、DOCX、XLSX、PPTX、MD、TXT、PNG、JPG。": "Choose a valid file up to 2 MB: PDF, DOCX, XLSX, PPTX, MD, TXT, PNG or JPG.",
+    "請先勾選附件聲明": "Confirm the attachment declaration first",
+    "附檔退回失敗：": "Could not return with attachment:",
+    "附件表單格式錯誤": "Invalid attachment form",
+    "請選擇附件": "Choose an attachment"
   },
 };

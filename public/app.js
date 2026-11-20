@@ -2798,29 +2798,23 @@
     fadeOutRow(verRow(id), id);
     if (work.openId === id) openCard(id);
     const owner = r.owner?.name || 'AI';
-    const tr = returnLabels();
-    toast(r.notifyError ? tr('卡片已退回，但未能發送回覆：', 'Card returned, but the reply could not be sent: ') + r.notifyError
-      : tr('已退回給 ' + owner, 'Sent back to ' + owner));
-  }
-  function returnLabels() {
-    const lang = window.aigileI18n?.lang ?? navigator.language;
-    return (zh, en) => /^en(?:-|$)/i.test(lang) ? en : zh;
+    toast(r.notifyError ? L('卡片已退回，但未能發送回覆：', 'Card returned, but the reply could not be sent: ') + r.notifyError
+      : L('已退回給 ' + owner, 'Sent back to ' + owner));
   }
   function promptReason(id, submit) {
     return new Promise(resolve => {
-      const tr = returnLabels();
       const host = document.createElement('div');
       host.className = 'confirm-root';
-      host.innerHTML = modalFrame({ title: tr('退回 ' + id + '？', 'Send ' + id + ' back?'), size: 'narrow', body: `
-        <label class="field"><span class="field-label">${tr('退回原因（會回覆到交接訊息，交過來的 AI 會收到）', 'Reason (sent as a reply to the AI’s handover message)')}</span><textarea autocomplete="off" autocorrect="on" id="rj-input" rows="3" maxlength="500"></textarea></label>
-        <label class="field"><span class="field-label">${tr('附檔（選填）', 'Attachment (optional)')}</span><input type="file" id="rj-file" accept="${FILE_EXTS.map(ext => '.' + ext).join(',')}" style="max-width:100%"></label>
+      host.innerHTML = modalFrame({ title: L('退回 ' + id + '？', 'Send ' + id + ' back?'), size: 'narrow', body: `
+        <label class="field"><span class="field-label">${L('退回原因（會回覆到交接訊息，交過來的 AI 會收到）', 'Reason (sent as a reply to the AI’s handover message)')}</span><textarea autocomplete="off" autocorrect="on" id="rj-input" rows="3" maxlength="500"></textarea></label>
+        <label class="field"><span class="field-label">${L('附檔（選填）', 'Attachment (optional)')}</span><input type="file" id="rj-file" accept="${FILE_EXTS.map(ext => '.' + ext).join(',')}" style="max-width:100%"></label>
         <div id="rj-attachment" hidden>
-          <p class="muted small">${tr('上限 2 MB，1 小時後自動刪除。', 'Maximum 2 MB. Automatically deleted after one hour.')}</p>
-          <label class="declare-box"><input type="checkbox" id="rj-declare"><span>${tr('我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資', 'I confirm this file contains no code (source, builds, config files) and no customer personal data')}</span></label>
-          <button class="btn small" type="button" id="rj-clear">${tr('移除附件', 'Remove attachment')}</button>
+          <p class="muted small">${L('上限 2 MB，1 小時後自動刪除。', 'Maximum 2 MB. Automatically deleted after one hour.')}</p>
+          <label class="declare-box"><input type="checkbox" id="rj-declare"><span>${L('我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資', 'I confirm this file contains no code (source, builds, config files) and no customer personal data')}</span></label>
+          <button class="btn small" type="button" id="rj-clear">${L('移除附件', 'Remove attachment')}</button>
         </div>
         <p class="error" id="rj-err" role="alert"></p>`,
-        foot: `<button class="btn" type="button" data-rj="0">${tr('取消', 'Cancel')}</button><button class="btn primary" type="button" data-rj="1">${tr('退回', 'Send back')}</button>` });
+        foot: `<button class="btn" type="button" data-rj="0">${L('取消', 'Cancel')}</button><button class="btn primary" type="button" data-rj="1">${L('退回', 'Send back')}</button>` });
       document.body.appendChild(host);
       const input = host.querySelector('#rj-input');
       const picker = host.querySelector('#rj-file');
@@ -2838,13 +2832,13 @@
       const close = result => { host.remove(); resolve(result); };
       const send = async () => {
         const reason = input.value.trim(), file = picker.files[0];
-        if (!reason) { error.textContent = tr('請寫退回原因', 'Please enter a reason'); return input.focus(); }
+        if (!reason) { error.textContent = L('請寫退回原因', 'Please enter a reason'); return input.focus(); }
         if (file && (!file.size || file.size > MAX_FILE || !FILE_EXTS.includes(file.name.split('.').pop().toLowerCase()))) {
-          error.textContent = tr('請選擇 2 MB 以內的有效檔案：PDF、DOCX、XLSX、PPTX、MD、TXT、PNG、JPG。', 'Choose a valid file up to 2 MB: PDF, DOCX, XLSX, PPTX, MD, TXT, PNG or JPG.');
+          error.textContent = L('請選擇 2 MB 以內的有效檔案：PDF、DOCX、XLSX、PPTX、MD、TXT、PNG、JPG。', 'Choose a valid file up to 2 MB: PDF, DOCX, XLSX, PPTX, MD, TXT, PNG or JPG.');
           return picker.focus();
         }
         if (file && !declaration.checked) {
-          error.textContent = tr('請先勾選附件聲明', 'Confirm the attachment declaration first');
+          error.textContent = L('請先勾選附件聲明', 'Confirm the attachment declaration first');
           return declaration.focus();
         }
         busy = true;
@@ -2853,7 +2847,7 @@
         controls.forEach(el => { el.disabled = true; });
         try { close(await submit(reason, file)); }
         catch (err) {
-          error.textContent = (file ? tr('附檔退回失敗：', 'Could not return with attachment: ') : '') + err.message;
+          error.textContent = (file ? L('附檔退回失敗：', 'Could not return with attachment: ') : '') + err.message;
           controls.forEach(el => { el.disabled = false; });
           busy = false;
         }

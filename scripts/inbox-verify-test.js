@@ -98,7 +98,7 @@ try {
   await cdp('Page.navigate', { url: BASE + '/p/main/inbox' });
   const selector = '[data-ver-no="' + returnCard.cardId + '"]';
   await until(() => js('!!document.querySelector(' + JSON.stringify(selector) + ')'), 20000, '退回按鈕');
-  await js("Object.defineProperty(navigator, 'language', { configurable: true, value: 'en-US' }); document.querySelector(" + JSON.stringify(selector) + ").click(); true");
+  await js("Object.defineProperty(navigator, 'language', { configurable: true, value: 'zh-TW' }); document.querySelector(" + JSON.stringify(selector) + ").click(); true");
   assert.equal(await js("document.querySelector('#rj-file').labels[0].textContent.trim()"), 'Attachment (optional)');
   assert.ok(await js("document.querySelector('#rj-file').getBoundingClientRect().right <= innerWidth"), '手機附件欄留在畫面內');
   const choose = (name, contents) => js("(() => { const input = document.querySelector('#rj-file'); const data = new DataTransfer(); data.items.add(new File([" +
