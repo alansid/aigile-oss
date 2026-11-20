@@ -71,7 +71,7 @@ export async function teamCards(db, keyOf = c => cardNo(c.seq)) {
   return { work, open, decisions: decisions.map(d => ({ cardId: keyOf(d), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, readCardReturn, storeCardReturnFile, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // 卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
@@ -600,7 +600,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   // 人類驗收不通過 →「退回」：卡回到交過來的那個 AI、狀態回進行中；原因發一則回覆到交接訊息
   route('POST', '/api/cards/:id/reject', async ({ ctx, me, req, params }) => {
     if (me.kind !== 'human') throw new ApiError(403, 'FORBIDDEN', '只有人類能退回驗收。');
-    const body = await readJson(req);
+    const body = await readCardReturn(req);
     const c = await load(params.id, me);
     if (c.type === NOTE || c.type === '決策' || c.status !== '待確認') throw new ApiError(400, 'NOT_VERIFYING', '只有「等驗收」（待確認、不是決策卡）的卡片可以退回。');
     if (c.owner_id !== me.id && c.wait_for_id !== me.id) throw new ApiError(403, 'NOT_CARD_OWNER', '只有負責驗收的人能退回。');
@@ -612,12 +612,13 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const hos = await db.all("SELECT m.id, m.author_id FROM card_msgs cm JOIN messages m ON m.id = cm.message_id WHERE cm.card_seq = ? AND m.text LIKE '[交接]%' ORDER BY m.seq DESC LIMIT 20", c.seq);
     const ho = hos.find(m => people.get(m.author_id)?.kind === 'ai' && people.get(m.author_id)?.status === 'active');
     if (!ho) throw new ApiError(400, 'NO_HANDOVER_SOURCE', '找不到把這張卡交過來的 AI，請改用「交接」交給要處理的人。');
+    const file = body.file ? await storeCardReturnFile(me, body, c.project) : null;
     const ai = people.get(ho.author_id), at = nowIso();
     await save(c, { owner_id: ai.id, status: '進行中', wait_for_id: null }, [`退回 ${me.name} → ${ai.name}：${reason}（狀態 待確認 → 進行中）`], me, at);
     invalidatePeople();
     let messageId = null, notifyError = null;
     try {
-      const r = await createMessage(ctx, me, { text: `[退回] ${c.project ? `【${projectName(c.project)}】` : ''}${pub(c)} ${plainTitle(c.title)} → @${ai.name}：${reason}`, requestId: `reject_${c.uid}_${c.version}`, replyToMessageId: ho.id, recipientIds: [ai.id], project: c.project });
+      const r = await createMessage(ctx, me, { text: `[退回] ${c.project ? `【${projectName(c.project)}】` : ''}${pub(c)} ${plainTitle(c.title)} → @${ai.name}：${reason}`, requestId: `reject_${c.uid}_${c.version}`, replyToMessageId: ho.id, recipientIds: [ai.id], project: c.project }, { fileId: file?.id ?? null });
       messageId = r.message.messageId;
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
     } catch (err) { notifyError = err.message; }

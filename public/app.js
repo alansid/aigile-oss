@@ -49,12 +49,13 @@
     // 輪詢要設逾時，否則網路卡住時 fetch 可能永遠不回來，整個輪詢跟著停
     const ctl = timeoutMs ? new AbortController() : null;
     const timer = ctl && setTimeout(() => ctl.abort(), timeoutMs);
+    const multipart = body instanceof FormData;
     let r;
     try {
       r = await fetch(path, {
         method, signal: ctl?.signal,
-        headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(document.hidden ? { 'X-Aigile-Bg': '1' } : {}) }, // 背景分頁，伺服器少寫在線時間
-        body: body ? JSON.stringify(body) : undefined,
+        headers: { ...(!multipart && { 'Content-Type': 'application/json' }), ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...(document.hidden ? { 'X-Aigile-Bg': '1' } : {}) }, // 背景分頁，伺服器少寫在線時間
+        body: multipart ? body : body ? JSON.stringify(body) : undefined,
       });
     } catch (e) {
       const err = new Error(ctl?.signal.aborted ? '連線逾時' : '連線失敗');
@@ -2781,29 +2782,91 @@
   }
   async function rejectCard(id) {
     const c = work.cards.get(id);
-    const reason = await promptReason(`退回 ${id}？`, '退回原因（會回覆到交接訊息，交過來的 AI 會收到）');
-    if (!reason) return;
-    try {
-      const r = await api(`/api/cards/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason, version: c?.version } });
-      work.cards.set(id, r);
-      fadeOutRow(verRow(id), id); // 原地淡出
-      if (work.openId === id) openCard(id);
-      toast(`已退回給 ${r.owner?.name || 'AI'}`);
-    } catch (err) { toast(err.message); }
+    const r = await promptReason(id, async (reason, file) => {
+      let body = { reason, version: c?.version };
+      if (file) {
+        body = new FormData();
+        body.set('reason', reason);
+        if (c?.version !== undefined) body.set('version', String(c.version));
+        body.set('file', file);
+        body.set('declared', 'true');
+      }
+      return api('/api/cards/' + encodeURIComponent(id) + '/reject', { method: 'POST', body });
+    });
+    if (!r) return;
+    work.cards.set(id, r);
+    fadeOutRow(verRow(id), id);
+    if (work.openId === id) openCard(id);
+    const owner = r.owner?.name || 'AI';
+    const tr = returnLabels();
+    toast(r.notifyError ? tr('卡片已退回，但未能發送回覆：', 'Card returned, but the reply could not be sent: ') + r.notifyError
+      : tr('已退回給 ' + owner, 'Sent back to ' + owner));
   }
-  function promptReason(title, label) {
+  function returnLabels() {
+    const lang = window.aigileI18n?.lang ?? navigator.language;
+    return (zh, en) => /^en(?:-|$)/i.test(lang) ? en : zh;
+  }
+  function promptReason(id, submit) {
     return new Promise(resolve => {
+      const tr = returnLabels();
       const host = document.createElement('div');
       host.className = 'confirm-root';
-      host.innerHTML = modalFrame({ title, size: 'narrow', body: `<label class="field"><span class="field-label">${esc(label)}</span><textarea autocomplete="off" autocorrect="on" id="rj-input" rows="3" maxlength="500"></textarea></label><p class="error" id="rj-err" role="alert"></p>`,
-        foot: '<button class="btn" type="button" data-rj="0">取消</button><button class="btn primary" type="button" data-rj="1">退回</button>' });
+      host.innerHTML = modalFrame({ title: tr('退回 ' + id + '？', 'Send ' + id + ' back?'), size: 'narrow', body: `
+        <label class="field"><span class="field-label">${tr('退回原因（會回覆到交接訊息，交過來的 AI 會收到）', 'Reason (sent as a reply to the AI’s handover message)')}</span><textarea autocomplete="off" autocorrect="on" id="rj-input" rows="3" maxlength="500"></textarea></label>
+        <label class="field"><span class="field-label">${tr('附檔（選填）', 'Attachment (optional)')}</span><input type="file" id="rj-file" accept="${FILE_EXTS.map(ext => '.' + ext).join(',')}" style="max-width:100%"></label>
+        <div id="rj-attachment" hidden>
+          <p class="muted small">${tr('上限 2 MB，1 小時後自動刪除。', 'Maximum 2 MB. Automatically deleted after one hour.')}</p>
+          <label class="declare-box"><input type="checkbox" id="rj-declare"><span>${tr('我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資', 'I confirm this file contains no code (source, builds, config files) and no customer personal data')}</span></label>
+          <button class="btn small" type="button" id="rj-clear">${tr('移除附件', 'Remove attachment')}</button>
+        </div>
+        <p class="error" id="rj-err" role="alert"></p>`,
+        foot: `<button class="btn" type="button" data-rj="0">${tr('取消', 'Cancel')}</button><button class="btn primary" type="button" data-rj="1">${tr('退回', 'Send back')}</button>` });
       document.body.appendChild(host);
       const input = host.querySelector('#rj-input');
+      const picker = host.querySelector('#rj-file');
+      const declaration = host.querySelector('#rj-declare');
+      const error = host.querySelector('#rj-err');
+      const updateFile = () => {
+        host.querySelector('#rj-attachment').hidden = !picker.files.length;
+        declaration.checked = false;
+        error.textContent = '';
+      };
+      picker.addEventListener('change', updateFile);
+      host.querySelector('#rj-clear').addEventListener('click', () => { picker.value = ''; updateFile(); picker.focus(); });
       input.focus();
-      const done = ok => { const v = input.value.trim(); if (ok && !v) { host.querySelector('#rj-err').textContent = '請寫退回原因'; return input.focus(); } host.remove(); resolve(ok ? v : null); };
+      let busy = false;
+      const close = result => { host.remove(); resolve(result); };
+      const send = async () => {
+        const reason = input.value.trim(), file = picker.files[0];
+        if (!reason) { error.textContent = tr('請寫退回原因', 'Please enter a reason'); return input.focus(); }
+        if (file && (!file.size || file.size > MAX_FILE || !FILE_EXTS.includes(file.name.split('.').pop().toLowerCase()))) {
+          error.textContent = tr('請選擇 2 MB 以內的有效檔案：PDF、DOCX、XLSX、PPTX、MD、TXT、PNG、JPG。', 'Choose a valid file up to 2 MB: PDF, DOCX, XLSX, PPTX, MD, TXT, PNG or JPG.');
+          return picker.focus();
+        }
+        if (file && !declaration.checked) {
+          error.textContent = tr('請先勾選附件聲明', 'Confirm the attachment declaration first');
+          return declaration.focus();
+        }
+        busy = true;
+        error.textContent = '';
+        const controls = host.querySelectorAll('button, input, textarea');
+        controls.forEach(el => { el.disabled = true; });
+        try { close(await submit(reason, file)); }
+        catch (err) {
+          error.textContent = (file ? tr('附檔退回失敗：', 'Could not return with attachment: ') : '') + err.message;
+          controls.forEach(el => { el.disabled = false; });
+          busy = false;
+        }
+      };
       holdBackdrop(host.firstElementChild);
-      host.addEventListener('click', e => { const b = e.target.closest('[data-rj]'); if (b) done(b.dataset.rj === '1'); else if (e.target.closest('[data-close]')) done(false); });
-      host.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
+      host.addEventListener('click', e => {
+        if (busy) return;
+        if (e.target.closest('[data-rj="1"]')) void send();
+        else if (e.target.closest('[data-rj="0"], [data-close]')) close(null);
+      });
+      host.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.stopPropagation(); if (!busy) close(null); }
+      });
     });
   }
   // [需確認] 訊息裡提到「正在等我決定的決策卡」→ 以決策卡為準，訊息不再單獨列出

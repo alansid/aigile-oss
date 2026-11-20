@@ -21,8 +21,9 @@ const ready = new Promise((res, rej) => {
   server.on('exit', c => rej(new Error('server exited ' + c)));
 });
 const call = async (token, p, method = 'GET', body) => {
-  const r = await fetch(BASE + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: body ? JSON.stringify(body) : undefined });
+  const multipart = body instanceof FormData;
+  const r = await fetch(BASE + p, { method, headers: { ...(!multipart && { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: multipart ? body : body ? JSON.stringify(body) : undefined });
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
 let n = 0;
@@ -110,6 +111,37 @@ const rid = () => 'req_c' + (++n);
     assert.equal(rjMsg.replyToMessageId, toHuman.handoverMessageId, '原因回覆到交接訊息');
     assert.ok(rjMsg.text.startsWith('[退回]') && rjMsg.recipients.some(r => r.participantId === qa.participantId), '通知那個 AI');
     assert.equal((await RJ(boss.token, rel.cardId, { reason: '再退' })).body.error.code, 'NOT_VERIFYING', '不是等驗收的卡不能退回');
+    assert.equal(rjMsg.file, null, '退回不附檔時保持原行為');
+    const reviewing = (await H(qa.token, rel.cardId, { toId: boss.participant.participantId, progress: '已修正', nextStep: '請複驗' })).body;
+    assert.equal(reviewing.status, '待確認', JSON.stringify(reviewing));
+    const returnForm = (name, payload, declared) => {
+      const form = new FormData();
+      form.set('reason', '附上複驗結果');
+      form.set('version', String(reviewing.version));
+      form.set('file', new Blob([payload]), name);
+      if (declared) form.set('declared', 'true');
+      return form;
+    };
+    const payload = 'Synthetic screenshot report';
+    const noDeclaration = await RJ(boss.token, rel.cardId, returnForm('review.txt', payload, false));
+    assert.equal(noDeclaration.body.error?.code, 'DECLARATION_REQUIRED', JSON.stringify(noDeclaration.body));
+    const oversized = await RJ(boss.token, rel.cardId, returnForm('review.txt', 'a'.repeat(2 * 1024 * 1024 + 1), true));
+    assert.equal(oversized.status, 413, JSON.stringify(oversized.body));
+    assert.equal((await call(boss.token, '/api/cards/' + rel.cardId)).body.version, reviewing.version, '附件失敗時保留驗收卡與版本');
+    const withFile = await RJ(boss.token, rel.cardId, returnForm('review.txt', payload, true));
+    assert.equal(withFile.status, 200, JSON.stringify(withFile.body));
+    assert.equal(withFile.body.owner.participantId, qa.participantId);
+    const result = (await call(qa.token, '/api/mcp', 'POST', {
+      jsonrpc: '2.0', id: 368, method: 'tools/call',
+      params: { name: 'aigile_read', arguments: { messageId: withFile.body.rejectMessageId } },
+    })).body;
+    const attachmentReply = JSON.parse(result.result?.content?.[0]?.text ?? '{}');
+    assert.equal(attachmentReply.replyToMessageId, reviewing.handoverMessageId, JSON.stringify(result));
+    assert.match(attachmentReply.text, /附上複驗結果/);
+    assert.equal(attachmentReply.file.name, 'review.txt');
+    const download = await fetch(BASE + attachmentReply.file.downloadUrl, { headers: { Authorization: 'Bearer ' + qa.token } });
+    assert.equal(download.status, 200);
+    assert.equal(await download.text(), payload);
     // 人類交給 AI、人類交給人類：狀態維持
     const hh = (await call(boss.token, '/api/cards', 'POST', { requestId: rid(), title: '人類交出', ownerId: bossId, status: '進行中' })).body;
     assert.equal((await H(boss.token, hh.cardId, { toId: qa.participantId, note: '給你' })).body.status, '進行中', '人類交給 AI 照舊維持');

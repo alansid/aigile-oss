@@ -89,6 +89,35 @@ try {
   // 英文介面：重畫後才把中文換成英文，高度一變，瀏覽器的自動捲動補償會把畫面推走（修正前跳 100 多 px）
   await js("localStorage.setItem('aigile-lang', 'en'); true");
   await scenario('英文手機', 6);
+
+  const returnCard = (await call(aiTok, '/api/cards', 'POST', { requestId: 'return-file', project: '預設專案', title: '附件退回測試', ownerId: ai.participantId, status: '進行中' })).body;
+  const handover = await call(aiTok, '/api/cards/' + returnCard.cardId + '/handover', 'POST', {
+    toId: L, progress: '已實作', nextStep: '請驗收',
+  });
+  assert.equal(handover.status, 200, JSON.stringify(handover.body));
+  await cdp('Page.navigate', { url: BASE + '/p/main/inbox' });
+  const selector = '[data-ver-no="' + returnCard.cardId + '"]';
+  await until(() => js('!!document.querySelector(' + JSON.stringify(selector) + ')'), 20000, '退回按鈕');
+  await js("Object.defineProperty(navigator, 'language', { configurable: true, value: 'en-US' }); document.querySelector(" + JSON.stringify(selector) + ").click(); true");
+  assert.equal(await js("document.querySelector('#rj-file').labels[0].textContent.trim()"), 'Attachment (optional)');
+  assert.ok(await js("document.querySelector('#rj-file').getBoundingClientRect().right <= innerWidth"), '手機附件欄留在畫面內');
+  const choose = (name, contents) => js("(() => { const input = document.querySelector('#rj-file'); const data = new DataTransfer(); data.items.add(new File([" +
+    JSON.stringify(contents) + "], " + JSON.stringify(name) + ")); input.files = data.files; input.dispatchEvent(new Event('change')); return true; })()");
+  await choose('broken.png', 'not a PNG');
+  await js("document.querySelector('#rj-input').value = '請參考附件'; document.querySelector('[data-rj=\"1\"]').click(); true");
+  assert.match(await js("document.querySelector('#rj-err').textContent"), /declaration/);
+  await js("document.querySelector('#rj-declare').checked = true; document.querySelector('[data-rj=\"1\"]').click(); true");
+  await until(() => js("document.querySelector('#rj-err')?.textContent.includes('Could not return with attachment')"), 10000, '上傳失敗提示');
+  assert.equal(await js("document.querySelector('#rj-input').value"), '請參考附件');
+  await js("document.querySelector('#rj-clear').click(); true");
+  await choose('review.txt', 'Synthetic review attachment');
+  assert.equal(await js("document.querySelector('#rj-declare').checked"), false);
+  await js("document.querySelector('#rj-declare').checked = true; document.querySelector('[data-rj=\"1\"]').click(); true");
+  await until(() => js("!document.querySelector('#rj-input')"), 10000, '附檔退回成功');
+  const returned = (await call(boss.token, '/api/cards/' + returnCard.cardId)).body;
+  assert.equal(returned.status, '進行中');
+  assert.equal(returned.owner.participantId, ai.participantId);
+
   ws.close();
   console.log('inbox-verify-test：全部通過');
 } catch (e) {

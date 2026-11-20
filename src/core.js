@@ -691,6 +691,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const stmts = [[
       `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project, reply_from)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt, project, ask ? JSON.stringify(ask) : null]]];
+    if (fileId) stmts.push(['UPDATE files SET message_id = ? WHERE id = ?', [id, fileId]]);
     for (const rid of recipientIds) stmts.push(['INSERT INTO message_recipients (message_id, participant_id) VALUES (?,?)', [id, rid]]);
     for (const [rid, rs] of reasons) {
       stmts.push(['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)',
@@ -3140,8 +3141,7 @@ ${ending}`;
     return f;
   }
 
-  async function uploadFile(ctx, me, req, url) {
-    const q = url.searchParams;
+  async function storeMessageFile(me, req, q) {
     const name = cleanFileName(q.get('name'));
     const declared = ['true', '1', 'yes'].includes(String(q.get('declared')).toLowerCase());
     let bytes = new Uint8Array(0);
@@ -3178,12 +3178,39 @@ ${ending}`;
       VALUES (?,?,?,?,?,?,?,?,?,?)`, id, me.id, name, info.ext, info.mime, bytes.length, hash, 1, nowIso(), now + FILE_TTL_MS);
     const file = await db.get('SELECT * FROM files WHERE id = ?', id);
     await audit('upload', me, file);
+    return file;
+  }
+
+  async function readCardReturn(req) {
+    const type = req.headers.get('content-type') || '';
+    if (!type.toLowerCase().startsWith('multipart/form-data;')) {
+      const body = await readJson(req);
+      return { reason: body?.reason, version: body?.version };
+    }
+    const bytes = await readBody(req, MAX_FILE_BYTES + 16 * 1024, '檔案超過上傳上限', 'FILE_TOO_LARGE');
+    let form;
+    try { form = await new Response(bytes, { headers: { 'Content-Type': type } }).formData(); }
+    catch { throw invalid('附件表單格式錯誤'); }
+    const file = form.get('file');
+    if (!(file instanceof File)) throw invalid('請選擇附件');
+    return { reason: form.get('reason'), version: form.get('version') ?? undefined, file, declared: form.get('declared') };
+  }
+
+  function storeCardReturnFile(me, { file, declared }, project) {
+    const req = new Request('https://localhost/', { method: 'POST', body: file });
+    return storeMessageFile(me, req, new URLSearchParams({ name: file.name, declared: declared ?? '', project: project || 'all' }));
+  }
+
+  async function uploadFile(ctx, me, req, url) {
+    const q = url.searchParams;
+    const file = await storeMessageFile(me, req, q);
+    const { id, name, size, sha256: hash } = file;
 
     // 自動在群組發一則附下載連結的訊息
     const note = (q.get('text') || '').trim();
     const hours = Math.round(FILE_TTL_MS / 3600_000);
     const ttl = hours >= 1 ? `${hours} 小時` : `${Math.max(1, Math.round(FILE_TTL_MS / 60_000))} 分鐘`;
-    const text = `${note ? note + '\n' : ''}[文件] ${name}（${formatBytes(bytes.length)}，SHA-256 ${hash.slice(0, 12)}…）\n已聲明不含程式碼與客戶個資；${ttl}後自動刪除。下載：GET /api/files/${id}`;
+    const text = `${note ? note + '\n' : ''}[文件] ${name}（${formatBytes(size)}，SHA-256 ${hash.slice(0, 12)}…）\n已聲明不含程式碼與客戶個資；${ttl}後自動刪除。下載：GET /api/files/${id}`;
     const recipientIds = (q.get('recipientIds') || '').split(',').map(x => x.trim()).filter(Boolean);
     const { message } = await createMessage(ctx, me, {
       text: text.slice(0, MAX_TEXT), requestId: 'req_file_' + id,
@@ -3192,13 +3219,13 @@ ${ending}`;
       audience: q.get('audience') === 'all' ? 'all' : undefined,
       project: q.get('project') || undefined,
     }, { fileId: id, checkProject: true });
-    await db.run('UPDATE files SET message_id = ? WHERE id = ?', message.messageId, id);
     return { __status: 201, file: fileView(file), message };
   }
 
   async function downloadFile(me, id) {
     requireStorage();
     const f = await activeFile(id);
+    if (!f.message_id) throw new ApiError(404, 'NOT_FOUND', '找不到檔案');
     // 已掛在訊息上的檔案，套用跟訊息相同的專案隔離；看不到就當作不存在
     if (f.message_id) {
       const m = await db.get('SELECT project, created_at FROM messages WHERE id = ?', f.message_id);
@@ -3270,7 +3297,7 @@ ${ending}`;
   route('GET', '/api/files', async ({ ctx, me }) => {
     const people = await peopleMap(ctx);
     const scope = await messageScope(me, 'm');
-    const rows = await db.all(`SELECT f.*, m.project AS msg_project FROM files f LEFT JOIN messages m ON m.id = f.message_id WHERE f.deleted_at IS NULL AND f.expires_at > ?${scope ? ` AND (m.id IS NULL OR ${scope.sql})` : ''} ORDER BY f.created_at DESC`, Date.now(), ...(scope ? scope.args : []));
+    const rows = await db.all(`SELECT f.*, m.project AS msg_project FROM files f LEFT JOIN messages m ON m.id = f.message_id WHERE m.id IS NOT NULL AND f.deleted_at IS NULL AND f.expires_at > ?${scope ? ` AND (m.id IS NULL OR ${scope.sql})` : ''} ORDER BY f.created_at DESC`, Date.now(), ...(scope ? scope.args : []));
     const used = rows.reduce((n, f) => n + f.size, 0);
     return {
       items: rows.map(f => ({ ...fileView(f), project: f.msg_project ?? null, uploader: people.get(f.uploader_id) ? identity(people.get(f.uploader_id), people) : null })),
@@ -3510,7 +3537,7 @@ ${ending}`;
   registerUpdateCheck({ route, db, requireAdmin, requireHuman, config });
   registerDemo({ route, db, ApiError, randId, nowIso, requireAdmin, requireHuman, newCode, newToken,
     afterChange: async () => { invalidatePeople(); await bumpPeopleVer(); await loadProjects(true); } });
-  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
+  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 
   // 只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
   async function scopeTeamMembers(me, members, priv) {
