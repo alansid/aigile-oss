@@ -2935,9 +2935,8 @@ window.AIGILE_EN = {
     "附檔退回失敗：": "Could not return with attachment:",
     "附件表單格式錯誤": "Invalid attachment form",
     "請選擇附件": "Choose an attachment",
-    // 訊息顯示改版：頂端等你回、上次看到的地方、換日、收件人在標頭、AI 上線一行、卡片串收起
-    "🔔 {0} 則等你回": "🔔 {0} waiting for your reply",
-    "看 ›": "View ›",
+    // 訊息顯示改版：上次看到的地方、換日、收件人在標頭、AI 上線一行、卡片串收起（頂端「等你回」橫條已拿掉，數字改在「給我的」上）
+    "給我的，{0} 則要你回": "For me, {0} to reply",
     "以下是新訊息": "New messages below",
     "今天 {0}": "Today {0}",
     "昨天 {0}": "Yesterday {0}",

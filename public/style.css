@@ -3365,14 +3365,6 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 
 /* ---------- 訊息顯示改版：頂端等你回、換日、標頭一行、細行、精簡不要框 ---------- */
 /* 頂端「🔔 N 則等你回」：在捲動區外面，所以一直在訊息區最上面 */
-.ask-bar { flex: none; padding: 6px 16px 0; }
-.ask-bar[hidden] { display: none; }
-.ask-bar-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 8px 14px; border: 1px solid #f5c58a; border-radius: 10px; background: #fff4e6; color: #9a3412; font: inherit; font-size: .9rem; text-align: left; cursor: pointer; }
-.ask-bar-btn:hover { background: #ffedd5; }
-.ask-bar-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.ask-bar .ab-n { flex: none; font-weight: 700; }
-.ask-bar .ab-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ask-bar .ab-go { flex: none; font-weight: 700; }
 /* 換日分隔、上次看到的紅線 */
 .day-div { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
 .day-div::before, .day-div::after { content: ''; flex: 1; height: 1px; background: var(--border); }
@@ -3405,13 +3397,9 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
   .msg > .msg-foot .reply-btn { transition: opacity .12s; }
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .ask-bar-btn { background: #3b2410; border-color: #7c4a1a; color: #fdba74; }
-  :root:not([data-theme="light"]) .ask-bar-btn:hover { background: #4a2c12; }
   :root:not([data-theme="light"]) .to-h.to-you { color: #fdba74; }
   :root:not([data-theme="light"]) .cg-st { background: #1e3a8a; color: #bfdbfe; }
 }
-:root[data-theme="dark"] .ask-bar-btn { background: #3b2410; border-color: #7c4a1a; color: #fdba74; }
-:root[data-theme="dark"] .ask-bar-btn:hover { background: #4a2c12; }
 :root[data-theme="dark"] .to-h.to-you { color: #fdba74; }
 :root[data-theme="dark"] .cg-st { background: #1e3a8a; color: #bfdbfe; }
 /* 標頭：精簡時間跟在名字後面；完整時間靠右 */
@@ -3426,3 +3414,12 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
   #messages .msg:not(:hover):not(:focus-within) > .msg-foot.acts-only { visibility: hidden; }
 }
 #messages:not(.slim-view) .gm-head > .msg-time { margin-left: auto; }
+
+/* ---------- 拿掉「等你回」橫條，數字放在「給我的」上 ---------- */
+[data-scope="mine"], .m-scope [data-scope="mine"] { display: inline-flex; align-items: center; gap: 6px; } /* 手機的 .m-scope button 用 all: unset，要再寫一次才有間隔 */
+.scope-n { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #ea580c; color: #fff; font-size: 12px; font-weight: 700; line-height: 1; }
+.scope-n[hidden] { display: none; }
+@media (max-width: 420px) {
+  .m-scope { gap: 4px; }
+  .m-scope button { padding: 0 11px; }
+}

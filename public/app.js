@@ -1142,16 +1142,6 @@
     for (const m of run) state.ciOf.set(m.messageId, run[0].messageId);
     return `<button type="button" class="flow-line ci-line" id="ci-${esc(run[0].messageId)}" data-open-msgs="${esc(run.map(m => m.messageId).join(','))}" aria-label="${esc(`${run.length} 個 AI 上線：${names.join('、')}，展開`)}"><span class="fl-icon" aria-hidden="true">🤖</span><span class="fl-text"><b>${run.length} 個 AI 上線</b>${L('：', ': ')}<span data-nt>${esc(names.join(L('、', ', ')))}</span> <time datetime="${esc(run[0].createdAt)}">${tOnly(run[run.length - 1].createdAt)}</time></span></button>`;
   }
-  // 頂端「🔔 N 則等你回」：沒有就不出現；固定在訊息區最上面（在捲動區外面）
-  function drawAskBar() {
-    const bar = $('#ask-bar');
-    if (!bar) return;
-    const list = state.ctx ? [] : state.messages.filter(m => visible(m) && needReply(m));
-    bar.hidden = !list.length;
-    if (!list.length) { bar.innerHTML = ''; return; }
-    const m = list[0];
-    bar.innerHTML = `<button type="button" class="ask-bar-btn" data-ask-jump="${esc(m.messageId)}"><span class="ab-n">🔔 ${list.length} 則等你回</span><span class="ab-txt" data-nt>${esc(m.author.name)}${L('：', ': ')}${esc(firstSentence(m.text))}</span><span class="ab-go">看 ›</span></button>`;
-  }
   // 上次看到的地方：記在這台裝置（每個頻道最後看過的訊息序號）
   const seenKey = () => 'aigile-seen:' + (projectView() || '_all');
   const markSeen = seq => { if (seq && seq > (Number(store.get(seenKey())) || 0)) store.set(seenKey(), String(seq)); };
@@ -1626,13 +1616,25 @@
   // 決策／[需確認]、AI 建議、等你驗收、要你回覆、私訊
   function todoItems() {
     const items = [];
-    for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId });
+    for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId, ...(d.cardId ? {} : { mid: d.messageId }) });
     for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${ckey(g.card?.cardId || '')} 改為「${g.to}」`, key: 's:' + g.suggestionId });
     for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
-    for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId });
+    for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId, mid: n.messageId });
     for (const n of (work.notes || []).filter(x => x.dm)) items.push({ p: n.project ?? null, kind: n.sender?.system ? '通知' : '私訊', title: n.sender?.system ? `平台通知：${oneLine(dmGist(n.preview, true), 60)}` : `${n.sender?.name || ''} 回你了`, key: 'n:' + n.notificationId });
     for (const j of work.joins || []) items.push({ p: myProjects().includes(j.project) ? j.project : null, kind: '申請', title: `${j.name} 申請加入${j.projectName}`, key: 'j:' + j.id });
     return items.filter(x => !x.p || myProjects().includes(x.p));
+  }
+  const todoInView = (x, v = projectView()) => v === 'hub' || (v === 'cross' ? !x.p : x.p === v);
+  // 「給我的」＝「要你處理」裡要你回的訊息（[需確認]、要你回覆），數字和清單都從 todoItems 來，兩邊對得上
+  const mineAskIds = () => new Set(todoItems().filter(x => x.mid && todoInView(x)).map(x => x.mid));
+  function drawMineCount() {
+    const n = state.me ? mineAskIds().size : 0;
+    document.querySelectorAll('[data-scope="mine"]').forEach(b => {
+      let c = b.querySelector('.scope-n');
+      if (!c) { b.insertAdjacentHTML('beforeend', '<span class="scope-n" data-nt hidden></span>'); c = b.querySelector('.scope-n'); }
+      c.hidden = !n; c.textContent = n > 99 ? '99+' : n;
+      b.setAttribute('aria-label', n ? L(`給我的，${n} 則要你回`, `For me, ${n} to reply`) : L('給我的', 'For me'));
+    });
   }
   function todoByView() {
     const items = todoItems();
@@ -1824,7 +1826,7 @@
   function visible(m) {
     const f = state.filter;
     if (!msgInView(m.project)) return false;
-    if (f.scope === 'mine' && !(!isMine(m) && (isToMe(m) || isReplyToMe(m)))) return false;
+    if (f.scope === 'mine' && !(state.mineIds || mineAskIds()).has(m.messageId)) return false; // 只列要你回的
     if (f.scope === 'related' && !related(m)) return false;
     if (f.member && m.author.participantId !== f.member) return false;
     if (f.tag && !tagOf(m.text).includes(f.tag)) return false;
@@ -1846,8 +1848,8 @@
     const an = $('#f-ainow'); if (an) an.checked = aiNowOn();
     drawAiNow();
   }
-  // 範圍「全部／與我相關」已在手機頂部兩顆，篩選按鈕只算成員、標籤（「給我的」不在兩顆裡，仍算一個）
-  const filterCount = () => (state.filter.scope === 'mine' ? 1 : 0) + (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
+  // 範圍「全部／給我的／與我相關」在手機頂部，篩選按鈕只算成員、標籤
+  const filterCount = () => (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
   function setFilter(patch) {
     Object.assign(state.filter, patch);
     state.onlyMine = state.filter.scope === 'related';
@@ -1858,7 +1860,7 @@
   // 手機版：把範圍、成員、標籤合成一個「篩選」底部面板
   function filterSummary() {
     const f = state.filter, p = f.member ? state.participants.get(f.member)?.name : '';
-    return [f.scope === 'mine' ? '給我的' : '', p || '', f.tag || ''].filter(Boolean).join(' · ');
+    return [p || '', f.tag || ''].filter(Boolean).join(' · ');
   }
   function openFilterSheet() {
     const f = state.filter;
@@ -1948,6 +1950,7 @@
     return top + (state.messages.length ? `<div class="win-divider"><span><span>${esc(since)}</span><span> · ${list.length} 則</span></span></div>` : '');
   }
   function renderMessages(toBottom) {
+    state.mineIds = state.filter.scope === 'mine' ? mineAskIds() : null; // 「給我的」一次算好
     const list = state.messages.filter(visible);
     $('#f-count').textContent = filtering() ? `符合 ${list.length} 則` : '';
     const empty = filtering()
@@ -1963,7 +1966,7 @@
         || (state.grpHidden?.has(id) && document.querySelector(`[data-grp="${CSS.escape(state.grpHidden.get(id))}"]`));
       if (el) el.insertAdjacentHTML('beforebegin', '<div class="new-line seen-line" id="seen-line"><span>以下是新訊息</span></div>');
     }
-    drawAskBar();
+    drawMineCount();
     syncScrollbar();
     if (toBottom) scrollBottom();
     drawLatestBtn();
@@ -2073,7 +2076,7 @@
     if (!stick && state.firstNewId === m.messageId) box.insertAdjacentHTML('beforeend', `<div class="new-line" id="new-line"><span>以下 ${state.newCount} 則是新的</span></div>`);
     else if (!stick) { const nl = $('#new-line'); if (nl) nl.firstElementChild.textContent = `以下 ${state.newCount} 則是新的`; }
     box.insertAdjacentHTML('beforeend', messageHtml(m));
-    drawAskBar();
+    drawMineCount();
     if (stick) { scrollBottom(); trimWindow(); }
     drawNewPill();
     if (!isMine(m) && (isToMe(m) || isReplyToMe(m))) refreshInboxCount();
@@ -2094,7 +2097,6 @@
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
     e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
   });
-  $('#ask-bar')?.addEventListener('click', e => { const b = e.target.closest('[data-ask-jump]'); if (b) jumpTo(b.dataset.askJump); }); // 「🔔 N 則等你回」看 ›
   // 記住哪些「細節」打開了，重畫後維持
   $('#messages').addEventListener('toggle', e => {
     const d = e.target.closest?.('details[data-detail]');
@@ -3749,6 +3751,8 @@
     document.querySelectorAll('.inbox-badge').forEach(b => { b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
     if (document.querySelector('.ps-btn[aria-expanded="false"]') || !document.querySelector('.ps-btn')) drawProjSwitch(); // 下拉的件數跟著更新（開著時不重畫）
     document.title = (total ? `(${total > 99 ? '99+' : total}) ` : '') + BASE_TITLE;
+    drawMineCount(); // 「給我的」數字跟「要你處理」同一份
+    if (state.filter.scope === 'mine' && state.page === 'messages' && [...mineAskIds()].sort().join() !== [...(state.mineIds || [])].sort().join()) renderMessages(false); // 回完就從「給我的」拿掉
     if (state.page === 'hub' && work.loaded) renderWork();
   }
   function todoHtml(all) {

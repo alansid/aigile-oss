@@ -1,10 +1,10 @@
 // 畫面測試：訊息顯示改版（現有「精簡／完整」照定案圖改）
-// A. 共用：頂端「🔔 N 則等你回」（點了跳到那則、沒有就不出現、在捲動區外面）；上次看到的地方畫「以下是新訊息」；時間只寫時分＋換日分隔；
+// A. 共用：（頂端「等你回」橫條已拿掉）上次看到的地方畫「以下是新訊息」；時間只寫時分＋換日分隔；
 //    收件人併進標頭（📣 全體、→ 你）、沒有角色那行；需確認選項只在按鈕區；卡片串內文不重寫卡號
 // B. 精簡：連續 AI 簽到收一行；卡片串只露最新一則，前面收成「▸ 前面 N 則：…」，點開看全部、可再收起
 // C. 完整：卡片串全部顯示；接單、簽到變細行
 // D. 精簡／完整切換照舊記在裝置；流程訊息照舊收一行灰字
-// E. 英文介面（aigile-lang=en）：提示條、紅線、換日、收件人、AI 上線那一行、卡片串收起都是英文
+// E. 英文介面（aigile-lang=en）：紅線、換日、收件人、AI 上線那一行、卡片串收起都是英文
 // 本機暫存資料庫＋無頭 Chrome／Edge，不連正式站。設 MSG_VIEW_SHOTS=資料夾 會另外截圖（精簡／完整 × 電腦／手機 × 淺色／深色）
 // 用法：node scripts/message-view-ui-test.js（找不到瀏覽器就略過）
 import './test-home.mjs';
@@ -44,6 +44,7 @@ try {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: w < 700 ? 1100 : 1000, deviceScaleFactor: 1, mobile: w < 700 });
     await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
     await login(lin.token, '/p/main/messages');
+    await until(() => js("document.querySelectorAll('#messages .msg, #messages .flow-line').length > 0"), 20000, '第一次載入'); // 等第一次載完再設「上次看到」，不然它會蓋掉
     await js(`localStorage.setItem('aigile-lang', '${lang}'); localStorage.setItem('aigile-switch-view', '${view}'); ${seen ? `localStorage.setItem('aigile-seen:${PJ}', '${seen}')` : `localStorage.removeItem('aigile-seen:${PJ}')`}; location.reload(); true`);
     await sleep(400);
     await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg, #messages .flow-line').length > 3"), 20000, `訊息（${view}、${lang}）`);
@@ -53,13 +54,8 @@ try {
 
   // ---------- 完整（電腦） ----------
   await open('full');
-  // A 頂端等你回：在捲動區外面、點了跳到那則
-  const bar = await J(`(() => { const b = document.querySelector('#ask-bar'); return { hidden: b.hidden, text: b.innerText, outside: !document.querySelector('#messages').contains(b) }; })()`);
-  assert.equal(bar.hidden, false, '有等你回的就出現');
-  assert.ok(bar.outside, '提示條在捲動區外面（捲動時固定在最上面）');
-  assert.match(bar.text, /1 則等你回/); assert.match(bar.text, /小安的程式開發助手：搜尋框要不要支援模糊比對？/); assert.match(bar.text, /看 ›/);
-  await js("document.querySelector('#messages').scrollTop = 0; document.querySelector('[data-ask-jump]').click(); true");
-  await until(() => js(`(() => { const box = document.querySelector('#messages'), el = document.getElementById('msg-${ask.messageId}'); if (!el) return false; const a = el.getBoundingClientRect(), b = box.getBoundingClientRect(); return a.top < b.bottom && a.bottom > b.top; })()`), 8000, '點「看」跳到那則');
+  // A 頂端「等你回」橫條拿掉了，改成「給我的」上的數字（見 ask-for-me-ui-test）
+  assert.equal(await js("!!document.querySelector('#ask-bar')"), false, '沒有黃色橫條');
   // A 上次看到的地方
   const seenLine = await J(`(() => { const l = document.querySelector('#seen-line'); return l ? { text: l.innerText.trim(), next: l.nextElementSibling?.id || '' } : null; })()`);
   assert.ok(seenLine, '有「以下是新訊息」'); assert.equal(seenLine.text, '以下是新訊息');
@@ -113,10 +109,9 @@ try {
   // ---------- E 英文介面 ----------
   const HAN = /[㐀-鿿]/;
   await open('slim', { lang: 'en' });
-  await until(() => js("document.documentElement.lang === 'en' && /waiting for your reply/.test(document.querySelector('#ask-bar').innerText)"), 8000, '英文提示條');
-  const en = await J(`(() => { const t = s => document.querySelector(s)?.innerText.trim() || ''; return { n: t('#ask-bar .ab-n'), go: t('#ask-bar .ab-go'), seen: t('#seen-line'), day: t('#messages .day-div'), ci: t('#messages .ci-line'), ciB: t('#messages .ci-line b'), all: t('#messages .to-all'), more: t('#messages .cg-more'), meta: t('#messages .cg-meta') }; })()`);
-  assert.equal(en.n, '🔔 1 waiting for your reply', '英文：提示條則數：' + en.n);
-  assert.equal(en.go, 'View ›', '英文：提示條「看 ›」');
+  await until(() => js("document.documentElement.lang === 'en' && /^Today /.test(document.querySelector('#messages .day-div')?.innerText || '')"), 15000, '英文介面');
+  await until(() => js("/New messages below/.test(document.querySelector('#seen-line')?.innerText || '')"), 15000, '英文紅線');
+  const en = await J(`(() => { const t = s => document.querySelector(s)?.innerText.trim() || ''; return { seen: t('#seen-line'), day: t('#messages .day-div'), ci: t('#messages .ci-line'), ciB: t('#messages .ci-line b'), all: t('#messages .to-all'), more: t('#messages .cg-more'), meta: t('#messages .cg-meta') }; })()`);
   assert.equal(en.seen, 'New messages below', '英文：紅線');
   assert.match(en.day, /^Today \d+\/\d+$/, '英文：換日分隔：' + en.day);
   assert.equal(en.ciB, '3 AIs online', '英文：AI 上線那一行：' + en.ci);
@@ -124,16 +119,15 @@ try {
   assert.equal(en.all, '📣 Everyone', '英文：全體通知寫在標頭');
   assert.match(en.more, /^▸ \d+ earlier messages?: .*claude-PO Handover/i, '英文：卡片串收起：' + en.more);
   assert.match(en.meta, /^\d+ messages · \d{2}:\d{2} ›$/, '英文：卡片串標頭：' + en.meta);
-  for (const [k, v] of Object.entries({ n: en.n, go: en.go, seen: en.seen, day: en.day, ciB: en.ciB, all: en.all, meta: en.meta })) assert.ok(!HAN.test(v), `英文：${k} 沒有中文：${v}`);
+  for (const [k, v] of Object.entries({ seen: en.seen, day: en.day, ciB: en.ciB, all: en.all, meta: en.meta })) assert.ok(!HAN.test(v), `英文：${k} 沒有中文：${v}`);
   // 完整：收件人「→ you」
   await open('full', { lang: 'en' });
   await until(() => js(`/→ you/.test(document.querySelector('#msg-${ask.messageId} .msg-line1')?.innerText || '')`), 8000, '英文：給你的寫「→ you」');
   assert.equal(await js("document.querySelector('#seen-line')?.innerText.trim()"), 'New messages below', '英文：完整也有紅線');
 
-  // 沒有等你回就不出現；沒記過上次看到的就沒有紅線
+  // 沒記過上次看到的就沒有紅線
   await call(lin.token, '/api/messages', 'POST', { project: PJ, requestId: 'mv_ans', text: 'A、A', replyToMessageId: ask.messageId });
   await open('full', { seen: 0 });
-  assert.equal(await js("document.querySelector('#ask-bar').hidden"), true, '沒有等你回的就不出現');
   assert.equal(await js("!!document.querySelector('#seen-line')"), false, '第一次看沒有紅線');
 
   // 手機也看一次（精簡、深色）
