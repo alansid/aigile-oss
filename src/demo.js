@@ -117,7 +117,7 @@ export function registerDemo({ route, db, ApiError, randId, nowIso, requireAdmin
         c.question || '', c.recommendation || '', c.options ? JSON.stringify(c.options) : '', c.impact || '', c.afterNext || '', pj, c.no, c.at, c.up]]);
       stmts.push([`INSERT INTO card_log (card_seq, at, by_id, via, text) SELECT seq, ?, ?, 'API', ? FROM cards WHERE uid = ?`, [c.at, po.id, T.created(c.type), c.uid]]);
     }
-    stmts.push(['INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)', [`pnomax:${pj}`, String(no)]]);
+    stmts.push(['INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = CASE WHEN CAST(excluded.value AS INTEGER) > CAST(app_settings.value AS INTEGER) THEN excluded.value ELSE app_settings.value END', [`pnomax:${pj}`, String(no)]]);
 
     // 一段人與 AI 的對話（掛在「報名成功寄確認信」那張卡上）＋給你的一則通知（決策等你）
     const code = codeUsed ? null : 'DEMO';

@@ -8,6 +8,7 @@ import path from 'node:path';
 import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { ROLES } from '../src/roles.js';
+import { peekTestDb } from './test-db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -159,15 +160,14 @@ async function stopServer(server) {
 
     // 網頁依時間載入（span／min／beforeId）與某則訊息前後（/around）；AI 的游標參數不變
     if (!EXTERNAL) {
-      const { DatabaseSync } = await import('node:sqlite');
       const ids = [];
       for (let i = 0; i < 12; i++) ids.push((await call(boss.token, '/api/messages', 'POST', { requestId: 'c164-' + i, text: `[進度] 時間測試 ${i}` })).body.messageId);
-      const sqlDb = new DatabaseSync(path.join(dataDir, 'switch.db'));
+      const sqlDb = await peekTestDb(path.join(dataDir, 'switch.db'));
       const twoDays = new Date(Date.now() - 48 * 3600_000).toISOString();
       // 前 8 則改成兩天前；之前的其他訊息也一起改成三天前
-      sqlDb.prepare("UPDATE messages SET created_at = ? WHERE id NOT IN (SELECT value FROM json_each(?))").run(new Date(Date.now() - 72 * 3600_000).toISOString(), JSON.stringify(ids));
-      for (const id of ids.slice(0, 8)) sqlDb.prepare('UPDATE messages SET created_at = ? WHERE id = ?').run(twoDays, id);
-      sqlDb.close();
+      await sqlDb.run("UPDATE messages SET created_at = ? WHERE id NOT IN (SELECT value FROM json_each(?))", new Date(Date.now() - 72 * 3600_000).toISOString(), JSON.stringify(ids));
+      for (const id of ids.slice(0, 8)) await sqlDb.run('UPDATE messages SET created_at = ? WHERE id = ?', twoDays, id);
+      await sqlDb.close();
       const w = (await call(boss.token, '/api/messages?limit=100&span=12&min=2')).body;
       assert.deepEqual(w.items.map(m => m.messageId), ids.slice(8), 'span=12：只拿最近 12 小時（4 則）');
       assert.ok(w.hasMore && w.olderCursor && w.from, '還有更早的、回起始時間');

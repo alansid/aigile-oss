@@ -9,12 +9,12 @@ import assert from 'node:assert';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-poll-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');

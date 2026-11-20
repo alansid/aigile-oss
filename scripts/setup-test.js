@@ -8,6 +8,7 @@ import path from 'node:path';
 import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { ROLES } from '../src/roles.js';
+import { peekTestDb } from './test-db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3998;
@@ -106,12 +107,11 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     assert.match(spec + guideDoc, /工作排程器/, 'opencode：說明背景常駐');
     assert.ok(!/WAKE_CMD=opencode run --continue/.test(obPg + spec), '不再用 --continue');
     // 到期：直接把資料改成過去
-    const { DatabaseSync } = await import('node:sqlite');
-    const sdb = new DatabaseSync(path.join(dataDir, 'switch.db'));
+    const sdb = await peekTestDb(path.join(dataDir, 'switch.db'));
     const key = 'grants:' + pg.participantId;
-    const v = JSON.parse(sdb.prepare('SELECT value FROM app_settings WHERE key = ?').get(key).value);
-    sdb.prepare('UPDATE app_settings SET value = ? WHERE key = ?').run(JSON.stringify({ ...v, until: new Date(Date.now() - 3600_000).toISOString() }), key);
-    sdb.close();
+    const v = JSON.parse((await sdb.get('SELECT value FROM app_settings WHERE key = ?', key)).value);
+    await sdb.run('UPDATE app_settings SET value = ? WHERE key = ?', JSON.stringify({ ...v, until: new Date(Date.now() - 3600_000).toISOString() }), key);
+    await sdb.close();
     assert.deepEqual((await call(pg.token, '/api/me')).body.grants, { items: [], until: null }, '到期後自動變空');
     r = await call(boss.token, `/api/my-ais/${pg.participantId}/grants`, 'PUT', { items: ['deploy'], until: '30d' });
     assert.ok(Math.abs(Date.parse(r.body.until) - Date.now() - 30 * 86_400_000) < 60_000, '30 天');

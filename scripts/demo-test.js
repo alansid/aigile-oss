@@ -10,11 +10,11 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-demo-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'), { legacyProjects: false });
+const db = await openTestDb(path.join(dataDir, 'switch.db'), { legacyProjects: false });
 const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0', peopleCheckMs: '1' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -85,7 +85,7 @@ try {
   const left = await db.all('SELECT id FROM messages WHERE project = ?', r2.projectId);
   assert.deepEqual(left.map(m => m.id), [mine.body.messageId], '只留真訊息');
   assert.equal(await count('cards'), before.cards, '示範卡都刪了');
-  assert.equal((await db.get("SELECT COUNT(*) AS n FROM participants WHERE name LIKE '示範%'")).n, 0, '示範成員都刪了');
+  assert.equal((await db.all('SELECT name FROM participants')).filter(p => p.name.startsWith('示範')).length, 0, '示範成員都刪了'); // 名字欄位不分大小寫，Postgres 不能對它下 LIKE
   console.log('demo-test：全部通過');
 } catch (e) {
   console.error('demo-test 失敗：', e.stack || e.message);

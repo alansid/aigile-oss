@@ -6,12 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-wizard-'));
-const mk = (file, config, opts = { legacyProjects: false }) => {
-  const db = openNodeDb(path.join(dataDir, file), opts);
+const mk = async (file, config, opts = { legacyProjects: false }) => {
+  const db = await openTestDb(path.join(dataDir, file), opts);
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', ...config } });
   return async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -19,7 +19,7 @@ const mk = (file, config, opts = { legacyProjects: false }) => {
   };
 };
 try {
-  const call = mk('a.db', { defaultAdmin: '1' });
+  const call = await mk('a.db', { defaultAdmin: '1' });
   await call(null, '/api/health');
   const tok = (await call(null, '/api/auth/password', 'POST', { username: 'admin', password: 'admin' })).body.token;
   assert.ok(tok, '預設管理員登入');
@@ -46,11 +46,11 @@ try {
   assert.ok(!(await call(tok, '/api/me')).body.setupWizard, '做完不再出現');
 
   // 重啟不再出現
-  const again = mk('a.db', { defaultAdmin: '1' });
+  const again = await mk('a.db', { defaultAdmin: '1' });
   assert.ok(!(await again(tok, '/api/me')).body.setupWizard, '重啟後也不出現');
 
   // 沒開預設管理員的站：不出現
-  const t = mk('t.db', {}, {});
+  const t = await mk('t.db', {}, {});
   const first = (await t(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   assert.ok(!(await t(first.token, '/api/me')).body.setupWizard, '測試模式、舊站不出現引導');
   console.log('setup-wizard-test：全部通過');

@@ -6,9 +6,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
-import { DatabaseSync } from 'node:sqlite';
 import { testToken } from './test-token.js';
 import { findBrowser, startServer, openChrome } from './browser-kit.js';
+import { peekTestDb } from './test-db.js';
 
 if (!findBrowser()) { console.log('inbox-verify-test：略過（找不到 Chrome／Edge）'); process.exit(0); }
 
@@ -26,8 +26,8 @@ try {
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   const L = boss.participant.participantId;
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: '程式開發', name: '程式助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
-  const sdb = new DatabaseSync(path.join(dir, 'data', 'switch.db'));
-  const aiTok = await testToken(sdb, ai.participantId); sdb.close();
+  const sdb = await peekTestDb(path.join(dir, 'data', 'switch.db'));
+  const aiTok = await testToken(sdb, ai.participantId); await sdb.close();
   for (let i = 1; i <= 8; i++) {
     const c = (await call(aiTok, '/api/cards', 'POST', { requestId: 'v' + i, project: '預設專案', title: `第 ${i} 張等驗收`, ownerId: ai.participantId, status: '進行中' })).body;
     assert.equal((await call(aiTok, `/api/cards/${c.cardId}`, 'PATCH', { status: '待確認', waitForId: L, version: c.version })).status, 200);

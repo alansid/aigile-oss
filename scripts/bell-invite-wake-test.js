@@ -13,13 +13,13 @@ import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-const raw = openNodeDb(path.join(dataDir, 'switch.db'));
+const raw = await openTestDb(path.join(dataDir, 'switch.db'));
 let raceName = null; // B8：設了就在建人前一刻讓別人先用掉這個名稱
 const db = { ...raw, run: async (sql, ...a) => {
   if (raceName && /^INSERT INTO participants/.test(sql.trim())) {

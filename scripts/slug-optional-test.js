@@ -6,11 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-slug-'));
-const db = openNodeDb(path.join(dataDir, 'a.db'), { legacyProjects: false });
+const db = await openTestDb(path.join(dataDir, 'a.db'), { legacyProjects: false });
 const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', defaultAdmin: '1' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');

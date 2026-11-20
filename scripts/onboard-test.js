@@ -10,12 +10,12 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-onboard-'));
-const raw = openNodeDb(path.join(dataDir, 'switch.db'), { legacyProjects: true });
+const raw = await openTestDb(path.join(dataDir, 'switch.db'), { legacyProjects: true });
 let onboardReads = 0; // 數新手上路那兩個查詢被跑了幾次
 const db = { ...raw, get: (sql, ...a) => { if (/owner_id = \? AND kind = 'ai' AND last_seen_at > 0|JOIN messages q ON q\.id = n\.message_id/.test(sql)) onboardReads++; return raw.get(sql, ...a); } };
 const app = createApp({ db, storage: dbStorage(raw), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });

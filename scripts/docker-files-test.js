@@ -1,11 +1,11 @@
 // 驗收測試：Docker 與 docker compose 一行啟動、發佈映像、CI 三平台（檔案內容檢查；測試不跑 Docker、不連 GitHub）
 // 實際 build 與啟動在開發時驗過：docker compose up 後 admin 登入、非 root、資料在 volume、重啟資料還在、ADMIN_PASSWORD、健康檢查
-// 1. Dockerfile：Node 22 官方映像、非 root 執行、資料在 /data volume、啟動 server.js、有健康檢查
-// 2. docker-compose.yml：3000 埠、volume、ADMIN_PASSWORD 等環境變數有設才帶
+// 1. Dockerfile：Node 22 官方映像、非 root 執行、資料在 /data volume、啟動 server.js、有健康檢查；只裝選用的 pg（npm ci 照 package-lock）
+// 2. docker-compose.yml：3000 埠、volume、ADMIN_PASSWORD 等環境變數有設才帶；docker-compose.postgres.yml 連 Postgres 一起起來（PLAT-369）
 // 3. .dockerignore 排除 data、.aigile、node_modules、密鑰檔
 // 4. README 的快速開始是 Docker，本機第二、Cloudflare 放後面
 // 5. 打 v* 標籤自動建 amd64／arm64 映像推到 ghcr.io，標版本號與 latest；README 中英文都有「不用 clone 直接用映像」（docker run 與 compose，資料掛 volume）
-// 6. CI 在 ubuntu、windows、macos 跑全部測試（Node 22），檢查 checkout 是 LF、找得到瀏覽器
+// 6. CI 在 ubuntu、windows、macos 跑全部測試（Node 22），檢查 checkout 是 LF、找得到瀏覽器；另外在 Postgres 服務跑一次全套
 // 用法：node scripts/docker-files-test.js
 import fs from 'node:fs';
 import assert from 'node:assert';
@@ -21,13 +21,29 @@ try {
   assert.match(df, /EXPOSE 3000/);
   assert.match(df, /HEALTHCHECK[\s\S]*\/api\/health/, '健康檢查');
   assert.match(df, /CMD \["node", "server\.js"\]/);
-  assert.ok(!df.split(/\r?\n/).some(l => !l.trim().startsWith('#') && /npm (install|ci)/.test(l)), '零相依，不用 npm install');
+  // 唯一的套件是 Postgres 連線（pg，選用）：照 package-lock 固定版本裝，不裝開發用的；先複製 package*.json 再 npm ci（改程式不用重裝）
+  const installs = df.split(/\r?\n/).filter(l => !l.trim().startsWith('#') && /npm (install|ci)/.test(l));
+  assert.equal(installs.length, 1, '只有一行安裝');
+  assert.match(installs[0], /npm ci --omit=dev/, '用 npm ci 照 package-lock 裝，不裝開發用的');
+  assert.ok(df.indexOf('COPY package.json package-lock.json') < df.indexOf('npm ci'), '先複製 package*.json 再安裝');
+  const pkg = JSON.parse(read('package.json'));
+  assert.deepEqual(Object.keys(pkg.dependencies || {}), [], '沒有必裝的套件（SQLite 版零相依）');
+  assert.deepEqual(Object.keys(pkg.optionalDependencies || {}), ['pg'], '選用套件只有 pg');
+  assert.match(pkg.optionalDependencies.pg, /^\d+\.\d+\.\d+$/, 'pg 版本固定');
+  assert.ok(JSON.parse(read('package-lock.json')).packages['node_modules/pg'], 'package-lock 有 pg');
+
+  // docker-compose.postgres.yml：一行連 Postgres 一起起來；資料庫埠不對外、密碼不寫死、等資料庫好了才啟動
+  const dcp = read('docker-compose.postgres.yml');
+  assert.match(dcp, /DATABASE_URL=postgres:\/\/aigile:\$\{POSTGRES_PASSWORD:-aigile\}@postgres:5432\/aigile/, 'DATABASE_URL 指到 postgres 服務');
+  assert.match(dcp, /condition: service_healthy/, '等資料庫健康才啟動');
+  assert.ok(!/^\s+ports:/m.test(dcp), '資料庫埠不對外開');
+  assert.match(dcp, /aigile-pg:\/var\/lib\/postgresql\/data/, '資料庫資料放 volume');
 
   const dc = read('docker-compose.yml');
   assert.match(dc, /"\$\{HOST_PORT:-3000\}:3000"/, '3000 埠（可換）');
   assert.match(dc, /aigile-data:\/data/, '資料放 volume');
   assert.match(dc, /^volumes:\s*\n\s+aigile-data:/m, '宣告 volume');
-  for (const v of ['ADMIN_PASSWORD', 'ROOM_CODE', 'OPEN_JOIN', 'UPDATE_CHECK']) assert.match(dc, new RegExp(`^\\s+- ${v}\\s*$`, 'm'), `${v} 有設才帶進容器`);
+  for (const v of ['ADMIN_PASSWORD', 'ROOM_CODE', 'OPEN_JOIN', 'UPDATE_CHECK', 'DATABASE_URL', 'DATABASE_SCHEMA']) assert.match(dc, new RegExp(`^\\s+- ${v}\\s*$`, 'm'), `${v} 有設才帶進容器`);
   assert.ok(!dc.split(/\r?\n/).some(l => !l.trim().startsWith('#') && /ADMIN_PASSWORD\s*[:=]\s*\S/.test(l)), 'compose 裡不寫死密碼');
 
   const di = read('.dockerignore').split(/\r?\n/).map(l => l.trim());
@@ -63,6 +79,9 @@ try {
   assert.match(ci, /git ls-files --eol[\s\S]*w\/crlf/, 'CI：檢查 checkout 是 LF');
   assert.match(ci, /findBrowser/, 'CI：找不到瀏覽器就失敗，不默默略過畫面測試');
   assert.match(ci, /npm test/);
+  assert.match(ci, /test-postgres:[\s\S]*image: postgres:[\s\S]*npm ci[\s\S]*AIGILE_TEST_PG_URL: postgres:\/\/postgres:test@localhost:5432\//, 'CI：另外在 Postgres 服務跑全套（只連 CI 本機的服務）');
+  assert.match(ci, /docker compose -f docker-compose\.yml -f docker-compose\.postgres\.yml up -d --build/, 'CI：compose 連 Postgres 一起起來並檢查');
+  assert.ok(!/^\s+run: npm (ci|install)\s*$/m.test(ci.split('test-postgres:')[0]), 'CI：SQLite 那組不裝套件（零相依照樣能跑）');
   console.log('docker-files-test：全部通過');
 } catch (e) {
   console.error('docker-files-test 失敗：', e.message);

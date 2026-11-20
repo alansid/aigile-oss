@@ -172,7 +172,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   // me 有給時套用 C-xxx 隔離：不屬於卡片專案的成員視為找不到
   // 新卡在所屬專案拿下一個號（先寫 NULL 再補，唯一索引不會撞）
   // 移出去的卡用過的號不回收（pnomax:<專案> 記原專案用過的最大號）
-  const ASSIGN_PROJ_NO_SQL = "UPDATE cards SET proj_no = MAX(COALESCE((SELECT MAX(c2.proj_no) FROM cards c2 WHERE c2.project = cards.project), 0), COALESCE((SELECT CAST(value AS INTEGER) FROM app_settings WHERE key = 'pnomax:' || cards.project), 0)) + 1 WHERE uid = ? AND proj_no IS NULL";
+  const ASSIGN_PROJ_NO_SQL = "UPDATE cards SET proj_no = COALESCE((SELECT MAX(n) FROM (SELECT c2.proj_no AS n FROM cards c2 WHERE c2.project = cards.project UNION ALL SELECT CAST(value AS INTEGER) FROM app_settings WHERE key = 'pnomax:' || cards.project) AS used), 0) + 1 WHERE uid = ? AND proj_no IS NULL";
   const assignProjNo = uid => db.run(ASSIGN_PROJ_NO_SQL, uid);
   async function load(no, me = null) {
     const c = await db.get('SELECT * FROM cards WHERE seq = ?', await seqOf(no));
@@ -513,7 +513,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       await save(c, sets, logs, me, nowIso());
       if (moved) await db.batch([ // 移走的號記成別名（舊訊息照樣查得到），並記下原專案用過的最大號（不回收）
         ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [`cardmoved:${moved.project}:${moved.proj_no}`, String(moved.seq)]],
-        ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER)) AS TEXT)", [`pnomax:${moved.project}`, String(moved.proj_no)]],
+        ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = CASE WHEN CAST(excluded.value AS INTEGER) > CAST(app_settings.value AS INTEGER) THEN excluded.value ELSE app_settings.value END", [`pnomax:${moved.project}`, String(moved.proj_no)]],
       ]);
       if (sets.project !== undefined) await assignProjNo(c.uid);
       if (dropNotes) await db.run('DELETE FROM card_log WHERE card_seq = ? AND via = ?', c.seq, NOTE_LOG);

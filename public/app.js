@@ -664,7 +664,8 @@
   const swJoinOpen = pj => state.projMeta.join?.[pj.id]?.open !== false; // 專案預設開放申請
   // 第一次設定引導：群組名稱 → 第一個專案 → 邀請成員 → 第一隻 AI。每步可略過；做完或「全部略過」不再出現；按 × 先關，下次登入再出現
   async function openSetupWizard() {
-    const [group, health, roles] = await Promise.all([api('/api/group').catch(() => ({})), api('/api/health').catch(() => ({})), loadRoles().catch(() => ({ items: [] }))]);
+    const [group, health, roles] = await Promise.all([api('/api/group').catch(() => ({})), api('/api/health').catch(() => ({})), loadRoles().catch(() => ({ items: [] })),
+      state.projectList?.length ? null : loadProjectList().catch(() => {})]); // 專案清單還沒載入完就打開引導（伺服器回得慢時）：先等它，不然第一隻 AI 送出時沒有專案
     const pj = (state.projectList || []).find(p => !p.archived) || null;
     const tpl = (roles.items || []).filter(r => r.resident !== false && r.key !== 'custom');
     const st = { step: 0, invites: [], ai: null, link: null, tool: 'claude', copied: false, demo: null };

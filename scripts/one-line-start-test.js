@@ -17,7 +17,7 @@ import assert from 'node:assert';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { ROLES } from '../src/roles.js';
 import { scriptHashes } from './script-hashes.mjs';
@@ -27,7 +27,7 @@ const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-p323-'));
 const REQ_LOG = path.join(dataDir, 'requests.log'); // 測試伺服器收到的每個網址
 fs.writeFileSync(REQ_LOG, '');
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '10000' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');

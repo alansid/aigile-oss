@@ -13,7 +13,7 @@ import assert from 'node:assert';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { ROLES } from '../src/roles.js';
 import { scriptHashes } from './script-hashes.mjs';
@@ -22,7 +22,7 @@ import { testToken } from './test-token.js';
 const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
 const RUNS = Math.max(1, Number(process.env.HOOK_RUNS) || 20);
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-p326-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '10000' } });
 const server = http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c);

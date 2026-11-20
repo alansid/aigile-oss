@@ -80,7 +80,7 @@ try {
   }
 
   // ---------- 3. 新版程式開舊資料庫：自動升級 ----------
-  const BASE = await startServer(kids, dataDir, { TEAM_CACHE_MS: '0' });
+  const BASE = await startServer(kids, dataDir, { TEAM_CACHE_MS: '0', AIGILE_TEST_PG_URL: '' }); // 這裡驗的是舊 SQLite 檔升級：Postgres 模式也開 SQLite
   assert.match(kids[0].tail, /資料庫升級：套用 002_wake_counts\.sql（目前版本 2）/, '啟動時自動套 002：' + kids[0].tail);
   {
     const db = new DatabaseSync(file);

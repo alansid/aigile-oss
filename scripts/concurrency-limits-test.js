@@ -7,13 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb, TEST_PG_URL } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
 
-const mkApp = () => {
+const mkApp = async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-  const db = openNodeDb(path.join(dir, 'switch.db'));
+  const db = await openTestDb(path.join(dir, 'switch.db'));
   return { dir, db, app: createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } }) };
 };
 const caller = app => async (token, p, method = 'GET', body, extra = {}) => {
@@ -39,7 +39,7 @@ const dirs = [];
 try {
   // ---- B11：兩個人同時建群 ----
   {
-    const { dir, app } = mkApp(); dirs.push(dir);
+    const { dir, app } = await mkApp(); dirs.push(dir);
     const call = caller(app);
     const [a, b] = await Promise.all([
       call(null, '/api/join', 'POST', { name: '甲', role: 'PO' }),
@@ -50,7 +50,7 @@ try {
     assert.equal(allProj.length, 1, `B11：同時建群只有一位拿到所有專案（實際 ${allProj.length} 位）`);
   }
 
-  const { dir, db, app } = mkApp(); dirs.push(dir);
+  const { dir, db, app } = await mkApp(); dirs.push(dir);
   const call = caller(app);
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   const L = boss.participant.participantId;
@@ -71,11 +71,14 @@ try {
   assert.equal((await db.get('SELECT COUNT(*) AS n FROM devices WHERE participant_id = ? AND revoked_at IS NULL', W)).n, 0, 'B11：離開後裝置都撤銷');
 
   // ---- B11：建卡中途失敗不留下半張卡 ----
-  await db.run("CREATE TRIGGER c343_fail BEFORE INSERT ON card_log BEGIN SELECT RAISE(ABORT, 'c343 測試：寫紀錄失敗'); END");
+  if (TEST_PG_URL) { // Postgres 的觸發器要先有函式
+    await db.run("CREATE FUNCTION c343_fail() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'c343 測試：寫紀錄失敗'; END $$ LANGUAGE plpgsql");
+    await db.run('CREATE TRIGGER c343_fail BEFORE INSERT ON card_log FOR EACH ROW EXECUTE FUNCTION c343_fail()');
+  } else await db.run("CREATE TRIGGER c343_fail BEFORE INSERT ON card_log BEGIN SELECT RAISE(ABORT, 'c343 測試：寫紀錄失敗'); END");
   const origErr = console.error; console.error = () => {};
   const bad = await call(boss.token, '/api/cards', 'POST', { requestId: 't1_bad', title: '會失敗的卡', project: '預設專案' });
   console.error = origErr;
-  await db.run('DROP TRIGGER c343_fail');
+  await db.run(TEST_PG_URL ? 'DROP TRIGGER c343_fail ON card_log' : 'DROP TRIGGER c343_fail');
   assert.ok(bad.status >= 500, '寫紀錄失敗 → 建卡失敗');
   assert.equal((await db.get("SELECT COUNT(*) AS n FROM cards WHERE request_id = 't1_bad'")).n, 0, 'B11：中途失敗不留下沒有編號的卡');
   const ok = (await call(boss.token, '/api/cards', 'POST', { requestId: 't1_ok', title: '正常的卡', project: '預設專案' })).body;
@@ -101,8 +104,10 @@ try {
   assert.equal((await call(boss.token, '/api/messages', 'POST', { requestId: 'small', project: '預設專案', text: '[回覆] 一般訊息' })).status, 201, 'S6：一般大小照常');
 
   // ---- R2：已確認通知清單走索引（不把整個人的已確認通知讀出來排序）----
-  const plan = (await db.all("EXPLAIN QUERY PLAN SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'acked' ORDER BY n.created_at DESC, n.rowid DESC LIMIT ?", L, 51)).map(r => r.detail).join(' | ');
-  assert.ok(/USING INDEX idx_notif_recipient/.test(plan) && !/TEMP B-TREE/.test(plan), `R2：走 idx_notif_recipient、不另外排序：${plan}`);
+  if (!TEST_PG_URL) { // 查詢計畫是 SQLite 的（Postgres 模式不比）
+    const plan = (await db.all("EXPLAIN QUERY PLAN SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'acked' ORDER BY n.created_at DESC, n.rowid DESC LIMIT ?", L, 51)).map(r => r.detail).join(' | ');
+    assert.ok(/USING INDEX idx_notif_recipient/.test(plan) && !/TEMP B-TREE/.test(plan), `R2：走 idx_notif_recipient、不另外排序：${plan}`);
+  }
   const conf = await call(boss.token, '/api/notifications?status=confirmed&limit=5');
   assert.equal(conf.status, 200, 'R2：confirmed 清單照常可用');
 

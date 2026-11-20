@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
 
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -70,17 +71,26 @@ export function findBrowser() {
 }
 
 let exitGuard = null;
+// 測試直接查／改伺服器的暫存庫（同步）：SQLite 直接開檔；Postgres 模式（AIGILE_TEST_PG_URL）在子程序跑同一句，schema 跟伺服器一樣由資料夾決定
+const PG = !!process.env.AIGILE_TEST_PG_URL;
+const sqliteDo = (dir, fn) => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return fn(d); } finally { d.close(); } };
+function pgSync(dir, op, q, args) {
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL('./pg-sync.mjs', import.meta.url))], { input: JSON.stringify({ dir: path.join(dir, 'data'), op, sql: q, args }), encoding: 'utf8', timeout: 30_000 });
+  if (r.status !== 0) throw new Error('Postgres 查詢失敗：' + (r.stderr || r.error?.message || '').trim().split('\n').slice(-3).join(' '));
+  return JSON.parse(r.stdout);
+}
+
 export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服器環境變數（例如 AIGILE_TEST_PROJECTS: '0' ＝一般模式，有預設管理員）
   clearTimeout(exitGuard); // 同一支測試再開一組（例如 backup-ui-test）就不用結束
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `aigile-${name}-`));
   const kids = [];
   const BASE = await startServer(kids, path.join(dir, 'data'), env);
   const call = async (t, p, m = 'GET', b) => { const r = await fetch(BASE + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
-  const get = (q, ...v) => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return d.prepare(q).get(...v); } finally { d.close(); } }; // 測試唯讀查暫存庫
-  const sql = (q, ...v) => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return d.prepare(q).run(...v); } finally { d.close(); } }; // 測試直接改本機暫存庫（例如讓 Token 過期）
+  const get = (q, ...v) => (PG ? pgSync(dir, 'get', q, v) : sqliteDo(dir, d => d.prepare(q).get(...v))); // 測試唯讀查暫存庫
+  const sql = (q, ...v) => (PG ? pgSync(dir, 'run', q, v) : sqliteDo(dir, d => d.prepare(q).run(...v))); // 測試直接改本機暫存庫（例如讓 Token 過期）
   // 資料庫只存 Token 的雜湊：測試要以 AI 打 API 時，換一組已知的 Token（同一位只換一次，之後拿同一組）
   const toks = new Map();
-  const aiToken = id => { if (toks.has(id)) return toks.get(id); const t = 'tt_' + randomBytes(24).toString('base64url'); const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { d.prepare('UPDATE participants SET token = ? WHERE id = ?').run('h:' + createHash('sha256').update(t).digest('hex'), id); } finally { d.close(); } toks.set(id, t); return t; };
+  const aiToken = id => { if (toks.has(id)) return toks.get(id); const t = 'tt_' + randomBytes(24).toString('base64url'); sql('UPDATE participants SET token = ? WHERE id = ?', 'h:' + createHash('sha256').update(t).digest('hex'), id); toks.set(id, t); return t; };
 
   let ws = null;
   async function browser(width = 1400, height = 700) {

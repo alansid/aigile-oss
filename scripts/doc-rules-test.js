@@ -7,13 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
 
 const onlyRules = process.argv.includes('--old');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-docrules-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
 const app = createApp({ db, storage: dbStorage(db), docText: spec, config: { openJoin: '1', rateLimitPerMin: '10000', supabaseUrl: 'https://abcdefghijklmnopqrst.supabase.co', supabaseKey: 'k'.repeat(208) } });
 const call = async (token, p, method = 'GET', body) => {

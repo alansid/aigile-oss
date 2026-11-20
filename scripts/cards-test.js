@@ -7,6 +7,7 @@ import path from 'node:path';
 import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { ROLES } from '../src/roles.js';
+import { peekTestDb } from './test-db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3996;
@@ -421,8 +422,7 @@ const rid = () => 'req_c' + (++n);
     // 這段改用 Amy 的帳號，避免的帳號撞到每分鐘請求上限
     await call(boss.token, `/api/participants/${amy.participant.participantId}/projects`, 'PUT', { projects: ['預設專案'] });
     const pc = amy;
-    const { DatabaseSync } = await import('node:sqlite');
-    const sqlDb = new DatabaseSync(path.join(dataDir, 'switch.db'));
+    const sqlDb = await peekTestDb(path.join(dataDir, 'switch.db'));
     const ago = d => new Date(Date.now() - d * 86400_000).toISOString();
     const seqOf = id => Number(id.slice(2)) - 100; // 傳 legacyId（cardId 是專案卡號）
     const mkDone = async (title, verify) => {
@@ -433,9 +433,9 @@ const rid = () => 'req_c' + (++n);
       return c;
     };
     const oldV = await mkDone('驗證滿 8 天', true), oldU = await mkDone('完成 8 天沒驗證', false), newV = await mkDone('驗證 6 天', true);
-    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(9), ago(8), seqOf(oldV.legacyId));
-    sqlDb.prepare('UPDATE cards SET done_at = ? WHERE seq = ?').run(ago(8), seqOf(oldU.legacyId));
-    sqlDb.prepare('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?').run(ago(7), ago(6), seqOf(newV.legacyId));
+    await sqlDb.run('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?', ago(9), ago(8), seqOf(oldV.legacyId));
+    await sqlDb.run('UPDATE cards SET done_at = ? WHERE seq = ?', ago(8), seqOf(oldU.legacyId));
+    await sqlDb.run('UPDATE cards SET done_at = ?, verified_at = ? WHERE seq = ?', ago(7), ago(6), seqOf(newV.legacyId));
     const list = (await call(pc.token, '/api/cards?limit=200&counts=1')).body; // 讀卡時順便封存（測試設 ARCHIVE_EVERY_MS=0）
     const st = id => list.items.find(c => c.cardId === id)?.status;
     assert.equal(st(oldV.cardId), undefined, '已驗證滿 7 天 → 不在預設清單（已封存）');
@@ -457,7 +457,7 @@ const rid = () => 'req_c' + (++n);
     assert.equal((await call(pc.token, '/api/cards?limit=200')).body.items.find(c => c.cardId === oldV.cardId)?.status, '已完成', '重新完成＋驗證後重新計 7 天');
     const back = (await call(pc.token, `/api/cards/${oldV.cardId}`)).body;
     assert.ok(back.log.some(l => l.text === '重新打開'), '紀錄寫重新打開');
-    sqlDb.close();
+    await sqlDb.close();
     // 人類標「已完成」＝最終驗收，同時記為已驗證；AI 完成的卡照舊要別人驗
     const hc = (await call(pc.token, '/api/cards', 'POST', { requestId: rid(), title: '人類完成的卡', ownerId: amy.participant.participantId })).body;
     const hd = (await call(pc.token, `/api/cards/${hc.cardId}`, 'PATCH', { status: '已完成' })).body;

@@ -7,6 +7,7 @@ import path from 'node:path';
 import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { ROLES } from '../src/roles.js';
+import { peekTestDb } from './test-db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3998;
@@ -160,10 +161,9 @@ const docxMacro = zip([['[Content_Types].xml', '<Types/>'], ['word/document.xml'
     await new Promise(r => setTimeout(r, 300));
     const audit2 = (await json(boss.token, '/api/files/audit?limit=500')).body.items;
     assert.ok(audit2.some(a => a.action === 'expire' && a.fileId === short.body.file.fileId), 'AC5 到期清除有稽核');
-    const { DatabaseSync } = await import('node:sqlite');
-    const chk = new DatabaseSync(path.join(dataDir, 'switch.db'));
-    assert.equal(chk.prepare('SELECT COUNT(*) AS n FROM file_chunks WHERE file_id = ?').get(short.body.file.fileId).n, 0, 'AC5 檔案實體已刪除');
-    chk.close();
+    const chk = await peekTestDb(path.join(dataDir, 'switch.db'));
+    assert.equal((await chk.get('SELECT COUNT(*) AS n FROM file_chunks WHERE file_id = ?', short.body.file.fileId)).n, 0, 'AC5 檔案實體已刪除');
+    await chk.close();
 
     console.log('files: all acceptance checks passed');
   } finally {

@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-defadmin-'));
@@ -16,8 +16,8 @@ const seen = [];
 const origLog = console.log, origErr = console.error;
 console.log = (...a) => { seen.push(a.join(' ')); origLog(...a); };
 console.error = (...a) => { seen.push(a.join(' ')); origErr(...a); };
-const mk = (file, config, opts = { legacyProjects: false }) => {
-  const db = openNodeDb(path.join(dataDir, file), opts);
+const mk = async (file, config, opts = { legacyProjects: false }) => {
+  const db = await openTestDb(path.join(dataDir, file), opts);
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', ...config } });
   const call = async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -31,7 +31,7 @@ const login = (call, username, password) => call(null, '/api/auth/password', 'PO
 
 try {
   // 1. 沒設 ADMIN_PASSWORD：admin／admin
-  const A = mk('a.db', { defaultAdmin: '1' });
+  const A = await mk('a.db', { defaultAdmin: '1' });
   assert.equal((await A.call(null, '/api/health')).status, 200, '第一個請求');
   let r = await login(A.call, 'admin', 'admin');
   assert.equal(r.status, 200, '用 admin／admin 登入：' + JSON.stringify(r.body));
@@ -64,14 +64,14 @@ try {
   assert.equal((await A.call(mate.token, '/api/invites', 'POST', { name: 'x', projects: [] })).status, 403, '一般成員不是管理員（不能發邀請）');
 
   // 3. 重啟（同一個資料庫再開一次）不重建
-  const A2 = mk('a.db', { defaultAdmin: '1' });
+  const A2 = await mk('a.db', { defaultAdmin: '1' });
   await A2.call(null, '/api/health');
   assert.equal((await A2.db.get("SELECT COUNT(*) AS n FROM credentials WHERE username = 'admin'")).n, 0, '重啟不重建 admin');
   assert.equal((await A2.db.get("SELECT COUNT(*) AS n FROM participants WHERE kind = 'human'")).n, 2, '人數不變');
 
   // 4. 有設 ADMIN_PASSWORD：admin／admin 不行，要用設的密碼
   const SECRET = 'S3cret-only-in-env-77';
-  const B = mk('b.db', { defaultAdmin: '1', adminPassword: SECRET });
+  const B = await mk('b.db', { defaultAdmin: '1', adminPassword: SECRET });
   await B.call(null, '/api/health');
   assert.equal((await login(B.call, 'admin', 'admin')).status, 400, '設了 ADMIN_PASSWORD 就不能用 admin');
   r = await login(B.call, 'admin', SECRET);
@@ -80,19 +80,19 @@ try {
 
   // 5. 兩份程式同時收到第一個請求：只建一位
   const file = path.join(dataDir, 'race.db');
-  const C1 = mk('race.db', { defaultAdmin: '1' }), C2 = mk('race.db', { defaultAdmin: '1' });
+  const C1 = await mk('race.db', { defaultAdmin: '1' }), C2 = await mk('race.db', { defaultAdmin: '1' });
   await Promise.all([C1.call(null, '/api/health'), C2.call(null, '/api/health')]);
   assert.equal((await C1.db.get("SELECT COUNT(*) AS n FROM participants WHERE kind = 'human'")).n, 1, '只建一位管理員：' + file);
 
   // 6. 已經有人類的站不建
-  const D = mk('d.db', { openJoin: '1' });
+  const D = await mk('d.db', { openJoin: '1' });
   await D.call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' });
-  const D2 = mk('d.db', { defaultAdmin: '1' });
+  const D2 = await mk('d.db', { defaultAdmin: '1' });
   await D2.call(null, '/api/health');
   assert.equal((await D2.db.get("SELECT COUNT(*) AS n FROM credentials WHERE username = 'admin'")).n, 0, '舊站不建 admin');
 
   // 7. 測試模式（defaultAdmin 沒開）：照舊第一位註冊＝管理員、在所有專案
-  const E = mk('e.db', {}, {});
+  const E = await mk('e.db', {}, {});
   const first = (await E.call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   assert.ok((await E.call(first.token, '/api/me')).body.projects.length > 0, '沒開預設管理員：第一位註冊就是管理員');
 

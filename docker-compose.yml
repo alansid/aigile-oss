@@ -1,6 +1,7 @@
 # 一行啟動：docker compose up -d → 開 http://localhost:3000
 # 帳號 admin、密碼看 ADMIN_PASSWORD（沒設＝admin），第一次登入要先改帳號和密碼
 # 設定：在這個資料夾放 .env（例：ADMIN_PASSWORD=換成你的密碼），或啟動前 export；沒設的變數就用預設值
+# 用 Postgres：已經有資料庫就在 .env 設 DATABASE_URL；要連資料庫一起起來用 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 services:
   aigile:
     build: .
@@ -32,6 +33,10 @@ services:
       - SUPABASE_KEY
       - SUPABASE_TOPIC
       - UPDATE_CHECK
+      # Postgres（選用）：沒設＝SQLite（資料在 volume）；設了 postgres://… 就改用 Postgres，專案文件照樣放 volume
+      - DATABASE_URL
+      - DATABASE_SCHEMA
+      - PG_POOL_MAX
     volumes:
       - aigile-data:/data
     restart: unless-stopped

@@ -6,12 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-const raw = openNodeDb(path.join(dataDir, 'switch.db'));
+const raw = await openTestDb(path.join(dataDir, 'switch.db'));
 let reads = 0; // 整張成員表被讀幾次
 const db = new Proxy(raw, { get: (t, k) => k === 'all' ? (sql, ...a) => { if (/^SELECT \* FROM participants$/.test(String(sql).trim())) reads++; return t.all(sql, ...a); } : typeof t[k] === 'function' ? t[k].bind(t) : t[k] });
 const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000' } });

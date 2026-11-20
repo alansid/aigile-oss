@@ -16,7 +16,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-readcost-'));
 const raw = openNodeDb(path.join(dataDir, 'switch.db'));
 // 數「整張成員表」被讀了幾次
 let fullReads = 0;
-const db = { ...raw, all: (sql, ...a) => { if (/^SELECT \* FROM participants$/.test(sql.trim())) fullReads++; return raw.all(sql, ...a); } };
+const db = { ...raw, all: (sql, ...a) => { if (/^SELECT \* FROM participants( ORDER BY rowid)?$/.test(sql.trim())) fullReads++; return raw.all(sql, ...a); } };
 const mk = () => createApp({ db, storage: dbStorage(raw), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000', peopleCheckMs: '50' } });
 const A = mk(), B = mk(); // 兩份程式共用同一個資料庫
 const call = (app, token, p, method = 'GET', body) => app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost')

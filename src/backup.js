@@ -140,7 +140,7 @@ export function registerBackup({ route, db, ApiError, invalid, readJson, readBod
       if (t === 'participants') Object.assign(row, { token: 'h:rs_' + randId('t') + randId('t'), token_expires_at: 1 }); // 登入一律重發：AI 顯示「Token 已過期」請主人重發；人類的登入碼是沒人拿得到的亂數
       const cols = Object.keys(row);
       if (!cols.length) continue;
-      stmts.push([`INSERT${t === 'app_settings' ? ' OR REPLACE' : ''} INTO ${t} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, cols.map(c => row[c])]);
+      stmts.push([`INSERT INTO ${t} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})${t === 'app_settings' ? ' ON CONFLICT(key) DO UPDATE SET value = excluded.value' : ''}`, cols.map(c => row[c])]);
     }
     for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
     return { table: t, inserted: stmts.length };
@@ -173,6 +173,7 @@ export function registerBackup({ route, db, ApiError, invalid, readJson, readBod
       stmts.push(['UPDATE participants SET name = ?, code = ? WHERE id = ?', [state.name, state.code, me.id]]);
     }
     await db.batch(stmts);
+    await db.syncIds?.(); // Postgres：匯入時明寫了流水號，自動編號要接到最大號後面（SQLite／D1 會自己接，沒有這個方法）
     await afterRestore?.();
     const people = await peopleMap(ctx);
     const humans = [...people.values()].filter(p => p.kind === 'human').length, ais = [...people.values()].filter(p => p.kind === 'ai').length;

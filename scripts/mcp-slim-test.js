@@ -19,7 +19,7 @@ import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { slimContext, slimPost, CTX_CHARS, CTX_TOTAL, LINE_CHARS } from '../src/mcp.js';
 import { scriptHashes } from './script-hashes.mjs';
@@ -27,7 +27,7 @@ import { testToken } from './test-token.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-p332-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');

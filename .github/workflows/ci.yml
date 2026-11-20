@@ -1,6 +1,7 @@
 # CI: run the full test suite (including the real-browser UI tests) on Linux, Windows and macOS,
 # and build the Docker image, on every push and pull request.
-# The project has no npm dependencies, so there is no install step.
+# The SQLite jobs have no install step on purpose: the default (SQLite) setup must keep working with zero dependencies.
+# The Postgres job installs the one optional dependency (pg) and runs the same full suite against a Postgres service.
 # Publishing the image to ghcr.io on a version tag is in release.yml.
 name: CI
 
@@ -47,6 +48,37 @@ jobs:
           CI: 'true'
           TEST_TIMEOUT_SEC: '300'
 
+  # Same full suite on Postgres (DATABASE_URL mode). Tests only ever connect to this local service container.
+  test-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: aigile_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install the Postgres driver (pg, pinned in package-lock.json)
+        run: npm ci
+      - name: Run tests on Postgres
+        run: npm test
+        env:
+          CI: 'true'
+          TEST_TIMEOUT_SEC: '300'
+          AIGILE_TEST_PG_URL: postgres://postgres:test@localhost:5432/aigile_test
+
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -64,3 +96,16 @@ jobs:
       - name: Container logs
         if: always()
         run: docker logs aigile || true
+      # docker compose with Postgres included (docker-compose.postgres.yml): one command, data in Postgres
+      - name: Start with Postgres (compose) and check health
+        run: |
+          docker rm -f aigile
+          ADMIN_PASSWORD=ci-check-pass docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+          for i in $(seq 1 60); do curl -fs http://localhost:3000/api/health && break; sleep 1; done
+          curl -fs http://localhost:3000/api/health
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-check-pass"}' http://localhost:3000/api/auth/password)
+          echo "admin login: $code"; test "$code" = 200
+          docker compose -f docker-compose.yml -f docker-compose.postgres.yml exec -T postgres psql -U aigile -d aigile -tAc "SELECT COUNT(*) FROM participants" | grep -qx 1
+      - name: Compose logs
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.postgres.yml logs || true

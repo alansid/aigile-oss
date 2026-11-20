@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const SECRET = 'blue-sky-7781';
@@ -16,8 +16,8 @@ for (const k of ['log', 'error', 'warn', 'info']) { const orig = console[k]; con
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-group-settings-'));
 const seen = [];
-const mk = (file, config) => {
-  const db = openNodeDb(path.join(dataDir, file), {});
+const mk = async (file, config) => {
+  const db = await openTestDb(path.join(dataDir, file), {});
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', authFailLimit: '1000', ...config } });
   return async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -29,7 +29,7 @@ const mk = (file, config) => {
 };
 try {
   // 環境變數：ROOM_CODE 有設、OPEN_JOIN 沒設（開）
-  const call = mk('a.db', { roomCode: ENV_CODE });
+  const call = await mk('a.db', { roomCode: ENV_CODE });
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO', roomCode: ENV_CODE })).body;
   assert.ok(boss.token, '第一位加入（測試模式＝管理員）');
   const h0 = (await call(null, '/api/health')).body;
@@ -61,7 +61,7 @@ try {
   assert.equal((await call(boss.token, '/api/group/settings', 'PUT', { roomCode: 'ab' })).status, 400, '太短的密碼擋掉');
 
   // 重啟（同一個資料庫、環境變數不變）：還是網頁設的為準
-  const call2 = mk('a.db', { roomCode: ENV_CODE });
+  const call2 = await mk('a.db', { roomCode: ENV_CODE });
   assert.equal((await call2(null, '/api/join', 'POST', { name: '張美玲', role: 'UX', roomCode: ENV_CODE })).status, 403, '重啟後環境變數不會蓋回去');
 
   // 清除群組密碼：不用密碼也能註冊
@@ -76,7 +76,7 @@ try {
   assert.equal((await call2(null, '/api/health')).body.openJoin, false);
   assert.equal((await call2(null, '/api/join', 'POST', { name: '李志豪', role: 'PG' })).body.error?.code, 'JOIN_CLOSED', '關了就不能自己註冊');
   // 另一份程式（Workers 多個執行個體）也立刻生效
-  const call3 = mk('a.db', { roomCode: ENV_CODE, openJoin: '1' });
+  const call3 = await mk('a.db', { roomCode: ENV_CODE, openJoin: '1' });
   assert.equal((await call3(null, '/api/join', 'POST', { name: '李志豪', role: 'PG' })).status, 403, '別份程式也立刻關閉，環境變數 OPEN_JOIN=1 不會蓋回去');
   await call3(boss.token, '/api/group/settings', 'PUT', { openJoin: true });
   assert.equal((await call2(null, '/api/join', 'POST', { name: '李志豪', role: 'PG' })).status, 201, '重新打開');
@@ -101,7 +101,7 @@ try {
   assert.ok(!logs.some(t => t.includes(SECRET)), '密碼沒有寫進日誌');
 
   // 沒設 ROOM_CODE 的站：網頁設了密碼就要密碼
-  const b = mk('b.db', {});
+  const b = await mk('b.db', {});
   const bb = (await b(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   assert.equal((await b(bb.token, '/api/group/settings')).body.roomCodeSet, false);
   await b(bb.token, '/api/group/settings', 'PUT', { roomCode: SECRET });

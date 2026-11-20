@@ -7,8 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import { ROLES } from '../src/roles.js';
+import { peekTestDb } from './test-db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3997;
@@ -62,8 +62,8 @@ const PW2 = 'battery staple 2';
     assert.ok(!JSON.stringify(r.body).includes(PW) && !('pwd_hash' in r.body) && !('hash' in r.body), '6. 不回傳密碼或雜湊');
 
     // 6. 只存加鹽慢雜湊
-    const sdb = new DatabaseSync(path.join(dataDir, 'switch.db'));
-    const row = sdb.prepare('SELECT * FROM credentials').get();
+    const sdb = await peekTestDb(path.join(dataDir, 'switch.db'));
+    const row = await sdb.get('SELECT * FROM credentials');
     assert.match(row.pwd_hash, /^pbkdf2-sha256\$100000\$/);
     assert.ok(!row.pwd_hash.includes(PW));
 
@@ -99,7 +99,7 @@ const PW2 = 'battery staple 2';
     for (let i = 0; i < 4; i++) await login('nobody.here', 'wrong password!');
     assert.equal((await login('nobody.here', 'wrong password!')).status, 429);
     // 解鎖（模擬 15 分鐘後）
-    sdb.prepare('UPDATE login_fails SET locked_until = ?').run(Date.now() - 60_000);
+    await sdb.run('UPDATE login_fails SET locked_until = ?', Date.now() - 60_000);
     r = await login('yuchih.admin', PW);
     assert.equal(r.status, 200, '15 分鐘後可以再登入 ' + JSON.stringify(r.body));
     const pwdDev2 = r.body.token;
@@ -136,9 +136,9 @@ const PW2 = 'battery staple 2';
     assert.equal((await call(ai.token, '/api/me/password')).status, 403);
     assert.equal((await call(ai.token, '/api/me/notices')).status, 403, 'AI 讀不到安全通知');
     // 就算資料庫被塞了 AI 的帳密也不放行
-    sdb.prepare('INSERT INTO credentials (participant_id, username, pwd_hash, updated_at) SELECT ?, ?, pwd_hash, 0 FROM credentials LIMIT 1').run(ai.participantId, 'ai.sneaky');
+    await sdb.run('INSERT INTO credentials (participant_id, username, pwd_hash, updated_at) SELECT ?, ?, pwd_hash, 0 FROM credentials LIMIT 1', ai.participantId, 'ai.sneaky');
     assert.equal((await login('ai.sneaky', PW2)).status, 400, 'AI 一律拒絕');
-    sdb.prepare('DELETE FROM credentials WHERE participant_id = ?').run(ai.participantId);
+    await sdb.run('DELETE FROM credentials WHERE participant_id = ?', ai.participantId);
 
     // 12. 邀請時順便設帳號密碼（選填）
     let inv = (await call(bossDev, '/api/invites', 'POST', { name: '王小明', projects: ['預設專案'] })).body;
@@ -197,7 +197,7 @@ const PW2 = 'battery staple 2';
     assert.ok(url, out.stdout);
     const rtok = url[1];
     assert.ok(!logs.includes(rtok), '伺服器日誌沒有救援連結');
-    const linkRow = sdb.prepare('SELECT * FROM rescue_links').get();
+    const linkRow = await sdb.get('SELECT * FROM rescue_links');
     assert.ok(linkRow.created_by.includes('@'), '記下誰產生');
     assert.ok(linkRow.expires_at - linkRow.created_at === 15 * 60_000);
     assert.ok(!JSON.stringify(linkRow).includes(rtok), '只存雜湊');
@@ -207,7 +207,7 @@ const PW2 = 'battery staple 2';
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.participant.name, '林志明', '救的是管理員');
     // 救援登入：其他裝置全部登出、登入碼換新（帳號被別人拿走時，從這裡拿回來）
-    const oldCode = sdb.prepare("SELECT token FROM participants WHERE name = '林志明'").get().token;
+    const oldCode = (await sdb.get("SELECT token FROM participants WHERE name = '林志明'")).token;
     assert.equal((await call(bossDev, '/api/me')).status, 401, '救援後其他裝置登出');
     bossDev = r.body.token;
     assert.ok((await call(bossDev, '/api/devices')).body.items.some(d => d.label === '救援登入 · Chrome（Windows）'));
@@ -227,15 +227,15 @@ const PW2 = 'battery staple 2';
     spawnSync(process.execPath, [path.join(__dirname, 'admin-rescue.js'), '--local', dataDir, '--base', BASE], { encoding: 'utf8' });
     const out2 = spawnSync(process.execPath, [path.join(__dirname, 'admin-rescue.js'), '--local', dataDir, '--base', BASE], { encoding: 'utf8' });
     const rtok2 = out2.stdout.match(/\/rescue\/(\S+)/)[1];
-    sdb.prepare('UPDATE rescue_links SET expires_at = ? WHERE used_at IS NULL').run(Date.now() - 60_000);
+    await sdb.run('UPDATE rescue_links SET expires_at = ? WHERE used_at IS NULL', Date.now() - 60_000);
     assert.equal((await call(null, '/api/auth/rescue', 'POST', { token: rtok2 })).status, 400, '15 分鐘後失效');
-    assert.equal(sdb.prepare('SELECT COUNT(*) AS n FROM rescue_links').get().n, 3, '每次產生都有紀錄');
+    assert.equal((await sdb.get('SELECT COUNT(*) AS n FROM rescue_links')).n, 3, '每次產生都有紀錄');
     // 網頁沒有產生救援連結的 API
     for (const p of ['/api/rescue', '/api/admin/rescue', '/api/auth/rescue/create']) assert.notEqual((await call(bossDev, p, 'POST', {})).status, 200);
 
     // 6. 密碼沒有進日誌
     assert.ok(![PW, PW2].some(p => logs.includes(p)), '日誌沒有密碼');
-    sdb.close();
+    await sdb.close();
     console.log('password-test 全部通過');
   } catch (e) {
     console.error(e);

@@ -34,5 +34,8 @@
         "description": "選填：設了之後，自己註冊要輸入這個代碼。留空＝不用代碼。"
       }
     }
+  },
+  "optionalDependencies": {
+    "pg": "8.23.1"
   }
 }

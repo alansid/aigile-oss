@@ -11,15 +11,15 @@ import net from 'node:net';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { startKit } from './browser-kit.js';
 import { testToken } from './test-token.js';
 
 const dirs = [];
-function mk(config = {}) {
+async function mk(config = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-harden-')); dirs.push(dir);
-  const db = openNodeDb(path.join(dir, 'switch.db'), { legacyProjects: false });
+  const db = await openTestDb(path.join(dir, 'switch.db'), { legacyProjects: false });
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0', ...config } });
   const call = async (token, p, method = 'GET', body, ip = '198.51.100.1', raw) => {
     const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: raw ?? (body ? JSON.stringify(body) : undefined) }), 'http://localhost');
@@ -31,7 +31,7 @@ const kits = [];
 try {
   // ---------- A. 登入 ----------
   {
-    const { call } = mk({ authFailLimit: '10' });
+    const { call } = await mk({ authFailLimit: '10' });
     const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO', username: 'boss.lin', password: 'longpassword1', passwordAgain: 'longpassword1' }, '10.0.0.1')).body;
     assert.ok(boss.token);
     // 同時 30 個錯的：只有前 5 個真的拿去驗（400），其他直接 429
@@ -42,7 +42,7 @@ try {
     assert.equal((await call(null, '/api/auth/password', 'POST', { username: 'boss.lin', password: 'longpassword1' }, '10.2.0.1')).status, 429, '鎖住期間密碼對也不行');
   }
   {
-    const { call } = mk({ authFailLimit: '10' });
+    const { call } = await mk({ authFailLimit: '10' });
     await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO', username: 'boss.lin', password: 'longpassword1', passwordAgain: 'longpassword1' }, '10.0.0.1');
     // 很多個 IP 亂試不存在的帳號 150 次：沒有全站封鎖
     for (let i = 0; i < 150; i++) await call(null, '/api/auth/password', 'POST', { username: 'nobody' + i, password: 'xxxxxxxxx' }, `172.16.${i >> 8}.${i & 255}`);
@@ -53,7 +53,7 @@ try {
   }
   // ---------- B. 第一次改帳密 ----------
   {
-    const { call } = mk({ defaultAdmin: '1' });
+    const { call } = await mk({ defaultAdmin: '1' });
     await call(null, '/api/health');
     const t = (await call(null, '/api/auth/password', 'POST', { username: 'admin', password: 'admin' })).body.token;
     const r = await call(t, '/api/me/password', 'PUT', { currentPassword: 'admin', newPassword: 'longpassword1', newPasswordAgain: 'longpassword1' });
@@ -62,7 +62,7 @@ try {
   }
   // ---------- C. 註冊與群組密碼次數 ----------
   {
-    const { call } = mk({ joinLimitPerHour: '3', roomCode: 'garden-77' });
+    const { call } = await mk({ joinLimitPerHour: '3', roomCode: 'garden-77' });
     for (let i = 0; i < 3; i++) assert.equal((await call(null, '/api/join', 'POST', { name: '人' + i + '號', roomCode: 'garden-77' }, '203.0.113.7')).status, 201);
     const r = await call(null, '/api/join', 'POST', { name: '人9號', roomCode: 'garden-77' }, '203.0.113.7');
     assert.equal(r.status, 429); assert.equal(r.body.error.code, 'TOO_MANY_SIGNUPS');
@@ -72,7 +72,7 @@ try {
   }
   // ---------- D. API 標頭與錯誤處理 ----------
   {
-    const { call, db } = mk();
+    const { call, db } = await mk();
     const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
     const h = (await call(boss.token, '/api/me')).headers;
     assert.equal(h.get('x-content-type-options'), 'nosniff'); assert.equal(h.get('referrer-policy'), 'no-referrer');

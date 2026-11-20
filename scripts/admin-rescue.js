@@ -3,6 +3,7 @@
 // 用法：
 //   npm run admin-rescue                                   正式環境（Cloudflare D1）
 //   npm run admin-rescue -- --local [資料夾] [--base 網址]   本機 node server.js（預設 ./data、http://localhost:3000）
+//     本機版用 Postgres 時（有設 DATABASE_URL）照同一組設定連 Postgres，資料夾參數不用給
 // 每次產生都記在 rescue_links（誰＝主機使用者@主機名稱、何時），並在管理員的收件匣發一則安全通知。
 import os from 'node:os';
 import path from 'node:path';
@@ -41,9 +42,22 @@ const now = Date.now();
 const hash = await sha256(token);
 const linkId = randId('rsc'), noticeId = randId('ntc');
 let admin;
-if (local) {
+const dataDir = path.resolve(opt('--local') && !opt('--local').startsWith('--') ? opt('--local') : path.join(ROOT, 'data'));
+if (local && (process.env.DATABASE_URL || process.env.AIGILE_TEST_PG_URL)) { // 本機版用 Postgres（DATABASE_URL，跟 server.js 同一組設定）
+  const { openPgDb, pgTarget } = await import('../src/db-pg.js');
+  const pg = pgTarget(process.env, dataDir);
+  const db = await openPgDb(pg.url, { legacyProjects: false, schema: pg.schema, max: 1 });
+  try {
+    admin = await db.get(ADMIN_SQL);
+    if (!admin) throw new Error('群組還沒有管理員');
+    await db.batch([
+      ['INSERT INTO rescue_links (id, token_hash, participant_id, created_by, created_at, expires_at) VALUES (?,?,?,?,?,?)', [linkId, hash, admin.id, who, now, now + TTL_MS]],
+      ["INSERT INTO account_notices (id, participant_id, kind, detail, created_at) VALUES (?,?,'rescue_link',?,?)", [noticeId, admin.id, who, now]],
+    ]);
+  } finally { await db.close(); }
+} else if (local) {
   const { DatabaseSync } = await import('node:sqlite');
-  const file = path.join(path.resolve(opt('--local') && !opt('--local').startsWith('--') ? opt('--local') : path.join(ROOT, 'data')), 'switch.db');
+  const file = path.join(dataDir, 'switch.db');
   if (!fs.existsSync(file)) throw new Error('找不到資料庫：' + file);
   const db = new DatabaseSync(file);
   admin = db.prepare(ADMIN_SQL).get();

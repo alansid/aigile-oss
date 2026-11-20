@@ -1,8 +1,12 @@
-# Aigile-Switch：本機版（Node + SQLite）的容器。零相依，不用 npm install。
+# Aigile-Switch：本機版（Node + SQLite，或設 DATABASE_URL 改用 Postgres）的容器。
 # 用法：docker compose up -d，開 http://localhost:3000（帳號 admin、密碼 ADMIN_PASSWORD，沒設＝admin；第一次登入要先改）
+# 連 Postgres：docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d（見 README「用 Postgres」）
 FROM node:22-alpine
 
 WORKDIR /app
+# 唯一的套件是 Postgres 連線（pg，選用；只有設 DATABASE_URL 才載入），版本固定在 package-lock.json
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY . .
 
 # 資料（SQLite 與專案文件）放 /data，用 volume 保存；用內建的 node 使用者執行，不用 root

@@ -1,0 +1,32 @@
+# 連 Postgres 一起起來（疊在 docker-compose.yml 上）：
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+# 資料庫密碼在 .env 設 POSTGRES_PASSWORD（沒設＝aigile，只給這台電腦用；資料庫的埠不對外開）
+# 資料在 volume aigile-pg；專案文件照樣在 aigile-data。停掉：同一組 -f 加 down（要整個清掉才加 -v）
+# Use Postgres together with the app (on top of docker-compose.yml):
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+# Set POSTGRES_PASSWORD in .env (default: aigile; the database port is not published).
+services:
+  aigile:
+    environment:
+      - DATABASE_URL=postgres://aigile:${POSTGRES_PASSWORD:-aigile}@postgres:5432/aigile
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=aigile
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-aigile}
+      - POSTGRES_DB=aigile
+    volumes:
+      - aigile-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aigile -d aigile"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  aigile-pg:

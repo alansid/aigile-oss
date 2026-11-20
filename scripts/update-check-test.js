@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { APP_VERSION, cmpVersion } from '../src/version.js';
 
@@ -22,8 +22,8 @@ const fakeFetch = async (url, opts) => {
   if (reply instanceof Error) throw reply;
   return new Response(JSON.stringify(reply.body), { status: reply.status || 200 });
 };
-const site = (name, config = {}) => {
-  const db = openNodeDb(path.join(dataDir, name + '.db'), { legacyProjects: false });
+const site = async (name, config = {}) => {
+  const db = await openTestDb(path.join(dataDir, name + '.db'), { legacyProjects: false });
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', updateFetch: fakeFetch, ...config } });
   const call = async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -37,11 +37,11 @@ const release = (tag, extra = {}) => ({ body: { tag_name: tag, name: '新版說�
 
 try {
   assert.ok(cmpVersion('1.10.0', '1.9.9') > 0 && cmpVersion('v1.0.0', '1.0.0') === 0 && cmpVersion('1.0.0', '1.0.1') < 0, '版本比較');
-  const A = site('a');
+  const A = await site('a');
   const boss = (await A.call(null, '/api/join', 'POST', { name: '王小明', role: 'PO' })).body;
   const chen = (await A.call(null, '/api/join', 'POST', { name: '陳大文', role: 'PG' })).body;
   const check = tok => A.call(tok, '/api/admin/update-check');
-  const age = ms => A.db.run("UPDATE app_settings SET value = json_set(value, '$.at', ?) WHERE key = 'update_check'", Date.now() - ms);
+  const age = async ms => { const r = await A.db.get("SELECT value FROM app_settings WHERE key = 'update_check'"); await A.db.run("UPDATE app_settings SET value = ? WHERE key = 'update_check'", JSON.stringify({ ...JSON.parse(r.value), at: Date.now() - ms })); }; // 兩種資料庫都能跑（不用 SQLite 的 json_set）
 
   // 4. 只有管理員
   assert.equal((await check(chen.token)).status, 403, '非管理員不能看');
@@ -89,7 +89,7 @@ try {
   assert.equal(r404.failed, true, 'GitHub 回 404（還沒有這個 repo）也是查不到');
 
   // 4. UPDATE_CHECK=0
-  const B = site('b', { updateCheck: '0' });
+  const B = await site('b', { updateCheck: '0' });
   const bb = (await B.call(null, '/api/join', 'POST', { name: '管理者', role: 'PO' })).body;
   const n0 = calls;
   r = (await B.call(bb.token, '/api/admin/update-check')).body;

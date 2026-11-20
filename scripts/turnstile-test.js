@@ -7,7 +7,7 @@ import path from 'node:path';
 import http from 'node:http';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const SECRET = 'ts-secret-for-test-8841';
@@ -25,8 +25,8 @@ const VERIFY = `http://127.0.0.1:${fake.address().port}/siteverify`;
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-turnstile-'));
 const seen = [];
-const mk = (file, config) => {
-  const db = openNodeDb(path.join(dataDir, file), {});
+const mk = async (file, config) => {
+  const db = await openTestDb(path.join(dataDir, file), {});
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', authFailLimit: '1000', ...config } });
   return async (token, p, method = 'GET', body, ip = '203.0.113.5') => {
     const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -38,15 +38,15 @@ const mk = (file, config) => {
 const TS = { turnstileSiteKey: '0x4AAAA-site-key', turnstileSecret: SECRET, turnstileVerifyUrl: VERIFY };
 try {
   // 沒設 key：照舊，不要驗證
-  const off = mk('off.db', {});
+  const off = await mk('off.db', {});
   assert.equal((await off(null, '/api/health')).body.turnstileSiteKey, undefined, '沒設就不回 site key');
   assert.equal((await off(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).status, 201, '沒設照舊註冊');
   // 只設一個也不啟用
-  const half = mk('half.db', { turnstileSiteKey: 'x', turnstileVerifyUrl: VERIFY });
+  const half = await mk('half.db', { turnstileSiteKey: 'x', turnstileVerifyUrl: VERIFY });
   assert.equal((await half(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).status, 201, '只設一個不啟用');
   assert.equal(got.length, 0, '沒啟用時不呼叫驗證器');
 
-  const call = mk('on.db', TS);
+  const call = await mk('on.db', TS);
   const h = (await call(null, '/api/health')).body;
   assert.equal(h.turnstileSiteKey, '0x4AAAA-site-key'); assert.equal(h.captchaAfterFails, 3);
 
@@ -84,7 +84,7 @@ try {
   assert.equal((await call(null, '/api/auth/code', 'POST', { code: 'nope' }, ip)).body.error.captchaRequired, true, '登入碼失敗也要驗證');
 
   // 驗證器連不上：503 清楚錯誤
-  const down = mk('down.db', { ...TS, turnstileVerifyUrl: 'http://127.0.0.1:1/siteverify' });
+  const down = await mk('down.db', { ...TS, turnstileVerifyUrl: 'http://127.0.0.1:1/siteverify' });
   const d1 = await down(null, '/api/join', 'POST', { name: '林志明', role: 'PO', turnstileToken: 'ok-5' });
   assert.equal(d1.status, 503); assert.equal(d1.body.error.code, 'CAPTCHA_UNAVAILABLE');
 

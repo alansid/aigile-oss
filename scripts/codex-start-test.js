@@ -15,7 +15,7 @@ import assert from 'node:assert';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { ROLES } from '../src/roles.js';
 import { scriptHashes } from './script-hashes.mjs';
@@ -23,7 +23,7 @@ import { testToken } from './test-token.js';
 
 const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-p325-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '10000' } });
 let loseCheckinResponse = true;
 const server = http.createServer(async (req, res) => {

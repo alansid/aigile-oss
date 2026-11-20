@@ -4,6 +4,9 @@
 //   npm test                 全部
 //   npm test -- c341 s4      只跑檔名含這些字的
 // 環境變數 TEST_TIMEOUT_SEC：單一測試最多跑幾秒，預設 300；逾時算失敗
+// 環境變數 AIGILE_TEST_PG_URL：改在 Postgres 跑同一套（要先 npm install；只准本機或 CI 的 postgres 服務），
+//   例：AIGILE_TEST_PG_URL=postgres://postgres:test@127.0.0.1:5432/aigile_test npm test
+//   每個測試資料夾一個 t_ 開頭的 schema，開始前與跑完都會清掉
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +31,20 @@ const run = f => new Promise(resolve => {
   p.on('close', code => { clearTimeout(timer); resolve({ f, ok: code === 0 && !timedOut, code, timedOut, sec: ((Date.now() - started) / 1000).toFixed(1), out }); });
 });
 
+// Postgres 模式：清掉上次留下的測試 schema（只動 t_ 加 20 碼的）
+const PG_URL = process.env.AIGILE_TEST_PG_URL;
+async function dropTestSchemas() {
+  const { assertTestPgUrl } = await import('../src/db-pg.js');
+  const { default: pg } = await import('pg');
+  const c = new pg.Client({ connectionString: assertTestPgUrl(PG_URL) });
+  await c.connect();
+  try {
+    const { rows } = await c.query("SELECT nspname FROM pg_namespace WHERE nspname ~ '^t_[0-9a-f]{20}$'");
+    for (const r of rows) await c.query(`DROP SCHEMA "${r.nspname}" CASCADE`);
+  } finally { await c.end(); }
+}
+if (PG_URL) { await dropTestSchemas(); console.log('資料庫：Postgres（AIGILE_TEST_PG_URL）\n'); }
+
 const failed = [];
 const t0 = Date.now();
 for (const f of files) {
@@ -37,4 +54,5 @@ for (const f of files) {
   if (!r.ok) { failed.push(f); console.log(r.out.trim().split('\n').slice(-20).map(l => '    ' + l).join('\n')); }
 }
 console.log(`\n${files.length - failed.length}/${files.length} 通過，共 ${((Date.now() - t0) / 1000).toFixed(0)} 秒${failed.length ? `；沒過：${failed.join('、')}` : ''}`);
+if (PG_URL) await dropTestSchemas();
 process.exitCode = failed.length ? 1 : 0;

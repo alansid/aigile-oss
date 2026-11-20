@@ -9,17 +9,18 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb, TEST_PG_URL } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const call = async (token, p, method = 'GET', body, headers = {}) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
-const plan = async sql => (await db.all('EXPLAIN QUERY PLAN ' + sql)).map(r => r.detail).join(' | ');
+// 查詢計畫是量 SQLite／D1 讀取成本用的；Postgres 模式（AIGILE_TEST_PG_URL）不比計畫，其他照驗
+const plan = async sql => (TEST_PG_URL ? null : (await db.all('EXPLAIN QUERY PLAN ' + sql)).map(r => r.detail).join(' | '));
 const count = async (sql, ...a) => (await db.get(sql, ...a)).n;
 
 try {
@@ -31,8 +32,8 @@ try {
   const prefixes = ['sq', 'rprop', 'prefs', 'grants', 'olink'];
   for (let i = 0; i < 300; i++) await db.run('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', `${prefixes[i % 5]}:x${i}`, '{}');
   for (const pj of ['預設專案', '第二專案']) {
-    await db.run('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', `repo:${pj}`, JSON.stringify({ url: 'https://github.com/a/b', branch: 'main' }));
-    await db.run('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', `dm:${pj}`, JSON.stringify({ on: true, by: L, at: '2026-10-20T00:00:00Z' }));
+    await db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', `repo:${pj}`, JSON.stringify({ url: 'https://github.com/a/b', branch: 'main' }));
+    await db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', `dm:${pj}`, JSON.stringify({ on: true, by: L, at: '2026-10-20T00:00:00Z' }));
   }
   // ---- cards 600 張：100 張未結案、500 張已完成／已封存 ----
   const tpl = (await call(boss.token, '/api/cards', 'POST', { requestId: 'tpl', title: '樣板', project: '預設專案' })).body;
@@ -60,8 +61,10 @@ try {
   let before = 0, after = 0;
   for (const [name, now, old] of queries) {
     const pNew = await plan(now), pOld = await plan(old);
-    assert.ok(!/SCAN (app_settings|cards)\b/.test(pNew), `${name} 新查詢不能全表掃描：${pNew}`);
-    assert.ok(/SCAN (app_settings|cards)\b/.test(pOld), `${name} 舊查詢是全表掃描（量測基準）：${pOld}`);
+    if (pNew !== null) {
+      assert.ok(!/SCAN (app_settings|cards)\b/.test(pNew), `${name} 新查詢不能全表掃描：${pNew}`);
+      assert.ok(/SCAN (app_settings|cards)\b/.test(pOld), `${name} 舊查詢是全表掃描（量測基準）：${pOld}`);
+    }
     const table = name === 'cards 計數' ? cardRows : settingsRows;
     const matched = name === 'cards 計數' ? await count(`SELECT COUNT(*) AS n FROM cards WHERE status IN ${OPEN}`) : (await db.all(now)).length;
     // 舊查詢的結果要跟新的一樣
@@ -82,7 +85,7 @@ try {
   const lst = (await call(boss.token, '/api/cards?limit=200&counts=1')).body.items;
   assert.ok(lst.every(c => c.status !== '已封存'), '預設列表不含已封存');
   assert.ok((await call(boss.token, '/api/cards?status=open&limit=200')).body.items.every(c => !['已完成', '已封存'].includes(c.status)), 'status=open 只含未結案');
-  assert.ok(!/SCAN cards\b/.test(await plan(`SELECT seq FROM cards WHERE status IN ${OPEN}`)), 'R9：未結案條件走狀態索引');
+  if (!TEST_PG_URL) assert.ok(!/SCAN cards\b/.test(await plan(`SELECT seq FROM cards WHERE status IN ${OPEN}`)), 'R9：未結案條件走狀態索引');
 
   // ---- R5：人類在線時間寫入間隔 ----
   const seenAt = async () => (await db.get('SELECT last_seen_at FROM participants WHERE id = ?', L)).last_seen_at;

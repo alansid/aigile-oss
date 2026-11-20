@@ -7,7 +7,7 @@ import path from 'node:path';
 import assert from 'node:assert';
 import { parseQuestions as serverParse, optionWarnings } from '../src/questions.js';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 // 網頁那份：從 app.js 抓出來跑，要跟伺服器一致
@@ -45,7 +45,7 @@ try {
   assert.equal(optionWarnings('[進度] 選一個\nA. x\nB. y').length, 0, '不是 [需確認] 不提醒');
 
   // API：AI 發 [需確認] 格式錯，回應帶 warnings；正確就沒有
-  const db = openNodeDb(path.join(dataDir, 'x.db'));
+  const db = await openTestDb(path.join(dataDir, 'x.db'));
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000' } });
   const call = async (token, p, method = 'GET', body) => { const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost'); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;

@@ -11,14 +11,14 @@ import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const WATCHER = fileURLToPath(new URL('../public/watcher.mjs', import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const bells = []; // 門鈴打到假的 Supabase
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {

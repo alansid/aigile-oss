@@ -152,7 +152,7 @@ Want to see it in use first? After logging in, click "Load demo data" in the set
 
 ## Run locally (without Docker)
 
-Requires Node.js 22.13+ (24 recommended); no `npm install`:
+Requires Node.js 22.13+ (24 recommended); no `npm install` (only needed for Postgres, see "Using Postgres"):
 
 ```bash
 npm start            # http://localhost:3000, data in ./data
@@ -204,7 +204,10 @@ First login and setup are the same as above.
 |---|---|:-:|:-:|---|
 | `PORT` | `3000` | ✓ | | Port (or `npm start -- -p 8080`) |
 | `HOST` | all interfaces | ✓ | | Listen only on this address, e.g. `127.0.0.1` = this computer only (or `npm start -- --host 127.0.0.1`) |
-| `DATA_DIR` | `./data` | ✓ | | Where the SQLite database and docs are stored |
+| `DATA_DIR` | `./data` | ✓ | | Where the SQLite database and docs are stored (docs stay here with Postgres too) |
+| `DATABASE_URL` | empty | ✓ | | Set to `postgres://…` to use Postgres (run `npm install` first); unset = SQLite. See "Using Postgres" |
+| `DATABASE_SCHEMA` | empty | ✓ | | With Postgres, put the tables in this schema (created if missing); empty = the database default (public) |
+| `PG_POOL_MAX` | `10` | ✓ | | With Postgres, the maximum number of open connections |
 | `ADMIN_PASSWORD` | `admin` | ✓ | ✓ | Initial password of the default admin (username `admin`); used only on a new site's first start and must be changed on first login. Set it for public deployments |
 | `ROOM_CODE` | empty | ✓ | ✓ | Initial group password: everyone signing up must enter it (recommended for public deployments). The admin page overrides it once changed |
 | `OPEN_JOIN` | on | ✓ | ✓ | Initial open sign-up: unset = open; `0` = invite links only. The admin page overrides it once changed |
@@ -289,6 +292,45 @@ Recommended for public deployments with open sign-up, to stop bots from mass sig
    - **Login** (password, pairing code, login code, invite link) requires verification after 3 failures from the same IP (`TURNSTILE_AFTER_FAILS`); the login page shows the widget automatically.
    - The server verifies the token with your secret; failures return 403 `CAPTCHA_REQUIRED` / `CAPTCHA_FAILED`, an unreachable Cloudflare returns 503 `CAPTCHA_UNAVAILABLE`, and errors include `captchaRequired: true`.
    - The page loads the `challenges.cloudflare.com` script only when verification is needed; AIs calling the API with tokens are not affected.
+
+</details>
+
+## Using Postgres (optional)
+
+<details>
+<summary><b>Expand</b></summary>
+
+SQLite is the default (a single file, no database to install). For bigger teams, or to use your existing database backups and monitoring, you can switch to Postgres (14 or later):
+
+- **How to choose**: set `DATABASE_URL=postgres://user:password@host:5432/database` to use Postgres; leave it unset and it is SQLite, exactly as before.
+- **Only Postgres needs `npm install`** (it installs the pg driver, pinned in package-lock.json); SQLite still needs nothing installed. The Docker image already includes it.
+- **Tables are created on first start**, and later database upgrades are applied at startup just like SQLite (recorded in `schema_migrations`). The database user needs permission to create tables.
+- **Project docs** are still stored in `DATA_DIR/docs` (a folder); keep that folder when you switch (in Docker it is the `aigile-data` volume).
+- To share one database with other apps, set `DATABASE_SCHEMA=aigile` and all tables go into that schema (created if missing).
+
+**Docker, with the database included** (set `POSTGRES_PASSWORD` in `.env`; the database port is not published):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+```
+
+Already have Postgres: set `DATABASE_URL` in `.env` and run `docker compose up -d` as usual.
+
+**Locally (without Docker)**:
+
+```bash
+npm install
+DATABASE_URL=postgres://aigile:password@localhost:5432/aigile npm start
+```
+
+**Moving from SQLite to Postgres**: stop the server first (start this version once with SQLite so all database upgrades are applied), then:
+
+```bash
+npm install
+node scripts/sqlite-to-pg.js --from data/switch.db --to postgres://aigile:password@localhost:5432/aigile
+```
+
+It checks that the target is empty (stops if it already has data), copies everything in one transaction, and compares row counts table by table; on any mismatch it rolls everything back. Then set `DATABASE_URL` and restart; everyone's logins keep working. Keep the `data/docs` folder. With Docker the SQLite data is in a volume: copy it out first with `docker compose cp aigile:/data/switch.db ./switch.db`.
 
 </details>
 

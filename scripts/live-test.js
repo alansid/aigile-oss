@@ -9,15 +9,15 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { createLiveHub } from '../src/live.js';
 import { testToken } from './test-token.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-live-'));
-const mkApp = (name, live) => {
-  const db = openNodeDb(path.join(dataDir, name + '.db'));
+const mkApp = async (name, live) => {
+  const db = await openTestDb(path.join(dataDir, name + '.db'));
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', peopleCheckMs: '1' }, live });
   const call = async (token, p, method = 'GET', body, signal) => app(new Request('http://localhost' + encodeURI(p), { method, signal, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   const json = async (...a) => { const r = await call(...a); return { status: r.status, body: await r.json().catch(() => ({})) }; };
@@ -38,13 +38,13 @@ const kinds = l => l.events.map(e => e.type).filter(t => t !== 'hello');
 
 try {
   // 1. 沒有內建即時通道 → 404；沒登入 → 401
-  const plain = mkApp('plain', null);
+  const plain = await mkApp('plain', null);
   const p0 = (await plain.json(null, '/api/join', 'POST', { name: '甲', role: 'PO' })).body;
   assert.equal((await plain.json(p0.token, '/api/live')).body.error?.code, 'LIVE_DISABLED', 'Cloudflare 版：404');
   assert.equal((await plain.json(p0.token, '/api/health')).body.live, false);
 
   const hub = createLiveHub({ maxConnections: 6, maxPerMember: 2, heartbeatMs: 50, maxAgeMs: 60_000 });
-  const A = mkApp('live', hub);
+  const A = await mkApp('live', hub);
   assert.equal((await A.json(null, '/api/live')).status, 401, '要登入');
   assert.equal((await A.json(null, '/api/health')).body.live, true, 'health 寫有內建即時通道');
   const boss = (await A.json(null, '/api/join', 'POST', { name: '王小明', role: 'PO' })).body; // 管理員（兩個專案）
@@ -109,7 +109,7 @@ try {
   assert.equal(hub.size(), 4, '斷線的連線移除');
   // 連太久：送 bye 後關掉（用戶端自己重連）
   const short = createLiveHub({ maxAgeMs: 80 });
-  const B = mkApp('short', short);
+  const B = await mkApp('short', short);
   const s0 = (await B.json(null, '/api/join', 'POST', { name: '甲', role: 'PO' })).body;
   const ls = await listen(B, s0.token);
   await sleep(200);

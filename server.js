@@ -26,12 +26,23 @@ try {
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 
+// 資料庫：沒設 DATABASE_URL＝SQLite（DATA_DIR/switch.db，照舊）；設了 postgres://…＝Postgres（要先 npm install）
+// 測試：AIGILE_TEST_PG_URL（只准本機）＋測試模式＝每個 DATA_DIR 用自己的 schema，SQLite 與 Postgres 跑同一套測試
+const legacyProjects = process.env.AIGILE_TEST_PROJECTS === '1'; // 測試才先建兩個專案
+const usePg = !!(process.env.DATABASE_URL || process.env.AIGILE_TEST_PG_URL);
 let db;
 try {
-  db = openNodeDb(path.join(DATA_DIR, 'switch.db'), { legacyProjects: process.env.AIGILE_TEST_PROJECTS === '1' }); // 測試才先建兩個專案
+  if (usePg) {
+    const { openPgDb, pgTarget, describeUrl } = await import('./src/db-pg.js');
+    const pg = pgTarget(process.env, DATA_DIR);
+    db = await openPgDb(pg.url, { legacyProjects, schema: pg.schema });
+    if (!pg.test) console.log(`資料庫：Postgres（${describeUrl(pg.url)}${pg.schema ? '，schema ' + pg.schema : ''}）`);
+  } else {
+    db = openNodeDb(path.join(DATA_DIR, 'switch.db'), { legacyProjects });
+  }
 } catch (e) {
   // 資料庫升級失敗（或資料庫比程式新）：印出原因就停，不帶著壞資料啟動
-  console.error(e.name === 'MigrationError' ? `\n${e.message}\n` : e);
+  console.error(e.name === 'MigrationError' || usePg ? `\n${e.message}\n` : e);
   process.exit(1);
 }
 // 內建即時通道：LIVE=0 關掉（網頁與 watcher 會退回輪詢）

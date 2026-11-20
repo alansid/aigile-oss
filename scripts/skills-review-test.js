@@ -9,11 +9,11 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -53,7 +53,7 @@ try {
   assert.equal(new Set(ok).size, ok.length, 'N5 同時上傳不會同版本：' + ok.join(','));
   const vers = (await db.all("SELECT version FROM skills WHERE project = '預設專案' AND name = 'race' ORDER BY version")).map(x => x.version);
   assert.deepEqual(vers, vers.map((_, i) => i + 1), '版本號連續 1..n：' + vers.join(','));
-  await assert.rejects(db.run("INSERT INTO skills (id, project, name, version, description, files, sha256, size, has_scripts, roles, status, uploaded_by, uploaded_at) VALUES ('sk_dup', '預設專案', 'race', 1, 'x', '[]', 'x', 1, 0, '[]', 'pending', 'x', 'x')"), /UNIQUE/, 'N5 (project, name, version) 唯一');
+  await assert.rejects(db.run("INSERT INTO skills (id, project, name, version, description, files, sha256, size, has_scripts, roles, status, uploaded_by, uploaded_at) VALUES ('sk_dup', '預設專案', 'race', 1, 'x', '[]', 'x', 1, 0, '[]', 'pending', 'x', 'x')"), /UNIQUE|duplicate key/i, 'N5 (project, name, version) 唯一');
 
   // N6：唯讀成員不能上傳；唯讀的 leader 不能核准
   const pend = (await up(chen.token, '預設專案', skill('needs-review', [{ path: 'scripts/a.sh', text: 'echo 1\n' }]))).body;

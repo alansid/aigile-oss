@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb, tableNames } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { memStorage } from '../src/storage-r2.js';
 import { EXPORT_TABLES, SKIP_TABLES } from '../src/backup.js';
@@ -19,8 +19,8 @@ import { APP_VERSION } from '../src/version.js';
 import { testToken } from './test-token.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-backup-'));
-const site = name => {
-  const db = openNodeDb(path.join(dataDir, name + '.db'), { legacyProjects: false });
+const site = async name => {
+  const db = await openTestDb(path.join(dataDir, name + '.db'), { legacyProjects: false });
   const docs = memStorage();
   const app = createApp({ db, storage: dbStorage(db), docStorage: docs, docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0', peopleCheckMs: '1' } });
   const call = async (token, p, method = 'GET', body, raw) => {
@@ -68,8 +68,8 @@ async function importAll(s, tok, bk) {
 
 try {
   // 6. 每張表都有歸屬
-  const A = site('a');
-  const all = (await A.db.all("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")).map(r => r.name);
+  const A = await site('a');
+  const all = await tableNames(A.db);
   for (const t of all) assert.ok(EXPORT_TABLES.includes(t) || SKIP_TABLES.includes(t), `資料表 ${t} 要放進 EXPORT_TABLES 或 SKIP_TABLES`);
 
   // ---- 站 A：做一些資料 ----
@@ -127,7 +127,7 @@ try {
   assert.equal((await A.call(liu.token, '/api/admin/restore/begin', 'POST', backup)).body.error?.code, 'NOT_EMPTY');
 
   // ---- 站 B：新站，管理員同名（要能避開撞名）----
-  const B = site('b');
+  const B = await site('b');
   const me = (await B.call(null, '/api/join', 'POST', { name: '王小明', role: 'PO' })).body;
   assert.equal((await B.call(me.token, '/api/me/password', 'PUT', { username: 'newboss', newPassword: 'pass-word-2', newPasswordAgain: 'pass-word-2' })).status, 200);
   const dev = (await B.call(null, '/api/auth/password', 'POST', { username: 'newboss', password: 'pass-word-2' })).body.token;
@@ -156,7 +156,7 @@ try {
   assert.equal((await B.call(null, '/api/auth/password', 'POST', { username: 'boss', password: 'pass-word-1' })).status, 400, '備份裡的密碼沒帶過來');
   assert.equal((await B.call(aiTok, '/api/me')).status, 401, 'AI 的舊 Token 不能用（要重發）');
   assert.equal((await B.call(chen.token, '/api/me')).status, 401, '其他人的舊登入不能用（要重設登入）');
-  assert.equal((await B.db.get("SELECT COUNT(*) AS n FROM participants WHERE name LIKE '%匯入中%'")).n, 0, '暫時的你刪掉了');
+  assert.equal((await B.db.all('SELECT name FROM participants')).filter(p => p.name.includes('匯入中')).length, 0, '暫時的你刪掉了'); // 名字欄位不分大小寫，Postgres 不能對它下 LIKE
   const decB = await B.call(dev, `/api/cards/${dec.cardId}`);
   assert.equal(decB.body.decision?.question, '？', '決策卡：' + JSON.stringify(decB.body).slice(0, 300));
   assert.equal((await B.call(dev, `/api/projects/${pj}/skills`)).body.items.length, 2, '技能（含技能包）');
@@ -168,6 +168,13 @@ try {
   assert.equal(new TextDecoder().decode(got.body), '# 規格\n內容');
   assert.equal(new TextDecoder().decode((await B.call(dev, `/api/files/${att.body.file.fileId}`)).body), '附件內容', '附件');
   assert.equal((await B.call(dev, '/api/admin/backup')).body.empty, false, '匯入後不是空站（不能再匯一次）');
+  // 匯入後照常發文、建卡：流水號接在備份的最大號後面（Postgres 的自動編號要跟著校正）
+  const maxSeq = Math.max(...backup.tables.messages.map(m => m.seq));
+  const after = await B.call(dev, '/api/messages', 'POST', { requestId: 'after-restore', project: pj, text: '匯入後第一則' });
+  assert.equal(after.status, 201, '匯入後能發文：' + JSON.stringify(after.body));
+  assert.ok((await B.db.get('SELECT seq FROM messages WHERE id = ?', after.body.messageId)).seq > maxSeq, '訊息流水號接在備份後面');
+  const cardAfter = await B.call(dev, '/api/cards', 'POST', { requestId: 'after-restore-card', project: pj, title: '匯入後的卡' });
+  assert.equal(cardAfter.status, 201, '匯入後能建卡：' + JSON.stringify(cardAfter.body));
   // 6. 匯入後其他人類要重設登入：管理員的成員清單標出來；發了重設連結就不再標
   const ppl = async tok => (await B.call(tok, '/api/participants')).body.items;
   const chenId = chen.participant.participantId;

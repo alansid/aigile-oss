@@ -9,13 +9,13 @@ import path from 'node:path';
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken, hashOf } from './test-token.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-s4-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const bells = []; // 門鈴打到假的 Supabase
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {

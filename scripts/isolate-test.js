@@ -6,11 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-isolate-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const mk = () => createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', teamCacheMs: '60000' } });
 const A = mk(), B = mk(); // 兩份程式、同一個資料庫
 const BASE = 'http://localhost';

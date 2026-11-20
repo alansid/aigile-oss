@@ -11,6 +11,7 @@ import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { testToken } from './test-token.js';
+import { peekTestDb } from './test-db.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SERVER = fileURLToPath(new URL('../server.js', import.meta.url));
@@ -30,8 +31,7 @@ try {
   assert.equal((await call(null, '/api/health')).body.live, true, '本機版有內建即時通道');
   const boss = (await call(null, '/api/join', 'POST', { name: '王小明', role: 'PO' })).body;
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: 'PG', name: '王的PG', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
-  const { DatabaseSync } = await import('node:sqlite');
-  const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); const tok = await testToken(d, ai.participantId); d.close();
+  const d = await peekTestDb(path.join(dir, 'data', 'switch.db')); const tok = await testToken(d, ai.participantId); await d.close();
   const wd = fs.mkdtempSync(path.join(dir, 'w-')), wakeLog = path.join(wd, 'wakes.txt');
   const wakes = () => { try { return fs.readFileSync(wakeLog, 'utf8').trim().split('\n').filter(Boolean).length; } catch { return 0; } };
   const cmd = `"${process.execPath}" -e "require('fs').appendFileSync('wakes.txt','w\\n')"`; // 在 watcher 的工作資料夾寫

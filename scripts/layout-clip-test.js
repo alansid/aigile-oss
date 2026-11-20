@@ -36,6 +36,7 @@ try {
     assert.equal(r.sx + r.app + r.sbs, 0, `${where}：整頁、外框、側欄都不能橫向捲動（${r.sx}/${r.app}/${r.sbs}）`);
   };
 
+  await until(() => js("!!document.querySelector('.sidebar')?.offsetParent"), 10000, '總覽側欄畫出來'); // 伺服器回得慢時（例如 Postgres）先等畫面好，不然量到的是還沒出現的側欄
   await desk('總覽');
   await kit.call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: '程式開發', name: '程式助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' });
   // 我的 AI：先有外框（載入中），再出現清單

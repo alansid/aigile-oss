@@ -6,12 +6,12 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-openjoin-'));
-const mk = (name, config) => {
-  const db = openNodeDb(path.join(dataDir, name));
+const mk = async (name, config) => {
+  const db = await openTestDb(path.join(dataDir, name));
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', ...config } });
   return async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -20,7 +20,7 @@ const mk = (name, config) => {
 };
 try {
   // 1. 沒設 OPEN_JOIN＝開放；第一位是管理員、在所有專案
-  const call = mk('open.db', {});
+  const call = await mk('open.db', {});
   assert.equal((await call(null, '/api/health')).status, 200);
   const first = await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' });
   assert.equal(first.status, 201, JSON.stringify(first.body));
@@ -50,13 +50,13 @@ try {
   assert.equal((await call(mate.token, `/api/cards/${card.cardId}`)).status, 200, '管理員指派後讀得到卡');
 
   // 3. OPEN_JOIN=0：只有第一位能自己加入
-  const closed = mk('closed.db', { openJoin: '0' });
+  const closed = await mk('closed.db', { openJoin: '0' });
   assert.equal((await closed(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).status, 201, '第一位照樣能建群');
   assert.equal((await closed(null, '/api/join', 'POST', { name: '王小明', role: 'UX' })).body.error?.code, 'JOIN_CLOSED', 'OPEN_JOIN=0：其他人要邀請連結');
   assert.equal((await closed(null, '/api/health')).body.openJoin, false, 'OPEN_JOIN=0：網頁看到的是關閉');
 
   // 4. ROOM_CODE：每個人註冊都要輸入
-  const coded = mk('coded.db', { roomCode: 'abc123' });
+  const coded = await mk('coded.db', { roomCode: 'abc123' });
   assert.equal((await coded(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body.error?.code, 'ROOM_CODE_REQUIRED', '第一位也要代碼（沒填：請輸入群組密碼）');
   assert.equal((await coded(null, '/api/join', 'POST', { name: '林志明', role: 'PO', roomCode: 'abc123' })).status, 201);
   assert.equal((await coded(null, '/api/join', 'POST', { name: '王小明', role: 'UX' })).body.error?.code, 'ROOM_CODE_REQUIRED', '第二位沒代碼擋');

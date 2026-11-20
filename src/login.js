@@ -408,7 +408,7 @@ export function registerLogin(d) {
       const n = new DataView(randomBytes(4).buffer).getUint32(0) % 1_000_000;
       const code = String(n).padStart(6, '0');
       if (await db.get('SELECT 1 AS x FROM pair_codes WHERE code = ? AND used_at IS NULL AND expires_at > ?', code, now)) continue;
-      await db.run('INSERT OR REPLACE INTO pair_codes (code, participant_id, created_at, expires_at) VALUES (?,?,?,?)', code, me.id, now, now + PAIR_TTL_MS);
+      await db.run('INSERT INTO pair_codes (code, participant_id, created_at, expires_at) VALUES (?,?,?,?) ON CONFLICT(code) DO UPDATE SET participant_id = excluded.participant_id, created_at = excluded.created_at, expires_at = excluded.expires_at, used_at = NULL', code, me.id, now, now + PAIR_TTL_MS);
       return { code, expiresAt: iso(now + PAIR_TTL_MS) };
     }
   });

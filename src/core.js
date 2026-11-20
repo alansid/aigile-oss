@@ -80,6 +80,9 @@ const json = (status, body, headers = {}) => new Response(JSON.stringify(body), 
   status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...API_HEADERS, ...headers },
 });
 
+// 頭像整列換掉（SQLite、D1、Postgres 都能跑的寫法；原本是 INSERT OR REPLACE）
+const AVATAR_UPSERT = 'INSERT INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?) ON CONFLICT(participant_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at';
+
 // ---------- 應用程式 ----------
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
 export function createApp({ db, docText, flowsText = '', releases = null, config = {}, storage = null, docStorage = null, scriptHashes = {}, live = null }) { // live：內建即時通道（本機／Docker，見 src/live.js）；Workers 沒有
@@ -224,7 +227,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   async function bumpPeopleVer() { peopleDirty = false; await db.run("INSERT INTO app_settings (key, value) VALUES ('people_ver', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(Date.now()) + Math.random().toString(36).slice(2, 6)).catch(() => {}); }
   const loadPeople = async ctx => {
     const now = Date.now();
-    const [ver, rows] = await Promise.all([peopleVer(), db.all('SELECT * FROM participants')]);
+    const [ver, rows] = await Promise.all([peopleVer(), db.all('SELECT * FROM participants ORDER BY rowid')]); // 依加入順序（SQLite 不寫也是這個順序；Postgres 改過的列會跑到後面，要寫明）
     peopleCache = { at: now, loadedAt: now, seenAt: now, ver, map: new Map(rows.map(p => [p.id, p])) };
     ctx.people = peopleCache.map;
     ctx.peopleFresh = true;
@@ -1394,7 +1397,7 @@ ${ending}`;
     const mime = avatarMime(bytes);
     if (!mime) throw invalid('頭像只接受 png、jpg、webp 圖片');
     const ts = nowIso();
-    await db.run('INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', target.id, mime, bytes, ts);
+    await db.run(AVATAR_UPSERT, target.id, mime, bytes, ts);
     invalidatePeople();
     await db.run('UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', Date.now(), ts, target.id);
     return identity(await db.get('SELECT * FROM participants WHERE id = ?', target.id), await peopleMap(ctx));
@@ -2461,8 +2464,8 @@ ${ending}`;
     const now = Date.now(), ts = nowIso();
     const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', tid);
     await db.batch([
-      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + tid, cur ? cur.mime : 'none', cur ? cur.data : new Uint8Array(0), ts]],
-      ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [tid, p.mime, row.data, ts]],
+      [AVATAR_UPSERT, ['prev:' + tid, cur ? cur.mime : 'none', cur ? cur.data : new Uint8Array(0), ts]],
+      [AVATAR_UPSERT, [tid, p.mime, row.data, ts]],
       ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [now, ts, tid]],
       ["UPDATE avatar_proposals SET status = 'applied', data = NULL, decided_at = ? WHERE id = ?", [now, p.id]],
     ]);
@@ -2486,9 +2489,9 @@ ${ending}`;
     if (!prev) throw new ApiError(404, 'NOT_FOUND', '沒有上一張頭像可以換回。');
     const cur = await db.get('SELECT mime, data FROM avatars WHERE participant_id = ?', id);
     const ts = nowIso(), stmts = [];
-    stmts.push(cur ? ['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', ['prev:' + id, cur.mime, cur.data, ts]] : ['DELETE FROM avatars WHERE participant_id = ?', ['prev:' + id]]);
+    stmts.push(cur ? [AVATAR_UPSERT, ['prev:' + id, cur.mime, cur.data, ts]] : ['DELETE FROM avatars WHERE participant_id = ?', ['prev:' + id]]);
     if (prev.mime === 'none') stmts.push(['DELETE FROM avatars WHERE participant_id = ?', [id]], ['UPDATE participants SET avatar_v = 0, updated_at = ? WHERE id = ?', [ts, id]]);
-    else stmts.push(['INSERT OR REPLACE INTO avatars (participant_id, mime, data, updated_at) VALUES (?,?,?,?)', [id, prev.mime, prev.data, ts]], ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [Date.now(), ts, id]]);
+    else stmts.push([AVATAR_UPSERT, [id, prev.mime, prev.data, ts]], ['UPDATE participants SET avatar_v = ?, updated_at = ? WHERE id = ?', [Date.now(), ts, id]]);
     await db.batch(stmts);
     invalidatePeople();
     return identity(await db.get('SELECT * FROM participants WHERE id = ?', id), await peopleMap(ctx));

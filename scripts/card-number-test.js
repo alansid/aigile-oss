@@ -7,13 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { startKit, findBrowser, until } from './browser-kit.js';
 const OLD1 = 'C-' + (100 + 1), OLD2 = 'C-' + (100 + 2); // 舊編號＝C-(seq+100)
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 // 版本紀錄：commit 標題寫舊的 C-xxx、新的 MAIN-2，還有不是卡號的 UTF-8
 const releases = { generatedAt: '2026-10-22T00:00:00.000Z', current: '0.2.0', incidents: [{ fix: OLD2, fixVersion: '0.2.0', cause: OLD1, causeVersion: '0.1.0', note: 'x' }],
   items: [{ version: '0.2.0', at: '2026-10-22T00:00:00.000Z', cards: ['MAIN-2', 'UTF-8'], commits: [], causes: [], fixes: [{ cause: OLD1, causeVersion: '0.1.0', note: 'x' }] },

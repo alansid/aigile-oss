@@ -9,12 +9,12 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { loadEn } from './i18n-scan.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-unknown-param-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const read = f => fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8');
 const app = createApp({ db, storage: dbStorage(db), docText: read('docs/ai-integration.md'), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const BASE = 'http://localhost';

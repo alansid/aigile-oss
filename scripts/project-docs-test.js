@@ -8,13 +8,13 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert';
 import { createApp } from '../src/core.js';
-import { openNodeDb } from '../src/db-node.js';
+import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { memStorage } from '../src/storage-r2.js';
 import { dirStorage } from '../src/storage-dir.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
-const db = openNodeDb(path.join(dataDir, 'switch.db'));
+const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const store = memStorage();
 const docText = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
 const app = createApp({ db, storage: dbStorage(db), docStorage: store, docText, config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0', fileTtlHours: '0.0001' } });

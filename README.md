@@ -152,7 +152,7 @@ volumes:
 
 ## 本機啟動（不用 Docker）
 
-需要 Node.js 22.13 以上（建議 24），不用 `npm install`：
+需要 Node.js 22.13 以上（建議 24），不用 `npm install`（改用 Postgres 才要，見「用 Postgres」）：
 
 ```bash
 npm start            # http://localhost:3000，資料放 ./data
@@ -192,7 +192,10 @@ npm start -- -p 8080 --host 127.0.0.1    # 只給這台電腦連；沒指定就�
 |---|---|:-:|:-:|---|
 | `PORT` | `3000` | ✓ | | 服務埠號（也可以 `npm start -- -p 8080`） |
 | `HOST` | 所有網卡 | ✓ | | 只聽這個位址，例 `127.0.0.1`＝只給這台電腦連（也可以 `npm start -- --host 127.0.0.1`） |
-| `DATA_DIR` | `./data` | ✓ | | SQLite 資料庫與文件的位置 |
+| `DATA_DIR` | `./data` | ✓ | | SQLite 資料庫與文件的位置（用 Postgres 時文件照樣放這裡） |
+| `DATABASE_URL` | 空 | ✓ | | 設了 `postgres://…` 就改用 Postgres（要先 `npm install`）；沒設＝SQLite。見「用 Postgres」 |
+| `DATABASE_SCHEMA` | 空 | ✓ | | 用 Postgres 時把表放在這個 schema（沒有會自動建）；空＝資料庫預設的 public |
+| `PG_POOL_MAX` | `10` | ✓ | | 用 Postgres 時最多同時開幾條連線 |
 | `ADMIN_PASSWORD` | `admin` | ✓ | ✓ | 預設管理員（帳號 admin）的初始密碼；只在新站第一次啟動時用，第一次登入一定要改。公開部署請先設 |
 | `ROOM_CODE` | 空 | ✓ | ✓ | 群組密碼初始值：設定後，每個人自己註冊都要輸入（公開部署建議設）。管理頁改過就以管理頁為準 |
 | `OPEN_JOIN` | 開 | ✓ | ✓ | 開放註冊初始值：沒設＝開放自己註冊；設 `0` 就只能用管理員的邀請連結加入。管理頁改過就以管理頁為準 |
@@ -277,6 +280,45 @@ npm run deploy                                # 產生版本紀錄與腳本雜�
    - **登入**（帳號密碼、配對碼、登入碼、邀請連結）同一個 IP 失敗 3 次後（`TURNSTILE_AFTER_FAILS` 可改）才要驗證；登入頁會自動出現驗證框。
    - 伺服器用 Secret 呼叫 Cloudflare 驗證 token；沒過回 403 `CAPTCHA_REQUIRED`／`CAPTCHA_FAILED`，Cloudflare 連不上回 503 `CAPTCHA_UNAVAILABLE`，錯誤裡帶 `captchaRequired: true`。
    - 網頁只有要驗證時才載入 `challenges.cloudflare.com` 的腳本；AI 用 Token 呼叫 API 不受影響。
+
+</details>
+
+## 用 Postgres（選用）
+
+<details>
+<summary><b>展開</b></summary>
+
+預設用 SQLite（一個檔案，不用另外裝資料庫）。人多、想用現成的資料庫備份與監控，可以改用 Postgres（14 以上）：
+
+- **怎麼選**：設了環境變數 `DATABASE_URL=postgres://使用者:密碼@主機:5432/資料庫` 就用 Postgres；沒設就是 SQLite，跟以前完全一樣。
+- **只有用 Postgres 才要 `npm install`**（會裝連線套件 pg，版本固定在 package-lock.json）；只用 SQLite 照舊不用裝任何東西。Docker 映像已經裝好。
+- **第一次啟動自動建表**，之後的資料庫升級也跟 SQLite 一樣啟動時自動套用（記在 `schema_migrations`）。資料庫帳號要有建表權限。
+- **專案文件**還是存在 `DATA_DIR/docs`（資料夾），換成 Postgres 也要保留這個資料夾（Docker 是 volume `aigile-data`）。
+- 想跟別的程式共用同一個資料庫：設 `DATABASE_SCHEMA=aigile`，表都放在這個 schema（沒有會自動建）。
+
+**Docker，連資料庫一起起來**（資料庫密碼在 `.env` 設 `POSTGRES_PASSWORD`；資料庫的埠不對外開）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+```
+
+已經有 Postgres：在 `.env` 設 `DATABASE_URL`，照平常 `docker compose up -d` 就好。
+
+**本機（不用 Docker）**：
+
+```bash
+npm install
+DATABASE_URL=postgres://aigile:密碼@localhost:5432/aigile npm start
+```
+
+**從 SQLite 搬到 Postgres**：先停掉伺服器（用這版程式以 SQLite 啟動過一次，確定資料庫升級都套了），再：
+
+```bash
+npm install
+node scripts/sqlite-to-pg.js --from data/switch.db --to postgres://aigile:密碼@localhost:5432/aigile
+```
+
+會先確認目標是空的（已經有資料就停），整份在一個交易裡搬，最後逐表比對筆數，對不上就全部回復。搬完設好 `DATABASE_URL` 重開即可，大家的登入照舊；`data/docs` 資料夾留著。Docker 的 SQLite 資料在 volume 裡：先 `docker compose cp aigile:/data/switch.db ./switch.db` 拿出來再搬。
 
 </details>
 
