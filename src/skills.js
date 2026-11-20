@@ -4,6 +4,7 @@
 //   - 每個 AI 的主人允許「這一版」才安裝含腳本的包；同步全手動（主人按「同步」或重跑 aigile-setup），AI 不自己查、不加輪詢
 //   - 執行照工具權限，不另外問；技能只發給該專案、指定的 AI（所有 AI／指定角色／指定 AI，MAIN-249）；新版或下架由平台私訊主人（每位主人一則）
 import { ROLES } from './roles.js';
+import { SKILL_TEMPLATES, templateByName, templateIn, templateMarkOf, TEMPLATE_MARK } from './skill-templates.js';
 export const SKILL_MAX_BYTES = 1024 * 1024;
 export const SKILL_MAX_FILES = 100;
 const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/; // Claude Code、Codex 共通的技能名稱規則（也是資料夾名）
@@ -51,6 +52,7 @@ export const packMeta = r => { const s = r?.files ?? r?.pack_meta; if (typeof s 
 export function registerSkills({ route, db, ApiError, invalid, readJson, randId, nowIso, sha256, peopleMap, projectsOf, PROJECTS, nameOf,
   loadLeaders, adminOf, assertNoSecret, writeDm, myAi, requireHuman, loadReadOnly = async () => ({}), roIn = () => false, readOnlyError = null, setupSha = '', roleDefsMap = async () => ({}), storage = null }) {
   const bytes = s => new TextEncoder().encode(s).length;
+  const TPL_HINT = `CASE WHEN substr(files, 1, 1) = '[' AND instr(files, '\\n  ${TEMPLATE_MARK}:') > 0 THEN substr(files, instr(files, '\\n  ${TEMPLATE_MARK}:'), 100) END AS tpl`; // 範本標記那一小段（PLAT-365；JSON 裡 frontmatter 縮排那一行，其他檔隨口提到不算）
   // 這個技能發不發給這隻 AI——安裝、私訊主人、同名檢查、待允許數、安裝統計都用這一個判斷
   // 一定要：啟用中的 AI、在技能的專案裡；指定 AI 看名單，指定角色看 role_key（平台角色與專案自訂角色都是 role_key）
   const targets = (r, ai) => {
@@ -164,6 +166,16 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     if (!b) throw new ApiError(500, 'PACK_MISSING', `技能包「${r.name}」的檔案不見了，請重新上傳`);
     return JSON.parse(new TextDecoder().decode(b));
   }
+  // PLAT-365 來自哪個範本：SKILL.md 的 metadata 有 aigile-template: <名稱>@<版本>；latest＝程式裡範本現在的版本（範本拿掉了就 null）
+  // 清單查詢只撈 files 欄裡那一小段（TPL_HINT），不整包讀；整列（SELECT *）就直接看 SKILL.md
+  const tplView = r => {
+    let src = r.tpl ?? null;
+    if (src == null && typeof r.files === 'string' && r.files[0] === '[') { try { src = JSON.parse(r.files).find(f => f.path === 'SKILL.md')?.text || null; } catch {} }
+    const m = templateMarkOf(src);
+    if (!m) return {};
+    const latest = templateByName(m.name)?.version ?? null;
+    return { template: { name: m.name, version: m.version, latest, outdated: latest != null && latest > m.version } };
+  };
   const view = (r, people, { withFiles = false } = {}) => ({
     skillId: r.id, project: r.project, name: r.name, version: r.version, description: r.description, sha256: r.sha256, size: r.size,
     kind: packMeta(r) ? 'pack' : 'skill', ...(packMeta(r) ? { pack: (({ skills, agents, files, runs }) => ({ skills, agents, files, runs }))(packMeta(r)) } : {}),
@@ -171,6 +183,7 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     uploadedBy: { participantId: r.uploaded_by, name: people?.get(r.uploaded_by)?.name || '?' }, uploadedAt: r.uploaded_at,
     ...(r.reviewed_by ? { reviewedBy: { participantId: r.reviewed_by, name: people?.get(r.reviewed_by)?.name || '?' }, reviewedAt: r.reviewed_at, reviewNote: r.review_note || '' } : {}),
     ...(withFiles ? { files: r.__files } : {}), // 先用 filesOf 讀好放 __files（技能包在分塊儲存）
+    ...tplView(r),
   });
 
   // 平台私訊主人（發送者記 system，網頁顯示「平台通知」；放在主人與他在這個專案第一個 AI 的私訊串；每位主人一則）
@@ -212,6 +225,14 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     }));
   }
 
+  // ---------- 範本技能（PLAT-365）：跟著程式走，所有專案共用；套用＝複製成本專案技能（前端帶內容走一般上傳） ----------
+  // lang=en 給英文版，其他給中文；AI 不用（技能是主人同步給 AI 的）
+  route('GET', '/api/skill-templates', async ({ me, url }) => {
+    requireHuman(me);
+    const lang = url.searchParams.get('lang') === 'en' ? 'en' : 'zh';
+    return { lang, items: SKILL_TEMPLATES.map(t => templateIn(t, lang)) };
+  });
+
   // ---------- 技能分頁：一次拿全部 ----------
   route('GET', '/api/skills', async ({ ctx, me }) => {
     const people = await peopleMap(ctx);
@@ -221,7 +242,7 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     if (!pjs.length) return { items: [], projects: [], roles: ROLES.map(r => r.key) };
     const ro = await loadReadOnly();
     const manageOf = pj => me.kind === 'human' && !roIn(me, pj, ro) && (admin || (leaders[pj] || []).includes(me.id));
-    const rows = (await db.all("SELECT id, project, name, version, description, sha256, size, has_scripts, roles, CASE WHEN substr(files, 1, 1) = '{' THEN files END AS pack_meta, status, uploaded_by, uploaded_at, reviewed_by, reviewed_at, review_note FROM skills WHERE status != 'superseded' AND project IN (SELECT value FROM json_each(?)) ORDER BY uploaded_at DESC", JSON.stringify(pjs)))
+    const rows = (await db.all(`SELECT id, project, name, version, description, sha256, size, has_scripts, roles, CASE WHEN substr(files, 1, 1) = '{' THEN files END AS pack_meta, ${TPL_HINT}, status, uploaded_by, uploaded_at, reviewed_by, reviewed_at, review_note FROM skills WHERE status != 'superseded' AND project IN (SELECT value FROM json_each(?)) ORDER BY uploaded_at DESC`, JSON.stringify(pjs)))
       .filter(r => manageOf(r.project) || r.status === 'published' || r.uploaded_by === me.id);
     const stats = await installStats(null, rows.filter(r => r.status === 'published'));
     const ais = [...people.values()].filter(p => p.kind === 'ai' && p.status === 'active');
@@ -241,7 +262,7 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     const pj = params.id; requireProject(pj);
     if (!(await canSee(ctx, me, pj))) throw new ApiError(403, 'FORBIDDEN', '你不屬於這個專案');
     const manage = await canManage(ctx, me, pj);
-    const rows = await db.all("SELECT id, project, name, version, description, sha256, size, has_scripts, roles, CASE WHEN substr(files, 1, 1) = '{' THEN files END AS pack_meta, status, uploaded_by, uploaded_at, reviewed_by, reviewed_at, review_note FROM skills WHERE project = ? ORDER BY name, version DESC", pj);
+    const rows = await db.all(`SELECT id, project, name, version, description, sha256, size, has_scripts, roles, CASE WHEN substr(files, 1, 1) = '{' THEN files END AS pack_meta, ${TPL_HINT}, status, uploaded_by, uploaded_at, reviewed_by, reviewed_at, review_note FROM skills WHERE project = ? ORDER BY name, version DESC`, pj);
     const people = await peopleMap(ctx);
     // 一般成員：已上架的＋自己上傳的；leader／管理員：除了舊版都看得到
     const shown = rows.filter(r => r.status !== 'superseded' && (manage || r.status === 'published' || r.uploaded_by === me.id));

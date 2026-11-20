@@ -6127,7 +6127,10 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   async function skLoad() {
     if (skv.loading) return;
     skv.loading = true;
-    try { skv.data = await api('/api/skills'); } catch (e) { toast(e.message); } finally { skv.loading = false; }
+    try { skv.data = await api('/api/skills'); } catch (e) { toast(e.message); }
+    // PLAT-365 範本技能：跟著程式走，讀一次就好（照介面語言）；讀不到不影響技能清單
+    if (!skv.tpls) try { skv.tpls = (await api('/api/skill-templates?lang=' + (window.aigileI18n?.lang === 'en' ? 'en' : 'zh'))).items; } catch { skv.tpls = null; }
+    skv.loading = false;
     skv.redraw?.();
   }
   const skCount = () => (skv.data ? skv.data.items.filter(s => s.status !== 'removed' && s.status !== 'rejected').length : 0);
@@ -6152,7 +6155,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       return `<button type="button" class="sk-card" data-skc="${esc(s.skillId)}">
         <span class="sk-ct">${skIcon(s)}<span class="sk-tt"><b class="sk-nm">${esc(s.name)}</b><span class="muted small">v${s.version} · ${esc(s.uploadedBy.name)} · ${esc(mmdd(s.uploadedAt))}</span></span><span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || esc(s.status)}</span></span>
         <span class="sk-ds">${esc(s.description)}</span>
-        <span class="sk-tags"><span class="pill-tag grey">${esc(pj?.name || projName(s.project))}</span> ${skRoleTags(s)} ${skKindTag(s)}</span>
+        <span class="sk-tags"><span class="pill-tag grey">${esc(pj?.name || projName(s.project))}</span> ${skRoleTags(s)} ${skKindTag(s)}${skTplTag(s, pj?.canManage)}</span>
         <span class="sk-meter" aria-hidden="true"><i style="width:${ok}%" class="ok"></i><i style="width:${wait}%" class="wait"></i></span>
         <span class="sk-foot">${foot}</span>
       </button>`;
@@ -6173,7 +6176,24 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         ${emptyPjs.map(p => `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>把團隊的做事方法寫成 SKILL.md，該角色的 AI 就照同一套做。</span><button type="button" class="btn small" data-skup="${esc(p.id)}">＋ 上傳到${esc(p.name)}</button></div>`).join('')}
         ${!shown.length && !emptyPjs.length ? `<p class="muted">${q ? '沒有符合的技能。' : '目前沒有技能。'}</p>` : ''}
       </div>
+      ${skTplSecHtml(d, live)}
     </div>`;
+  }
+  // PLAT-365 範本技能區：leader／管理員才看得到（要能套用）；每個範本列出已套用到哪些專案（篩選專案時只看那個）
+  const skTplTag = (s, manage) => (s.template ? ` <span class="pill-tag grey" title="${esc(s.template.name)} v${s.template.version}">📚 範本</span>${s.template.outdated && manage ? ' <span class="pill-tag yellow">範本有新版</span>' : ''}` : '');
+  function skTplSecHtml(d, live) {
+    const tpls = skv.tpls || [];
+    if (!tpls.length || !d.projects.some(p => p.canManage && (!skv.filter || p.id === skv.filter))) return '';
+    const pjName = id => d.projects.find(p => p.id === id)?.name || projName(id);
+    const card = t => {
+      const used = d.items.filter(s => live(s) && s.status !== 'rejected' && s.template?.name === t.name && (!skv.filter || s.project === skv.filter));
+      return `<div class="sk-tpl"><span class="sk-tt"><b class="sk-nm">${esc(t.title)}</b><span class="muted small"><code>${esc(t.name)}</code> · v${t.version}</span></span>
+        <span class="sk-ds">${esc(t.description)}</span>
+        ${used.length ? `<span class="sk-tags">${used.map(s => `<span class="pill-tag ${s.template.outdated ? 'yellow' : 'green'}">${esc(pjName(s.project))}${s.template.outdated ? '：範本有新版' : '：已套用'}</span>`).join(' ')}</span>` : ''}
+        <span class="sk-tpl-go"><button type="button" class="btn small" data-sktpl="${esc(t.name)}">套用</button></span></div>`;
+    };
+    return `<section class="sk-tpl-sec" aria-label="範本技能"><div class="sk-tpl-h"><b>📚 範本技能</b><span class="muted small">內建的做事方法。按「套用」複製到專案，可以先改內容再上架；範本出新版時會提示，不會自動蓋掉你改過的內容。</span></div>
+      <div class="sk-grid">${tpls.map(card).join('')}</div></section>`;
   }
   // 我的 AI 頁的入口（一般成員進不了成員與權限）：同一個畫面放在彈窗
   function openSkillsView(pj = '') {
@@ -6203,9 +6223,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           ${s.previous ? s.previous.files.filter(o => !s.files.some(f => f.path === o.path)).map(o => `<p class="small"><code>${esc(o.path)}</code> <span class="pill-tag red">刪除</span></p>`).join('') : ''}</div>`}
         ${['published', 'pending'].includes(s.status) ? `<div class="sk-sec" id="sk-to-sec"><b class="sk-h">發給誰</b><div class="sk-to-sum">${esc(skToText(s))}${s.ais?.length ? `：${s.ais.map(a => esc(a.name) + (a.gone ? '（已不在專案，不會再發）' : '')).join('、')}` : ''}${s.canManage && skv.data?.projects.some(p => p.id === s.project) ? ' <button type="button" class="link small" data-skto>改</button>' : ''}</div></div>` : ''}
         ${s.status === 'published' ? `<div class="sk-sec"><b class="sk-h">裝到哪些 AI</b>${s.installs.length ? s.installs.map(a => `<div class="sk-ai"><span class="sk-dot ${dot[a.state][0]}" aria-hidden="true"></span>${esc(a.name)}（${esc(a.owner)}）· ${a.state === 'waiting' && a.mine ? '等你允許' : dot[a.state][1]}${a.state === 'installed' ? ` v${s.version}` : ''}${a.state === 'waiting' && a.mine ? `<button type="button" class="link small sk-push" data-skallow="${esc(a.aiId)}">允許並同步</button>` : ''}</div>`).join('') : '<p class="muted small">這個專案沒有符合發給誰的 AI。</p>'}</div>` : ''}
-        <div class="sk-sec"><b class="sk-h">版本</b>v${s.version} · ${esc(fmtTime(s.uploadedAt))} ${esc(s.uploadedBy.name)}上傳${s.reviewedBy ? `，${esc(s.reviewedBy.name)}核准` : s.status === 'published' ? '（直接上架）' : ''}${s.reviewNote ? ` · 審核：${esc(s.reviewNote)}` : ''}</div>
+        <div class="sk-sec"><b class="sk-h">版本</b>v${s.version} · ${esc(fmtTime(s.uploadedAt))} ${esc(s.uploadedBy.name)}上傳${s.reviewedBy ? `，${esc(s.reviewedBy.name)}核准` : s.status === 'published' ? '（直接上架）' : ''}${s.reviewNote ? ` · 審核：${esc(s.reviewNote)}` : ''}${s.template ? `<br><span class="muted small">${s.template.outdated ? `來自範本第 ${s.template.version} 版，範本已經有第 ${s.template.latest} 版` : `來自範本第 ${s.template.version} 版`}：<code>${esc(s.template.name)}</code></span>` : ''}</div>
         ${s.canReview ? `<div class="sk-sec"><label class="field">審核說明（退回必填）<input id="sk-note" maxlength="300"></label><div class="row"><button type="button" class="btn danger" data-skno>退回（寫原因）</button><button type="button" class="btn primary" data-skok>看過全文與差異，核准上架</button></div></div>` : ''}
-        <div class="sk-actions">${pj?.canUpload ? `<button type="button" class="btn" data-skup="${esc(s.project)}">上傳新版本</button>` : ''}${s.canManage && ['published', 'pending'].includes(s.status) ? `<button type="button" class="btn danger-outline" data-skrm>下架</button>` : ''}</div>`;
+        <div class="sk-actions">${s.template?.outdated && s.canManage && ['published', 'pending'].includes(s.status) && (skv.tpls || []).some(t => t.name === s.template.name) ? '<button type="button" class="btn primary" data-sktplup>看範本新版</button>' : ''}${pj?.canUpload ? `<button type="button" class="btn" data-skup="${esc(s.project)}">上傳新版本</button>` : ''}${s.canManage && ['published', 'pending'].includes(s.status) ? `<button type="button" class="btn danger-outline" data-skrm>下架</button>` : ''}</div>`;
       // 技能包的其他檔（說明、測試資料）打開才畫，幾百個檔不一次塞進畫面
       box.querySelector('[data-sk-lazy]')?.addEventListener('toggle', e => { const d = e.currentTarget, el = d.querySelector('.sk-lazy'); if (d.open && !el.childElementCount) el.innerHTML = s.files.filter(f => !skRuns(f.path)).map(f => skFileHtml(f, s.previous)).join(''); });
       return s;
@@ -6216,7 +6236,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       // 改發給誰：在抽屜裡展開選擇器，存了就生效（不用重傳、不升版本）
       const ed = box.querySelector('#sk-to-edit');
       if (toPick && ed && toPick.click(e, ed)) { box.querySelector('[data-sktosave]').disabled = !toPick.valid(); return; }
-      const t = e.target.closest('[data-skx],[data-skok],[data-skno],[data-skrm],[data-skallow],[data-skup],[data-skto],[data-sktosave],[data-sktocancel]');
+      const t = e.target.closest('[data-skx],[data-skok],[data-skno],[data-skrm],[data-skallow],[data-skup],[data-skto],[data-sktosave],[data-sktocancel],[data-sktplup]');
       if (!t) return;
       try {
         if (t.hasAttribute('data-skx')) return close();
@@ -6234,6 +6254,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           toPick = null; toast('已改發給誰，已通知受影響的 AI 主人'); s = await draw(); box.querySelector('[data-skto]')?.focus(); return skLoad();
         }
         if (t.dataset.skup) { close(); return skOpenUpload(t.dataset.skup); }
+        if (t.hasAttribute('data-sktplup')) { close(); return skOpenApply(s.template.name, s.project); }
         if (t.dataset.skallow) {
           if (!await confirmDialog({ title: '允許含腳本的技能？', message: '允許後會請 AI 同步，把這一版的腳本放進它的技能資料夾；執行時照它工具本身的權限。新版要重新允許。', confirmText: '允許並同步' })) return;
           await api(`/api/my-ais/${encodeURIComponent(t.dataset.skallow)}/skills/${encodeURIComponent(id)}`, { method: 'PUT', body: { allow: true } });
@@ -6379,6 +6400,68 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
     drawFile(); drawFoot();
   }
+  // PLAT-365 套用範本：1 套用到（能管理的專案）→ 2 內容（範本 SKILL.md 放進編輯框，可以先改）→ 3 發給誰；送出走一般上傳
+  // 專案已有同名技能：顯示目前的 SKILL.md 對照，發給誰沿用原本的，其他檔照留；上架後成為新版（不會自動做，要 leader 按）
+  const skNameOf = text => /^---\r?\n[\s\S]*?^name:\s*([^\s#]+)/m.exec(text || '')?.[1] || '';
+  function skOpenApply(name, pj = '') {
+    const tpl = (skv.tpls || []).find(t => t.name === name);
+    if (!tpl) return toast('找不到這個範本');
+    const pjs = (skv.data?.projects || []).filter(p => p.canManage);
+    if (!pjs.length) return toast('只有專案的 leader 或管理員能套用範本');
+    let target = pjs.some(p => p.id === pj) ? pj : pjs[0].id, busy = false, cur = null, seq = 0;
+    let pick = skTargetPicker(() => target);
+    const body = openModal('套用範本', `<label class="field sk-up-step">1. 套用到<select id="sk-ap-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+      <div class="sk-up-sec"><b class="sk-up-step">2. 內容（SKILL.md）</b><div id="sk-ap-cur"></div>
+        <textarea id="sk-ap-text" class="sk-ap-text" rows="14" spellcheck="false" aria-label="SKILL.md 內容">${esc(tpl.text)}</textarea>
+        <p class="field-hint">可以先改內容再上架。開頭的 name 是技能名稱（也是 AI 電腦上的資料夾名）；metadata 底下 aigile-template 那一行記錄來自哪個範本，留著才會在範本出新版時提示你。</p></div>
+      <div class="sk-up-sec"><b class="sk-up-step">3. 發給誰</b><div class="sk-to" id="sk-to">${pick.html()}</div></div>`,
+      { size: 'sk-up', sub: `範本「${tpl.title}」第 ${tpl.version} 版`, foot: '<p class="error" id="sk-err" role="alert"></p><div class="sk-up-bar"><span class="sk-up-note" id="sk-up-note"></span><button type="button" class="btn" data-skcancel>取消</button><button type="button" class="btn primary" data-sksend>上架</button></div>' });
+    const modal = body.modal, foot = modal.querySelector('.modal-foot');
+    foot.classList.add('sk-up-foot');
+    const ta = body.querySelector('#sk-ap-text');
+    const err = t => { foot.querySelector('#sk-err').textContent = t; };
+    const nm = () => skNameOf(ta.value);
+    const drawFoot = () => {
+      const n = nm(), ok = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(n), go = foot.querySelector('[data-sksend]');
+      foot.querySelector('#sk-up-note').textContent = !ok ? 'SKILL.md 開頭要有 name（小寫英數與連字號）' : !pick.valid() ? '先選要發給誰' : cur ? `會成為「${n}」第 ${cur.version + 1} 版` : '純文字，按下就上架';
+      go.textContent = busy ? '上架中…' : '上架';
+      go.disabled = busy || !ok || !pick.valid();
+    };
+    // 這個專案有沒有同名技能（上架中或待核准）：有就讀全文給對照、沿用發給誰與其他檔
+    const loadCur = async () => {
+      const my = ++seq, n = nm();
+      const hit = (skv.data?.items || []).find(x => x.project === target && x.name === n && ['published', 'pending'].includes(x.status));
+      let c = null;
+      if (hit) try { c = await api(`/api/skills/${encodeURIComponent(hit.skillId)}`); } catch {}
+      if (my !== seq) return;
+      cur = c && c.kind !== 'pack' ? c : null;
+      pick = skTargetPicker(() => target, cur || {});
+      body.querySelector('#sk-to').innerHTML = pick.html();
+      const old = cur?.files.find(f => f.path === 'SKILL.md')?.text;
+      body.querySelector('#sk-ap-cur').innerHTML = cur ? `<div class="sk-alert" role="status">這個專案已經有「${esc(cur.name)}」第 ${cur.version} 版${cur.template ? `（來自範本第 ${cur.template.version} 版）` : ''}。上架後會成為第 ${cur.version + 1} 版、取代原本的 SKILL.md${cur.files.length > 1 ? `，其他 ${cur.files.length - 1} 個檔照留` : ''}；改過的地方請先對照。</div>${old ? `<details class="sk-file"><summary>看目前的 SKILL.md（第 ${cur.version} 版）</summary><pre class="sk-pre">${esc(old)}</pre></details>` : ''}` : '';
+      drawFoot();
+    };
+    body.addEventListener('change', e => {
+      if (e.target.id === 'sk-ap-pj') { target = e.target.value; loadCur(); }
+      else if (e.target.id === 'sk-ap-text') loadCur();
+    });
+    ta.addEventListener('input', () => { err(''); drawFoot(); });
+    modal.addEventListener('click', async e => {
+      if (pick.click(e, body.querySelector('#sk-to'))) return drawFoot();
+      if (e.target.closest('[data-skcancel]')) { closeModal(); if (skv.modal) openSkillsView(skv.filter); return; }
+      if (!e.target.closest('[data-sksend]') || busy) return;
+      busy = true; err(''); drawFoot();
+      try {
+        if (cur && cur.name !== nm()) cur = null; // 改了名稱就是另一個技能，不帶舊檔
+        const files = [{ path: 'SKILL.md', text: ta.value }, ...(cur ? cur.files.filter(f => f.path !== 'SKILL.md') : [])];
+        const r = await api(`/api/projects/${encodeURIComponent(target)}/skills`, { method: 'POST', body: { files, ...pick.body() } });
+        if (r.status === 'published') { foot.remove(); return skUploaded(body, r); }
+        toast(`「${r.name}」含腳本，等 leader 或管理員核准`);
+        closeModal(); if (skv.modal) openSkillsView(skv.filter); else skLoad();
+      } catch (ex) { busy = false; err(ex.message); drawFoot(); }
+    });
+    drawFoot(); loadCur();
+  }
   // 上傳成功：你名下會用到這個技能的 AI 一鍵全部同步
   async function skUploaded(body, r) {
     skLoad();
@@ -6398,7 +6481,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const lib = e.target.closest('[data-skills-lib]');
     if (lib) return openSkillsView(lib.dataset.skillsLib);
     if (!e.target.closest('.sk-view')) return;
-    const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), rule = e.target.closest('[data-skrule]');
+    const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), rule = e.target.closest('[data-skrule]'), tp = e.target.closest('[data-sktpl]');
+    if (tp) return skOpenApply(tp.dataset.sktpl, skv.filter);
     if (f) { skv.filter = f.dataset.skf; skv.redraw?.(); }
     else if (c) skOpenDrawer(c.dataset.skc);
     else if (up) skOpenUpload(up.dataset.skup);

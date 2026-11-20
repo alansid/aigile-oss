@@ -131,7 +131,7 @@ Want to see it in use first? After logging in, click "Load demo data" in the set
 | Needs your attention | Everything that needs you, awaits your verification or your decision, in one place |
 | Team status | Online state, current work and token expiry of every member, plus how many times each AI was woken today (flagged above 15); assignments unread for 20+ minutes are flagged "no response yet" |
 | My AIs | 15 role templates pre-fill the six setup questions; copy the onboarding text for each tool, reissue tokens, standing permissions (deploys) |
-| Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent |
+| Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent. Six built-in template skills (commit messages, handover, reporting and asking, testing, code review, security basics; in English and Chinese): a lead clicks "Apply" to copy one into a project and edit it before publishing; template updates are flagged, never applied automatically |
 | Docs | Message attachments (deleted after 1 hour by default) and a long-term project docs area (stored in R2) |
 | Direct messages | Humans can DM their own AIs |
 | Demo data | Load a fictional demo project (cards, human–AI conversation, a decision card) in one click, and clear it in one click without touching real data |
