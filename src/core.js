@@ -420,6 +420,13 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const fileRows = fileIds.length
       ? await db.all('SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(fileIds)) : [];
     const filesById = new Map(fileRows.map(x => [x.id, x]));
+    // 一則訊息可掛多個檔（files.message_id）；file＝第一個（舊版照讀），files＝全部、照上傳順序
+    const withFile = rows.filter(m => m.file_id).map(m => m.id);
+    const moreRows = withFile.length
+      ? await db.all('SELECT * FROM files WHERE message_id IN (SELECT value FROM json_each(?)) ORDER BY created_at, rowid', JSON.stringify(withFile)) : [];
+    const filesByMsg = new Map();
+    for (const x of moreRows) { if (!filesByMsg.has(x.message_id)) filesByMsg.set(x.message_id, []); filesByMsg.get(x.message_id).push(x); }
+    const filesOf = m => filesByMsg.get(m.id).map(x => fileView(x));
     const byMsg = new Map();
     for (const r of recRows) {
       if (!byMsg.has(r.message_id)) byMsg.set(r.message_id, []);
@@ -439,6 +446,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
       replyToMessageId: m.reply_to,
       project: m.project || null,
       file: m.file_id ? fileView(filesById.get(m.file_id), m.file_id) : null,
+      ...(filesByMsg.get(m.id)?.length > 1 ? { files: filesOf(m) } : {}), // 只有多個檔才帶（單檔跟 file 一樣，不重複佔 AI 的上下文）
       createdAt: m.created_at,
       ...(AUTO_MSG_RE.test(m.request_id || '') ? { auto: true } : {}), // 平台自動組的通知（卡片異動、退回、交接…）：網頁英文介面照固定句型翻，內容不動
       ...(resBy.has(m.id) ? { resolution: resolutionView(resBy.get(m.id), people) } : {}),
@@ -568,7 +576,8 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
 
   // ---------- 訊息 ----------
   // checkProject：成員發文時檢查收件人是否屬於訊息的專案；伺服器代發的通知不檢查
-  async function createMessage(ctx, me, body, { fileId = null, checkProject = false, systemNotice = false } = {}) {
+  async function createMessage(ctx, me, body, { fileId = null, fileIds = null, checkProject = false, systemNotice = false } = {}) {
+    if (fileIds?.length) fileId = fileIds[0]; // 多檔時 messages.file_id 放第一個
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text || text.length > MAX_TEXT) throw invalid(`text 需為 1～${MAX_TEXT} 字`);
     // 亂碼攔截（Windows 主控台用錯編碼送中文常變成 ????）。U+FFFD 一律擋；連續問號只擋 AI
@@ -591,7 +600,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     if (body.replyFrom !== undefined && body.replyFrom !== null && !Array.isArray(body.replyFrom)) throw invalid('replyFrom 需為陣列');
     const rawAsk = body.replyFrom ? [...new Set(body.replyFrom.map(String))] : null;
 
-    const hashParts = [text, [...new Set(rawIds)].sort(), replyToId, audience, fileId];
+    const hashParts = [text, [...new Set(rawIds)].sort(), replyToId, audience, fileIds?.length > 1 ? fileIds : fileId];
     if (rawAsk) hashParts.push(rawAsk);
     const payloadHash = await sha256(JSON.stringify(hashParts));
     const dup = await db.get('SELECT * FROM messages WHERE author_id = ? AND request_id = ?', me.id, requestId);
@@ -695,7 +704,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     const stmts = [[
       `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project, reply_from)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt, project, ask ? JSON.stringify(ask) : null]]];
-    if (fileId) stmts.push(['UPDATE files SET message_id = ? WHERE id = ?', [id, fileId]]);
+    for (const fid of fileIds?.length ? fileIds : fileId ? [fileId] : []) stmts.push(['UPDATE files SET message_id = ? WHERE id = ?', [id, fid]]);
     for (const rid of recipientIds) stmts.push(['INSERT INTO message_recipients (message_id, participant_id) VALUES (?,?)', [id, rid]]);
     for (const [rid, rs] of reasons) {
       stmts.push(['INSERT INTO notifications (id, recipient_id, message_id, reasons, created_at) VALUES (?,?,?,?,?)',
@@ -3013,7 +3022,8 @@ ${ending}`;
       if (card.project && body.project !== card.project) { cardMismatch = `${body.cardId} 屬於「${nameOf(card.project)}」，這則訊息的專案不同，已照發但沒有掛上卡片；要掛請把 project 填 ${card.project}。`; cardSeq = null; card = null; }
       cardClosed = card && ['已完成', '已封存'].includes(card.status) ? card.status : '';
     }
-    const r = await createMessage(ctx, me, body, { checkProject: true });
+    const fileIds = body.fileIds !== undefined && body.fileIds !== null ? await attachableFiles(me, body) : null;
+    const r = await createMessage(ctx, me, body, { checkProject: true, fileIds });
     let cardLinked = cardMismatch ? false : undefined;
     if (cardSeq) {
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
@@ -3275,16 +3285,42 @@ ${ending}`;
     return storeMessageFile(me, req, new URLSearchParams({ name: file.name, declared: declared ?? '', project: project || 'all' }));
   }
 
+  const MAX_MSG_FILES = 4; // 一則訊息最多掛 4 個檔
+  const ttlText = () => { const hours = Math.round(FILE_TTL_MS / 3600_000); return hours >= 1 ? `${hours} 小時` : `${Math.max(1, Math.round(FILE_TTL_MS / 60_000))} 分鐘`; };
+  // 多檔訊息的內文；每個檔都列下載連結，只讀 text 的舊版 AI 也拿得到全部
+  const filesText = (note, files) => `${note ? note + '\n' : ''}[文件] ${files.length} 個檔案（已聲明不含程式碼與客戶個資；${ttlText()}後自動刪除）\n${
+    files.map((f, i) => `${i + 1}. ${f.name}（${formatBytes(f.size)}，SHA-256 ${f.sha256.slice(0, 12)}…）下載：GET /api/files/${f.id}`).join('\n')}`;
+  // POST /api/messages 帶 fileIds＝先用 POST /api/files?post=false 上傳、再一次發成一則（通知只發一次）；
+  // 只能掛自己上傳、還沒掛到訊息、沒過期的檔；內文由平台照檔案產生（text 當附註，可空）
+  async function attachableFiles(me, body) {
+    if (!Array.isArray(body.fileIds) || !body.fileIds.length) throw invalid(`fileIds 需為 1～${MAX_MSG_FILES} 個 fileId 的陣列`);
+    const ids = [...new Set(body.fileIds.map(String))];
+    if (ids.length !== body.fileIds.length) throw invalid('fileIds 不可重複');
+    if (ids.length > MAX_MSG_FILES) throw new ApiError(400, 'TOO_MANY_FILES', `一則訊息最多 ${MAX_MSG_FILES} 個檔案`);
+    const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
+    const dup = requestId ? await db.get('SELECT id FROM messages WHERE author_id = ? AND request_id = ?', me.id, requestId) : null; // 重送同一則：檔案已掛在它上面
+    const rows = await db.all('SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(ids));
+    const byId = new Map(rows.map(x => [x.id, x]));
+    const files = ids.map(id => byId.get(id));
+    for (const [i, f] of files.entries()) {
+      if (!f || f.uploader_id !== me.id || f.deleted_at || f.expires_at <= Date.now()) throw new ApiError(404, 'NOT_FOUND', `找不到可以掛的檔案 ${ids[i]}（要是你自己上傳、還沒過期的）`);
+      if (f.message_id && f.message_id !== dup?.id) throw new ApiError(409, 'FILE_ALREADY_POSTED', `檔案 ${f.name} 已經掛在別的訊息上`);
+    }
+    const note = typeof body.text === 'string' ? body.text.trim() : '';
+    body.text = filesText(note, files).slice(0, MAX_TEXT);
+    return ids;
+  }
+
   async function uploadFile(ctx, me, req, url) {
     const q = url.searchParams;
     const file = await storeMessageFile(me, req, q);
     const { id, name, size, sha256: hash } = file;
+    // post=false 只存檔不發文，之後用 POST /api/messages 帶 fileIds 一次發（最多 4 個）；沒掛上訊息的檔下載不到，到期自動刪
+    if (q.get('post') === 'false') return { __status: 201, file: fileView(file) };
 
     // 自動在群組發一則附下載連結的訊息
     const note = (q.get('text') || '').trim();
-    const hours = Math.round(FILE_TTL_MS / 3600_000);
-    const ttl = hours >= 1 ? `${hours} 小時` : `${Math.max(1, Math.round(FILE_TTL_MS / 60_000))} 分鐘`;
-    const text = `${note ? note + '\n' : ''}[文件] ${name}（${formatBytes(size)}，SHA-256 ${hash.slice(0, 12)}…）\n已聲明不含程式碼與客戶個資；${ttl}後自動刪除。下載：GET /api/files/${id}`;
+    const text = `${note ? note + '\n' : ''}[文件] ${name}（${formatBytes(size)}，SHA-256 ${hash.slice(0, 12)}…）\n已聲明不含程式碼與客戶個資；${ttlText()}後自動刪除。下載：GET /api/files/${id}`;
     const recipientIds = (q.get('recipientIds') || '').split(',').map(x => x.trim()).filter(Boolean);
     const { message } = await createMessage(ctx, me, {
       text: text.slice(0, MAX_TEXT), requestId: 'req_file_' + id,

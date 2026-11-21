@@ -23,7 +23,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIG_DIR = path.join(ROOT, 'migrations');
 const SCHEMA = fs.readFileSync(path.join(ROOT, 'src/schema.sql'), 'utf8');
 // 1.0.x 的結構＝現在的 schema.sql 去掉 002 加的三欄（有 git 與版本標籤時，再對一次 v1.0.0、v1.0.2 的原檔）
-const OLD = SCHEMA.split('\n').filter(l => !/^\s+wake_(day|count|at) /.test(l)).join('\n');
+const OLD = SCHEMA.split('\n').filter(l => !/^\s+wake_(day|count|at) /.test(l) && !/^CREATE INDEX IF NOT EXISTS idx_files_message /.test(l)).join('\n'); // 003 加的索引也去掉
 assert.notEqual(OLD, SCHEMA, '測試用的舊結構真的少了叫醒欄位');
 for (const tag of ['v1.0.0', 'v1.0.2']) {
   const g = spawnSync('git', ['show', `${tag}:src/schema.sql`], { cwd: ROOT, encoding: 'utf8' });
@@ -68,7 +68,7 @@ try {
     assert.ok(!plan.steps.some(s => /001_admin_flag/.test(s.label)), 'D1：001 已套過不重跑');
     for (const s of plan.steps) d1.exec(s.sql); // D1 一步一批送出（接成一行、註解拿掉）
     assert.ok(['wake_day', 'wake_count', 'wake_at'].every(c => cols(d1, 'participants').includes(c)), 'D1：升級後有三欄');
-    assert.deepEqual(applied(), ['001_admin_flag.sql', '002_wake_counts.sql'], 'D1：記成已套');
+    assert.deepEqual(applied(), files.map(f => f.name), 'D1：記成已套（002 和之後的升級）');
     assert.ok(!d1Steps({ fresh: false, applied: applied(), files, schema: SCHEMA, now: 'T' }).steps.some(s => /002/.test(s.label)), 'D1：再跑一次不重套');
     // D1 全新站：直接建最新結構、標記全部已套
     const fresh = d1Steps({ fresh: true, applied: [], files, schema: SCHEMA, now: 'T' });
@@ -81,11 +81,12 @@ try {
 
   // ---------- 3. 新版程式開舊資料庫：自動升級 ----------
   const BASE = await startServer(kids, dataDir, { TEAM_CACHE_MS: '0', AIGILE_TEST_PG_URL: '' }); // 這裡驗的是舊 SQLite 檔升級：Postgres 模式也開 SQLite
-  assert.match(kids[0].tail, /資料庫升級：套用 002_wake_counts\.sql（目前版本 2）/, '啟動時自動套 002：' + kids[0].tail);
+  const ALL_MIGS = listMigrations(MIG_DIR).map(f => f.name); // 002 之後還有別的升級時一起套
+  assert.ok(kids[0].tail.includes(`資料庫升級：套用 ${ALL_MIGS.filter(n => !OLD_MIGS.includes(n)).join('、')}（目前版本 ${ALL_MIGS.length}）`) && /套用 002_wake_counts\.sql/.test(kids[0].tail), '啟動時自動套 002：' + kids[0].tail);
   {
     const db = new DatabaseSync(file);
     assert.ok(['wake_day', 'wake_count', 'wake_at'].every(c => cols(db, 'participants').includes(c)), 'Node：升級後有三欄');
-    assert.deepEqual(db.prepare('SELECT name FROM schema_migrations ORDER BY name').all().map(r => r.name), ['001_admin_flag.sql', '002_wake_counts.sql']);
+    assert.deepEqual(db.prepare('SELECT name FROM schema_migrations ORDER BY name').all().map(r => r.name), ALL_MIGS);
     db.close();
   }
   const call = async (t, p, method = 'GET', body) => { const r = await fetch(BASE + p, { method, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };

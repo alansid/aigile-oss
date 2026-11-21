@@ -1317,7 +1317,7 @@
         ${statusTags(m, toMe, replyMe)}
         ${cardRefHtml(m, prevCard)}
         ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
-        ${m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, ai) : textHtml(m)}
+        ${m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, ai) : textHtml(m)}
         ${authHtml(m)}
         <div class="msg-foot${linkedCapsules(m) || state.open.has(m.messageId) || (!m.file && !ai && isLong(m.text)) || repliesOf(m.messageId).length ? '' : ' acts-only'}">
           <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
@@ -1390,7 +1390,7 @@
       : `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>`;
     const cls = ['msg', 'gmsg', isMine(m) ? 'mine' : '', needReply(m) ? 'need-me' : '', isKid(m) ? 'kid' : ''].join(' ');
     const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
-    const body = m.file ? fileNoteHtml(m.text) + fileCardHtml(m.file) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m, !!tag); // 名字旁已有標籤
+    const body = m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m, !!tag); // 名字旁已有標籤
     return `<article class="${cls}" id="msg-${esc(m.messageId)}">
       <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}${timeHtml(m)}${ask}${resolvedPill(m)}${unansweredTag(m)}</div>
       ${re}
@@ -7437,6 +7437,101 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       </div>`;
   }
 
+  // 一則訊息多個檔（files，2～4 個）→ 縮圖格：2 張並排、3 張一大兩小、4 張 2×2；點開深色全螢幕左右切
+  const isImgExt = ext => ['png', 'jpg', 'jpeg'].includes(ext);
+  function filesHtml(m) {
+    const fs = m.files?.length > 1 ? m.files : null;
+    if (!fs) return fileCardHtml(m.file);
+    if (!fs.some(f => f.available)) return '<div class="file-card gone">📄 文件已過期或已刪除</div>';
+    const allImg = fs.every(f => !f.available || isImgExt(f.ext));
+    const cells = fs.map((f, i) => !f.available
+      ? `<div class="fg-cell gone"><span class="muted small">已過期或已刪除</span></div>`
+      : `<button type="button" class="fg-cell" data-fg-open="${esc(m.messageId)}" data-i="${i}" aria-label="${esc(`第 ${i + 1} 張，共 ${fs.length} 張：${f.name}，點開放大`)}">${isImgExt(f.ext)
+        ? `<img alt="" data-thumb="${esc(f.fileId)}">` : `<span class="fg-ico" aria-hidden="true">${fileIcon(f.ext)}</span><span class="fg-name small">${esc(f.name)}</span>`}</button>`).join('');
+    return `<div class="fgrid fg-${fs.length}">${cells}</div>
+      <p class="fg-foot muted small"><span>${allImg ? `🖼 ${fs.length} 張截圖` : `📎 ${fs.length} 個檔案`}</span> · <span class="file-ok">✓ 已聲明不含程式碼與個資</span> · <button type="button" class="link small" data-fg-all="${esc(m.messageId)}">全部下載</button></p>`;
+  }
+  // 縮圖要帶登入才拿得到：同一頁同一個檔只抓一次（抓＝下載，會記稽核）
+  const thumbCache = new Map();
+  const thumbUrl = id => {
+    if (!thumbCache.has(id)) thumbCache.set(id, fetch(`/api/files/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } })
+      .then(r => (r.ok ? r.blob() : Promise.reject(new Error(r.status)))).then(b => URL.createObjectURL(b)).catch(e => { thumbCache.delete(id); throw e; }));
+    return thumbCache.get(id);
+  };
+  function loadThumbs(root = document) {
+    for (const img of root.querySelectorAll('img[data-thumb]:not([data-loading])')) {
+      img.dataset.loading = '1';
+      thumbUrl(img.dataset.thumb).then(u => { img.src = u; }).catch(() => { img.closest('.fg-cell')?.classList.add('broken'); });
+    }
+  }
+  new MutationObserver(() => { if (document.querySelector('img[data-thumb]:not([data-loading])')) loadThumbs(); }).observe(document.body, { childList: true, subtree: true });
+
+  // 深色全螢幕：上方「2 / 3 · 檔名 · 發文者 時間」、下載、✕；左右箭頭、← → 鍵、手機滑；下方縮圖列；Esc 關閉
+  // items：[{ name, url?（本機預覽）, fileId?（訊息裡的檔）, sub? }]
+  function openViewer(items, start = 0, { onDelete = null } = {}) {
+    let i = start;
+    const prev = document.activeElement;
+    const el = document.createElement('div');
+    el.className = 'viewer';
+    document.body.classList.add('viewer-open'); // 確認框要疊在大圖上
+    el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', '看大圖');
+    document.body.append(el);
+    const src = it => (it.url ? Promise.resolve(it.url) : it.fileId ? thumbUrl(it.fileId) : Promise.reject(new Error('no')));
+    const draw = () => {
+      const it = items[i], many = items.length > 1;
+      el.innerHTML = `<div class="vw-top"><span class="vw-title">${many ? `${i + 1} / ${items.length} · ` : ''}${esc(it.name)}${it.sub ? ` · ${esc(it.sub)}` : ''}</span><span class="grow"></span>
+          ${it.fileId ? `<button type="button" class="vw-btn" data-vw="dl">下載</button>` : ''}${onDelete && it.canDelete ? `<button type="button" class="vw-btn danger" data-vw="del">${items.length > 1 ? '刪除這張' : '刪除'}</button>` : ''}
+          <button type="button" class="vw-btn vw-x" data-vw="x" aria-label="關閉">✕</button></div>
+        <div class="vw-stage">${many ? '<button type="button" class="vw-nav prev" data-vw="prev" aria-label="上一張">‹</button>' : ''}
+          ${isImgExt((it.name.split('.').pop() || '').toLowerCase()) ? '<img class="vw-img" alt="">' : `<div class="vw-file"><span aria-hidden="true">${fileIcon((it.name.split('.').pop() || '').toLowerCase())}</span><b>${esc(it.name)}</b><span class="small">不是圖片，按「下載」打開</span></div>`}
+          ${many ? '<button type="button" class="vw-nav next" data-vw="next" aria-label="下一張">›</button>' : ''}</div>
+        ${many ? `<div class="vw-strip">${items.map((x, k) => `<button type="button" class="vw-th${k === i ? ' sel' : ''}" data-vw-i="${k}" aria-label="${esc(`第 ${k + 1} 張：${x.name}`)}"${k === i ? ' aria-current="true"' : ''}><img alt="" data-vw-src="${k}"></button>`).join('')}</div>` : ''}
+        <p class="vw-hint"><span class="k-desk">${many ? '← → 鍵或左右滑動切換 · Esc 關閉' : 'Esc 關閉'}</span><span class="k-mob">${many ? '左右滑動或點縮圖切換' : '按右上 ✕ 關閉'}</span></p>`;
+      const img = el.querySelector('.vw-img');
+      if (img) src(it).then(u => { img.src = u; img.alt = it.name; }).catch(() => {});
+      el.querySelectorAll('[data-vw-src]').forEach(t => src(items[+t.dataset.vwSrc]).then(u => { t.src = u; }).catch(() => {}));
+      el.querySelector('.vw-x').focus();
+    };
+    const go = d => { if (items.length > 1) { i = (i + d + items.length) % items.length; draw(); } };
+    const close = () => { el.remove(); document.body.classList.toggle('viewer-open', !!document.querySelector('.viewer')); window.removeEventListener('keydown', onKey, true); if (prev?.isConnected) prev.focus(); };
+    const onKey = e => {
+      if (document.querySelector('.confirm-root')) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); }
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); e.stopImmediatePropagation(); go(e.key === 'ArrowLeft' ? -1 : 1); }
+      else if (e.key === 'Tab') { const f = [...el.querySelectorAll('button')]; if (!f.length) return; const a = f.indexOf(document.activeElement); if (e.shiftKey && a <= 0) { e.preventDefault(); f.at(-1).focus(); } else if (!e.shiftKey && a === f.length - 1) { e.preventDefault(); f[0].focus(); } }
+    };
+    window.addEventListener('keydown', onKey, true);
+    el.addEventListener('click', async e => {
+      const b = e.target.closest('[data-vw], [data-vw-i]');
+      if (!b) { if (e.target === el || e.target.classList.contains('vw-stage')) close(); return; }
+      if (b.dataset.vwI !== undefined) { i = +b.dataset.vwI; return draw(); }
+      const k = b.dataset.vw;
+      if (k === 'x') close(); else if (k === 'prev') go(-1); else if (k === 'next') go(1);
+      else if (k === 'dl') downloadFile(items[i].fileId, items[i].name);
+      else if (k === 'del' && await onDelete(items[i])) close();
+    });
+    let x0 = null;
+    el.addEventListener('touchstart', e => { x0 = e.touches[0]?.clientX ?? null; }, { passive: true });
+    el.addEventListener('touchend', e => { const x = e.changedTouches[0]?.clientX; if (x0 != null && x != null && Math.abs(x - x0) > 40) go(x < x0 ? 1 : -1); x0 = null; });
+    draw();
+    return { close };
+  }
+  const msgFiles = id => { const m = state.byId.get(id) || state.messages.find(x => x.messageId === id); return m?.files?.length > 1 ? m : null; };
+  document.addEventListener('click', e => {
+    const o = e.target.closest('[data-fg-open]'), all = e.target.closest('[data-fg-all]');
+    if (!o && !all) return;
+    const m = msgFiles((o || all).dataset.fgOpen || (o || all).dataset.fgAll);
+    if (!m) return;
+    const live = m.files.filter(f => f.available);
+    if (all) { live.forEach((f, k) => setTimeout(() => downloadFile(f.fileId, f.name), k * 400)); return; }
+    const pick = m.files[+o.dataset.i];
+    const sub = `${m.author?.name || ''} ${fmtTime(m.createdAt)}`.trim();
+    const rest = live.length - 1; // 只刪這一張，同一則的其他張留著
+    openViewer(live.map(f => ({ fileId: f.fileId, name: f.name, sub, canDelete: canDeleteFile(f) })), Math.max(0, live.indexOf(pick)),
+      { onDelete: it => deleteFileById(it.fileId, { title: '刪除這張？', confirmText: '刪除這張', message: rest ? `只刪這一張，同一則的其他 ${rest} 張會留著。` : '刪除後所有人都無法再下載這張。' }) });
+  });
+
+
   const downloadFile = (id, name) => downloadFrom(`/api/files/${encodeURIComponent(id)}`, name);
   async function downloadFrom(path, name) { // 專案文件區也用這支
     try {
@@ -7452,13 +7547,16 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     } catch (err) { toast('下載失敗：' + err.message); }
   }
 
-  async function deleteFileById(id) {
-    if (!await confirmDialog({ title: '刪除文件？', confirmText: '刪除', danger: true, message: '刪除後所有人都無法再下載這個文件。' })) return false;
+  async function deleteFileById(id, ask = { title: '刪除文件？', confirmText: '刪除', message: '刪除後所有人都無法再下載這個文件。' }) {
+    if (!await confirmDialog({ danger: true, ...ask })) return false;
     try {
       await api(`/api/files/${encodeURIComponent(id)}`, { method: 'DELETE' });
       toast('已刪除');
       // 讓訊息中的卡片同步顯示為已刪除
-      for (const m of state.messages) if (m.file?.fileId === id) m.file = { fileId: id, available: false };
+      for (const m of state.messages) {
+        if (m.file?.fileId === id) m.file = { fileId: id, available: false };
+        if (m.files) m.files = m.files.map(f => (f.fileId === id ? { fileId: id, available: false } : f));
+      }
       renderMessages(false);
       return true;
     } catch (err) { toast(err.message); return false; }
@@ -7471,23 +7569,24 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (x) deleteFileById(x.dataset.deleteFile).then(ok => { if (ok && x.closest('.modal')) openFiles(); });
   });
 
-  // 選檔 → 聲明 → 上傳
+  // 選檔 → 聲明 → 上傳（一次可選多個，最多 4 個）
   $('#attach').addEventListener('click', () => $('#file-input').click());
   $('#file-input').addEventListener('change', e => {
-    const file = e.target.files[0];
+    const files = [...e.target.files];
     e.target.value = '';
-    if (file) openUpload(file);
+    if (files.length) openUpload(files);
   });
-
-  // 在輸入框 Ctrl+V 貼上截圖 → 走同一個上傳流程（先預覽、可取消、每張都要重新勾聲明）
+  // 剪貼簿裡的截圖，取有時間的檔名
+  const pastedImages = e => [...(e.clipboardData?.items || [])].filter(it => it.kind === 'file' && /^image\/(png|jpeg)$/.test(it.type)).map(it => it.getAsFile()).filter(Boolean).map(f => {
+    const ext = f.type === 'image/jpeg' ? 'jpg' : 'png', d = new Date(), p = n => String(n).padStart(2, '0');
+    return new File([f], `截圖-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`, { type: f.type });
+  });
+  // 在輸入框 Ctrl+V 貼上截圖 → 走同一個上傳流程（先預覽、可取消、勾聲明）；一次貼多張也收，視窗開著還能再貼
   input.addEventListener('paste', e => {
-    const files = [...(e.clipboardData?.items || [])].filter(it => it.kind === 'file' && /^image\/(png|jpeg)$/.test(it.type)).map(it => it.getAsFile()).filter(Boolean);
+    const files = pastedImages(e);
     if (!files.length) return; // 純文字照舊貼上
     e.preventDefault();
-    if (files.length > 1) toast('一次只能貼一張截圖，先處理第一張');
-    const f = files[0], ext = f.type === 'image/jpeg' ? 'jpg' : 'png', d = new Date(), p = n => String(n).padStart(2, '0');
-    const name = `截圖-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
-    openUpload(new File([f], name, { type: f.type }));
+    openUpload(files);
   });
 
   // @ 成員選單（上傳視窗的附註欄用）：輸入 @ 跳出清單，↑↓ 移動、Enter／Tab／點選插入、Esc 關閉
@@ -7528,7 +7627,123 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     list.addEventListener('mousedown', e => { const li = e.target.closest('li[data-i]'); if (li && st) { e.preventDefault(); pick(Number(li.dataset.i)); } });
   }
 
-  function openUpload(file) {
+  // 上傳截圖：縮圖格（電腦 4 欄、手機 2 欄）、每張 × 拿掉、＋再加一張或 Ctrl+V 連貼；
+  // 最多 4 張、每張 2 MB，超過的標紅不上傳；聲明一次勾，之後再加圖自動取消勾選並提示重勾；沒勾不能上傳
+  const MAX_UP = 4;
+  const isImgFile = f => /^image\/(png|jpeg)$/.test(f.type) || /\.(png|jpe?g)$/i.test(f.name);
+  const upProblem = f => { const ext = (f.name.split('.').pop() || '').toLowerCase(); return !FILE_EXTS.includes(ext) ? '不支援這種檔案，不會上傳' : f.size > MAX_FILE ? '超過 2 MB，不會上傳' : ''; };
+  function openUpload(files) {
+    if (files.length === 1 && !isImgFile(files[0])) return openUploadOne(files[0]); // 單一份文件（pdf 等）照舊
+    const items = [];
+    let declared = false, redeclare = '', limit = '', busy = false;
+    const unique = name => { if (!items.some(x => x.file.name === name)) return name; const dot = name.lastIndexOf('.'); for (let k = 2; ; k++) { const n = `${name.slice(0, dot)}-${k}${name.slice(dot)}`; if (!items.some(x => x.file.name === n)) return n; } };
+    const add = list => {
+      let added = 0, over = 0;
+      for (const f0 of list) {
+        if (items.length >= MAX_UP) { over++; continue; }
+        const name = unique(f0.name), f = name === f0.name ? f0 : new File([f0], name, { type: f0.type });
+        items.push({ file: f, url: isImgFile(f) ? URL.createObjectURL(f) : '', problem: upProblem(f), fileId: null });
+        added++;
+      }
+      limit = over ? `最多 ${MAX_UP} 張，有 ${over} 張沒有加進來` : '';
+      if (added && declared) { declared = false; redeclare = `你剛加了第 ${items.length} 張，聲明已自動取消勾選，請再看一次全部截圖後重新勾選。`; }
+      return added;
+    };
+    add(files);
+    const ok = () => items.filter(x => !x.problem), allImg = () => items.every(x => isImgFile(x.file));
+    const body = openModal('上傳截圖', `
+      <section class="up-multi" aria-label="要上傳的檔案"><div class="up-mh"><span id="up-count"></span><span class="muted small up-tip">點縮圖可放大檢查</span></div>
+        <div class="up-grid" id="up-grid"></div><p class="up-limit small" id="up-limit" role="status" hidden></p></section>
+      <div class="warn-box">上傳到平台後，所有群組成員都能下載，1 小時後自動刪除。每張截圖都請先確認沒有客戶資料。</div>
+      <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea autocomplete="off" autocorrect="on" id="up-note" rows="3" maxlength="1500" placeholder="例如：@程式開發助手 1 是結果、2 是輸入中"></textarea></div></label>
+      <p class="mention-warn" id="up-warn" role="status" hidden></p>
+      <label class="declare-box"><input type="checkbox" id="up-declare"><span id="up-declare-t"></span></label>
+      <p class="warn-box up-redeclare small" id="up-redeclare" role="status" hidden></p>
+      <p class="error" id="up-error" role="alert"></p>
+      <input type="file" id="up-more" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" multiple hidden>`, {
+      size: 'wide',
+      foot: `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" id="up-go" disabled>上傳</button>`,
+    });
+    const modal = body.modal, go = modal.querySelector('#up-go'), chk = body.querySelector('#up-declare');
+    const draw = () => {
+      const n = ok().length, skip = items.length - n, img = allImg(); // 張／個分開寫整句，英文介面才對得到字典
+      modal.querySelector('#modal-title').textContent = img ? `上傳截圖（${items.length} 張）` : `上傳文件（${items.length} 個）`;
+      body.querySelector('#up-count').innerHTML = img ? `<b>${items.length} 張</b><span class="muted small">（最多 ${MAX_UP} 張，每張 2 MB 以內）</span>`
+        : `<b>${items.length} 個</b><span class="muted small">（最多 ${MAX_UP} 個，每個 2 MB 以內）</span>`;
+      body.querySelector('#up-grid').innerHTML = items.map((x, k) => `<figure class="up-cell${x.problem ? ' bad' : ''}">
+          <button type="button" class="up-th" data-up-view="${k}" aria-label="${esc(`放大看第 ${k + 1} 張：${x.file.name}`)}">${x.url ? `<img alt="" src="${x.url}">` : `<span class="up-ico" aria-hidden="true">${fileIcon((x.file.name.split('.').pop() || '').toLowerCase())}</span>`}${x.problem ? `<span class="up-bad"><b>${esc(x.problem)}</b></span>` : ''}</button>
+          <button type="button" class="up-rm" data-up-rm="${k}" aria-label="${esc(`拿掉第 ${k + 1} 張：${x.file.name}`)}">×</button>
+          <figcaption><span class="up-fn">${k + 1}. ${esc(x.file.name)}</span><span class="muted">${fmtBytes(x.file.size)}</span></figcaption></figure>`).join('')
+        + (items.length < MAX_UP ? `<button type="button" class="up-add" data-up-add><b aria-hidden="true">＋</b><span>${img ? '再加一張' : '再加一個'}</span><span class="muted small"><span class="k-desk">或直接 Ctrl+V 貼上</span><span class="k-mob">從相簿或檔案選</span></span></button>` : '');
+      body.querySelectorAll('.up-th img').forEach(img => img.addEventListener('error', () => { const i = document.createElement('span'); i.className = 'up-ico'; i.setAttribute('aria-hidden', 'true'); i.textContent = '🖼'; img.replaceWith(i); }, { once: true }));
+      const lm = body.querySelector('#up-limit'); lm.textContent = limit; lm.hidden = !limit;
+      body.querySelector('#up-declare-t').textContent = img ? `我已逐張看過，這 ${n} 張截圖都不含任何程式碼與客戶個資` : `我已逐個看過，這 ${n} 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資`;
+      chk.checked = declared;
+      const rd = body.querySelector('#up-redeclare'); rd.textContent = redeclare || ''; rd.hidden = !redeclare;
+      if (!busy) { go.textContent = img ? (skip ? `上傳 ${n} 張（略過 ${skip} 張）` : `上傳 ${n} 張`) : skip ? `上傳 ${n} 個（略過 ${skip} 個）` : `上傳 ${n} 個`; go.disabled = !declared || !n; }
+    };
+    const more = list => { if (busy) return; if (list.length) add(list); else return; draw(); };
+    body.addEventListener('click', e => {
+      const rm = e.target.closest('[data-up-rm]'), v = e.target.closest('[data-up-view]');
+      if (rm && !busy) { const [x] = items.splice(+rm.dataset.upRm, 1); if (x.url) URL.revokeObjectURL(x.url); limit = ''; if (!items.length) return closeModal(); return draw(); }
+      if (v) { const k = +v.dataset.upView; return openViewer(items.map(x => ({ url: x.url, name: x.file.name, sub: fmtBytes(x.file.size) + (x.problem ? ` · ${x.problem}` : '') })), k); }
+      if (e.target.closest('[data-up-add]')) body.querySelector('#up-more').click();
+    });
+    body.querySelector('#up-more').addEventListener('change', e => { const l = [...e.target.files]; e.target.value = ''; more(l); });
+    // 視窗開著時 Ctrl+V 連貼（附註欄裡貼純文字照舊）
+    modal.addEventListener('paste', e => { const l = pastedImages(e); if (!l.length) return; e.preventDefault(); more(l); });
+    chk.addEventListener('change', () => { declared = chk.checked; if (declared) redeclare = ''; draw(); });
+    attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'));
+    body.querySelector('#up-note').addEventListener('input', e => { const w = body.querySelector('#up-warn'), t = outsideText(outsideMentions(e.target.value)); w.textContent = t; w.hidden = !t; });
+    new MutationObserver((_, ob) => { if (!modal.isConnected) { ob.disconnect(); for (const x of items) if (x.url) URL.revokeObjectURL(x.url); } }).observe($('#modal-root'), { childList: true });
+    let requestId = null;
+    go.addEventListener('click', async () => {
+      const list = ok(); if (!declared || !list.length || busy) return;
+      busy = true; go.disabled = true; body.querySelector('#up-error').textContent = '';
+      body.querySelectorAll('.up-rm, .up-add').forEach(b => { b.disabled = true; });
+      const note = body.querySelector('#up-note').value.trim(), rec = note ? resolveRecipients(note) : {};
+      try {
+        let msg;
+        if (list.length === 1) { // 一張：照舊一次上傳＋發文
+          go.textContent = '上傳中…';
+          const q = new URLSearchParams({ name: list[0].file.name, declared: 'true', project: sendTarget() });
+          if (note) q.set('text', note);
+          if (rec.audience) q.set('audience', 'all');
+          if (rec.recipientIds) q.set('recipientIds', rec.recipientIds.join(','));
+          if (state.replyTo) q.set('replyToMessageId', state.replyTo.messageId);
+          const r = await fetch(`/api/files?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: list[0].file });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+          msg = data.message;
+        } else { // 多張：先逐張存檔（不發文），再一次發成一則，通知只發一次
+          for (const [k, x] of list.entries()) {
+            if (x.fileId) continue; // 重試時已上傳的不再傳
+            go.textContent = `上傳中 ${k + 1} / ${list.length}…`;
+            const q = new URLSearchParams({ name: x.file.name, declared: 'true', project: sendTarget(), post: 'false' });
+            const r = await fetch(`/api/files?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: x.file });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(`${x.file.name}：${data?.error?.message || `HTTP ${r.status}`}`);
+            x.fileId = data.file.fileId;
+          }
+          go.textContent = '發文中…';
+          requestId = requestId || newRequestId();
+          msg = await api('/api/messages', { method: 'POST', body: { project: sendTarget(), requestId, fileIds: list.map(x => x.fileId), ...(note ? { text: note } : {}),
+            ...(rec.audience ? { audience: 'all' } : {}), ...(rec.recipientIds ? { recipientIds: rec.recipientIds } : {}), ...(rec.replyFrom ? { replyFrom: rec.replyFrom } : {}),
+            ...(state.replyTo ? { replyToMessageId: state.replyTo.messageId } : {}) } });
+        }
+        closeModal();
+        setReply(null);
+        onNewMessage(msg);
+        toast(list.length < 2 ? '已上傳，群組已發出附檔訊息' : allImg() ? `已上傳 ${list.length} 張，群組已發出一則附檔訊息` : `已上傳 ${list.length} 個，群組已發出一則附檔訊息`);
+      } catch (err) {
+        body.querySelector('#up-error').textContent = '上傳失敗：' + err.message;
+        busy = false; body.querySelectorAll('.up-rm, .up-add').forEach(b => { b.disabled = false; }); draw();
+      }
+    });
+    draw();
+  }
+
+  function openUploadOne(file) {
     const isImg = /^image\//.test(file.type);
     const previewUrl = isImg ? URL.createObjectURL(file) : '';
     const ext = (file.name.split('.').pop() || '').toLowerCase();
@@ -7797,6 +8012,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         ${ep('GET', '/api/notifications/count', '未讀通知數')}
         ${ep('POST', '/api/notifications/ack', '確認通知（notificationIds）')}
         ${ep('POST', '/api/files?name=&amp;declared=true', '上傳文件（原始位元組）')}
+        ${ep('POST', '/api/files?name=&amp;declared=true&amp;post=false', '只存檔不發文；再用 POST /api/messages 帶 fileIds 一次發多張（最多 4 個）')}
         ${ep('GET', '/api/files', '文件清單；/api/files/:id 下載')}
       </ul>
       <p><a href="/api/docs/ai-integration" target="_blank" rel="noopener">完整規格：AI 代理人接入通訊協定指南</a></p>

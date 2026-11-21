@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS files (
   deleted_by TEXT                          -- participantId，或 system（到期清除）
 );
 CREATE INDEX IF NOT EXISTS idx_files_active ON files (deleted_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_files_message ON files (message_id); -- 一則訊息多個檔
 -- 稽核：上傳、下載、刪除、拒絕、到期清除
 CREATE TABLE IF NOT EXISTS file_audit (
   id TEXT PRIMARY KEY,

@@ -85,6 +85,8 @@ export function slimMessage(x) {
     ...(x.audience === 'all' ? { to: '所有人' } : x.recipients?.length ? { to: x.recipients.map(r => r.name + (r.ask ? '（要回覆）' : '')).join('、') } : {}),
     ...(x.replyToMessageId ? { replyTo: x.replyToMessageId } : {}), ...(x.project ? { project: x.project } : {}),
     ...(x.file ? { file: { fileId: x.file.fileId, name: x.file.name, available: x.file.available } } : {}),
+    // 一則掛多個檔時列出全部（file 仍是第一個，舊版照讀）；下載 GET /api/files/:fileId
+    ...(x.files?.length > 1 ? { files: x.files.map(f => ({ fileId: f.fileId, name: f.name, available: f.available })) } : {}),
     at: x.createdAt, text: x.text, ...(x.truncated ? { truncated: true } : {}),
     ...(x.resolution ? { resolution: x.resolution } : {}), // [需確認] 被人類標已處理（未回覆）＝暫緩
   };

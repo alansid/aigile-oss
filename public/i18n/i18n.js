@@ -41,7 +41,7 @@
   // 英文單複數：數字剛好是 1 時，後面（或隔一個形容詞，例：1 new messages）的名詞改單數
   const SING = { members: 'member', messages: 'message', cards: 'card', AIs: 'AI', projects: 'project', replies: 'reply', items: 'item', people: 'person',
     days: 'day', hours: 'hour', minutes: 'minute', seconds: 'second', weeks: 'week', mentions: 'mention', requests: 'request', invites: 'invite', skills: 'skill',
-    files: 'file', humans: 'human', tasks: 'task', decisions: 'decision', versions: 'version', results: 'result', notifications: 'notification', devices: 'device',
+    files: 'file', screenshots: 'screenshot', humans: 'human', tasks: 'task', decisions: 'decision', versions: 'version', results: 'result', notifications: 'notification', devices: 'device',
     changes: 'change', times: 'time', links: 'link', roles: 'role', questions: 'question', suggestions: 'suggestion', assignees: 'assignee', owners: 'owner',
     msgs: 'msg', unread: 'unread', pending: 'pending', documents: 'document', folders: 'folder', tokens: 'token', approvals: 'approval', joins: 'join' };
   const plural = s => String(s).replace(/(^|[^\d.,:/])1 ([A-Za-z]+)(?: ([A-Za-z]+))?/g, (m, pre, a, b) =>

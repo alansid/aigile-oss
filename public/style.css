@@ -3506,3 +3506,70 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
   .adm-acts { flex-direction: column; align-items: stretch; }
   .adm-acts .btn { padding: 0 6px; font-size: 13px; white-space: nowrap; }
 }
+
+/* ===== 一則訊息多張截圖：訊息縮圖格、深色全螢幕、上傳縮圖格 ===== */
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-width: 420px; margin-top: 6px; border-radius: 10px; overflow: hidden; }
+.fg-cell { all: unset; box-sizing: border-box; cursor: zoom-in; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; aspect-ratio: 4 / 3; min-width: 0; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+.fg-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fg-cell img:not([src]) { visibility: hidden; }
+.fg-cell:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.fg-cell.gone { cursor: default; padding: 6px; text-align: center; }
+.fg-3 { grid-template-columns: 2fr 1fr; }
+.fg-3 .fg-cell:first-child { grid-row: span 2; aspect-ratio: auto; }
+.fg-ico { font-size: 28px; }
+.fg-name { max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fg-foot { margin: 6px 0 0; }
+.fg-foot .link { padding: 0; }
+.viewer { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: rgba(15, 23, 42, .94); color: #f1f5f9; }
+.vw-top { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
+.vw-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.vw-btn { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 14px; border-radius: 8px; background: rgba(255, 255, 255, .12); color: #fff; font-size: 14px; white-space: nowrap; }
+.vw-btn:hover { background: rgba(255, 255, 255, .22); }
+.vw-btn.danger { background: rgba(220, 38, 38, .55); }
+.vw-btn:focus-visible, .vw-nav:focus-visible, .vw-th:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+.vw-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 72px; }
+.vw-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 10px 40px rgba(0, 0, 0, .4); }
+.vw-file { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+.vw-file > span:first-child { font-size: 48px; }
+.vw-nav { all: unset; box-sizing: border-box; cursor: pointer; position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, .16); color: #fff; font-size: 28px; line-height: 1; }
+.vw-nav:hover { background: rgba(255, 255, 255, .28); }
+.vw-nav.prev { left: 12px; }
+.vw-nav.next { right: 12px; }
+.vw-strip { display: flex; justify-content: center; gap: 8px; padding: 10px; overflow-x: auto; }
+.vw-th { all: unset; box-sizing: border-box; cursor: pointer; flex: none; width: 72px; height: 54px; border-radius: 6px; overflow: hidden; opacity: .55; border: 2px solid transparent; }
+.vw-th.sel { opacity: 1; border-color: #fff; }
+.vw-th img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vw-hint { margin: 0 0 12px; text-align: center; font-size: 12px; color: #cbd5e1; }
+.up-multi { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.up-mh { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 8px; }
+.up-tip { margin-left: auto; }
+html[lang="en"] #up-count b + span { margin-left: .3em; } /* 英文的括號是半形，要空一格 */
+.up-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.up-cell { position: relative; margin: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.up-th { all: unset; box-sizing: border-box; cursor: zoom-in; position: relative; display: flex; align-items: center; justify-content: center; aspect-ratio: 4 / 3; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-2); }
+.up-th img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.up-ico { font-size: 30px; }
+.up-cell.bad .up-th { border: 2px solid var(--danger); }
+.up-cell.bad .up-th img, .up-cell.bad .up-th .up-ico { opacity: .35; } /* 照樣看得到縮圖，只是調淡 */
+.up-bad { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 6px; text-align: center; color: var(--danger); font-size: 13px; }
+.up-bad b { padding: 2px 6px; border-radius: 6px; background: color-mix(in srgb, var(--surface) 80%, transparent); }
+.up-rm { all: unset; box-sizing: border-box; cursor: pointer; position: absolute; top: 4px; right: 4px; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, .75); color: #fff; font-size: 18px; line-height: 1; }
+.up-cell figcaption { display: flex; flex-direction: column; min-width: 0; font-size: 12px; }
+.up-fn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-add { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; aspect-ratio: 4 / 3; padding: 4px; border: 2px dashed var(--border); border-radius: 8px; text-align: center; color: var(--text); font-size: 14px; }
+.up-add b { font-size: 22px; line-height: 1; }
+.up-add:hover { border-color: var(--primary); }
+.up-add:disabled, .up-rm:disabled { opacity: .5; cursor: not-allowed; }
+.up-th:focus-visible, .up-add:focus-visible, .up-rm:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.up-limit { margin: 8px 0 0; color: var(--danger); }
+.up-redeclare { margin: 0; }
+body.viewer-open .confirm-root .overlay { z-index: 1001; } /* 大圖上按「刪除這張」的確認框 */
+.k-mob { display: none; }
+@media (max-width: 600px) {
+  .k-desk { display: none; } /* 手機沒有 Ctrl+V、方向鍵 */
+  .k-mob { display: inline; }
+  .up-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vw-stage { padding: 0 8px; }
+  .vw-nav { display: none; } /* 手機用滑的、或點下方縮圖列 */
+  .vw-th { width: 56px; height: 42px; }
+}
