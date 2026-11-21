@@ -75,6 +75,12 @@ try {
   assert.equal(await mineN('.m-scope'), '1', '手機「給我的」也有數字');
   assert.ok(await js("(() => { const b = document.querySelector('.m-scope [data-scope=\"mine\"]'), n = b.querySelector('.scope-n'); return n.getBoundingClientRect().left - b.firstChild.parentElement.getBoundingClientRect().left > 0 && parseFloat(getComputedStyle(b).columnGap) >= 4; })()"), '手機「給我的」和數字中間有間隔（UX 提醒）');
   assert.ok(mob.right <= 375 && !mob.hscroll, '手機 375 放得下、不橫向捲動：' + JSON.stringify(mob));
+  // 「篩選 ▾」跟三顆圓角按鈕同高、字垂直置中（UX 在平台 v0.100.28 提的，PLAT-378）
+  const al = await J(`(() => { const mid = el => { const rg = document.createRange(); rg.selectNodeContents(el); const rs = [...rg.getClientRects()]; return (Math.min(...rs.map(r => r.top)) + Math.max(...rs.map(r => r.bottom))) / 2; };
+    const p = document.querySelector('.m-scope button'), f = document.querySelector('#f-open'), pr = p.getBoundingClientRect(), fr = f.getBoundingClientRect();
+    return { ph: pr.height, fh: fr.height, pt: pr.top, ft: fr.top, ptx: mid(p), ftx: mid(f), fc: (fr.top + fr.bottom) / 2 }; })()`);
+  assert.ok(Math.abs(al.fh - al.ph) < 1 && Math.abs(al.ft - al.pt) < 1, '「篩選 ▾」跟圓角按鈕同高同排：' + JSON.stringify(al));
+  assert.ok(Math.abs(al.ftx - al.fc) < 1.5 && Math.abs(al.ftx - al.ptx) < 1.5, '「篩選 ▾」字垂直置中：' + JSON.stringify(al));
   if (process.env.ASK_SHOTS) fs.writeFileSync(path.join(process.env.ASK_SHOTS, 'phone.png'), Buffer.from((await cdp('Page.captureScreenshot', { format: 'png' })).result.data, 'base64'));
   await js("document.querySelector('.m-scope [data-scope=\"mine\"]').click(); true");
   await until(() => js("document.querySelectorAll('#messages article.msg').length === 1"), 5000, '手機按給我的只剩要你回的');

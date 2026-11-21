@@ -1027,7 +1027,7 @@ body.drawer-docked #app { padding-right: 400px; }
   .f-mobile { display: inline-flex; }
   #f-decide[hidden] { display: none; }
   #f-decide { min-height: 44px; padding: 0 12px; }
-  #f-open { min-height: 44px; padding: 0 14px; }
+  #f-open { min-height: 44px; padding: 0 14px; align-items: center; justify-content: center; line-height: 1.2; box-sizing: border-box; } /* 跟左邊圓角按鈕同高、字置中 */
   #f-summary { flex: 1; text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 輸入區兩列：輸入框獨佔一列、按鈕下排 */
   .composer { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
