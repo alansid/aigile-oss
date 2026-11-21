@@ -96,24 +96,25 @@ try {
 
   // 3) 叫醒中不換，等叫醒結束後才換（同時測 watcher.env 更新）
   const lockFile = path.join(dir, 'wake-running.lock');
-  fs.writeFileSync(wakeScript, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(lockFile)}, '1'); await new Promise(r => setTimeout(r, 1500)); fs.appendFileSync(${JSON.stringify(wakeLog)}, 'wake-v3\\n'); fs.unlinkSync(${JSON.stringify(lockFile)});\n`);
+  const releaseFile = path.join(dir, 'wake-release.flag');
+  fs.writeFileSync(wakeScript, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(lockFile)}, '1'); const end = Date.now() + 10000; while (!fs.existsSync(${JSON.stringify(releaseFile)}) && Date.now() < end) await new Promise(r => setTimeout(r, 50)); fs.appendFileSync(${JSON.stringify(wakeLog)}, 'wake-v3\\n'); fs.unlinkSync(${JSON.stringify(lockFile)});\n`);
   fs.writeFileSync(reloadFile, String(Date.now()));
   const pid3 = await until(() => { const p = readPid(); return p && p !== pid2 && alive(p) ? p : 0; }, 10000, '修好後換新為 pid3');
   trackedPid = pid3;
   await until(() => !alive(pid2), 5000, '舊程序 pid2 結束');
 
-  // 觸發 n2 讓 wake.mjs 跑 1.5 秒；跑的中途改 watcher.env 並寫 reload
+  // 觸發 n2 讓 wake.mjs 跑著等放行；跑的中途改 watcher.env 並寫 reload
   notifications = [{ notificationId: 'n1', wake: true }, { notificationId: 'n2', wake: true }];
   await until(() => fs.existsSync(lockFile), 10000, 'n2 開始叫醒');
   writeEnv(15);
   fs.writeFileSync(reloadFile, String(Date.now()));
-  await sleep(600);
+  await until(() => fs.readFileSync(logFile, 'utf8').includes('目前正在喚醒中，等這一輪結束後換新'), 10000, 'log 記錄叫醒中延後換新');
   assert.equal(readPid(), pid3, '叫醒中不能中途換新（仍為 pid3）');
+  fs.writeFileSync(releaseFile, '1');
 
   // 等 wake.mjs 跑完，自動接續換新為 pid4
   const pid4 = await until(() => { const p = readPid(); return p && p !== pid3 && alive(p) ? p : 0; }, 10000, '叫醒結束後換新為 pid4');
   trackedPid = pid4;
-  assert.ok(fs.readFileSync(logFile, 'utf8').includes('目前正在喚醒中，等這一輪結束後換新'), 'log 記錄叫醒中延後換新');
   assert.equal(fs.readFileSync(otherPidFile, 'utf8').trim(), '999999', '不碰其他代號的 pid 檔');
 
   console.log('plat375-test：全部通過');
