@@ -1683,7 +1683,11 @@
   // 決策／[需確認]、AI 建議、等你驗收、要你回覆、私訊
   function todoItems() {
     const items = [];
-    for (const d of state.team ? myDecisions(state.team) : []) items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId, ...(d.cardId ? {} : { mid: d.messageId }) });
+    for (const d of state.team ? myDecisions(state.team) : []) {
+      if (work.loaded && d.cardId) continue;
+      items.push({ p: d.project || null, kind: d.cardId ? '決策' : '需確認', title: d.title || '（無標題）', key: d.cardId ? 'c:' + d.cardId : 'm:' + d.messageId, ...(d.cardId ? {} : { mid: d.messageId }) });
+    }
+    if (work.loaded) for (const c of work.cards?.values() || []) if (decidingMe(c)) items.push({ p: c.project || null, kind: '決策', title: c.decision?.question || cardTitle(c) || '（無標題）', key: 'c:' + c.cardId });
     for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${ckey(g.card?.cardId || '')} 改為「${g.to}」`, key: 's:' + g.suggestionId });
     for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
     for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId, mid: n.messageId });
@@ -2925,7 +2929,7 @@
   }
   const REC_TAG = '<span class="rec-tag">建議</span>';
   // 這張決策卡現在是在等「我」做決定
-  const decidingMe = c => c.type === '決策' && c.status === '待確認' && !c.decision?.result && c.decision?.decider?.participantId === meId() && isMeRef(c.waitFor);
+  const decidingMe = c => c.type === '決策' && c.status === '待確認' && !c.decision?.result && c.decision?.decider?.participantId === meId() && (!c.waitFor || isMeRef(c.waitFor));
   // 「待確認」分兩種——決策卡＝等決定（黃）；AI 交給人類的卡＝等驗收（綠）
   const verifyingMe = c => c.status === '待確認' && c.type !== '決策' && c.type !== NOTE && state.me?.memberType === 'human' && (isMeRef(c.waitFor) || (!c.waitFor && c.owner?.participantId === meId()));
   function confirmPill(c) {
@@ -4210,7 +4214,17 @@
       const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: c?.version } });
       putCard(r);
       if (render) renderWork(); // 收件匣驗收時由呼叫端先淡出再重畫
-      if (work.openId === id) { work.openId = r.cardId; openCard(r.cardId); } // 改專案會換號
+      const focusBlocker = body.status === '受阻' && r.status === '受阻';
+      if (work.openId === id || focusBlocker) {
+        if (focusBlocker) work.editing = true;
+        work.openId = r.cardId;
+        await openCard(r.cardId); // 改專案會換號
+        if (focusBlocker) {
+          if (!work.editing) { work.editing = true; renderDrawer(false); }
+          const inp = $('#card-edit [name="blocker"]');
+          if (inp) { inp.scrollIntoView({ block: 'center' }); inp.focus(); }
+        }
+      }
       return r;
     } catch (err) {
       toast(err.message);
@@ -4452,10 +4466,10 @@
             <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
             <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
             <label>專案<select name="project">${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
-            <label>${d.type === NOTE ? '內容' : '原因'}<textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
+            <label>${d.type === NOTE ? '內容' : '背景／緣由'}<textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
             <label>負責人<select name="ownerId">${peopleOpts(d.project, d.owner?.participantId, '未指派')}</select></label>
             <label>下一步<textarea autocomplete="off" autocorrect="on" name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
-            <label>阻塞<input name="blocker" maxlength="300" value="${esc(d.blocker)}"></label>
+            <label>受阻原因<input name="blocker" maxlength="300" placeholder="卡在哪裡、需要誰協助" value="${esc(d.blocker)}"></label>
             <label>等誰<select name="waitForId">${peopleOpts(d.project, d.waitFor?.participantId, '不用等人')}</select></label>
             <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
@@ -4463,11 +4477,11 @@
           ${handHtml(d.handover)}
           <dl class="dfields">
             <dt>專案</dt><dd>${esc(projName(d.project) || '')}</dd>
-            <dt>${d.type === NOTE ? '內容' : '原因'}</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
+            <dt>${d.type === NOTE ? '內容' : '背景／緣由'}</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
             <dt>負責人</dt><dd>${ownerHtml(d)}</dd>
             ${d.claim ? `<dt>正在做</dt><dd>${esc(d.claim.by?.name || '')} · ${esc(shortTime(d.claim.at))} 起</dd>` : ''}
             <dt>下一步</dt><dd class="${d.next ? '' : 'muted'}">${esc(d.next || '未填寫')}</dd>
-            <dt>阻塞與等誰</dt><dd class="${waitText(d) ? '' : 'muted'}">${esc(waitText(d) || '沒有阻塞')}</dd>
+            <dt>受阻與等誰</dt><dd class="${waitText(d) ? '' : 'muted'}">${esc(waitText(d) || '沒有阻塞')}</dd>
             <dt>完成條件</dt><dd class="${d.criteria ? '' : 'muted'}">${esc(d.criteria || '未填寫')}</dd>
           </dl>
           ${d.type === NOTE ? '<div><button class="btn small" type="button" data-act="edit">編輯</button></div>' : ''}`}

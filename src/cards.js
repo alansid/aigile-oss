@@ -67,7 +67,7 @@ export function workFrom(open, allow = () => true, keyOf = c => cardNo(c.seq)) {
 export async function teamCards(db, keyOf = c => cardNo(c.seq)) {
   const open = await db.all("SELECT seq, owner_id, status, title, updated_at, project, proj_no FROM cards WHERE owner_id IS NOT NULL AND type != '人類紀錄' AND status IN ('待處理','進行中','待確認','受阻') ORDER BY updated_at DESC");
   const work = workFrom(open, undefined, keyOf);
-  const decisions = await db.all("SELECT seq, title, question, proposer_id, decider_id, created_at, project, proj_no FROM cards WHERE type = '決策' AND status = '待確認' AND decision_result IS NULL ORDER BY created_at DESC LIMIT 30");
+  const decisions = await db.all("SELECT seq, title, question, proposer_id, decider_id, created_at, project, proj_no FROM cards WHERE type = '決策' AND status = '待確認' AND decision_result IS NULL AND (wait_for_id IS NULL OR wait_for_id = decider_id) ORDER BY created_at DESC LIMIT 30");
   return { work, open, decisions: decisions.map(d => ({ cardId: keyOf(d), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 

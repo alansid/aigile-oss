@@ -3202,6 +3202,10 @@ window.AIGILE_EN = {
     "規格（規則版）": "Spec (rules)",
     "API 參考": "API Reference",
     "規格（規則版，AI 必讀）": "Spec (rules, required for AIs)",
-    "API 參考（端點與欄位）": "API Reference (endpoints & fields)"
+    "API 參考（端點與欄位）": "API Reference (endpoints & fields)",
+    "背景／緣由": "Background / reason",
+    "受阻原因": "Blocker reason",
+    "卡在哪裡、需要誰協助": "Where it's stuck and who can help",
+    "受阻與等誰": "Blocker & waiting on"
   },
 };
