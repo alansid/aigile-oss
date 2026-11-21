@@ -3423,3 +3423,14 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
   .m-scope { gap: 4px; }
   .m-scope button { padding: 0 11px; }
 }
+/* 忘記目前密碼 */
+.pwd-forgot-row, .pwd-forgot-on { margin: -4px 0 0; }
+.pwd-forgot-row .link, .pwd-forgot-on .link { min-height: 44px; }
+#pwd-set-form input[name=username]:disabled { background: var(--surface-2); color: var(--muted); cursor: not-allowed; }
+.confirm-list { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+/* 群組 › 可以用的 AI 工具 */
+.pm-tools-hint { margin: 0; padding: 0 16px 8px; }
+.pm-tools-list { display: flex; flex-wrap: wrap; gap: 4px 20px; padding: 0 16px 12px; }
+.pm-tools-list .chk { gap: 6px; }
+.pm-tools-list .chk .muted { margin-left: 4px; }
+.ma-tool-off { margin: 0 0 8px; }

@@ -25,11 +25,11 @@ AI 這端要遵守的完整協定在 [ai-integration.md](ai-integration.md)，�
 
 ![我的 AI：展開接入分頁，有工具、對話接續、自動待命與複製按鈕](images/my-ai-onboarding.png)
 
-- **工具**：你的 AI 用 Claude Code、Codex、Antigravity CLI 或其他（opencode 等選「其他」）。第一次複製前要選，選了會記在這個瀏覽器。Codex 版的接入文字會多幾行「怎麼開網路」。
+- **工具**：你的 AI 用 Claude Code、Codex、Antigravity CLI、Copilot CLI 或其他（opencode 等選「其他」）。第一次複製前要選，選了會記在這個瀏覽器。Codex 版的接入文字會多幾行「怎麼開網路」。Copilot CLI 目前不自動叫醒，所以選它時不會出現「對話接續」「自動待命」。管理員在「成員管理 › 群組」關掉的工具不會出現在選項裡；已經用它接好的 AI 照常運作，要重新接入時改選其他工具。
 - **對話接續**：AI 被叫醒時接著原本的對話，還是開新對話。不確定就用預設「太長才換新」。
 - **自動待命**：勾著（預設）＝AI 接好後自己啟動背景待命，不用再問你。
 - **複製接入文字**（主要做法，那一列的主按鈕也是它）：只有幾行、不含 Token，AI 用一次性連結（15 分鐘內、只能讀一次）自己下載完整設定。第一次接入、Token 重發後重新接上都用它。
-- **複製一行啟動**（工具選 Claude Code、Codex 或 Antigravity CLI 才有）：一行指令，貼到這隻 AI 工作資料夾的**終端機**。它下載並核對腳本、跑接入檢查、裝通用 MCP 與技能、在背景開 watcher，最後開 Claude Code、Codex 或 Antigravity CLI 帶入提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，**重開機貼同一行就接回**（本機 `.token` 還有效就不會用到連結）。
+- **複製一行啟動**（工具選 Claude Code、Codex 或 Copilot CLI 才有）：一行指令，貼到這隻 AI 工作資料夾的**終端機**。它下載並核對腳本、跑接入檢查、裝通用 MCP 與技能、在背景開 watcher（Copilot CLI 不開），最後開 Claude Code（或 Codex、Antigravity CLI、Copilot CLI）帶入提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，**重開機貼同一行就接回**（本機 `.token` 還有效就不會用到連結）。
 - **複製完整版**：AI 連不上網路、下載不到連結時才用。約 5,000 字，內容包含 AI 的身分、Token、待命方式、發文與授權規則。
 - **只複製 Token**（在那一列的 ⋯ 裡）：重發一組新 Token 並複製，換給已經接好、還記得設定的 AI 用。
 
@@ -104,6 +104,16 @@ sandbox = "elevated"
 - **關閉視窗後**：通知留在平台。下次在同一個工作資料夾貼上同一行啟動指令時，Antigravity CLI 會重新接上並處理待辦。
 - **確認已停**：Windows 工作管理員「詳細資料」看 `agy.exe` 與 `node.exe`；macOS／Linux 用 `ps aux | grep -E "agy|node"`。要停就結束 watcher（強制結束後刪 `watcher.pid`），連這一輪也停就結束 `agy.exe`。
 - **重開機**：貼同一行一行啟動就接回。
+### Copilot CLI（GitHub Copilot CLI）
+
+**目前只接入、不自動叫醒**：要人開 Copilot CLI 的視窗叫它做事，自動叫醒之後支援。原因是 Copilot CLI 每問一次扣 1 次 premium 請求，**免費版每月只有 50 次**，背景自動叫醒很快就用完。
+
+1. 先裝好 Copilot CLI，在終端機執行一次 `copilot` 登入 GitHub。
+2. 在「我的 AI」工具選 **Copilot CLI**，按 **複製一行啟動**，貼到這隻 AI 工作資料夾的終端機。
+3. 它會跑接入檢查（`--tool copilot`）：下載並核對腳本、把共用技能裝到 `.agents/skills/`（Copilot CLI 會讀這裡）、在 `~/.copilot/mcp-config.json`（有設 `COPILOT_HOME` 就在那個資料夾）的 `mcpServers` 加通用 MCP `aigile`。改之前先備份；已經有 `aigile` 就不改；你原有的其他 MCP 不動；檔案不是合法 JSON 就不碰，改印出設定請你自己貼。設定裡**不寫 Token**，代號用 `"AIGILE_AGENT": "${AIGILE_AGENT}"` 帶。
+4. 然後開 Copilot CLI 互動模式帶入接入提示：`copilot --additional-mcp-config @.aigile/<代號>/copilot-mcp.json -i <提示>`。這個檔只放這隻 AI 的代號，沒有 Token；它會簽到，最後說「接好了」。**不會開 watcher**。
+
+之後要它做事：在同一個資料夾貼同一行一行啟動（會重新接上、跑一輪）；或自己在這個資料夾開 `copilot` 叫它「跑一輪」（它認不出自己是哪隻 AI 時，請它先呼叫 `aigile_use` 選代號）。叫一次就讓它把一輪做完再回報，別拆成很多次來回，比較省次數。被 @ 時它不會自己醒，要你叫它。
 
 ### 接入設定是中文的
 

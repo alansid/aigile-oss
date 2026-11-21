@@ -1,6 +1,6 @@
 // 短版接入依工具出文字（「複製接入文字」變主要做法；真的瀏覽器，中文、英文介面都驗）
-// 1. API：GET …/onboarding、POST …/onboarding-link 收 tool（claude／codex／other），不認得的值當沒帶；接入設定第五節只給選的工具（opencode 在「其他」版）
-// 2. 我的 AI 那一列主按鈕「複製接入文字」；接入分頁有工具三格（Claude Code｜Codex｜其他）、主要「複製接入文字」、次要「複製完整版」，
+// 1. API：GET …/onboarding、POST …/onboarding-link 收 tool（claude／codex／copilot／other），不認得的值當沒帶；接入設定第五節只給選的工具（opencode 在「其他」版）
+// 2. 我的 AI 那一列主按鈕「複製接入文字」；接入分頁有工具四格（Claude Code｜Codex｜Copilot CLI｜其他）、主要「複製接入文字」、次要「複製完整版」，
 //    「只複製 Token」只留在 ⋯；沒選過工具按複製＝不複製，展開接入分頁、黃底提示、焦點到工具
 // 3. 短版文字：Codex 才帶開網路那段；Claude Code、其他不帶；選的工具記在這個瀏覽器，重新整理還在
 // 4. 重發 Token 後的視窗：沒選過工具時在視窗裡選、選之前複製鈕停用；新 Token 到期不寫秒；按鈕寫工具名
@@ -29,7 +29,7 @@ try {
   // 接入設定第五節只給選的工具；沒選＝照 Claude Code 寫並提醒選工具；不認得的值當沒帶
   assert.match(base, /## 五、待命：Claude Code[^\n]*\n- 林志明 沒在網頁選工具/, '沒選工具：照 Claude Code 寫並提醒');
   assert.equal(await linkText('bogus'), base, '一次性連結：tool=bogus 當沒帶');
-  const byTool = { claude: '## 五、待命：Claude Code', codex: '## 五、待命：Codex', antigravity: '## 五、待命：Antigravity CLI', other: '## 五、待命：其他工具' };
+  const byTool = { claude: '## 五、待命：Claude Code', codex: '## 五、待命：Codex', antigravity: '## 五、待命：Antigravity CLI', copilot: '## 五、待命：手動（Copilot CLI', other: '## 五、待命：其他工具' };
   for (const [t, head] of Object.entries(byTool)) {
     const txt = await linkText(t);
     assert.ok(txt.includes(head) && !txt.includes('沒在網頁選工具'), `一次性連結：tool=${t} 出 ${head}`);
@@ -72,7 +72,7 @@ try {
         btns: [...it.querySelectorAll('.ma-btns .btn')].map(b => (b.classList.contains('primary') ? '*' : '') + b.textContent), token: !!it.querySelector('.ma-btns [data-act="token"]'),
         hint: it.querySelector('.ma-tool').closest('.ma-f').nextElementSibling.textContent }; })()`);
     assert.deepEqual(tab, { open: true, tab: 'conn', ask: L('第一次複製前先選工具：你的 AI 用哪一個？', 'Pick a tool before the first copy: which one does your AI use?'),
-      tools: ['Claude Code:false', 'Codex:false', 'Antigravity CLI:false', L('其他', 'Other') + ':false'], focus: 'claude',
+      tools: ['Claude Code:false', 'Codex:false', 'Antigravity CLI:false', 'Copilot CLI:false', L('其他', 'Other') + ':false'], focus: 'claude',
       btns: [L('*複製接入文字', '*Copy onboarding text'), L('複製完整版', 'Copy full version')], token: false,
       hint: L('選了會記住，下次不用再選。opencode 等其他工具選「其他」；Codex 版會多幾行「怎麼開網路」。', 'Your choice is remembered, so you only pick once. For opencode and other tools, pick "Other". The Codex version adds a few lines on turning on network access.') }, lang + '：接入分頁');
     assert.equal(await js('window.__clip'), null, lang + '：沒選工具不複製');
@@ -131,7 +131,7 @@ try {
     assert.ok(m.dis && m.primary, '沒選工具時複製鈕停用');
     assert.notEqual(m.bg, 'rgb(37, 99, 235)', '停用時是灰的，不是藍的：' + m.bg);
     assert.equal(m.tok, L('只複製 Token', 'Copy token only'));
-    assert.deepEqual(m.tools, ['Claude Code', 'Codex', 'Antigravity CLI', L('其他', 'Other')]);
+    assert.deepEqual(m.tools, ['Claude Code', 'Codex', 'Antigravity CLI', 'Copilot CLI', L('其他', 'Other')]);
     assert.equal(m.ask, L('第一次複製前先選工具：你的 AI 用哪一個？', 'Pick a tool before the first copy: which one does your AI use?'));
     assert.doesNotMatch(m.exp, /\d\d:\d\d:\d\d/, '新 Token 到期不寫秒：' + m.exp);
     await js("document.querySelector('#modal-root [data-tok-tool=\"codex\"]').click(); true");

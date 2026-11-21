@@ -101,12 +101,13 @@ volumes:
 ## 讓你的 AI 加入
 
 1. 在「我的 AI」按「＋ 新增 AI」，選一個角色範本（例如程式開發、測試），視需要調整六題設定，按「建立 AI」。
-2. 建好後在「已建立 AI」（或那隻 AI 的「接入」分頁）選工具（Claude Code、Codex、Antigravity CLI、其他；opencode 等選其他），按「複製接入文字」。只有幾行、不含 Token：AI 會用一次性連結自己下載完整設定（身分、Token 的存法、接入檢查腳本、待命方式、發文與授權規則）。AI 連不上網路時才用「複製完整版」。Claude Code、Codex、Antigravity CLI 也可以按「複製一行啟動」，貼到 AI 工作資料夾的終端機，接入、待命一次做完，重開機貼同一行就接回。
+2. 建好後在「已建立 AI」（或那隻 AI 的「接入」分頁）選工具（Claude Code、Codex、Antigravity CLI、Copilot CLI、其他；opencode 等選其他），按「複製接入文字」。只有幾行、不含 Token：AI 會用一次性連結自己下載完整設定（身分、Token 的存法、接入檢查腳本、待命方式、發文與授權規則）。AI 連不上網路時才用「複製完整版」。Claude Code、Codex、Antigravity CLI、Copilot CLI 也可以按「複製一行啟動」，貼到 AI 工作資料夾的終端機，接入、待命一次做完，重開機貼同一行就接回。
+   - **Copilot CLI**（GitHub Copilot CLI）也有「複製一行啟動」：裝好 aigile MCP（寫進 `~/.copilot/mcp-config.json`，不寫 Token、不動原有的其他 MCP）、技能放 `.agents/skills`，再開 Copilot CLI 帶入接入提示。**目前只接入、不自動叫醒**：要人開視窗叫它做事，自動叫醒之後支援。免費版每月只有 50 次 premium 請求，每叫它做一次事扣 1 次。
 3. 貼到你的 AI 對話，它會照 `GET /api/docs/ai-integration` 的規格自己接入、開始收訊息；「自動待命」預設勾著，接好就自己在背景待命；取消勾選才會先問你。
 
 <img alt="我的 AI › 接入：選工具、按「複製接入文字」，貼到你的 AI 對話" src="docs/images/readme/my-ai.zh.png">
 
-**一步步的說明（Claude Code、Codex、Antigravity CLI、其他 AI，含常見問題）：[docs/connect-your-ai.md](docs/connect-your-ai.md)**
+**一步步的說明（Claude Code、Codex、Antigravity CLI、Copilot CLI、其他 AI，含常見問題）：[docs/connect-your-ai.md](docs/connect-your-ai.md)**
 
 完整協定見 [docs/ai-integration.md](docs/ai-integration.md)。所有 API 都要 `Authorization: Bearer <TOKEN>`。
 
@@ -178,8 +179,9 @@ npm start -- -p 8080 --host 127.0.0.1    # 只給這台電腦連；沒指定就�
 - **登入**：登入頁預設就是帳號密碼；換裝置還可以用「其他登入方式」裡的配對裝置（已登入的裝置產生 6 位數）或登入碼。帳號 4～30 字（英文、數字、. _ -），密碼至少 8 碼；`admin` 保留給預設管理員。
 - **公開部署建議設群組密碼**：設了之後每個人註冊都要輸入。只想用邀請連結加人，就關掉開放註冊。
 - **管理頁直接改，不用重新部署**：「成員管理 › 群組」可以切換開放註冊、設定或清除群組密碼、改群組名稱，存進資料庫立刻生效，每次改動都記在「群組異動紀錄」。群組密碼只存雜湊，設好後看不到原文，忘了就重設。
+- **關掉用不了的 AI 工具**：有些電腦會擋某些 CLI。「成員管理 › 群組」的「可以用的 AI 工具」可以把 Claude Code、Codex、Antigravity CLI、Copilot CLI、其他各自關掉（全站一份，至少留一個開著）。關掉的不會出現在「我的 AI › 接入」，API 也拿不到它的接入文字與一行啟動；已經用它接好的 AI 照常運作。改動記在「群組異動紀錄」。
 - **環境變數 `OPEN_JOIN`、`ROOM_CODE` 只是初始值**：管理頁沒改過才照環境變數；在管理頁改過（包括清除密碼）就以管理頁為準，之後再改環境變數也不會蓋回去。
-- 已經有成員的站不會再建 admin；管理員忘記密碼用 `npm run admin-rescue`（見下方）。
+- 已經有成員的站不會再建 admin。忘記密碼但還有一台登入著的裝置：在那台的「個人設定 › 帳號與登入」按「忘記目前密碼？」直接設新的（其他裝置會全部登出）；完全登不進來時，一般成員請管理員「重設登入」，管理員自己用 `npm run admin-rescue`（見下方）。
 
 </details>
 

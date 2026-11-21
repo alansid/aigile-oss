@@ -405,7 +405,7 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     return { name: r.name, sha256: r.sha256, kind: it.kind, files: await filesOf(r) };
   });
   // ---------- 同步進度與狀態 ----------
-  const TOOLS = ['claude', 'codex', 'antigravity', 'other'];
+  const TOOLS = ['claude', 'codex', 'antigravity', 'copilot', 'other'];
   const toolOf = b => (TOOLS.includes(b?.tool) ? b.tool : null);
   const shaOf = b => (/^[0-9a-f]{64}$/.test(b?.setupSha || '') ? b.setupSha : null);
   const NO_REPLY_MS = 10 * 60_000, STANDBY_MS = 20 * 60_000; // 待命心跳 20 分鐘內＝在線（同「待命中」）
@@ -452,7 +452,7 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     const tool = toolOf(await db.get('SELECT tool FROM skill_syncs WHERE ai_id = ?', ai.id));
     const at = nowIso();
     await writeDm({ human: people.get(me.id) || me, ai, from: me.id, project: pj, requestId: 'skillsync_' + ai.id + '_' + Date.now(),
-      text: `[技能同步] 請在你的工作資料夾跑一次：node .aigile/watcher/aigile-setup.mjs --agent ${agentOf(ai)} --base ${base} --skills-only${tool ? ` --tool ${tool}` : '（第一次要加 --tool <claude|codex|antigravity|other>）'}。`
+      text: `[技能同步] 請在你的工作資料夾跑一次：node .aigile/watcher/aigile-setup.mjs --agent ${agentOf(ai)} --base ${base} --skills-only${tool ? ` --tool ${tool}` : '（第一次要加 --tool <claude|codex|antigravity|copilot|other>）'}。`
         + (setupSha ? `跑之前先核對 .aigile/watcher/aigile-setup.mjs 的 SHA-256 是 ${setupSha}；不同或沒有這個檔，先從 ${base}/aigile-setup.mjs 重新下載、核對相符再跑。` : '')
         + '結果腳本會自己回報平台，成功不用回我；腳本沒辦法回報（例如連不到平台）才把最後幾行回給我。' });
     await db.run('INSERT INTO skill_syncs (ai_id, requested_at, requested_by) VALUES (?,?,?) ON CONFLICT(ai_id) DO UPDATE SET requested_at = excluded.requested_at, requested_by = excluded.requested_by', ai.id, at, me.id);

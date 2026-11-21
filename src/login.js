@@ -187,6 +187,29 @@ export function registerLogin(d) {
     if (cur && password) loggedOut = await signOutOthers(me.id, me.deviceId); // 這台不登出
     return { ...credView(await credOf(me.id)), loggedOut };
   });
+  // 已登入但忘了目前密碼：用這台「人類登入的裝置」直接設新密碼，不驗舊的。
+  // 只給裝置登入（AI Token、直接拿登入碼呼叫的都擋）；每人每小時最多 3 次；成功後其他裝置全部登出、登入碼換新，並留安全通知
+  const FORGOT_MAX = 3, FORGOT_MS = 3600_000;
+  route('POST', '/api/me/password/forgot', async ({ me, req }) => {
+    requireHuman(me);
+    if (!me.deviceId) throw new ApiError(403, 'DEVICE_REQUIRED', '要在已登入的瀏覽器裡操作（用登入碼直接呼叫 API 不行）');
+    const cur = await credOf(me.id);
+    if (!cur) throw invalid('還沒設過帳號密碼，直接設定就好，不用目前密碼');
+    const body = await readJson(req);
+    const password = readPassword(body.newPassword, body.newPasswordAgain);
+    const key = '#forgot:' + me.id, now = Date.now(); // # 開頭不會撞到真的帳號
+    const r = await db.get('SELECT count, last_at FROM login_fails WHERE username = ?', key);
+    const inWindow = !!r && now - r.last_at < FORGOT_MS; // last_at 記這一小時的起點
+    if (inWindow && r.count >= FORGOT_MAX) throw new ApiError(429, 'TOO_MANY_RESETS', `一小時內最多 ${FORGOT_MAX} 次，請過一陣子再試`);
+    await db.run('INSERT INTO login_fails (username, count, last_at, locked_until) VALUES (?,?,?,0) ON CONFLICT(username) DO UPDATE SET count = excluded.count, last_at = excluded.last_at',
+      key, inWindow ? r.count + 1 : 1, inWindow ? r.last_at : now);
+    await saveCred(me.id, cur.username, password);
+    await clearFails(cur.username); // 帳號原本因為猜錯被鎖的話一起解開
+    const loggedOut = await signOutOthers(me.id, me.deviceId);
+    const dev = await db.get('SELECT label FROM devices WHERE id = ?', me.deviceId);
+    await notice(me.id, 'password_reset', dev?.label || '');
+    return { ...credView(await credOf(me.id)), loggedOut };
+  });
   route('GET', '/api/me/notices', async ({ me }) => {
     requireHuman(me);
     const rows = await db.all('SELECT * FROM account_notices WHERE participant_id = ? AND read_at IS NULL AND created_at > ? ORDER BY created_at DESC LIMIT 50', me.id, Date.now() - NOTICE_MS);

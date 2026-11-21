@@ -3516,6 +3516,7 @@
     const [text, hint] = n.kind === 'password_login' ? [`有新裝置用你的帳號密碼登入：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它並改密碼。']
       : n.kind === 'rescue_login' ? [`有裝置用主機救援連結登入你的帳號：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並檢查誰有主機部署權限。']
       : n.kind === 'login_code_read' ? [`有裝置讀取了你的登入碼：${secDev(n.detail)} · ${when}。`, '不是你？到「我的裝置」登出它，並換一組登入碼（舊的會失效）。']
+      : n.kind === 'password_reset' ? [`用一台已登入的裝置（${/^(其他)?$/.test(secDev(n.detail).trim()) ? '不明裝置' : secDev(n.detail)}）重設了你的密碼，沒有填目前密碼 · ${when}。其他裝置都已登出。`, '不是你？請管理員在「成員管理」按「重設登入」，再檢查「我的裝置」。']
       : [`主機產生了一次性救援登入連結（${n.detail}）· ${when}，15 分鐘內有效。`, '不是你或你的團隊？請檢查誰有主機部署權限。'];
     return `<div class="sec-note" id="sec-${esc(n.id)}"><span class="sec-ico" aria-hidden="true">🔐</span>
       <div class="sec-main"><span>${esc(text)}</span><span class="small">${esc(hint)}</span></div>
@@ -5981,7 +5982,7 @@
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
         ${maAvatar(ai)}
         <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
-          <div class="ma-meta">${[markQ(ai.role || '', q)].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}</div></div>
+          <div class="ma-meta">${[markQ(ai.role || '', q)].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
         <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
       </div>
       ${tab ? myAiPanelHtml(ai, tab) : ''}
@@ -5995,18 +5996,20 @@
     const tabs = [['conn', '接入'], ['skills', `技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}`], ['set', '設定']].filter(([k]) => active || k === 'set');
     const t = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
     const convoLabel = v => v ? CONVO_OPTS.find(x => x[0] === v)[1] : '太長才換新（建議）';
-    const tool = maTool(ai), ask = maAskTool.has(ai.participantId);
+    const tool = maTool(ai), ask = maAskTool.has(ai.participantId), closed = maToolClosed(ai);
     const body = t === 'conn' ? `
+        ${closed ? `<p class="notice ma-tool-off" role="status">這個工具（${esc(toolName(closed))}）已被管理員關閉，重新接入請改用其他工具。已經接好的照常運作，不用動。</p>` : ''}
         ${ask ? '<p class="ma-tool-ask" role="status">第一次複製前先選工具：你的 AI 用哪一個？</p>' : ''}
-        <div class="ma-f"><b>工具</b><span class="ma-tool" role="group" aria-label="這隻 AI 用的工具">${AI_TOOLS.map(([v, l]) => `<button type="button" data-act="tool" data-tool="${v}" data-id="${id}" aria-pressed="${tool === v}">${l}</button>`).join('')}</span></div>
-        <p class="ma-hint">選了會記住，下次不用再選。opencode 等其他工具選「其他」；Codex 版會多幾行「怎麼開網路」。</p>
-        <label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
+        <div class="ma-f"><b>工具</b><span class="ma-tool" role="group" aria-label="這隻 AI 用的工具">${maToolsOn().map(([v, l]) => `<button type="button" data-act="tool" data-tool="${v}" data-id="${id}" aria-pressed="${tool === v}">${l}</button>`).join('')}</span></div>
+        <p class="ma-hint">${maToolsOff.has('other') ? '選了會記住，下次不用再選。' : '選了會記住，下次不用再選。opencode 等其他工具選「其他」；Codex 版會多幾行「怎麼開網路」。'}</p>
+        ${maAutoWake(tool) ? `<label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
         <p class="ma-hint">${esc(CONVO_HINT[o.convo || ''])}</p>
-        <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>
+        <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>` : ''}
         <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="short" data-id="${id}">複製接入文字</button>${maHasLine(tool) ? `<button class="btn" type="button" data-act="start" data-id="${id}">複製一行啟動</button>` : ''}<button class="btn" type="button" data-act="copy" data-id="${id}">複製完整版</button></span></div>
         ${tool === 'codex' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝通用 MCP 與技能、在背景開 watcher，最後開 Codex 帶入接入提示（視窗開著時被點名會在同一個視窗回覆；關掉後有事在背景叫它）。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。</p>'
           : tool === 'claude' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝通用 MCP 與技能、在背景開 watcher，最後開 Claude Code 並帶入待命提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。/clear 後會自動接回，不用再貼。</p>'
-          : tool === 'antigravity' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝技能與規則、把通用 MCP 加進 Antigravity CLI 設定（不寫 Token、不動你原有的其他 MCP）、在背景開 watcher，最後開 Antigravity CLI 帶入接入提示。預設沙盒下 MCP 可直連平台，不用開完全權限；開著視窗才會處理，關掉就等下次打開。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。</p>' : ''}
+          : tool === 'antigravity' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝技能與規則、把通用 MCP 加進 Antigravity CLI 設定（不寫 Token、不動你原有的其他 MCP）、在背景開 watcher，最後開 Antigravity CLI 帶入接入提示。預設沙盒下 MCP 可直連平台，不用開完全權限；開著視窗才會處理，關掉就等下次打開。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。</p>'
+          : tool === 'copilot' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝技能、把通用 MCP 加進 Copilot CLI 的 MCP 設定（不寫 Token、不動你原有的其他 MCP），最後開 Copilot CLI 帶入接入提示。第一次用 Copilot CLI 要先執行 copilot 登入 GitHub；第一次要在 15 分鐘內貼。</p><p class="ma-hint">目前要人開視窗叫它做事，自動叫醒之後支援（不會在背景開 watcher）。每叫它做一次事扣 1 次 premium 請求，免費版每月只有 50 次。</p>' : ''}
         <p class="ma-hint">接入文字很短、不含 Token：AI 會用一次性連結自己下載完整設定（15 分鐘內、只能讀一次），讀的那一刻拿到新 Token。第一次接入、Token 重發後重新接上都用它。AI 連不上網路時才用完整版（約 5,000 字，附一組新 Token）。</p>
         <p class="ma-hint">上面的選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
       : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
@@ -6063,7 +6066,8 @@
       for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
     }
     async function draw() {
-      items = (await Promise.all([api('/api/my-ais'), waitFor]))[0].items; waitFor = null;
+      const d = (await Promise.all([api('/api/my-ais'), waitFor]))[0]; waitFor = null;
+      items = d.items; maToolsOff = new Set(d.toolsOff || []);
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
       if (scope) items = items.filter(a => (a.projects || []).includes(scope) || state.projMeta.crossRoleIds.includes(a.participantId));
       drawList();
@@ -6187,7 +6191,7 @@
     await draw();
   }
   // 短版接入（「複製接入文字」）：終端機下載到 .aigile/<代號>/setup.md、核對身分、接完刪掉（內容跟完整版一樣）
-  // tool：'codex'／'claude'／'other'（opencode 等算其他）；Codex 才帶開網路那段。沒給＝不知道用哪個工具，Codex 的網路說明照樣寫
+  // tool：'codex'／'claude'／'copilot'／'other'（opencode 等算其他）；Codex 才帶開網路那段。沒給＝不知道用哪個工具，Codex 的網路說明照樣寫
   function shortOnboardingText(ai, r, tool = '') {
     const dir = `.aigile/${r.agent || 'AI'}`, codex = !tool || tool === 'codex';
     // Codex 沒開網路時連規格都下載不到，所以開網路的說明要寫在這段貼上的文字裡
@@ -6211,12 +6215,16 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     return tool === 'other' ? '已複製接入文字（連結 15 分鐘內有效、只能讀一次）' : `已複製 ${toolName(tool)} 版接入文字（連結 15 分鐘內有效、只能讀一次）`;
   }
   // 每隻 AI 用的工具記在這個瀏覽器（不改資料庫，換電腦再選一次）；存不了就只記到重新整理
-  const AI_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['antigravity', 'Antigravity CLI'], ['other', '其他']];
+  const AI_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['antigravity', 'Antigravity CLI'], ['copilot', 'Copilot CLI'], ['other', '其他']];
   const toolName = v => (AI_TOOLS.find(x => x[0] === v) || [])[1] || '';
-  const maHasLine = tool => tool === 'claude' || tool === 'codex' || tool === 'antigravity'; // 有「複製一行啟動」的工具
+  const maHasLine = tool => tool === 'claude' || tool === 'codex' || tool === 'antigravity' || tool === 'copilot'; // 有「複製一行啟動」的工具
+  const maAutoWake = tool => tool !== 'copilot'; // Copilot CLI 目前不自動叫醒：不顯示對話接續、自動待命
   const maToolMem = {}, maAskTool = new Set();
   const maTools = () => { try { return { ...JSON.parse(store.get('aigile-ai-tools') || '{}'), ...maToolMem }; } catch { return { ...maToolMem }; } };
-  const maTool = ai => { const v = maTools()[ai.participantId]; return toolName(v) ? v : ''; };
+  let maToolsOff = new Set(); // 管理員關掉的工具（/api/my-ais 帶回來）
+  const maToolsOn = () => AI_TOOLS.filter(([v]) => !maToolsOff.has(v));
+  const maTool = ai => { const v = maTools()[ai.participantId]; return toolName(v) && !maToolsOff.has(v) ? v : ''; }; // 選的工具被關掉＝當沒選，請他改選
+  const maToolClosed = ai => [ai.tool, maTools()[ai.participantId]].find(v => v && maToolsOff.has(v)) || ''; // 上次接入檢查回報的、或這台選過的工具被關掉
   const maSetTool = (ai, v) => { maToolMem[ai.participantId] = v; store.set('aigile-ai-tools', JSON.stringify(maTools())); };
 
   // 「允許 AI 自動啟動待命」預設勾選；勾選才在接入設定寫明已同意，沒勾照舊先問
@@ -6239,7 +6247,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <p class="warn-box">Token 只有現在看得到：平台不保存原文，關掉這個視窗後要再複製就得重發。</p>
       <p class="notice">${created ? '接上你的 AI：按「複製接入文字」，整段貼到你開 AI 的那個視窗，它會自己接入。' : '重新接上：按「複製接入文字」，整段貼到你開 AI 的那個視窗。AI 會讀到自己的工作記憶，接著原本的工作做，不會重新簽到。'}<span>AI 讀連結時會再拿一組新 Token；AI 還記得設定、只要換 Token 時，才用「只複製 Token」。</span></p>
       ${maTool(ai) ? '' : `<div class="tok-tool"><p class="ma-tool-ask" role="status">第一次複製前先選工具：你的 AI 用哪一個？</p>
-        <span class="ma-tool" role="group" aria-label="這隻 AI 用的工具">${AI_TOOLS.map(([v, l]) => `<button type="button" data-tok-tool="${v}" aria-pressed="false">${l}</button>`).join('')}</span></div>`}`, {
+        <span class="ma-tool" role="group" aria-label="這隻 AI 用的工具">${maToolsOn().map(([v, l]) => `<button type="button" data-tok-tool="${v}" aria-pressed="false">${l}</button>`).join('')}</span></div>`}`, {
       size: 'narrow',
       foot: `<button class="btn" type="button" id="tok-copy">只複製 Token</button>
              <button class="btn primary" type="button" id="tok-short"${maTool(ai) ? '' : ' disabled'}>${label()}</button>`,
@@ -8197,8 +8205,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   async function loadGroupSettings() {
     perm.gsLoading = true;
     try {
-      const [s, ev] = await Promise.all([api('/api/group/settings'), api('/api/group/events?limit=30').catch(() => ({ items: [] }))]);
-      perm.gs = s; perm.gsEvents = ev.items;
+      const [s, ev, tools] = await Promise.all([api('/api/group/settings'), api('/api/group/events?limit=30').catch(() => ({ items: [] })), api('/api/ai-tools').catch(() => null)]);
+      perm.gs = s; perm.gsEvents = ev.items; perm.aiTools = tools;
     } catch (err) { perm.gs = { error: err.message }; }
     perm.gsLoading = false;
     if (state.page === 'perm' && perm.tab === 'group') drawPerm();
@@ -8227,7 +8235,18 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   function permGroupHtml() {
     return `<div class="pm-projs">
       <div class="pm-card pm-setrow pm-group-name"><label for="pm-group-name">群組名稱</label><input id="pm-group-name" maxlength="30" value="${esc(BASE_TITLE)}" aria-describedby="pm-gn-hint"><button type="button" class="btn small primary" data-pp="groupname">儲存</button><span class="muted small" id="pm-gn-hint">顯示在登入頁、左上角、分頁標題與 AI 接入設定。</span></div>
+      ${groupToolsHtml()}
       ${groupJoinHtml()}</div>`;
+  }
+  // 可以用的 AI 工具（全站一份）：取消勾選的只擋新接入，至少留一個開著；改的紀錄在「群組異動紀錄」
+  function groupToolsHtml() {
+    const d = perm.aiTools;
+    if (!d?.tools?.length) return '';
+    const nOn = d.tools.filter(t => t.on).length;
+    return `<div class="pm-card pm-tools"><div class="pm-card-head"><strong>可以用的 AI 工具</strong><span class="grow"></span><button type="button" class="btn small primary" data-pp="aitools">儲存</button></div>
+      <p class="muted small pm-tools-hint">取消勾選的工具不會出現在「我的 AI › 接入」，也拿不到接入文字與一行啟動。已經用它接好的 AI 照常運作。全站一份，不分專案；至少要留一個開著。改的紀錄在下面的「群組異動紀錄」。</p>
+      <div class="pm-tools-list" role="group" aria-label="可以用的 AI 工具">${d.tools.map(t => `<label class="chk"><input type="checkbox" data-pm-tool="${esc(t.key)}"${t.on ? ' checked' : ''}> ${esc(toolName(t.key) || t.name)}${t.key === 'other' ? '<span class="muted small">opencode、Gemini CLI、Cursor 等</span>' : ''}</label>`).join('')}</div>
+      ${nOn <= 1 ? '<p class="muted small pm-tools-hint">只剩一個開著：要關它，先打開另一個。</p>' : ''}</div>`;
   }
   // 專案分頁＝專案表格；改名／程式庫／異動紀錄／封存收進「⋯」
   function permProjectsHtml() {
@@ -8724,6 +8743,13 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (!pp) return;
     const id = pp.closest('[data-pj]')?.dataset.pj, a = pp.dataset.pp;
     if (perm.moreOpen) perm.moreOpen = null; // 選單裡選了就收起
+    if (a === 'aitools') {
+      const off = [...document.querySelectorAll('[data-pm-tool]')].filter(x => !x.checked).map(x => x.dataset.pmTool);
+      if (perm.aiTools?.tools && off.length >= perm.aiTools.tools.length) return toast('至少要留一個工具開著');
+      try { const d = await api('/api/ai-tools', { method: 'PUT', body: { off } }); perm.aiTools = d; toast(off.length ? `已儲存：關閉 ${d.tools.filter(t => !t.on).map(t => toolName(t.key)).join('、')}` : '已儲存：全部工具都開著'); } catch (err) { toast(err.message); }
+      perm.gsLogOpen = !!$('.pm-gs-log')?.open;
+      return loadGroupSettings(); // 異動紀錄多一筆
+    }
     if (a === 'groupname') {
       const name = $('#pm-group-name').value.trim();
       if (!name) return toast('請輸入群組名稱');
@@ -8961,8 +8987,10 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <div class="field pwd-set" id="pwd-set"><span class="field-label" id="pwd-set-h">帳號密碼</span>
         <div class="pwd-status" id="pwd-status" role="status"><span class="muted small">載入中…</span></div>
         <form id="pwd-set-form" class="stack" aria-labelledby="pwd-set-h" hidden>
-          <label>帳號<input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="field-hint">4～30 字，英文、數字、. _ -；不分大小寫</span></label>
+          <label>帳號<input name="username" required maxlength="30" autocomplete="username" autocapitalize="none" spellcheck="false"><span class="field-hint" id="pwd-user-hint">4～30 字，英文、數字、. _ -；不分大小寫</span></label>
           <label id="pwd-cur-l">目前密碼<span class="pwd-wrap"><input name="current" type="password" maxlength="128" autocomplete="current-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示目前密碼">顯示</button></span><span class="field-hint">改帳號或密碼都要先填</span></label>
+          <p class="pwd-forgot-row" id="pwd-forgot-row" hidden><button type="button" class="link small" id="pwd-forgot-cur">忘記目前密碼？</button></p>
+          <p class="pwd-forgot-on muted small" id="pwd-forgot-on" hidden>不用填目前密碼，直接設新的；存好後你其他的裝置都會登出。<button type="button" class="link small" id="pwd-forgot-back">我記得，改填目前密碼</button></p>
           <label><span id="pwd-new-t">新密碼</span><span class="pwd-wrap"><input name="newPassword" type="password" maxlength="128" autocomplete="new-password"><button type="button" class="pwd-eye" data-eye aria-pressed="false" aria-label="顯示新密碼">顯示</button></span><span class="field-hint" id="pwd-new-hint">至少 8 碼</span></label>
           <label>再輸入一次<input name="again" type="password" maxlength="128" autocomplete="new-password"></label>
           <p class="error" id="pwd-set-err" role="alert"></p>
@@ -9084,14 +9112,31 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       form.hidden = false;
       form.username.value = cur.username || form.username.value;
       form.dataset.saved = cur.username || ''; // 換分頁時判斷有沒有沒存的修改
-      body.querySelector('#pwd-cur-l').hidden = !cur.set;
-      body.querySelector('#pwd-new-hint').textContent = cur.set ? '至少 8 碼；只改帳號可以留白' : '至少 8 碼';
-      form.newPassword.required = !cur.set;
-      body.querySelector('#pwd-forgot').textContent = isAdmin() ? '忘記密碼要請有主機權限的人用救援指令（npm run admin-rescue）。' : `忘記密碼請管理員（${state.projMeta.adminName || '管理員'}）在「成員管理」按「重設登入」。`;
+      const forgot = form.dataset.forgot === '1' && cur.set; // 忘記目前密碼模式
+      body.querySelector('#pwd-cur-l').hidden = !cur.set || forgot;
+      body.querySelector('#pwd-forgot-row').hidden = !cur.set || forgot || state.me.authKind !== 'device'; // 只給裝置登入（伺服器也擋）
+      body.querySelector('#pwd-forgot-on').hidden = !forgot;
+      form.username.disabled = forgot; // 忘記模式只換密碼，不改帳號
+      body.querySelector('#pwd-user-hint').textContent = forgot ? '這個模式只能改密碼' : '4～30 字，英文、數字、. _ -；不分大小寫';
+      form.querySelector('button[type=submit]').textContent = forgot ? '設新密碼' : '儲存'; // 主按鈕跟確認框一致
+      body.querySelector('#pwd-new-hint').textContent = cur.set && !forgot ? '至少 8 碼；只改帳號可以留白' : '至少 8 碼';
+      form.newPassword.required = !cur.set || forgot;
+      body.querySelector('#pwd-forgot').innerHTML = [ // 兩句分開放，英文介面才各自翻得到
+        cur.set && state.me.authKind === 'device' ? '忘了目前密碼：在這台按上面的「忘記目前密碼？」直接設新的。' : '',
+        isAdmin() ? '完全登不進來時，要請有主機權限的人用救援指令（npm run admin-rescue）。' : `完全登不進來時，請管理員（${state.projMeta.adminName || '管理員'}）在「成員管理」按「重設登入」。`,
+      ].filter(Boolean).map(t => `<span>${esc(t)}</span>`).join(' ');
       for (const k of ['current', 'newPassword', 'again']) form[k].value = '';
     };
     try { cur = await api('/api/me/password'); } catch (err) { status.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
     draw();
+    const setForgot = on => {
+      form.dataset.forgot = on ? '1' : '';
+      form.username.value = cur.username || form.username.value;
+      draw();
+      (on ? form.newPassword : form.current).focus();
+    };
+    body.querySelector('#pwd-forgot-cur').addEventListener('click', () => setForgot(true));
+    body.querySelector('#pwd-forgot-back').addEventListener('click', () => setForgot(false));
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const err = body.querySelector('#pwd-set-err');
@@ -9099,6 +9144,22 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const username = form.username.value.trim(), np = form.newPassword.value, again = form.again.value;
       if (!/^[a-z0-9._-]{4,30}$/i.test(username)) { err.textContent = '帳號需為 4～30 字，只能用英文、數字、. _ -'; return form.username.focus(); }
       if (np || !cur.set) { const bad = credError(username, np, again); if (bad) { err.textContent = bad; return form.newPassword.focus(); } }
+      if (form.dataset.forgot === '1' && cur.set) { // 不驗舊密碼，其他裝置全部登出
+        const bad = credError(cur.username, np, again); if (bad) { err.textContent = bad; return form.newPassword.focus(); }
+        const ok = await confirmDialog({ title: '不用目前密碼，直接設新密碼？', confirmText: '設新密碼', danger: true,
+          message: '<ul class="confirm-list"><li>你其他所有裝置（包括配對、登入碼登入的）都會登出，要用新密碼重新登入；這台不會登出。</li><li>舊的登入碼會失效。</li><li>這件事會記在安全通知裡。</li></ul>' });
+        if (!ok) return;
+        const btn = form.querySelector('button[type=submit]');
+        btn.disabled = true;
+        try {
+          const r = await api('/api/me/password/forgot', { method: 'POST', body: { newPassword: np, newPasswordAgain: again } });
+          cur = r; form.dataset.forgot = '';
+          draw(`已設新密碼。建議存到密碼管理器。${r.loggedOut ? `另外 ${r.loggedOut} 台裝置已登出。` : ''}`);
+          toast('已設新密碼');
+        } catch (e2) { err.textContent = e2.message; }
+        finally { btn.disabled = false; }
+        return;
+      }
       if (cur.set && !form.current.value) { err.textContent = '請先填目前密碼'; return form.current.focus(); }
       const btn = form.querySelector('button[type=submit]');
       btn.disabled = true;

@@ -1,5 +1,5 @@
 // 驗收測試：接入文件瘦身但規則不能少
-// 接入設定初次／重接、三種工具每種版本 ≤ 6,500 字（含一般長度的角色設定與即時通道金鑰）、規格 ≤ 20,000 字；
+// 接入設定初次／重接、四種工具每種版本 ≤ 6,500 字（含一般長度的角色設定與即時通道金鑰）、規格 ≤ 20,000 字；
 // 必做／禁止事項清單（從瘦身前的接入設定與規格整理）在「接入設定＋規格」裡一條都不能少
 // 用法：node scripts/doc-rules-test.js　（--old 只檢查規則，用來比對瘦身前也都有）
 import fs from 'node:fs';
@@ -23,6 +23,7 @@ const call = async (token, p, method = 'GET', body) => {
 const len = t => [...t].length;
 
 // 必做／禁止事項（每條：說明、正規式；接入設定或規格任一處有就算）
+const waitForReplyRule = /等[^\n]{0,40}才能繼續[^\n]*\[需確認\][^\n]*replyFrom[^\n]*在等什麼/;
 const RULES = [
   ['身分不符就停（讀到別的 AI 的設定）', /名字不是[^\n]{0,40}(停下來|停止)/],
   ['重新接上不要重新簽到', /不要重新簽到/],
@@ -101,8 +102,8 @@ try {
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   const role = { duties: '負責平台的程式開發：照卡片需求實作、寫測試、修 bug、部署到兩站；交接時寫影響範圍與測試名稱。', style: '繁體中文、先講結論', autonomy: '實作、測試、commit、部署', mustConfirm: 'push、資料庫遷移、刪資料', handoff: '交 UX 驗收' };
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: '程式開發', name: '程式助手', ...role })).body;
-  // 接入設定分初次版／重接版、待命依工具三種；初次＋重接合起來加規格要涵蓋全部規則（其他工具不跑等待腳本，排除那一條）
-  const TOOLS = ['claude', 'codex', 'antigravity', 'other'];
+  // 接入設定分初次版／重接版、待命依工具四種；初次＋重接合起來加規格要涵蓋全部規則（其他工具不跑等待腳本，排除那一條）
+  const TOOLS = ['claude', 'codex', 'antigravity', 'copilot', 'other']; // Copilot CLI 也要涵蓋全部規則、字數上限
   const get = async tool => (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding?tool=${tool}`)).body.text;
   const first = {}, again = {};
   for (const t of TOOLS) first[t] = await get(t);
@@ -111,6 +112,8 @@ try {
   const ob = first.claude;
   for (const t of TOOLS) {
     assert.ok(/（初次接入）/.test(first[t]) && /（重新接上）/.test(again[t]), `${t}：標題寫出是初次還是重接`);
+    assert.match(spec, waitForReplyRule, '規格須說明等待他人時如何請對方回覆');
+    assert.match(first[t], waitForReplyRule, t + ' 初次接入須說明等待規則');
     const all = first[t] + '\n' + again[t] + '\n' + spec;
     const missing = RULES.filter(([n, re]) => !(t !== 'claude' && n.startsWith('等待腳本 ')) && !re.test(all)).map(([n]) => n);
     assert.deepEqual(missing, [], `${t}：規則不見了：` + missing.join('、'));

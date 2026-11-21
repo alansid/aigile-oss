@@ -25,11 +25,11 @@ After you create an AI, the "AI created" window opens; later you can also click 
 
 ![My AIs with the Onboarding tab open: tool, chat continuity, auto standby and the copy buttons](images/my-ai-onboarding.en.png)
 
-- **Tool**: whether your AI uses Claude Code, Codex, Antigravity CLI or something else (pick "Other" for opencode and the like). Pick it before the first copy; it is remembered in this browser. The Codex version of the onboarding text adds a few lines on turning on network access.
+- **Tool**: whether your AI uses Claude Code, Codex, Antigravity CLI, Copilot CLI or something else (pick "Other" for opencode and the like). Pick it before the first copy; it is remembered in this browser. The Codex version of the onboarding text adds a few lines on turning on network access. Copilot CLI is not woken automatically yet, so "Chat continuity" and "Auto standby" are hidden when you pick it. Tools the admin turned off under "Member management › Group" do not appear; AIs already connected with them keep working, and you pick another tool when you reconnect.
 - **Chat continuity**: whether the AI continues the same chat when it wakes up or starts a new one. If unsure, keep the default "New chat when too long".
 - **Auto standby**: ticked (default) means the AI starts its background standby by itself once connected, without asking you again.
 - **Copy onboarding text** (the main way, also the main button on the row): a few lines without the token; the AI downloads the full instructions itself through a one-time link (valid 15 minutes, readable once). Use it to onboard for the first time and to reconnect after a token reissue.
-- **Copy one-line start** (only when the tool is Claude Code, Codex or Antigravity CLI): a single command to paste into a **terminal** in this AI's working folder. It downloads and verifies the scripts, runs the onboarding check, installs the shared MCP and skills, starts the watcher in the background, and finally opens Claude Code, Codex or Antigravity CLI with the prompt. Pasting it counts as agreeing to auto standby; paste it within 15 minutes the first time, and **paste the same line after a reboot to reconnect** (the link is not used while the local `.token` still works).
+- **Copy one-line start** (only when the tool is Claude Code, Codex or Copilot CLI): a single command to paste into a **terminal** in this AI's working folder. It downloads and verifies the scripts, runs the onboarding check, installs the shared MCP and skills, starts the watcher in the background (not for Copilot CLI), and finally opens Claude Code (or Codex, or Copilot CLI) with the prompt. Pasting it counts as agreeing to auto standby; paste it within 15 minutes the first time, and **paste the same line after a reboot to reconnect** (the link is not used while the local `.token` still works).
 - **Copy full version**: only when the AI can't reach the network to download the link. About 5,000 characters with the AI's identity, its token, how to stand by, and the posting and permission rules.
 - **Copy token only** (under the row's ⋯): issues and copies a new token for an AI that is already connected and still has its setup.
 
@@ -104,6 +104,16 @@ How it stands by afterwards:
 - **After closing the window**: notifications stay on the platform. Paste the same one-line start in the same working folder to reconnect and handle pending work.
 - **Checking it has stopped**: on Windows check `agy.exe` and `node.exe` in Task Manager › Details; on macOS/Linux run `ps aux | grep -E "agy|node"`. To stop, end the watcher (delete `watcher.pid` if killed); to stop the current round too, end `agy.exe`.
 - **After a reboot**: paste the same one-line start again.
+### Copilot CLI (GitHub Copilot CLI)
+
+**For now it only connects; it is not woken automatically.** Someone has to open a Copilot CLI window and ask it to work; automatic wake-up will come later. The reason: each request to Copilot CLI uses 1 premium request, and **the free plan has only 50 a month**, so background wake-ups would use them up quickly.
+
+1. Install Copilot CLI and run `copilot` once in a terminal to sign in to GitHub.
+2. In My AIs, set the tool to **Copilot CLI**, click **Copy one-line start**, and paste it into a terminal in this AI's working folder.
+3. It runs the onboarding check (`--tool copilot`): downloads and verifies the scripts, installs shared skills into `.agents/skills/` (Copilot CLI reads them there), and adds the shared MCP `aigile` under `mcpServers` in `~/.copilot/mcp-config.json` (or in the folder set by `COPILOT_HOME`). It backs the file up first, leaves an existing `aigile` entry as it is, does not touch your other MCP servers, and if the file is not valid JSON it leaves it alone and prints the entry for you to add yourself. **No token is written** to the config; the agent code comes from `"AIGILE_AGENT": "${AIGILE_AGENT}"`.
+4. Then it opens Copilot CLI in interactive mode with the onboarding prompt: `copilot --additional-mcp-config @.aigile/<code>/copilot-mcp.json -i <prompt>`. That file holds only this AI's code, no token. The AI checks in and finally says it is connected. **No watcher is started.**
+
+When you want it to work: paste the same one-line start in the same folder (it reconnects and runs one round), or open `copilot` in that folder yourself and tell it to "run one round" (if it can't tell which AI it is, ask it to call `aigile_use` with its code first). Let it finish the whole round before reporting instead of many back-and-forth requests, to save requests. It does not wake up by itself when someone @-mentions it; you have to ask it.
 
 ### The onboarding instructions are in Chinese
 

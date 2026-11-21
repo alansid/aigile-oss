@@ -10,10 +10,12 @@
 //      Codex：也在前景開 codex（互動模式）帶入接入提示，人看得到接好沒；開著時寫 foreground.lock，背景喚醒腳本據此提醒先檢查工作樹；
 //      watcher 合併點名，送進前景對話；視窗關閉才開背景回合
 //      Antigravity CLI：在前景開 agy -i 帶入接入提示，開著時寫 foreground.lock 與 foreground-state.json；watcher 收到門鈴於前景空閒時背景跑 agy -p
-// 用法：node aigile-start.mjs --agent PG_XXXX --base https://平台網址 [--setup 一次性接入連結] [--tool claude|codex|antigravity] [--no-launch]
+//      Copilot CLI：目前只接入、不自動叫醒：不開 watcher；開 copilot 互動模式帶入接入提示（MCP 用這隻 AI 的代號）
+// 用法：node aigile-start.mjs --agent PG_XXXX --base https://平台網址 [--setup 一次性接入連結] [--tool claude|codex|antigravity|copilot] [--no-launch]
 // 結束碼：0 完成（或 claude 的結束碼）；1 某一步失敗（最後一行寫卡在哪、怎麼辦）
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
@@ -36,7 +38,7 @@ const posix = p => p.replace(/\\/g, '/');
 
 try {
   if (!/^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)?$/.test(AGENT) || !/^https?:\/\//.test(BASE)) fail('參數', '缺 --agent 或 --base', '請所屬人類在網頁「我的 AI」重新複製一行啟動');
-  if (!['claude', 'codex', 'antigravity'].includes(TOOL)) fail('參數', `--tool 只能是 claude、codex 或 antigravity（收到 ${TOOL}）`, '請所屬人類在網頁選對工具再複製');
+  if (!['claude', 'codex', 'antigravity', 'copilot'].includes(TOOL)) fail('參數', `--tool 只能是 claude、codex、antigravity 或 copilot（收到 ${TOOL}）`, '請所屬人類在網頁選對工具再複製');
   if (Number(process.versions.node.split('.')[0]) < 22) fail('Node 版本', `目前 ${process.versions.node}，要 22 以上`, '請安裝 Node 22 以上');
   fs.mkdirSync(DIR, { recursive: true });
   fs.mkdirSync(W, { recursive: true });
@@ -175,7 +177,7 @@ try {
     }
     watcherReady = true;
   };
-  if (TOOL !== 'codex' || NO_LAUNCH) startWatcher();
+  if (TOOL === 'claude' || (TOOL === 'codex' && NO_LAUNCH)) startWatcher(); // Copilot CLI 不開 watcher
 
   // 4. 待命提示
   const wait = `node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;
@@ -183,9 +185,13 @@ try {
   const done = '最後用一句話告訴所屬人類：「接好了，可以關掉，之後有事會在背景叫我」';
   const codexTail = `Codex 不用前景等待、不開等待腳本：watcher 已在背景跑，支援同視窗時會把工作送入本對話，視窗關閉後才用背景回合。呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），${done}。`;
   const agyTail = `Antigravity CLI 一律走前景（視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理）：watcher 已在背景跑，請先呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），處理完手上的訊息後用背景執行開等待腳本（${wait}）讓新通知直接叫醒這個視窗；最後告訴所屬人類：「接好了；視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理」。`;
+  // Copilot CLI 不自動叫醒，不開 watcher、不開等待腳本；平台操作用 MCP
+  const copilotTail = 'Copilot CLI 目前不自動叫醒：不開 watcher、不開等待腳本。平台操作用 MCP 工具（先呼叫 aigile_me 確認 MCP 能用，不能用就照實說）。最後用一句話告訴所屬人類：「接好了；要我做事時開 Copilot CLI 叫我」';
   let prompt;
   if (first) prompt = TOOL === 'antigravity'
     ? `你是 ${AGENT}，${NO_LAUNCH ? '請重貼一行啟動開啟 Antigravity CLI 並完成首次簽到' : '一行啟動已完成首次簽到並保存游標，請勿重複簽到'}。用 aigile_memory 讀取工作記憶，依規格 4.1 收一輪訊息。接入設定在 ${posix(path.join(DIR, 'onboarding.md'))}。所屬人類已用一行啟動同意待命。${agyTail}`
+    : TOOL === 'copilot'
+    ? `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動接入。${copilotTail}。`
     : TOOL === 'codex'
     ? `你是 ${AGENT}，${NO_LAUNCH ? '請重貼一行啟動開啟 Codex 並完成首次簽到' : '一行啟動已完成首次簽到並保存游標，請勿重複簽到'}。用 aigile_memory 讀取工作記憶，依規格 4.1 收一輪訊息。接入設定在 ${posix(path.join(DIR, 'onboarding.md'))}。所屬人類已用一行啟動同意待命。${codexTail}`
     : `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動同意待命，watcher 已在背景跑；接好後用背景執行開等待腳本：${wait}`;
@@ -194,12 +200,14 @@ try {
     fs.writeFileSync(path.join(DIR, 'reconnect.md'), await r.text());
     prompt = TOOL === 'antigravity'
       ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${agyTail}`
+    : TOOL === 'copilot'
+      ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${copilotTail}。`
       : TOOL === 'codex'
       ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${codexTail}`
       : `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用）。watcher 已在背景跑；跑完一輪就用背景執行開等待腳本待命：${wait}`;
   }
   const say = prompt.replace(/"/g, "'");
-  if (NO_LAUNCH) { out(`✓ 待命提示：${prompt}`); out(`完成（--no-launch：沒有開 ${{ codex: 'Codex', antigravity: 'Antigravity CLI' }[TOOL] || 'Claude Code'}）。`); }
+  if (NO_LAUNCH) { out(`✓ 待命提示：${prompt}`); out(`完成（--no-launch：沒有開 ${{ codex: 'Codex', antigravity: 'Antigravity CLI', copilot: 'Copilot CLI' }[TOOL] || 'Claude Code'}）。`); }
   else if (TOOL === 'antigravity') {
     out('✓ 開 Antigravity CLI（互動模式，帶 AIGILE_AGENT）。開著視窗才會處理，關掉就等下次打開');
     const bin = process.env.AIGILE_ANTIGRAVITY_BIN || process.env.AGY_BIN || 'agy';
@@ -244,6 +252,24 @@ try {
     unlock();
     if (r.error || r.status === null) fail('Codex', `開不起來（${r.error?.message || '找不到 codex 指令'}）`, '確認已安裝 Codex CLI（codex 指令），再貼一次');
     out('✓ Codex 已關，watcher 會在背景處理待處理通知');
+    process.exitCode = r.status;
+  } else if (TOOL === 'copilot') {
+    // Copilot CLI 互動模式（-i 帶入提示並直接執行）。目前不自動叫醒，所以不開 watcher。
+    // --additional-mcp-config：這次對話的 aigile 直接帶這隻 AI 的代號（蓋掉同名的全機設定；檔案裡沒有 Token，轉接腳本讀 .token）
+    const mcpFile = path.join(DIR, 'copilot-mcp.json');
+    const mcpPath = posix(path.join(process.env.AIGILE_HOME || os.homedir(), '.aigile', 'aigile-mcp.mjs'));
+    fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: { aigile: { type: 'local', command: 'node', args: [mcpPath], env: { AIGILE_AGENT: AGENT }, tools: ['*'] } } }, null, 2) + '\n');
+    out('✓ 開 Copilot CLI（互動模式，帶 AIGILE_AGENT；這次對話的 aigile MCP 用你的代號）。目前不自動叫醒：要它做事時，開 Copilot CLI 叫它');
+    // AIGILE_COPILOT_BIN 給測試用假的 copilot
+    const bin = process.env.AIGILE_COPILOT_BIN || 'copilot';
+    const env = { ...process.env, AIGILE_AGENT: AGENT };
+    const mcpArg = '@' + posix(path.resolve(mcpFile)); // 絕對路徑：不靠 copilot 從哪個資料夾解讀
+    const list = ['--additional-mcp-config', mcpArg, '-i', prompt];
+    const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...list], { stdio: 'inherit', env })
+      : process.platform === 'win32'
+        ? spawnSync(`${fs.existsSync(bin) ? `"${bin}"` : bin} --additional-mcp-config "${mcpArg}" -i "${say}"`, { stdio: 'inherit', env, shell: true })
+        : spawnSync(bin, list, { stdio: 'inherit', env });
+    if (r.error || r.status === null) fail('Copilot CLI', `開不起來（${r.error?.message || '找不到 copilot 指令'}）`, '確認已安裝 GitHub Copilot CLI（copilot 指令）並登入過，再貼一次');
     process.exitCode = r.status;
   } else {
     out('✓ 開 Claude Code（帶 AIGILE_AGENT，通用 MCP 認得你）');

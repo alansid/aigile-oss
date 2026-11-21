@@ -101,12 +101,13 @@ On first start a "預設專案" (default project) and an admin account are creat
 ## Bring your AI in
 
 1. In "My AIs", click "+ Add AI", pick a role template (for example Developer or Tester), adjust the six setup questions if needed and click "Create AI".
-2. In the "AI created" window (or that AI's "Onboarding" tab), pick the tool (Claude Code, Codex, Antigravity CLI or Other; pick Other for opencode and the like) and click "Copy onboarding text". It is just a few lines without the token: the AI downloads the full instructions itself through a one-time link. Use "Copy full version" only when the AI can't reach the network. (The instructions are in Chinese.) For Claude Code, Codex and Antigravity CLI you can instead click "Copy one-line start" and paste it into a terminal in the AI's working folder: it onboards and starts standby in one go, and pasting the same line after a reboot reconnects.
+2. In the "AI created" window (or that AI's "Onboarding" tab), pick the tool (Claude Code, Codex, Antigravity CLI, Copilot CLI or Other; pick Other for opencode and the like) and click "Copy onboarding text". It is just a few lines without the token: the AI downloads the full instructions itself through a one-time link. Use "Copy full version" only when the AI can't reach the network. (The instructions are in Chinese.) For Claude Code, Codex and Antigravity CLI, Copilot CLI you can instead click "Copy one-line start" and paste it into a terminal in the AI's working folder: it onboards and starts standby in one go, and pasting the same line after a reboot reconnects.
+   - **Copilot CLI** (GitHub Copilot CLI) also has "Copy one-line start": it installs the aigile MCP (into `~/.copilot/mcp-config.json`, with no token and without touching your other MCP servers), puts skills in `.agents/skills`, and opens Copilot CLI with the onboarding prompt. **For now it only connects and is not woken automatically**: someone has to open a window and ask it to work; automatic wake-up will come later. The free plan has only 50 premium requests a month, and each time you ask it to do something uses 1.
 3. Paste it into your AI's chat. The AI connects itself following the spec at `GET /api/docs/ai-integration` (Chinese) and starts receiving messages; "Auto standby" is ticked by default, so it starts standing by in the background once connected; untick it if you want it to ask you first.
 
 <img alt="My AIs › Onboarding: pick the tool, copy the onboarding text and paste it into your AI's chat" src="docs/images/readme/my-ai.en.png">
 
-**Step-by-step guide (Claude Code, Codex, Antigravity CLI, other AIs, with troubleshooting): [docs/connect-your-ai.en.md](docs/connect-your-ai.en.md)**
+**Step-by-step guide (Claude Code, Codex, Antigravity CLI, Copilot CLI, other AIs, with troubleshooting): [docs/connect-your-ai.en.md](docs/connect-your-ai.en.md)**
 
 Full protocol: [docs/ai-integration.md](docs/ai-integration.md) (Chinese). Every API call needs `Authorization: Bearer <TOKEN>`.
 
@@ -190,8 +191,9 @@ First login and setup are the same as above.
 - **Login**: the login page defaults to username and password; on a new device you can also use "Other ways to sign in" — pair a device (6 digits generated on a signed-in device) or a login code. Usernames are 4–30 characters (letters, digits, `. _ -`), passwords at least 8; `admin` is reserved for the default admin.
 - **Set a group password for public deployments**: once set, everyone must enter it to sign up. To allow invite links only, turn off open sign-up.
 - **Change it on the admin page, no redeploy**: "Member management › Group" toggles open sign-up, sets or clears the group password and renames the group. Changes are stored in the database, take effect immediately and are recorded in the group change log. The group password is stored only as a hash; you can't see it after saving — just reset it if forgotten.
+- **Turn off AI tools that cannot run here**: some computers block certain CLIs. Under "Member management › Group", "Allowed AI tools" turns Claude Code, Codex, Antigravity CLI, Copilot CLI and Other on or off one by one (one setting for the whole site; at least one stays on). A tool that is off is hidden from "My AIs › Connect", and the API will not hand out its onboarding text or one-line start; AIs already connected with it keep working. Changes are recorded in the group change log.
 - **`OPEN_JOIN` and `ROOM_CODE` are only initial values**: they apply until changed on the admin page; after that (including clearing the password) the admin page wins, and changing the environment variables won't override it.
-- A site that already has members never creates `admin` again; if the admin forgets the password, use `npm run admin-rescue` (below).
+- A site that already has members never creates `admin` again. Forgot your password but still signed in on one device? On that device, open "Personal settings › Account & sign-in" and click "Forgot current password?" to set a new one (all other devices are signed out). If you cannot sign in at all, members ask an admin to "Reset sign-in"; admins use `npm run admin-rescue` (below).
 
 </details>
 

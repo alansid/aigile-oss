@@ -10,11 +10,12 @@
 //   7. 同步技能：下載專案已上架的技能、核對雜湊、裝到工具的技能資料夾；含腳本的要主人允許才裝；下架的移除（只移除自己裝的）
 //   8. Claude Code：裝通用 MCP aigile（使用者範圍，整台電腦一次；已裝就跳過）與 hook（.claude/settings.local.json）；Codex 印設定讓你自己加
 //      Antigravity CLI：~/.gemini/config/mcp_config.json 加 aigile（先備份；已有就不改；其他 MCP 不動）、.agents/rules/aigile.md、.agents/hooks.json 前景狀態 hook
+//      Copilot CLI：~/.copilot/mcp-config.json 加 aigile（先備份；已有就不改；其他 MCP 不動）
 //   9. 先比對自己跟平台的 SHA-256，不同就下載、核對後用新版重跑；同步開始、結束、失敗都回報平台（主人的同步清單看得到）
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
-// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|antigravity|other] [--mode auto|fresh|keep] [--skills-only]
-//   --tool 決定沒勾角色的技能裝哪裡：claude → .claude/skills、codex 與 antigravity → .agents/skills、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
+// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|antigravity|copilot|other] [--mode auto|fresh|keep] [--skills-only]
+//   --tool 決定沒勾角色的技能裝哪裡：claude → .claude/skills、codex 與 copilot → .agents/skills（Copilot CLI 也讀這裡）、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
 //   有指定（角色或 AI）的技能一律裝 .aigile/<代號>/skills（同資料夾別的 AI 不會載入）
 //   --mode（codex、antigravity 用）：對話接續方式；設 WAKE_CMD 指向對應喚醒腳本（有事才在背景跑一輪）
 //   --skills-only 只同步技能（主人在網頁按「同步」時用），不動 watcher
@@ -112,13 +113,13 @@ if (cfg.setup && SELF_SHA !== cfg.setup) {
 // ---------- 技能同步 ----------
 async function syncSkills() {
   REPORT = true;
-  if (!['claude', 'codex', 'antigravity', 'other'].includes(TOOL)) fail('技能', `--tool 只能是 claude、codex、antigravity、other（收到 ${TOOL}）`, '照接入設定寫的 --tool 原樣執行');
+  if (!['claude', 'codex', 'antigravity', 'copilot', 'other'].includes(TOOL)) fail('技能', `--tool 只能是 claude、codex、antigravity、copilot、other（收到 ${TOOL}）`, '照接入設定寫的 --tool 原樣執行');
   await report('/api/me/skills/sync-status', { state: 'running', tool: TOOL, setupSha: SELF_SHA });
   const r = await fetch(BASE + '/api/me/skills', { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'setup' }, signal: AbortSignal.timeout(20_000) }).catch(() => null);
   if (!r || r.status === 404) return out('（平台沒有技能庫，略過技能）');
   if (!r.ok) fail('技能', `/api/me/skills 回 HTTP ${r.status}`, '把這行告訴所屬人類');
   const list = (await r.json()).items;
-  const root = { claude: '.claude/skills', codex: '.agents/skills', antigravity: '.agents/skills' }[TOOL] || path.join(DIR, 'skills');
+  const root = { claude: '.claude/skills', codex: '.agents/skills', antigravity: '.agents/skills', copilot: '.agents/skills' }[TOOL] || path.join(DIR, 'skills');
   // 249：有指定（角色或 AI）的技能一律裝到自己的代號資料夾（同資料夾的別的 AI 不會載入）；發給所有 AI 的才照 --tool 裝到共用區
   // 平台回 own；舊平台沒有 own 時照舊看 roles
   const own = path.join(DIR, 'skills');
@@ -256,10 +257,14 @@ if (running && changed) {
     out(`! watcher（程序 ${pid}）用的是舊檔或舊設定：先停掉它，再用下面的指令重開`);
   }
 } else if (running) out(`✓ watcher 已在執行（程序 ${pid}），不用再開`);
-out(`啟動 watcher：node ${envArg} .aigile/watcher/watcher.mjs >> ${DIR.replace(/\\/g, '/')}/watcher.log 2>&1`);
-if (TOOL === 'codex') out(`Codex 不用前景等待：watcher 有待處理才執行 WAKE_CMD=${merged.get('WAKE_CMD')}（開 codex exec 跑一輪就結束，輸出在 ${DIR.replace(/\\/g, '/')}/wake.log）`);
+// Copilot CLI 目前不自動叫醒（免費版每月 50 次 premium 請求，自動叫醒很快用完）：不印 watcher、等待腳本的啟動指令
+if (TOOL === 'copilot') out('Copilot CLI 目前不自動叫醒：不用開 watcher 或等待腳本；要它做事時，所屬人類開 Copilot CLI 叫它跑一輪');
+else {
+  out(`啟動 watcher：node ${envArg} .aigile/watcher/watcher.mjs >> ${DIR.replace(/\\/g, '/')}/watcher.log 2>&1`);
+  if (TOOL === 'codex') out(`Codex 不用前景等待：watcher 有待處理才執行 WAKE_CMD=${merged.get('WAKE_CMD')}（開 codex exec 跑一輪就結束，輸出在 ${DIR.replace(/\\/g, '/')}/wake.log）`);
 else if (TOOL === 'antigravity') out(`Antigravity CLI 一律走前景（開著視窗才會處理，關掉就等下次打開）：等待腳本 node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`);
-else out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}（沒事不會結束，結束就是有事）`);
+  else out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}（沒事不會結束，結束就是有事）`);
+}
 // 通用 MCP（aigile，整台電腦裝一次）：轉接腳本複製到家目錄 ~/.aigile/aigile-mcp.mjs，Claude Code 裝在使用者範圍（-s user）。
 // 從哪個資料夾開都用同一個；身分由轉接腳本看環境變數 AIGILE_AGENT 或資料夾裡唯一的 Token 決定，新增 AI、換角色、加專案不用重裝。
 // 舊的 aigile-<代號>不動、照樣能用。Token 由轉接腳本每次讀 .token，不寫進設定。
@@ -323,6 +328,7 @@ if (cfg.files['aigile-mcp.mjs']) {
   // Codex 預設不把環境變數傳給 MCP 子程序，要 env_vars 才帶得到 AIGILE_AGENT（喚醒腳本會設）
   const codexManual = `  Codex → ~/.codex/config.toml 加 [mcp_servers.aigile]，command = "node"，args = ["${mcpPath}"]，env_vars = ["AIGILE_AGENT"]（整台電腦一個；env_vars 那行一定要有，Codex 預設不傳環境變數給 MCP；資料夾有多隻 AI 又沒帶 AIGILE_AGENT 時先呼叫 aigile_use）`;
   if (TOOL === 'codex') codexMcp(mcpPath, codexManual); else out(codexManual);
+  if (TOOL === 'copilot') copilotMcp(mcpPath);
   if (TOOL === 'antigravity') { antigravityMcp(mcpPath); antigravityWorkspace(); }
 }
 
@@ -424,7 +430,35 @@ function codexMcp(mcpPath, manual) {
   out(`! MCP：加了之後 codex mcp get aigile 驗證失敗（${String(r.stderr || r.stdout || r.error?.message || '').trim().split('\n').pop().slice(0, 120) || '找不到 codex 指令'}），已還原 ${file.replace(/\\/g, '/')}：這版 Codex 可能不認得這些設定，請自己加`);
   out(manual);
 }
-out('完成：照上面兩行啟動（要先取得所屬人類同意的就先問）。');
+// Copilot CLI 的 MCP 設定是 JSON（~/.copilot/mcp-config.json，或 COPILOT_HOME 底下）。只加 mcpServers.aigile：
+// 已有就不改；檔案不是合法 JSON 就不碰、印設定請人貼；改之前先備份，其他 MCP 原樣保留。
+// AIGILE_AGENT 寫 ${AIGILE_AGENT}（Copilot CLI 啟動 MCP 時展開）：一行啟動會帶；沒帶時轉接腳本改看資料夾裡唯一的 Token 或 aigile_use
+function copilotMcp(mcpPath) {
+  // AIGILE_TEST_COPILOT_HOME：測試的保險（COPILOT_HOME 被設成空字串時也不會落到真的 ~/.copilot）；一般使用不會設
+  const dir = process.env.COPILOT_HOME || process.env.AIGILE_TEST_COPILOT_HOME || path.join(os.homedir(), '.copilot');
+  const file = path.join(dir, 'mcp-config.json'), shown = file.replace(/\\/g, '/');
+  const entry = { type: 'local', command: 'node', args: [mcpPath], env: { AIGILE_AGENT: '${AIGILE_AGENT}' }, tools: ['*'] };
+  const manual = `  請自己在 ${shown} 的 mcpServers 加 "aigile": ${JSON.stringify(entry)}`;
+  let had = null; try { had = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') { out(`! MCP：讀不到 ${shown}（${e.code}）`); return out(manual); } }
+  let j = {};
+  if (had !== null && had.trim()) {
+    try { j = JSON.parse(had); } catch { out(`! MCP：${shown} 不是合法的 JSON，沒有改它`); return out(manual); }
+    const bad = v => !v || typeof v !== 'object' || Array.isArray(v);
+    if (bad(j) || (j.mcpServers !== undefined && bad(j.mcpServers))) { out(`! MCP：${shown} 的格式看不懂（要有 mcpServers 物件），沒有改它`); return out(manual); }
+  }
+  const cur = j.mcpServers?.aigile;
+  if (cur) return out(JSON.stringify(cur.env || {}).includes('AIGILE_AGENT') ? `✓ MCP：Copilot CLI 已有 aigile（${shown}，不改）`
+    : `! MCP：Copilot CLI 已有 aigile，但 env 沒有 AIGILE_AGENT：請在那一段加 "env": { "AIGILE_AGENT": "\${AIGILE_AGENT}" }（沒有的話資料夾多隻 AI 時認不出你）`);
+  j.mcpServers = { ...(j.mcpServers || {}), aigile: entry };
+  const bak = had !== null ? `${file}.aigile-bak-${new Date().toISOString().replace(/[:.]/g, '-')}` : '';
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    if (bak) fs.writeFileSync(bak, had);
+    fs.writeFileSync(file, JSON.stringify(j, null, 2) + '\n');
+  } catch (e) { try { if (had !== null) fs.writeFileSync(file, had); } catch {} out(`! MCP：寫不進 ${shown}（${e.code || e.message}）`); return out(manual); }
+  out(`✓ MCP：已在 ${shown} 加好通用的 aigile${bak ? `，原檔備份在 ${bak.replace(/\\/g, '/')}` : ''}；其他 MCP 沒動，新開的 Copilot CLI 就有 aigile 工具`);
+}
+out(TOOL === 'copilot' ? '完成：接好後開 Copilot CLI 叫它（一行啟動會自動開）。' : '完成：照上面兩行啟動（要先取得所屬人類同意的就先問）。');
 }
 } catch (e) {
   if (!(e instanceof Done)) {

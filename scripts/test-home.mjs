@@ -9,5 +9,7 @@ process.env.AIGILE_TEST_CODEX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'aigi
 process.env.CODEX_HOME = process.env.AIGILE_TEST_CODEX_HOME; // 一律蓋掉（測試用不到真的 Codex 設定）
 process.env.AIGILE_TEST_GEMINI_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-geminihome-')); // Antigravity CLI 的 ~/.gemini 也隔離
 process.env.AIGILE_GEMINI_HOME = process.env.AIGILE_TEST_GEMINI_HOME;
+process.env.AIGILE_TEST_COPILOT_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-copilothome-')); // Copilot CLI 版會改 ~/.copilot/mcp-config.json，也隔離
+process.env.COPILOT_HOME = process.env.AIGILE_TEST_COPILOT_HOME;
 process.env.AIGILE_CODEX_BIN ||= fileURLToPath(new URL('./fake-codex.mjs', import.meta.url));
 process.env.AIGILE_ANTIGRAVITY_BIN ||= fileURLToPath(new URL('./fake-antigravity.mjs', import.meta.url));
