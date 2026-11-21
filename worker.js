@@ -5,6 +5,7 @@ import { wrapD1 } from './src/db-d1.js';
 import { dbStorage } from './src/storage-db.js';
 import { r2Storage } from './src/storage-r2.js'; // 專案文件區
 import docText from './docs/ai-integration.md';
+import apiRefText from './docs/api-reference.md';
 import flowsText from './docs/flows.md'; // 要登入才讀得到
 import releases from './generated/releases.json'; // npm run deploy 會先產生
 import scriptHashes from './generated/script-hashes.json'; // 同上，AI 下載腳本的 SHA-256
@@ -18,6 +19,7 @@ const app = env => {
     storage: dbStorage(db), // 訊息附件存 D1，不需要 R2
     docStorage: env.DOCS ? r2Storage(env.DOCS) : null, // 專案文件區存 R2；還沒綁定 DOCS 就回 503，其他功能照常
     docText,
+    apiRefText,
     flowsText,
     releases,
     scriptHashes,

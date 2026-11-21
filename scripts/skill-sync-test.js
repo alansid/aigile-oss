@@ -178,9 +178,9 @@ try {
   assert.ok(!fs.existsSync(path.join(wd2, `.aigile/${pg1.ag}/skills/pg-tools`)), '下架的移除了');
 
   // 9. 規格 3.16
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /成功不用回覆/); assert.match(spec, /先核對 `\.aigile\/watcher\/aigile-setup\.mjs`/);
-  assert.ok([...spec].length <= 20000, '規格 2 萬字內');
+  assert.ok([...fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8')].length <= 6000, '規則版規格 6,000 字內');
   console.log('skill-sync-test：全部通過');
 } catch (e) {
   console.error('skill-sync-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('skill-sync-test')) || '');

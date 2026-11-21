@@ -144,7 +144,7 @@ try {
   assert.equal(await w.done, 10); assert.equal(w.last(), 'TIMEOUT', '--exit-on-timeout 照舊');
 
   // 5. 規格、接入設定、接入檢查
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.ok(spec.includes('等待腳本沒事不會結束；它結束就是有事（待處理、錯誤或 Token 失效），處理完再重開。'), '規格那句白話');
   assert.ok(!/`TIMEOUT` → 直接再執行；/.test(spec) && /`TIMEOUT`（只有加 `--exit-on-timeout` 才會出現）/.test(spec), '規格 TIMEOUT 改寫');
   assert.ok(!/--max-min=110/.test(spec), '規格的等待指令拿掉 --max-min=110');

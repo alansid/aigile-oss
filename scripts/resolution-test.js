@@ -80,8 +80,8 @@ try {
 
   // 規格寫了 AI 要怎麼做
   const rules = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
-  assert.match(rules, /「已處理（未回覆）」）：當暫緩，不再等、不重問/, '規格：已處理＝暫緩');
-  assert.ok([...rules].length <= 19500, '規格留 500 字餘裕：' + [...rules].length);
+  assert.match(rules, /「已處理（未回覆）」）＝[^\n]*當暫緩，不再等、不重問/, '規格：已處理＝暫緩');
+  assert.ok([...rules].length <= 6000, '規則版規格 ≤ 6,000 字：' + [...rules].length);
   console.log('resolution-test：全部通過');
 } catch (e) {
   console.error('resolution-test 失敗：', e.message, (e.stack || '').split('\n').slice(1, 4).join(' | '));

@@ -14,7 +14,7 @@ import { testToken } from './test-token.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
 const db = await openTestDb(path.join(dataDir, 'switch.db'));
-const app = createApp({ db, storage: dbStorage(db), docText: fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
+const app = createApp({ db, storage: dbStorage(db), docText: (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8')), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   return { status: r.status, body: await r.json().catch(() => ({})) };
@@ -101,7 +101,7 @@ try {
   assert.equal((await call(A.tok, `/api/cards/${dec.cardId}/takeover`, 'POST', {})).body.error?.code, 'NO_CLAIM_DECISION');
 
   // 8) 規格寫明；網頁顯示認領者與交接四欄
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /takeover/); assert.match(spec, /cardClaim/); assert.match(spec, /progress.*nextStep/);
   const web = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(web, /正在做/, '網頁顯示誰正在做'); assert.match(web, /做到哪/); assert.match(web, /改了什麼/); assert.match(web, /h\.caution/); assert.match(web, /上一棒交接/);

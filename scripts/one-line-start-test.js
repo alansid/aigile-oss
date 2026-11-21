@@ -409,7 +409,7 @@ try {
   console.log('✓ 7 等待腳本 wait.pid');
 
   // 規格、接入設定
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   for (const k of ['通用 MCP 叫 `aigile`', '**一行啟動**', 'GET /api/me/reconnect', '`.claude/settings.local.json`']) assert.ok(spec.includes(k), '規格有：' + k);
   const ob = (await call(liu.token, `/api/my-ais/${pg.id}/onboarding?tool=claude`)).body.text;
   assert.match(ob, /通用 MCP aigile/, '接入設定寫通用 MCP');

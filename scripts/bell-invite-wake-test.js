@@ -98,7 +98,7 @@ try {
   assert.ok(!fs.existsSync(pub('wait-for-bell.js')), 'wait-for-bell.js 刪掉');
   assert.ok(!fs.existsSync(pub('wake-qa.mjs')) && fs.existsSync(new URL('./experimental/wake-qa.mjs', import.meta.url)), 'wake-qa.mjs 移出 public');
   assert.ok(!fs.readFileSync(pub('app.js'), 'utf8').includes('wait-for-bell'), '設定頁不再提 wait-for-bell');
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.ok(!spec.includes("node -e \"const fs=require('fs')"), 'C3：規格不再放一行式下載，改請人跑檢查腳本');
   console.log('bell-invite-wake-test：全部通過');
 } catch (e) {

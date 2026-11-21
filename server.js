@@ -53,6 +53,7 @@ const handle = createApp({
   storage: dbStorage(db),
   docStorage: dirStorage(path.join(DATA_DIR, 'docs')),
   docText: fs.readFileSync(path.join(ROOT, 'docs', 'ai-integration.md'), 'utf8'),
+  apiRefText: fs.readFileSync(path.join(ROOT, 'docs', 'api-reference.md'), 'utf8'),
   flowsText: fs.readFileSync(path.join(ROOT, 'docs', 'flows.md'), 'utf8'),
   scriptHashes: scriptHashes(), // 從 public/ 現算
   releases: (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'generated', 'releases.json'), 'utf8')); } catch { return null; } })(), // npm run releases 產生
@@ -125,7 +126,7 @@ http.createServer(async (req, res) => {
     let url;
     try { url = new URL(req.url, `${proto}://${req.headers.host || 'localhost'}`); } catch { return sendJson(res, 400, 'BAD_REQUEST', '網址不合法'); }
     const base = APP_ORIGIN || url.origin;
-    if (!url.pathname.startsWith('/api/') && url.pathname !== '/docs/ai-integration.md') return await serveStatic(res, url.pathname, base);
+    if (!url.pathname.startsWith('/api/') && !['/docs/ai-integration.md', '/docs/api-reference.md'].includes(url.pathname)) return await serveStatic(res, url.pathname, base);
 
     const len = Number(req.headers['content-length'] || 0);
     if (len > MAX_BODY) { req.resume(); return sendJson(res, 413, 'PAYLOAD_TOO_LARGE', '請求內容過大'); }

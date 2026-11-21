@@ -125,7 +125,7 @@ try {
   await w.stop();
   const src = fs.readFileSync(WATCHER, 'utf8');
   assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, BELL_ONLY \? 12 : 3\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, BELL_ONLY \? 60 : 15\)/);
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /只寫門鈴的（Claude Code）每小時 12、每天 60 次/); assert.match(spec, /`wake`（[^\n]{0,80}`false`＝知會類/); assert.match(spec, /count\?wake=1/);
   console.log('wake-fyi-test：全部通過');
 } catch (e) {

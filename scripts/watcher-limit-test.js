@@ -100,7 +100,7 @@ try {
   const src = fs.readFileSync(WATCHER, 'utf8');
   // 會跑模型的接法（這裡的 WAKE_CMD 是 node）維持 3／15；Claude Code（echo）12／60 見 wake-fyi-test
   assert.match(src, /num\(env\.WAKE_MAX_PER_HOUR, BELL_ONLY \? 12 : 3\)/); assert.match(src, /num\(env\.WAKE_MAX_PER_DAY, BELL_ONLY \? 60 : 15\)/); assert.match(src, /num\(env\.WAKE_TIMEOUT_MIN, 10\)/);
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /會跑模型的（opencode、Codex）每小時 3、每天 15 次、每次最多跑 10 分鐘，超時停掉[^\n]*都只私訊所屬人類/, '規格寫明上限');
   console.log('watcher-limit-test：全部通過');
 } catch (e) {

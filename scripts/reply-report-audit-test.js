@@ -91,10 +91,10 @@ try {
   assert.ok(await db.get("SELECT 1 FROM file_audit WHERE action = 'reject' AND actor_id = ? AND detail = 'READ_ONLY'", ux.id), '唯讀擋下也記進稽核');
 
   // 規格：FYI 開頭、403 不是平台 JSON 怎麼分辨；2 萬字內
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /沒帶：`\[接單\]`、`\[完成\]`、`\[進度…\]`、`\[通知\]` 開頭＝知會/, '規格寫 FYI 開頭');
   assert.match(spec, /沒有 `error\.code`＝沒到平台（有 `cf-ray`＝Cloudflare 擋，沒有＝你那端網路）/, '規格寫 403 怎麼分辨');
-  assert.ok([...spec].length <= 20000, '規格 2 萬字內：' + [...spec].length);
+  assert.ok([...fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8')].length <= 6000, '規則版規格 6,000 字內');
   console.log('reply-report-audit-test：全部通過');
 } catch (e) {
   console.error('reply-report-audit-test 失敗：', e.message);

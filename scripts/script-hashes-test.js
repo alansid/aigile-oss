@@ -66,7 +66,7 @@ try {
   assert.equal(none.status, 1, '篩不到測試算失敗（不會默默說全過）');
 
   // C12：文件數字跟程式一致
-  const core = read('src/core.js'), spec = read('docs/ai-integration.md'), readme = read('README.md');
+  const core = read('src/core.js'), spec = (read('docs/ai-integration.md') + '\n' + read('docs/api-reference.md')), readme = read('README.md');
   const stale = Number(/STALE_MS = \(Number\(config\.staleMinutes\) \|\| (\d+)\)/.exec(core)[1]);
   const unanswered = Number(/UNANSWERED_MS = \(Number\(config\.unansweredMinutes\) \|\| (\d+)\)/.exec(core)[1]);
   assert.ok(spec.includes(`AI 超過 ${stale} 分鐘沒呼叫 API 標「可能斷線」`), `規格：可能斷線 ${stale} 分鐘`);

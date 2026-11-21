@@ -8,7 +8,7 @@ import assert from 'node:assert';
 
 const setup = fs.readFileSync(new URL('../public/aigile-setup.mjs', import.meta.url), 'utf8');
 const mcp = fs.readFileSync(new URL('../public/aigile-mcp.mjs', import.meta.url), 'utf8');
-const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
 try {
   assert.match(setup, /addArgs = \['mcp', 'add', '-s', 'user', 'aigile', '--', 'node', mcpPath\]/, 'Claude Code：通用 aigile 裝在使用者範圍');
   assert.match(setup, /\[mcp_servers\.aigile\]/, 'Codex：寫一個 [mcp_servers.aigile]');

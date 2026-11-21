@@ -152,7 +152,7 @@ try {
   assert.equal(wenv.files['aigile-mcp.mjs'], scriptHashes()['aigile-mcp.mjs'], 'watcher-env 帶 aigile-mcp.mjs 雜湊');
   const setup = fs.readFileSync(new URL('../public/aigile-setup.mjs', import.meta.url), 'utf8');
   assert.match(setup, /addArgs = \['mcp', 'add', '-s', 'user', 'aigile', '--', 'node', mcpPath\]/, 'Claude Code 裝通用 aigile（使用者範圍）'); assert.match(setup, /\[mcp_servers\.aigile\]/, 'Codex 寫 [mcp_servers.aigile]');
-  assert.match(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), /### 3\.17 MCP/);
+  assert.match((fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8')), /### 3\.18 MCP/);
   const ob = JSON.stringify((await call(boss.token, `/api/my-ais/${AI}/onboarding`)).body);
   assert.match(ob, /裝好通用 MCP aigile（全機一次，工具 mcp__aigile__\*）/, '接入設定（Claude Code 版）寫明通用 MCP');
   assert.match(JSON.stringify((await call(boss.token, `/api/my-ais/${AI}/onboarding?tool=codex`)).body), /裝好通用 MCP aigile（先備份 config.toml）/, '接入設定（Codex 版）：接入檢查自動裝 MCP');

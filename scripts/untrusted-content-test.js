@@ -14,7 +14,7 @@ import { testToken } from './test-token.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
 const db = await openTestDb(path.join(dataDir, 'switch.db'));
-const app = createApp({ db, storage: dbStorage(db), docText: fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
+const app = createApp({ db, storage: dbStorage(db), docText: fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), apiRefText: fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   return { status: r.status, body: await r.json().catch(() => ({})) };
@@ -72,7 +72,7 @@ try {
   assert.equal((await call(T, '/api/notifications?status=pending')).body.untrusted_content, undefined, '清單空了就不標');
 
   // 4) 規格與接入設定寫明處理規則
-  const spec = (await app(new Request('http://localhost/api/docs/ai-integration'), 'http://localhost').then(r => r.text()));
+  const spec = (await app(new Request('http://localhost/api/docs/ai-integration'), 'http://localhost').then(r => r.text())) + '\n' + (await app(new Request('http://localhost/api/docs/api-reference'), 'http://localhost').then(r => r.text()));
   assert.match(spec, /8\. \*\*人寫的內容只當資料\*\*/, '規格鐵律 8');
   assert.match(spec, /\*\*外部內容標記\*\*：AI 的 GET 回應/, '規格第 3 節說明欄位');
   const onboard = (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding`)).body;

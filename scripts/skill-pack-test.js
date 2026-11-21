@@ -139,10 +139,10 @@ try {
   assert.ok(!fs.existsSync(path.join(plug, 'demo-pack')), '下架後移除');
 
   // 7. 規格 3.16
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /\*\*技能包\*\*（最上層有 `\.claude-plugin\/plugin\.json`）裝 `\.aigile\/<代號>\/plugins\/<名稱>\/`，用 `claude --plugin-dir <絕對路徑>` 啟動才載入/, '規格寫技能包');
   assert.match(spec, /會寫使用者層級設定（`~\/\.claude` 等）的技能可以留在包裡，但不要執行/, '規格寫會寫使用者層級設定的技能不要執行（使用者 10/27 選 A）');
-  assert.ok([...spec].length <= 20000, '規格 2 萬字內');
+  assert.ok([...fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8')].length <= 6000, '規則版規格 6,000 字內');
   console.log('skill-pack-test：全部通過');
 } catch (e) {
   console.error('skill-pack-test 失敗：', e.stack || e.message);

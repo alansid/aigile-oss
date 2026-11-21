@@ -14,8 +14,10 @@ import { testToken } from './test-token.js';
 const onlyRules = process.argv.includes('--old');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-docrules-'));
 const db = await openTestDb(path.join(dataDir, 'switch.db'));
-const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
-const app = createApp({ db, storage: dbStorage(db), docText: spec, config: { openJoin: '1', rateLimitPerMin: '10000', supabaseUrl: 'https://abcdefghijklmnopqrst.supabase.co', supabaseKey: 'k'.repeat(208) } });
+const rules = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+const apiRef = fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8');
+const spec = rules + '\n' + apiRef;
+const app = createApp({ db, storage: dbStorage(db), docText: rules, apiRefText: apiRef, config: { openJoin: '1', rateLimitPerMin: '10000', supabaseUrl: 'https://abcdefghijklmnopqrst.supabase.co', supabaseKey: 'k'.repeat(208) } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   return { status: r.status, body: await r.json().catch(() => ({})) };
@@ -131,7 +133,7 @@ try {
   }
   if (!onlyRules) {
     for (const t of TOOLS) for (const [k, v] of [['初次', first[t]], ['重接', again[t]]]) assert.ok(len(v) <= 6500, `${k}＋${t} 接入設定 ${len(v)} 字，要 ≤ 6,500`);
-    assert.ok(len(spec) <= 20000, `規格 ${len(spec)} 字，要 ≤ 20,000`);
+    assert.ok(len(rules) <= 6000, `規則版規格 ${len(rules)} 字，要 ≤ 6,000`);
     assert.ok(!/[（(]C-\d{3}[^）)\n]{0,12}[）)]/.test(spec), '規格不再留歷史卡號註記（例：）');
     assert.ok(!/^```js$/m.test(spec), '規格不放整段範例腳本（改下載 poll.mjs）');
     assert.ok(fs.existsSync(new URL('../public/poll.mjs', import.meta.url)), 'poll.mjs 可下載');

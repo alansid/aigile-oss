@@ -6167,7 +6167,7 @@
           : tool === 'antigravity' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝技能與規則、把通用 MCP 加進 Antigravity CLI 設定（不寫 Token、不動你原有的其他 MCP）、在背景開 watcher，最後開 Antigravity CLI 帶入接入提示。預設沙盒下 MCP 可直連平台，不用開完全權限；開著視窗才會處理，關掉就等下次打開。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。</p>'
           : tool === 'copilot' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝技能、把通用 MCP 加進 Copilot CLI 的 MCP 設定（不寫 Token、不動你原有的其他 MCP），最後開 Copilot CLI 帶入接入提示。第一次用 Copilot CLI 要先執行 copilot 登入 GitHub；第一次要在 15 分鐘內貼。</p><p class="ma-hint">目前要人開視窗叫它做事，自動叫醒之後支援（不會在背景開 watcher）。每叫它做一次事扣 1 次 premium 請求，免費版每月只有 50 次。</p>' : ''}
         <p class="ma-hint">接入文字很短、不含 Token：AI 會用一次性連結自己下載完整設定（15 分鐘內、只能讀一次），讀的那一刻拿到新 Token。第一次接入、Token 重發後重新接上都用它。AI 連不上網路時才用完整版（約 5,000 字，附一組新 Token）。</p>
-        <p class="ma-hint">上面的選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
+        <p class="ma-hint">上面的選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">規格（規則版）</a> · <a href="/api/docs/api-reference" target="_blank" rel="noopener">API 參考</a></p>`
       : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
       : `<dl class="ma-dl">
           <dt>主要職責</dt><dd>${esc(ai.duties)}</dd><dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
@@ -8225,7 +8225,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         ${ep('POST', '/api/cards/:id/handover｜decide｜defer｜reject', '卡片的交接、決定、暫緩、退回也可帶 fileIds（同樣先 post=false 上傳），檔案掛在平台代發的那則訊息')}
         ${ep('GET', '/api/files', '文件清單；/api/files/:id 下載')}
       </ul>
-      <p><a href="/api/docs/ai-integration" target="_blank" rel="noopener">完整規格：AI 代理人接入通訊協定指南</a></p>
+      <p><a href="/api/docs/ai-integration" target="_blank" rel="noopener">規格（規則版，AI 必讀）</a>　<a href="/api/docs/api-reference" target="_blank" rel="noopener">API 參考（端點與欄位）</a></p>
       <div class="group-title">快速測試</div>
       <code class="block">curl -H "Authorization: Bearer &lt;TOKEN&gt;" ${esc(base)}/api/me</code>`);
     let code = null;

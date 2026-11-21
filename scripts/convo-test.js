@@ -37,7 +37,7 @@ try {
   assert.match(fr, /對話接續（林志明 選的）：每次叫醒開新對話[^\n]*；照規格 3\.12 用 claude -p/);
   assert.match(await ob('?convo=fresh&tool=other'), /--mode fresh/);
   assert.ok(!/claude -p/.test(await ob('?convo=fresh&tool=codex')), 'Codex 版不寫 claude -p');
-  assert.ok(!/100 回合/.test(def) && !/100 回合/.test(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8')), 'UX 退回：機器數不到的「100 回合」拿掉');
+  assert.ok(!/100 回合/.test(def) && !/100 回合/.test((fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'))), 'UX 退回：機器數不到的「100 回合」拿掉');
 
   // UX 退回 ：「太長才換新」要真的有東西在數。用假的 opencode 跑 aigile-opencode.mjs
   const OC = fileURLToPath(new URL('../public/aigile-opencode.mjs', import.meta.url));
@@ -81,7 +81,7 @@ if (a[0] === 'run') {
   assert.match(text, /每次叫醒開新對話/, '短版接入也帶選的方式');
 
   // 規格寫三種與「每次新對話」的喚醒寫法；網頁選單預設太長才換新，Claude Code 選每次新對話要提醒
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /沒選＝太長才換新/); assert.match(spec, /\*\*太長才換新\*\*＝太長是指同一個對話叫醒滿 10 次/); assert.match(spec, /\*\*每次新對話\*\*/); assert.match(spec, /\*\*一直接續\*\*/);
   assert.match(spec, /WAKE_CMD=node \.aigile\/watcher\/aigile-opencode\.mjs --agent <代號> --mode/, '規格寫出 opencode 喚醒腳本');
   const js = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');

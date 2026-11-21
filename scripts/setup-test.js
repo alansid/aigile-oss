@@ -95,7 +95,7 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     const obOther = await ob(boss.token, other.participantId, other.token);
     const obKai = await ob(mate.token, kai.participantId, kai.token);
     // 補、待命細節（起）寫在規格 3.12，接入設定指過去
-    const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+    const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
     assert.match(obPg, /雜湊不符[^\n]*照規格 3\.12/, '接入設定：雜湊不符照規格 3.12');
     assert.match(spec, /先停掉你自己用舊檔在跑的 watcher[^\n]*重新下載一次[^\n]*重下仍不符才停止並回報/, '規格：舊 watcher 先重下');
     assert.ok(!/不符就停止並告訴/.test(obPg + spec), '不再「一不符就停」');

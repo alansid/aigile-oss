@@ -39,7 +39,7 @@ try {
   assert.match(none.claude, /平台未設定即時通道：每 15 分鐘巡檢/);
   // 規格與說明文件（中英）也寫了
   const read = f => fs.readFileSync(new URL('../docs/' + f, import.meta.url), 'utf8');
-  assert.match(read('ai-integration.md'), /有網路白名單的雲端環境要放行 Supabase 網域/);
+  assert.match((read('ai-integration.md') + '\n' + read('api-reference.md')), /有網路白名單的雲端環境要放行 Supabase 網域/);
   assert.match(read('connect-your-ai.md'), /被 @ 之後 AI 要 10～15 分鐘才醒/);
   assert.match(read('connect-your-ai.en.md'), /The AI takes 10–15 minutes to wake after a mention/);
   console.log('onboard-realtime-test：全部通過');

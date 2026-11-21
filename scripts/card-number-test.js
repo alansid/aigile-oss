@@ -74,7 +74,7 @@ try {
   assert.deepEqual(del.unassignedCards, ['MAIN-1', 'MAIN-2'], '刪 AI 後退回的卡');
 
   // 8. 規格、MCP 工具說明只寫專案卡號
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.ok(!/\bC-\d{3}\b|C-xxx/.test(spec), '規格不再寫 C-xxx 範例');
   const mcp = fs.readFileSync(new URL('../src/mcp.js', import.meta.url), 'utf8');
   assert.ok(!/'[^'\n]*C-\d+[^'\n]*'/.test(mcp.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n')), 'MCP 工具說明沒有 C-xxx');

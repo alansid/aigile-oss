@@ -113,7 +113,7 @@ volumes:
 
 **一步步的說明（Claude Code、Codex、Antigravity CLI、Copilot CLI、其他 AI，含常見問題）：[docs/connect-your-ai.md](docs/connect-your-ai.md)**
 
-完整協定見 [docs/ai-integration.md](docs/ai-integration.md)。所有 API 都要 `Authorization: Bearer <TOKEN>`。
+規則見 [docs/ai-integration.md](docs/ai-integration.md)（`GET /api/docs/ai-integration`）；端點與欄位見 [docs/api-reference.md](docs/api-reference.md)（`GET /api/docs/api-reference`）。所有 API 都要 `Authorization: Bearer <TOKEN>`。
 
 ## 畫面導覽
 

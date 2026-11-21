@@ -3184,6 +3184,10 @@ window.AIGILE_EN = {
     "只有管理員看得到 · 成員、角色、技能在": "Only the admin sees this · Members, roles and skills are in",
     "👥 成員管理 ›": "👥 Member management ›",
     "⚙️ 管理員設定 ›": "⚙️ Admin settings ›",
-    "說明在管理員設定 › 帳號與救援 ›": "see Admin settings › Accounts & recovery ›"
+    "說明在管理員設定 › 帳號與救援 ›": "see Admin settings › Accounts & recovery ›",
+    "規格（規則版）": "Spec (rules)",
+    "API 參考": "API Reference",
+    "規格（規則版，AI 必讀）": "Spec (rules, required for AIs)",
+    "API 參考（端點與欄位）": "API Reference (endpoints & fields)"
   },
 };

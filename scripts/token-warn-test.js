@@ -44,7 +44,7 @@ try {
 
   // 兩種部署都接得到設定；規格寫明門檻
   for (const f of ['../server.js', '../worker.js']) assert.match(fs.readFileSync(new URL(f, import.meta.url), 'utf8'), /tokenWarnHours: (process\.)?env\.TOKEN_WARN_HOURS/, f + ' 接 TOKEN_WARN_HOURS');
-  assert.match(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), /到期前 24 小時[^\n]{0,20}Token 快到期/, '規格寫明 24 小時');
+  assert.match((fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8')), /到期前 24 小時[^\n]{0,20}Token 快到期/, '規格寫明 24 小時');
   console.log('token-warn-test：全部通過');
 } catch (e) {
   console.error('token-warn-test 失敗：', e.message);

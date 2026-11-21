@@ -180,7 +180,7 @@ try {
   console.log('✓ 5 Windows 沙盒沒設：印清楚、不改');
 
   // 規格
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /Codex 也在前景開一次/, '規格寫 Codex 一行啟動');
   console.log('codex-start-test：全部通過');
 } catch (e) {

@@ -226,11 +226,11 @@ try {
   assert.match(await ob('?tool=codex&convo=fresh'), /--tool codex --mode fresh/);
   assert.ok(!/免得對話越來越長/.test(await ob('?tool=codex&convo=keep')), '一直接續不寫換新');
   for (const q of ['?tool=codex', '?tool=codex&convo=fresh&autoStandby=1']) assert.ok([...await ob(q)].length <= 6500, `Codex 接入設定 ≤ 6,500 字（${q}）`);
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /\| 能被外部指令叫起來跑一輪（opencode、Codex） \| watcher＋喚醒腳本/, '規格 3.12 表格');
   assert.ok(!/只能在回合裡執行指令（Codex）|整個過程對話要保持進行中/.test(spec), '規格拿掉 Codex 前景常駐');
   const guide = fs.readFileSync(new URL('../docs/connect-your-ai.md', import.meta.url), 'utf8'); // 開源版：Codex 細節在 connect-your-ai，規格只留規則
-  assert.ok([...spec].length <= 19500, '開源版規格留 500 字餘裕：' + [...spec].length);
+  assert.ok([...fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8')].length <= 6000, '規則版規格 ≤ 6,000 字');
   for (const k of ['aigile-codex.mjs --agent <代號> --mode', '不要用 `resume --last`', 'commit、push、merge、部署一律不做', '`codex.exe` 與 `node.exe`', '每叫醒 10 次開一個新對話', 'git 帳密在叫醒那一輪拿不到，push 會失敗']) assert.ok((spec + guide).includes(k), '規格或 connect-your-ai 有：' + k);
   console.log('codex-standby-test：全部通過');
 } catch (e) {

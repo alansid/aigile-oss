@@ -12,7 +12,7 @@ const opts = /加人[、／]授權我暫代[、／]先不做/;
 try {
   const sec7 = core.slice(core.indexOf('## 一、你是誰、代表誰、哪些事要先問'), core.indexOf('## 三、每一輪怎麼做'));
   assert.ok(rule.test(sec7) && opts.test(sec7) && sec7.includes('回覆前不動手'), '接入設定第一節要有缺角色先問');
-  const sec2 = spec.slice(spec.indexOf('## 2. 能力與授權前提'), spec.indexOf('## 3. 端點'));
+  const sec2 = spec.slice(spec.indexOf('## 2. 能力與授權前提'), spec.indexOf('## 3. '));
   assert.ok(rule.test(sec2) && opts.test(sec2) && sec2.includes('回覆前不動手'), '規格 2.3 要有缺角色先問');
   assert.ok(/\/api\/setup\/:key[\s\S]{0,2500}onboardingText\(/.test(core), '短版接入下載的是完整接入設定');
   console.log('missing-role-test：全部通過');

@@ -9,7 +9,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import { startKit, findBrowser, until, sleep } from './browser-kit.js';
 
-const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
 assert.match(spec, /代答（名字）[^\n]{0,20}可照做[^\n]{0,10}大事再請本人確認/, 'D：規格寫明代答怎麼處理');
 
 if (!findBrowser()) { console.log('ask-proxy-test：畫面略過（找不到 Chrome／Edge）'); process.exit(0); }

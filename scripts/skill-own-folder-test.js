@@ -89,7 +89,7 @@ try {
   assert.deepEqual(fs.readdirSync(path.join(wo, `.aigile/${pg.ag}/skills`)).sort(), ['common-tool', 'pg-rules'], 'other 全部在代號資料夾：' + o.out);
 
   // 6. 規格、接入設定寫了
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /有指定的一律裝 `\.aigile\/<代號>\/skills\/<名稱>\/`/, '規格 3.16 寫安裝位置');
   assert.match(spec, /SKILL\.md 只放硬規則與完成判定（約 1,500 字），範本另放 templates\.md/, '規格寫角色技能寫法建議');
   const ob = (await call(boss.token, `/api/my-ais/${pg.id}/onboarding`)).body.text;

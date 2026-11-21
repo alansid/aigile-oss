@@ -97,7 +97,7 @@ try {
   }
 
   // 6) 規格說明跟著更新（watcher 雜湊  起自動產生，script-hashes-test 驗）
-  assert.match(fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), /watcher 驗不過就略過/, '規格寫到簽章');
+  assert.match((fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8')), /watcher 驗不過就略過/, '規格寫到簽章');
   console.log('bell-signature-test：全部通過');
 } catch (e) {
   console.error('bell-signature-test 失敗：', e.message);

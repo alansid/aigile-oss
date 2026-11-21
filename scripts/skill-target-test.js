@@ -20,7 +20,7 @@ import { targetOf, encTarget } from '../src/skills.js';
 const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
 const db = await openTestDb(path.join(dataDir, 'switch.db'));
-const app = createApp({ db, storage: dbStorage(db), docText: fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8'), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
+const app = createApp({ db, storage: dbStorage(db), docText: (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8')), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   return { status: r.status, body: await r.json().catch(() => ({})) };
@@ -151,10 +151,10 @@ try {
   assert.deepEqual(maSk.map(x => [x.name, x.to]), [['all-tool', 'all'], ['pg-only', 'roles']], '我的 AI 看得到發給誰');
 
   // 9. 規格 3.16
-  const spec = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8');
+  const spec = (fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8') + '\n' + fs.readFileSync(new URL('../docs/api-reference.md', import.meta.url), 'utf8'));
   assert.match(spec, /可指定給哪些角色或哪幾隻 AI/, '規格寫可指定 AI');
   assert.match(spec, /有指定的一律裝 `\.aigile\/<代號>\/skills\/<名稱>\/`/, '規格寫有指定的裝代號資料夾');
-  assert.ok([...spec].length <= 20000, '規格 2 萬字內');
+  assert.ok([...fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8')].length <= 6000, '規則版規格 6,000 字內');
   console.log('skill-target-test：全部通過');
 } catch (e) {
   console.error('skill-target-test 失敗：', e.stack || e.message);

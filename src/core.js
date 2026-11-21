@@ -85,7 +85,7 @@ const AVATAR_UPSERT = 'INSERT INTO avatars (participant_id, mime, data, updated_
 
 // ---------- 應用程式 ----------
 // storage（選用，上傳文件用）：put(key, Uint8Array)、get(key) → Uint8Array|null、delete(key)
-export function createApp({ db, docText, flowsText = '', releases = null, config = {}, storage = null, docStorage = null, scriptHashes = {}, live = null }) { // live：內建即時通道（本機／Docker，見 src/live.js）；Workers 沒有
+export function createApp({ db, docText, apiRefText = '', flowsText = '', releases = null, config = {}, storage = null, docStorage = null, scriptHashes = {}, live = null }) { // live：內建即時通道（本機／Docker，見 src/live.js）；Workers 沒有
   const ROOM_CODE = config.roomCode || '';
   // 人類可以自己註冊（OPEN_JOIN 沒設＝開）；設 OPEN_JOIN=0 就只有第一位（建立者）能自己加入，其他人要邀請連結
   const OPEN_JOIN = !(config.openJoin === false || config.openJoin === '0');
@@ -3824,8 +3824,9 @@ ${ending}`;
   async function handleInner(req, base) {
     const url = new URL(req.url);
     if (url.pathname === '/api/mcp') return handleMcp(req, url, base);
-    if (url.pathname === '/api/docs/ai-integration' || url.pathname === '/docs/ai-integration.md') {
-      return new Response(docText.replaceAll('{{BASE_URL}}', base), {
+    const docPath = { '/api/docs/ai-integration': 'rules', '/docs/ai-integration.md': 'rules', '/api/docs/api-reference': 'ref', '/docs/api-reference.md': 'ref' }[url.pathname];
+    if (docPath) {
+      return new Response((docPath === 'rules' ? docText : apiRefText).replaceAll('{{BASE_URL}}', base), {
         headers: { 'Content-Type': 'text/markdown; charset=utf-8', 'Cache-Control': 'no-store' },
       });
     }

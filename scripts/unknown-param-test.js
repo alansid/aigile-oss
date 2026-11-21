@@ -16,7 +16,7 @@ import { loadEn } from './i18n-scan.js';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-unknown-param-'));
 const db = await openTestDb(path.join(dataDir, 'switch.db'));
 const read = f => fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8');
-const app = createApp({ db, storage: dbStorage(db), docText: read('docs/ai-integration.md'), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
+const app = createApp({ db, storage: dbStorage(db), docText: (read('docs/ai-integration.md', 'docs/api-reference.md') + '\n' + read('docs/api-reference.md')), config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } });
 const BASE = 'http://localhost';
 const req = async (token, p, method = 'GET', body) => {
   const r = await app(new Request(BASE + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), BASE);
