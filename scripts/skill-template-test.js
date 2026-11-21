@@ -53,6 +53,9 @@ try {
   assert.equal(zh.status, 200); assert.equal(zh.body.lang, 'zh');
   assert.deepEqual(zh.body.items.map(x => x.name), NAMES);
   assert.match(zh.body.items[0].text, /Commit 訊息慣例/);
+  // 新增技能視窗用的圖示、分類、推薦角色（UX #6386）：每個範本都有，分類都在清單裡
+  assert.deepEqual(zh.body.categories, ['git', 'quality', 'handoff', 'security']);
+  for (const t of zh.body.items) { assert.ok(t.icon, `${t.name} 有圖示`); assert.ok(zh.body.categories.includes(t.category), `${t.name} 分類`); assert.ok(Array.isArray(t.roles), `${t.name} 推薦角色`); }
   const en = await call(wang.token, '/api/skill-templates?lang=en');
   assert.equal(en.body.lang, 'en'); assert.match(en.body.items[0].text, /# Commit message convention/, '一般成員也能看範本（英文）');
   assert.equal((await call(aiTok, '/api/skill-templates')).status, 403, 'AI 不用讀範本');

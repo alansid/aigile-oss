@@ -81,14 +81,14 @@ try {
   const zf = path.join(tmp, 'pg-new.zip');
   fs.writeFileSync(zf, zip([['SKILL.md', '---\nname: pg-new\ndescription: 新技能\n---\n規則\n']]));
   await js("document.querySelector('#ma-skills').click(); true");
-  await until(() => js("!!document.querySelector('[data-skup]')"), 10000, '技能庫');
-  await js("document.querySelector('[data-skup]').click(); true");
+  await until(() => js("!!document.querySelector('.sk-bar [data-sknew]')"), 10000, '技能庫');
+  await js("document.querySelector('.sk-bar [data-sknew]').click(); document.querySelector('[data-sknew-up]').click(); true");
   await until(() => js("!!document.querySelector('#sk-zip')"), 8000, '上傳彈窗');
   const { root } = (await cdp('DOM.getDocument')).result;
   const { nodeId } = (await cdp('DOM.querySelector', { nodeId: root.nodeId, selector: '#sk-zip' })).result;
   await cdp('DOM.setFileInputFiles', { nodeId, files: [zf] });
   await until(() => js("!document.querySelector('[data-sksend]')?.disabled"), 8000, '可以送出');
-  await js("document.querySelector('[data-skup]') && document.querySelector('[data-sksend]').click(); true");
+  await js("document.querySelector('[data-sksend]').click(); true");
   await until(() => js("(document.querySelector('.sk-ok')?.textContent || '').includes('pg-new')"), 10000, '上傳成功畫面');
   await until(() => js("(document.querySelector('#sk-up-sync')?.textContent || '').includes('你有 2 隻 AI 會用到')"), 10000, '會用到幾隻');
   await js("document.querySelector('[data-sk-upsync]').click(); true");

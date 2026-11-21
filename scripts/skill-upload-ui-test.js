@@ -36,10 +36,10 @@ try {
   const js = e => js0(e).catch(x => { throw new Error(x.message + ' ← ' + e.slice(0, 80)); });
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 800, deviceScaleFactor: 1, mobile: true }); // 視窗最小寬度可能大於 375，直接模擬手機
   const open = async () => {
-    await until(() => js("!!document.querySelector('[data-skup], #ma-skills')"), 10000, '技能入口');
-    if (!(await js("!!document.querySelector('[data-skup]')"))) await js("document.querySelector('#ma-skills').click(); true");
-    await until(() => js("!!document.querySelector('[data-skup]')"), 10000, '技能庫');
-    await js("document.querySelector('[data-skup]').click(); true");
+    await until(() => js("!!document.querySelector('.sk-bar [data-sknew], #ma-skills')"), 10000, '技能入口');
+    if (!(await js("!!document.querySelector('.sk-bar [data-sknew]')"))) await js("document.querySelector('#ma-skills').click(); true");
+    await until(() => js("!!document.querySelector('.sk-bar [data-sknew]')"), 10000, '技能庫');
+    await js("document.querySelector('.sk-bar [data-sknew]').click(); document.querySelector('[data-sknew-up]').click(); true");
     await until(() => js("!!document.querySelector('.modal.sk-up #sk-zip')"), 8000, '上傳彈窗');
   };
   const pick = async f => {

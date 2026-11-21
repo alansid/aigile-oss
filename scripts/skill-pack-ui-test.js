@@ -46,8 +46,8 @@ try {
     await login(boss.token, '/my-ai');
     await until(() => js("!!document.querySelector('#ma-skills')"), 10000, '技能庫入口');
     await click('#ma-skills');
-    await until(() => js("!!document.querySelector('[data-skup]')"), 10000, '技能庫');
-    await click('[data-skup]');
+    await until(() => js("!!document.querySelector('.sk-bar [data-sknew]')"), 10000, '技能庫');
+    await click('.sk-bar [data-sknew]'); await click('[data-sknew-up]'); // PLAT-365：「＋ 新增技能」→ 上傳自己的
     await until(() => js("!!document.querySelector('.modal.sk-up #sk-zip')"), 8000, '上傳彈窗');
   };
   const pick = async f => {

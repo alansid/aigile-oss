@@ -4,7 +4,7 @@
 //   - 每個 AI 的主人允許「這一版」才安裝含腳本的包；同步全手動（主人按「同步」或重跑 aigile-setup），AI 不自己查、不加輪詢
 //   - 執行照工具權限，不另外問；技能只發給該專案、指定的 AI（所有 AI／指定角色／指定 AI，MAIN-249）；新版或下架由平台私訊主人（每位主人一則）
 import { ROLES } from './roles.js';
-import { SKILL_TEMPLATES, templateByName, templateIn, templateMarkOf, TEMPLATE_MARK } from './skill-templates.js';
+import { SKILL_TEMPLATES, TEMPLATE_CATEGORIES, templateByName, templateIn, templateMarkOf, TEMPLATE_MARK } from './skill-templates.js';
 export const SKILL_MAX_BYTES = 1024 * 1024;
 export const SKILL_MAX_FILES = 100;
 const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/; // Claude Code、Codex 共通的技能名稱規則（也是資料夾名）
@@ -230,7 +230,7 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
   route('GET', '/api/skill-templates', async ({ me, url }) => {
     requireHuman(me);
     const lang = url.searchParams.get('lang') === 'en' ? 'en' : 'zh';
-    return { lang, items: SKILL_TEMPLATES.map(t => templateIn(t, lang)) };
+    return { lang, categories: TEMPLATE_CATEGORIES, items: SKILL_TEMPLATES.map(t => templateIn(t, lang)) };
   });
 
   // ---------- 技能分頁：一次拿全部 ----------

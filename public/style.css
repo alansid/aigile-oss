@@ -2638,11 +2638,49 @@ html, body { overflow-x: clip; }
 .sk-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px; border: 2px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 13px; }
 .sk-empty b { color: var(--text); font-size: 14px; }
 .sk-empty-ic { font-size: 22px; }
-.sk-tpl-sec { display: grid; gap: 10px; padding-top: 6px; border-top: 1px solid var(--border); }
-.sk-tpl-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
-.sk-tpl { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); min-width: 0; }
-.sk-tpl-go { display: flex; justify-content: flex-end; margin-top: auto; }
-.sk-tpl .sk-tt { flex: 0 0 auto; } /* 卡片是直排：標題不撐高，說明緊接在下 */
+/* PLAT-365（UX #6386）：空專案卡直接列範本；「＋ 新增技能」視窗 */
+.sk-empty-tpls { display: flex; flex-wrap: wrap; gap: 6px; }
+.sk-tpl-chip { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--human-border); background: var(--human-bg); color: var(--primary); cursor: pointer; }
+.sk-tpl-chip:hover { border-color: var(--primary); }
+.modal.sk-new .modal-body { display: grid; gap: 12px; align-content: start; }
+#sk-new-list { display: grid; gap: 10px; min-width: 0; }
+#sk-new-list:empty { display: none; }
+.modal.wide.sk-new { width: min(920px, 100%); }
+.sk-new-top { display: flex; gap: 8px; flex-wrap: wrap; }
+.sk-new-pj { display: flex; align-items: center; gap: 4px; flex: 0 1 220px; min-width: 0; padding: 0 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 14px; }
+.sk-new-pj span { white-space: nowrap; color: var(--muted); }
+.sk-new-pj select { border: 0; background: transparent; min-width: 0; flex: 1; padding: 8px 0; font: inherit; color: var(--text); }
+.sk-new-q { flex: 1 1 240px; min-width: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; font: inherit; }
+.sk-new-q[hidden] { display: none; }
+.sk-new-h { margin: 0; }
+.sk-new-cats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sk-new-unused { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; }
+.sk-new-rech { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; }
+.sk-new-rows, .sk-new-items { display: grid; gap: 8px; align-content: start; }
+.sk-new-row, .sk-new-item, .sk-new-up { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); min-width: 0; }
+.sk-new-ic { font-size: 22px; flex: 0 0 auto; }
+.sk-new-tx { display: flex; flex-direction: column; gap: 2px; flex: 1 1 200px; min-width: 0; }
+.sk-new-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.sk-new-go { display: flex; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+.sk-new-pre { flex: 1 1 100%; max-height: 260px; overflow: auto; margin: 0; }
+.sk-new-all { width: 100%; font: inherit; font-weight: 600; color: var(--primary); padding: 10px; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface-2); cursor: pointer; }
+.sk-new-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.sk-new-or::before, .sk-new-or::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
+.sk-new-up { border-style: dashed; background: var(--surface-2); }
+.sk-new-browse { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 12px; align-items: start; }
+.sk-new-item { cursor: pointer; flex-wrap: nowrap; }
+.sk-new-item.on { border-color: var(--primary); background: var(--human-bg); }
+.sk-new-item .btn { flex: 0 0 auto; }
+.sk-new-pv { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); min-width: 0; }
+.sk-new-pv .sk-pre { max-height: 320px; overflow: auto; margin: 0; }
+.sk-new-pvf { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.sk-new-note { margin: 0; }
+.modal-foot .sk-new-cancel { width: 100%; }
+@media (max-width: 640px) {
+  .sk-new-browse { grid-template-columns: minmax(0, 1fr); }
+  .sk-new-item .sk-new-tx { flex-basis: 0; }
+  .sk-new-pj { flex: 1 1 100%; }
+}
 .sk-card .sk-nm { white-space: normal; overflow-wrap: anywhere; } /* 英文狀態標籤較長：名稱換行，不擠成「commit-convent…」 */
 .sk-ct > .pill-tag { flex: none; }
 .sk-ap-old summary::before { content: '▸'; flex: none; margin-right: 2px; } /* summary 是 flex，原生三角形不見了：自己畫，看得出可以展開 */

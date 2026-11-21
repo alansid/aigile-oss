@@ -401,10 +401,23 @@ add('security-checklist', 1, {
 `,
 });
 
+// 新增技能視窗用（UX #6386）：圖示、分類、推薦給哪些角色（專案裡有這些角色的 AI 就推薦；空的＝每個專案都適用）
+// 分類只是畫面分組，改了不用加版本
+const META = {
+  'commit-convention': { icon: '🧾', category: 'git', roles: ['PG', 'DBA', 'SRE'] },
+  'handover-format': { icon: '🤝', category: 'handoff', roles: [] },
+  'report-and-ask': { icon: '📣', category: 'handoff', roles: [] },
+  'testing-rules': { icon: '🧪', category: 'quality', roles: ['PG', 'QA'] },
+  'code-review-checklist': { icon: '🔍', category: 'quality', roles: ['PG', 'QA', 'SD'] },
+  'security-checklist': { icon: '🔒', category: 'security', roles: ['SEC', 'SRE', 'DBA', 'PG'] },
+};
+export const TEMPLATE_CATEGORIES = ['git', 'quality', 'handoff', 'security'];
+for (const t of T) Object.assign(t, META[t.name] || { icon: '📄', category: 'other', roles: [] });
+
 export const SKILL_TEMPLATES = T;
 export const templateByName = name => T.find(t => t.name === name) || null;
-// 範本的一種語言（沒有或不認得就給中文）：{ name, version, title, description, text }
-export const templateIn = (t, lang) => { const x = lang === 'en' ? t.en : t.zh; return { name: t.name, version: t.version, title: x.title, description: x.description, text: x.text }; };
+// 範本的一種語言（沒有或不認得就給中文）：{ name, version, title, description, text, icon, category, roles }
+export const templateIn = (t, lang) => { const x = lang === 'en' ? t.en : t.zh; return { name: t.name, version: t.version, title: x.title, description: x.description, text: x.text, icon: t.icon, category: t.category, roles: t.roles }; };
 // 從 SKILL.md（或技能 files 欄的 JSON 字串）認出範本來源：{ name, version }；沒有就 null
 const MARK_RE = new RegExp(`${TEMPLATE_MARK}:\\s*([a-z0-9]+(?:-[a-z0-9]+)*)@(\\d+)`);
 export function templateMarkOf(text) {

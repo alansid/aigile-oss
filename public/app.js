@@ -6302,35 +6302,39 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         ${more.length ? `<select class="sk-more" aria-label="更多專案"><option value="">更多 ▾</option>${more.map(p => `<option value="${esc(p.id)}"${skv.filter === p.id ? ' selected' : ''}>${esc(p.name)}（${p.count}）</option>`).join('')}</select>` : ''}
         <span class="grow"></span>
         <input type="search" class="sk-q" placeholder="找技能名稱或說明" aria-label="找技能" value="${esc(skv.q)}">
-        ${upPj ? `<button type="button" class="btn primary" data-skup="${esc(upPj.id)}">＋ 上傳技能</button>` : ''}
+        ${upPj ? `<button type="button" class="btn primary" data-sknew="${esc(upPj.id)}">＋ 新增技能</button>` : ''}
       </div>
       <p class="sk-rule">技能＝給 AI 的做事方法（SKILL.md，可附腳本）。含腳本的要核准、每台 AI 主人允許才會裝。<button type="button" class="link small" data-skrule aria-expanded="${skv.rules}">完整規則</button></p>
       ${skv.rules ? `<div class="sk-rules small">• 專案成員都能上傳（資料夾或 zip，最上層要有 SKILL.md 寫 name、description；1 MB 內、只收文字、擋金鑰）。<br>• 只有說明文件的直接上架；含腳本的：leader／管理員上傳的直接上架，其他成員上傳的要 leader／管理員看過全文與差異才核准。<br>• 技能只發給該專案、指定角色的 AI；含腳本的要該 AI 的主人在「我的 AI › 技能」允許那一版。<br>• 同步全手動：主人按「同步」或 AI 重跑接入檢查才下載安裝；AI 不會自己去查。新版、下架由平台私訊主人。<br>• 執行技能裡的腳本照 AI 工具本身的權限，不另外問。</div>` : ''}
       ${review.length ? `<div class="sk-alert" role="status">⏳ <b>${review.length} 個技能等你核准上架</b>：${review.slice(0, 2).map(s => `${esc(s.uploadedBy.name)} 上傳的 ${esc(s.name)} v${s.version}（含腳本 ${s.scripts} 個）`).join('、')}${review.length > 2 ? '…' : ''}<span class="grow"></span><button type="button" class="btn small" data-skc="${esc(review[0].skillId)}">看腳本並核准</button></div>` : ''}
       <div class="sk-grid">
         ${shown.map(card).join('')}
-        ${emptyPjs.map(p => `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>把團隊的做事方法寫成 SKILL.md，該角色的 AI 就照同一套做。</span><button type="button" class="btn small" data-skup="${esc(p.id)}">＋ 上傳到${esc(p.name)}</button></div>`).join('')}
+        ${emptyPjs.map(skEmptyHtml).join('')}
         ${!shown.length && !emptyPjs.length ? `<p class="muted">${q ? '沒有符合的技能。' : '目前沒有技能。'}</p>` : ''}
       </div>
-      ${skTplSecHtml(d, live)}
     </div>`;
   }
-  // PLAT-365 範本技能區：leader／管理員才看得到（要能套用）；每個範本列出已套用到哪些專案（篩選專案時只看那個）
-  const skTplTag = (s, manage) => (s.template ? ` <span class="pill-tag grey" title="${esc(s.template.name)} v${s.template.version}">📚 範本</span>${s.template.outdated && manage ? ' <span class="pill-tag yellow">範本有新版</span>' : ''}` : '');
-  function skTplSecHtml(d, live) {
-    const tpls = skv.tpls || [];
-    if (!tpls.length || !d.projects.some(p => p.canManage && (!skv.filter || p.id === skv.filter))) return '';
-    const pjName = id => d.projects.find(p => p.id === id)?.name || projName(id);
-    const card = t => {
-      const used = d.items.filter(s => live(s) && s.status !== 'rejected' && s.template?.name === t.name && (!skv.filter || s.project === skv.filter));
-      const stale = used.find(s => s.template.outdated && d.projects.some(p => p.id === s.project && p.canManage)); // 有新版：按鈕改「更新」，直接帶到那個專案
-      return `<div class="sk-tpl"><span class="sk-tt"><b class="sk-nm">${esc(t.title)}</b><span class="muted small"><code>${esc(t.name)}</code> · v${t.version}</span></span>
-        <span class="sk-ds">${esc(t.description)}</span>
-        ${used.length ? `<span class="sk-tags">${used.map(s => `<span class="pill-tag ${s.template.outdated ? 'yellow' : 'green'}"><span>${esc(pjName(s.project))}</span>${s.template.outdated ? '：範本有新版' : '：已套用'}</span>`).join(' ')}</span>` : ''}
-        <span class="sk-tpl-go"><button type="button" class="btn small${stale ? ' primary' : ''}" data-sktpl="${esc(t.name)}"${stale ? ` data-sktpl-pj="${esc(stale.project)}"` : ''}>${stale ? '更新' : '套用'}</button></span></div>`;
-    };
-    return `<section class="sk-tpl-sec" aria-label="範本技能"><div class="sk-tpl-h"><b>📚 範本技能</b><span class="muted small">內建的做事方法。按「套用」複製到專案，可以先改內容再上架；範本出新版時會提示，不會自動蓋掉你改過的內容。</span></div>
-      <div class="sk-grid">${tpls.map(card).join('')}</div></section>`;
+  // PLAT-365（UX #6386）：範本只從「＋ 新增技能」視窗和空專案卡套用（leader／管理員才能套用）
+  const skTplTag = (s, manage) => (s.template ? ` <span class="pill-tag grey" title="${esc(s.template.name)} v${s.template.version}">📚 來自範本 v${s.template.version}</span>${s.template.outdated && manage ? ' <span class="pill-tag yellow">範本有新版</span>' : ''}` : '');
+  const SK_TPL_CAT = { git: 'Git／提交', quality: '測試與審查', handoff: '交接與回報', security: '安全', other: '其他' };
+  const SK_TPL_MANY = 6; // 範本到 6 個就加搜尋、分類，預設只列推薦
+  const SK_TPL_REC = 3;
+  // 這個專案套用過這個範本的技能（上架中或待核准）
+  const skTplUsed = (pj, name) => (skv.data?.items || []).find(s => s.project === pj && s.template?.name === name && ['published', 'pending'].includes(s.status));
+  // 推薦順序：專案裡有對應角色的 AI 的範本先放 2 個，接著每個專案都適用的，其餘照原本順序
+  function skTplRank(pj) {
+    const have = new Set((skPjInfo(pj).ais || []).map(a => a.roleKey)), tpls = skv.tpls || [];
+    const hit = tpls.filter(t => t.roles?.some(r => have.has(r))), all = tpls.filter(t => !t.roles?.length);
+    return [...new Set([...hit.slice(0, 2), ...all, ...hit, ...tpls])];
+  }
+  const skTplShort = t => (t.description || '').replace(/(。|\.\s).*$/s, '$1').trim(); // 列表只放第一句，全文在 title
+  function skEmptyHtml(p) {
+    const tp = p.canManage ? skTplRank(p.id) : [];
+    if (!tp.length) return `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>把團隊的做事方法寫成 SKILL.md，該角色的 AI 就照同一套做。</span><button type="button" class="btn small" data-skup="${esc(p.id)}">＋ 上傳到${esc(p.name)}</button></div>`;
+    return `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>從範本開始，一鍵複製到${esc(p.name)}，之後可以改：</span>
+      <span class="sk-empty-tpls">${tp.slice(0, SK_TPL_REC).map(t => `<button type="button" class="sk-tpl-chip" data-sktpl="${esc(t.name)}" data-sktpl-pj="${esc(p.id)}" title="${esc(t.description)}">${esc(t.title)}</button>`).join('')}</span>
+      ${tp.length > SK_TPL_REC ? `<button type="button" class="link small" data-sknew="${esc(p.id)}" data-sknew-all>看全部範本 ›</button>` : ''}
+      <span class="small">或 <button type="button" class="link small" data-skup="${esc(p.id)}">上傳自己的 SKILL.md ›</button></span></div>`;
   }
   // 我的 AI 頁的入口（一般成員進不了成員與權限）：同一個畫面放在彈窗
   function openSkillsView(pj = '') {
@@ -6550,7 +6554,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const body = openModal('套用範本', `<label class="field sk-up-step">1. 套用到<select id="sk-ap-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
       <div class="sk-up-sec"><b class="sk-up-step">2. 內容（SKILL.md）</b><div id="sk-ap-cur"></div>
         <textarea id="sk-ap-text" class="sk-ap-text" rows="14" spellcheck="false" aria-label="SKILL.md 內容">${esc(tpl.text)}</textarea>
-        <p class="field-hint">可以先改內容再上架。開頭的 name 是技能名稱（也是 AI 電腦上的資料夾名）；metadata 底下 aigile-template 那一行記錄來自哪個範本，留著才會在範本出新版時提示你。</p></div>
+        <p class="field-hint">可以先改內容再上架。最上面幾行請保留，平台靠它知道這個技能來自哪個範本，有新版時才提醒得到你。</p></div>
       <div class="sk-up-sec"><b class="sk-up-step">3. 發給誰</b><div class="sk-to" id="sk-to">${pick.html()}</div></div>`,
       { size: 'sk-up', sub: `範本「${tpl.title}」第 ${tpl.version} 版`, foot: '<p class="error" id="sk-err" role="alert"></p><div class="sk-up-bar"><span class="sk-up-note" id="sk-up-note"></span><button type="button" class="btn" data-skcancel>取消</button><button type="button" class="btn primary" data-sksend>上架</button></div>' });
     const modal = body.modal, foot = modal.querySelector('.modal-foot');
@@ -6599,6 +6603,89 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
     drawFoot(); loadCur();
   }
+  // PLAT-365「＋ 新增技能」視窗（UX #6386）：1 加到哪個專案 → 2 從範本開始（建議）→ 或 上傳自己的 SKILL.md
+  // 範本到 6 個：上方加搜尋與分類，預設只列推薦 3 個、其餘收在「看全部 N 個範本」；搜尋或展開後列表變精簡，點一列在右邊看全文
+  function skOpenNew(pj, opt = {}) {
+    const pjs = (skv.data?.projects || []).filter(p => p.canUpload);
+    if (!pjs.length) return toast('你沒有可以新增技能的專案');
+    const tpls = skv.tpls || [], many = tpls.length >= SK_TPL_MANY;
+    const st = { target: pjs.some(p => p.id === pj) ? pj : pjs[0].id, q: '', cat: '', all: !!opt.all, unused: false, sel: '', peek: new Set() };
+    const pjOpts = () => pjs.map(x => `<option value="${esc(x.id)}"${x.id === st.target ? ' selected' : ''}>${esc(x.name)}${x.inside ? '（行內）' : ''}</option>`).join('');
+    const top = many
+      ? `<div class="sk-new-top"><label class="sk-new-pj"><span>加到：</span><select id="sk-new-pj" aria-label="加到哪個專案">${pjOpts()}</select></label><input type="search" id="sk-new-q" class="sk-new-q" placeholder="🔍 找範本：名稱或說明…" aria-label="找範本"></div>`
+      : `<label class="field sk-up-step">1. 加到哪個專案<select id="sk-new-pj">${pjOpts()}</select></label>`;
+    const body = openModal('新增技能', `${top}<div id="sk-new-list"></div>
+      <div class="sk-new-or" role="separator"><span>或</span></div>
+      <div class="sk-new-up"><span class="sk-new-ic" aria-hidden="true">📄</span><span class="sk-new-tx"><b>上傳自己的 SKILL.md</b><span class="muted small">可以附腳本；含腳本的要核准</span></span><button type="button" class="btn small" data-sknew-up>選檔案</button></div>`,
+      { size: many ? 'wide sk-new' : 'sk-new', foot: '<button type="button" class="btn sk-new-cancel" data-skcancel>取消</button>' });
+    const modal = body.modal, list = body.querySelector('#sk-new-list'), qEl = body.querySelector('#sk-new-q');
+    const pjName = () => skPjInfo(st.target).name || projName(st.target);
+    const usedTag = t => {
+      const u = skTplUsed(st.target, t.name);
+      return u ? ` <span class="pill-tag green">${esc(pjName())}已套用 v${u.template.version}</span>${u.template.outdated ? ' <span class="pill-tag yellow">範本有新版</span>' : ''}` : '';
+    };
+    const goBtn = (t, label) => {
+      const u = skTplUsed(st.target, t.name), old = u?.template.outdated;
+      return `<button type="button" class="btn small${u && !old ? '' : ' primary'}" data-sktpl="${esc(t.name)}">${label || (old ? '更新' : u ? '再套一次' : '套用')}</button>`;
+    };
+    const catTag = t => (many ? ` <span class="pill-tag grey">${esc(SK_TPL_CAT[t.category] || SK_TPL_CAT.other)}</span>` : '');
+    // 一列（推薦區、範本少時）：圖示、名稱、標籤、一句說明、「預覽／套用」；預覽在列下展開全文
+    const row = t => `<div class="sk-new-row"><span class="sk-new-ic" aria-hidden="true">${esc(t.icon || '📄')}</span>
+      <span class="sk-new-tx"><span class="sk-new-nm"><b>${esc(t.title)}</b>${usedTag(t)}${catTag(t)}</span><span class="muted small" title="${esc(t.description)}">${esc(skTplShort(t))}</span></span>
+      <span class="sk-new-go"><button type="button" class="btn small" data-sknew-peek="${esc(t.name)}" aria-expanded="${st.peek.has(t.name)}">預覽</button>${goBtn(t)}</span>
+      ${st.peek.has(t.name) ? `<pre class="sk-pre sk-new-pre">${esc(t.text)}</pre>` : ''}</div>`;
+    const draw = () => {
+      const p = skPjInfo(st.target);
+      if (!tpls.length) { list.innerHTML = ''; return; }
+      if (qEl) qEl.hidden = !p.canManage;
+      if (!p.canManage) { list.innerHTML = `<p class="muted small sk-new-note">只有${esc(pjName())}的 leader 或管理員能套用範本；你可以上傳自己的 SKILL.md。</p>`; return; }
+      const rank = skTplRank(st.target), rec = new Set(rank.slice(0, SK_TPL_REC).map(t => t.name));
+      if (!many) {
+        list.innerHTML = `<p class="sk-up-step sk-new-h"><b>2. 從範本開始</b> <span class="muted small">（建議，套用後可以先改再上架）</span></p><div class="sk-new-rows">${rank.map(row).join('')}</div>`;
+        return;
+      }
+      const q = st.q.trim().toLowerCase(), browse = !!(q || st.cat || st.all);
+      const cats = [...new Set(tpls.map(t => t.category || 'other'))];
+      const chip = (v, label, n) => `<button type="button" class="sk-chip" data-sknew-cat="${esc(v)}" aria-pressed="${st.cat === v}">${esc(label)} <span class="sk-n">${n}</span></button>`;
+      const bar = `<div class="sk-new-cats" role="group" aria-label="範本分類">${chip('', '全部', tpls.length)}${cats.map(c => chip(c, SK_TPL_CAT[c] || SK_TPL_CAT.other, tpls.filter(t => (t.category || 'other') === c).length)).join('')}
+        ${browse ? `<span class="grow"></span><label class="sk-new-unused"><input type="checkbox" id="sk-new-unused"${st.unused ? ' checked' : ''}> 只看還沒套用的</label>` : ''}</div>`;
+      if (!browse) {
+        const have = [...new Set((p.ais || []).map(a => a.roleKey).filter(Boolean))].map(k => skRoleLabel(st.target, k));
+        list.innerHTML = `${bar}<div class="sk-new-rech"><b>⭐ 推薦給「${esc(pjName())}」</b><span class="muted small">${have.length ? `依專案裡 AI 的角色挑（有 ${esc(have.join('、'))}）` : '專案裡還沒有 AI，先列通用的'}</span></div>
+          <div class="sk-new-rows">${rank.slice(0, SK_TPL_REC).map(row).join('')}</div>
+          <button type="button" class="sk-new-all" data-sknew-all aria-expanded="false">看全部 ${tpls.length} 個範本 ▾</button>`;
+        return;
+      }
+      const hits = rank.filter(t => (!st.cat || (t.category || 'other') === st.cat) && (!q || (t.title + ' ' + t.description + ' ' + t.name).toLowerCase().includes(q)) && (!st.unused || !skTplUsed(st.target, t.name)));
+      const sel = hits.find(t => t.name === st.sel) || hits[0];
+      const item = t => `<div class="sk-new-item${t === sel ? ' on' : ''}" data-sknew-sel="${esc(t.name)}" role="button" tabindex="0" aria-pressed="${t === sel}"><span class="sk-new-ic" aria-hidden="true">${esc(t.icon || '📄')}</span>
+        <span class="sk-new-tx"><span class="sk-new-nm"><b>${esc(t.title)}</b>${rec.has(t.name) ? ' <span class="pill-tag yellow">推薦</span>' : ''}${usedTag(t)}${catTag(t)}</span><span class="muted small">${esc(skTplShort(t))}</span></span>${goBtn(t)}</div>`;
+      list.innerHTML = `${bar}<div class="sk-new-rech"><b>找到 ${hits.length} 個</b>${hits.length ? `<span class="muted small">${matchMedia('(max-width: 640px)').matches ? '點一列在下方看全文' : '點一列在右邊看全文'}</span>` : ''}</div>
+        ${hits.length ? `<div class="sk-new-browse"><div class="sk-new-items">${hits.map(item).join('')}</div>
+          <div class="sk-new-pv" aria-live="polite"><div class="sk-new-nm"><span aria-hidden="true">${esc(sel.icon || '📄')}</span> <b>${esc(sel.title)}</b>${catTag(sel)}</div><span class="muted small"><code>${esc(sel.name)}</code> · v${sel.version} · 內建範本</span>
+            <pre class="sk-pre">${esc(sel.text)}</pre><div class="sk-new-pvf"><span class="muted small">套用後可以先改再上架</span>${goBtn(sel, skTplUsed(st.target, sel.name)?.template.outdated ? `更新到${pjName()}` : `套用到${pjName()}`)}</div></div></div>`
+          : `<p class="muted small sk-new-note">沒有符合的範本${st.unused ? '（已勾「只看還沒套用的」）' : ''}。</p>`}`;
+    };
+    body.addEventListener('change', e => {
+      if (e.target.id === 'sk-new-pj') { st.target = e.target.value; st.peek.clear(); draw(); }
+      else if (e.target.id === 'sk-new-unused') { st.unused = e.target.checked; draw(); }
+    });
+    qEl?.addEventListener('input', () => { st.q = qEl.value; draw(); });
+    const pickRow = el => { st.sel = el.dataset.sknewSel; draw(); body.querySelector(`[data-sknew-sel="${CSS.escape(st.sel)}"]`)?.focus(); if (matchMedia('(max-width: 640px)').matches) body.querySelector('.sk-new-pv')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }; // 手機預覽在列表下方：捲過去
+    body.addEventListener('keydown', e => { const r = e.target.closest?.('[data-sknew-sel]'); if (r && (e.key === 'Enter' || e.key === ' ') && e.target === r) { e.preventDefault(); pickRow(r); } });
+    modal.addEventListener('click', e => {
+      const t = e.target.closest('[data-sktpl],[data-sknew-peek],[data-sknew-all],[data-sknew-cat],[data-sknew-up],[data-skcancel],[data-sknew-sel]');
+      if (!t) return;
+      if (t.dataset.sktpl) return skOpenApply(t.dataset.sktpl, st.target); // 接現在的套用視窗（改內容 → 發給誰 → 上架）
+      if (t.dataset.sknewPeek) { const n = t.dataset.sknewPeek; st.peek.has(n) ? st.peek.delete(n) : st.peek.add(n); draw(); return body.querySelector(`[data-sknew-peek="${CSS.escape(n)}"]`)?.focus(); }
+      if (t.hasAttribute('data-sknew-all')) { st.all = true; draw(); return body.querySelector('.sk-new-item')?.focus(); }
+      if (t.dataset.sknewCat !== undefined) { st.cat = t.dataset.sknewCat; st.all = true; draw(); return body.querySelector(`[data-sknew-cat="${CSS.escape(st.cat)}"]`)?.focus(); }
+      if (t.hasAttribute('data-sknew-up')) return skOpenUpload(st.target);
+      if (t.hasAttribute('data-skcancel')) { closeModal(); if (skv.modal) openSkillsView(skv.filter); return; }
+      if (t.dataset.sknewSel) pickRow(t);
+    });
+    draw();
+  }
   // 上傳成功：你名下會用到這個技能的 AI 一鍵全部同步
   async function skUploaded(body, r) {
     skLoad();
@@ -6618,8 +6705,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const lib = e.target.closest('[data-skills-lib]');
     if (lib) return openSkillsView(lib.dataset.skillsLib);
     if (!e.target.closest('.sk-view')) return;
-    const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), rule = e.target.closest('[data-skrule]'), tp = e.target.closest('[data-sktpl]');
-    if (tp) return skOpenApply(tp.dataset.sktpl, skv.filter || tp.dataset.sktplPj || '');
+    const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), rule = e.target.closest('[data-skrule]'), tp = e.target.closest('[data-sktpl]'), nw = e.target.closest('[data-sknew]');
+    if (tp) return skOpenApply(tp.dataset.sktpl, tp.dataset.sktplPj || skv.filter || '');
+    if (nw) return skOpenNew(nw.dataset.sknew, { all: nw.hasAttribute('data-sknew-all') });
     if (f) { skv.filter = f.dataset.skf; skv.redraw?.(); }
     else if (c) skOpenDrawer(c.dataset.skc);
     else if (up) skOpenUpload(up.dataset.skup);

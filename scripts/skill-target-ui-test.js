@@ -33,7 +33,7 @@ try {
     assert.match(await text(`[data-skc="${made.skillId}"]`), w === 1280 ? /指定 1 隻 AI/ : /PG.*SA/s, L + '清單標發給誰（375 時已在 1280 改成 PG、SA）');
 
     // 上傳視窗第 3 步：三選一
-    await click('[data-skup]');
+    await click('.sk-bar [data-sknew]'); await click('[data-sknew-up]'); // PLAT-365：「＋ 新增技能」→ 上傳自己的
     await until(() => js("!!document.querySelector('#sk-to .sk-to-mode')"), 8000, L + '上傳視窗');
     assert.deepEqual(JSON.parse(await js("JSON.stringify([...document.querySelectorAll('#sk-to .sk-to-mode')].map(b => b.textContent + ':' + b.getAttribute('aria-checked')))")), ['所有 AI:true', '指定角色:false', '指定 AI:false'], L + '預設所有 AI');
     assert.match(await text('#sk-to .sk-to-n'), /會裝到 3 隻 AI/, L + '所有 AI 的數字');

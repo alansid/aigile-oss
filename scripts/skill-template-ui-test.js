@@ -1,6 +1,6 @@
-// 畫面測試（真的瀏覽器，PLAT-365）：技能庫的「範本技能」區 → 套用（改內容）→ 上架 → 卡片標「📚 範本」
+// 畫面測試（真的瀏覽器，PLAT-365）：「＋ 新增技能」視窗／空專案卡的範本 → 套用（改內容）→ 上架 → 卡片標「📚 來自範本 v1」
 // → 範本有新版時卡片標「範本有新版」、抽屜有「看範本新版」，打開會附目前的 SKILL.md 對照、發給誰沿用原本的
-// 一般成員看不到範本區（不能套用）；手機 375 不橫向捲動；英文介面給英文範本
+// 範本 6 個起有搜尋、分類、推薦；一般成員不能套用；手機 375 不橫向捲動；英文介面給英文範本
 // 用法：node scripts/skill-template-ui-test.js（找不到 Chrome／Edge 就略過）
 // 截圖：設 SKILL_TPL_SHOT=<資料夾> 就把各步驟存成 PNG（給 UX 驗收，全是假資料）
 import assert from 'node:assert';
@@ -37,18 +37,61 @@ try {
     fs.writeFileSync(path.join(SHOT, name), Buffer.from(r.result.data, 'base64'));
   };
 
-  // 1. 一般成員：看不到範本區
+  // 1. 一般成員：右上是「＋ 新增技能」；空專案卡沒有範本（不能套用）；新增視窗只能上傳自己的
   await openLib(wang);
   await until(() => js("!!document.querySelector('.sk-view .sk-rule')"), 5000, '技能庫畫完');
-  assert.equal(await js("!!document.querySelector('.sk-tpl-sec')"), false, '一般成員看不到範本區');
+  assert.equal(await txt('.sk-bar [data-sknew]'), '＋ 新增技能');
+  assert.equal(await js("!!document.querySelector('.sk-view [data-sktpl]')"), false, '一般成員的空專案卡沒有範本');
+  await click('.sk-bar [data-sknew]');
+  await until(() => js("!!document.querySelector('.sk-new-up')"), 8000, '新增視窗');
+  assert.match(await txt('#sk-new-list'), /只有預設專案的 leader 或管理員能套用範本/);
+  assert.equal(await js("!!document.querySelector('#sk-new-list [data-sktpl]')"), false);
+  await click('[data-sknew-up]');
+  await until(() => js("!!document.querySelector('#sk-pj')"), 8000, '選檔案接上傳視窗');
 
-  // 2. 管理員：範本區 6 個，按套用 → 編輯框是範本全文
+  // 2. 管理員：底部範本區拿掉；預設專案空卡列推薦 3 個範本＋看全部＋上傳自己的
   await openLib(boss);
-  await until(() => js("document.querySelectorAll('.sk-tpl').length === 6"), 8000, '範本區 6 個');
-  assert.match(await txt('.sk-tpl-sec .sk-tpl-h'), /範本技能/);
-  await shot('PLAT-365-1-範本區-1280.png', '.sk-tpl-sec');
-  await click('[data-sktpl="commit-convention"]');
+  await until(() => js("!!document.querySelector('[data-sktpl-pj=\"預設專案\"]')"), 8000, '預設專案空卡有範本');
+  assert.equal(await js("!!document.querySelector('.sk-tpl-sec')"), false, '底部範本區拿掉');
+  const emptyCard = "[...document.querySelectorAll('.sk-empty')].find(c => c.querySelector('[data-sktpl-pj=\"預設專案\"]'))";
+  assert.match(await js(`${emptyCard}.textContent`), /從範本開始，一鍵複製到預設專案，之後可以改：/);
+  assert.deepEqual(await js(`[...${emptyCard}.querySelectorAll('[data-sktpl]')].map(b => b.dataset.sktpl)`), ['commit-convention', 'testing-rules', 'handover-format'], '依 PG 推薦 3 個');
+  assert.match(await js(`${emptyCard}.textContent`), /看全部範本 ›[\s\S]*或 上傳自己的 SKILL\.md ›/);
+  await shot('PLAT-365-B1-空專案卡-1280.png', '.sk-empty');
+  // 「＋ 新增技能」：範本 6 個 → 有搜尋、分類，預設推薦 3 個、其餘收起
+  await js(`document.querySelector('.sk-bar [data-sknew]').dataset.sknew = '預設專案'; true`);
+  await click('.sk-bar [data-sknew]');
+  await until(() => js("document.querySelectorAll('.sk-new-row').length === 3"), 8000, '推薦 3 個');
+  assert.match(await txt('.sk-new-rech'), /⭐ 推薦給「預設專案」.*依專案裡 AI 的角色挑/);
+  assert.equal(await txt('#sk-new-list [data-sknew-all]'), '看全部 6 個範本 ▾');
+  assert.ok(await js("!!document.querySelector('#sk-new-q') && document.querySelectorAll('[data-sknew-cat]').length >= 4"), '有搜尋與分類');
+  assert.match(await txt('.sk-new-up'), /上傳自己的 SKILL\.md/);
+  await click('[data-sknew-peek="commit-convention"]');
+  assert.match(await txt('.sk-new-pre'), /name: commit-convention/, '預覽展開全文');
+  await click('[data-sknew-peek="commit-convention"]');
+  await shot('PLAT-365-B2-新增視窗-推薦-1280.png');
+  // 搜尋：列表變精簡、點一列在右邊看全文
+  await js("(() => { const q = document.querySelector('#sk-new-q'); q.focus(); q.value = '測試'; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await until(() => js("document.querySelectorAll('.sk-new-item').length >= 1"), 5000, '搜尋結果');
+  assert.match(await txt('.sk-new-rech'), /找到 \d+ 個/);
+  assert.equal(await js("document.activeElement.id"), 'sk-new-q', '打字時焦點留在搜尋框');
+  assert.match(await txt('.sk-new-pv'), /testing-rules · v1 · 內建範本/);
+  assert.match(await txt('.sk-new-pv [data-sktpl]'), /^套用到預設專案$/);
+  await shot('PLAT-365-B3-搜尋與預覽-1280.png');
+  // 分類：安全只有 1 個；點列換預覽
+  await js("(() => { const q = document.querySelector('#sk-new-q'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await click('[data-sknew-cat="security"]');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 1"), 5000, '安全分類');
+  assert.match(await txt('.sk-new-pv'), /security-checklist/);
+  await click('[data-sknew-cat=""]');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 6"), 5000, '全部 6 個');
+  await click('[data-sknew-sel="report-and-ask"]');
+  assert.match(await txt('.sk-new-pv'), /report-and-ask/, '點一列換右邊預覽');
+  // 按列上的「套用」→ 接套用視窗，專案已選好
+  await click('.sk-new-item [data-sktpl="commit-convention"]');
   await until(() => js("!!document.querySelector('#sk-ap-text')"), 8000, '套用彈窗');
+  assert.equal(await js("document.querySelector('#sk-ap-pj').value"), '預設專案');
+  assert.match(await txt('.sk-up-sec .field-hint'), /最上面幾行請保留，平台靠它知道這個技能來自哪個範本，有新版時才提醒得到你/);
   const text = await js("document.querySelector('#sk-ap-text').value");
   assert.match(text, /^---\nname: commit-convention\n/, '編輯框是範本 SKILL.md');
   assert.match(text, /aigile-template: commit-convention@1/);
@@ -69,11 +112,23 @@ try {
   const full = (await kit.call(boss.token, `/api/skills/${sk.skillId}`)).body;
   assert.match(full.files[0].text, /第一行 40 字內/, '上架的是改過的內容');
 
-  // 3. 回到技能庫：卡片標「📚 範本」，範本區標「已套用」
+  // 3. 回到技能庫：卡片標「📚 來自範本 v1」；新增視窗標「預設專案已套用 v1」、按鈕「再套一次」；「只看還沒套用的」藏起來
   await click('[data-sk-fin]');
-  await until(() => js("[...document.querySelectorAll('.sk-card')].some(c => c.textContent.includes('📚 範本'))"), 8000, '卡片標範本');
-  await until(() => js("[...document.querySelectorAll('.sk-tpl')].some(c => c.textContent.includes('：已套用'))"), 8000, '範本區標已套用');
+  await until(() => js("[...document.querySelectorAll('.sk-card')].some(c => c.textContent.includes('📚 來自範本 v1'))"), 8000, '卡片標範本 v1');
   await shot('PLAT-365-3-卡片範本標籤-1280.png', '.sk-card');
+  await js(`document.querySelector('.sk-bar [data-sknew]').dataset.sknew = '預設專案'; true`);
+  await click('.sk-bar [data-sknew]');
+  await until(() => js("!!document.querySelector('.sk-new-row [data-sktpl=\"commit-convention\"]')"), 8000, '新增視窗');
+  assert.equal(await js("document.querySelector('#sk-new-pj').value"), '預設專案');
+  assert.equal(await txt('.sk-new-row [data-sktpl="commit-convention"]'), '再套一次');
+  assert.match(await js("document.querySelector('.sk-new-row [data-sktpl=\"commit-convention\"]').closest('.sk-new-row').textContent"), /預設專案已套用 v1/);
+  await shot('PLAT-365-B4-已套用再套一次-1280.png');
+  await click('#sk-new-list [data-sknew-all]');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 6"), 5000, '看全部');
+  await click('#sk-new-unused');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 5"), 5000, '只看還沒套用的');
+  assert.equal(await js("!!document.querySelector('[data-sknew-sel=\"commit-convention\"]')"), false);
+  await click('[data-skcancel]');
 
   // 4. 範本有新版（模擬專案套用的是舊版 @0，並指定給 PG）：卡片標、抽屜有按鈕、打開附目前內容、發給誰沿用
   const old = full.files[0].text.replace('commit-convention@1', 'commit-convention@0');
@@ -82,10 +137,15 @@ try {
   await openLib(boss);
   await until(() => js("[...document.querySelectorAll('.sk-card')].some(c => c.textContent.includes('範本有新版'))"), 8000, '卡片標範本有新版');
   await shot('PLAT-365-4a-卡片範本有新版-1280.png', '.sk-card');
-  // 範本卡的按鈕變「更新」，帶到有新版的那個專案（UX 小提醒 1）
-  assert.equal(await txt('[data-sktpl="commit-convention"]'), '更新');
-  assert.equal(await js(`document.querySelector('[data-sktpl="commit-convention"]').dataset.sktplPj`), '預設專案');
-  assert.equal(await txt('[data-sktpl="testing-rules"]'), '套用', '沒套用過的照舊是「套用」');
+  // 新增視窗的範本列：標「範本有新版」、按鈕變「更新」
+  await js(`document.querySelector('.sk-bar [data-sknew]').dataset.sknew = '預設專案'; true`);
+  await click('.sk-bar [data-sknew]');
+  await until(() => js("!!document.querySelector('.sk-new-row [data-sktpl=\"commit-convention\"]')"), 8000, '新增視窗');
+  assert.equal(await txt('.sk-new-row [data-sktpl="commit-convention"]'), '更新');
+  assert.match(await js("document.querySelector('.sk-new-row [data-sktpl=\"commit-convention\"]').closest('.sk-new-row').textContent"), /預設專案已套用 v0[\s\S]*範本有新版/);
+  assert.equal(await txt('.sk-new-row [data-sktpl="testing-rules"]'), '套用', '沒套用過的照舊是「套用」');
+  await click('[data-skcancel]');
+  await until(() => js("!!document.querySelector('.sk-view .sk-card')"), 8000, '回技能庫');
   await js(`document.querySelector('[data-skc="${up.body.skillId}"]').click(), true`);
   await until(() => js("!!document.querySelector('[data-sktplup]')"), 8000, '抽屜有看範本新版');
   assert.match(await txt('.sk-drawer'), /來自範本第 0 版，範本已經有第 1 版：commit-convention/);
@@ -108,35 +168,55 @@ try {
   assert.equal(v3.version, 3); assert.equal(v3.template.outdated, false, '更新後不再標新版');
   assert.deepEqual((await kit.call(boss.token, `/api/skills/${v3.skillId}`)).body.files.map(f => f.path).sort(), ['SKILL.md', 'templates.md'], '其他檔照留');
 
-  // 5. 手機 375：範本區與套用彈窗不橫向捲動
+  // 5. 手機 375：新增視窗、看全部與套用彈窗不橫向捲動
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 760, deviceScaleFactor: 1, mobile: true });
   await openLib(boss);
-  await until(() => js("document.querySelectorAll('.sk-tpl').length === 6"), 8000, '手機範本區');
   assert.equal(await js('innerWidth'), 375);
-  assert.ok(!(await js('document.documentElement.scrollWidth > innerWidth + 1')), '手機範本區不橫向捲動');
-  await shot('PLAT-365-1-範本區-375.png', '.sk-tpl-sec');
-  await click('[data-sktpl="testing-rules"]');
+  assert.ok(!(await js('document.documentElement.scrollWidth > innerWidth + 1')), '手機技能庫不橫向捲動');
+  await shot('PLAT-365-B1-空專案卡-375.png', '.sk-empty');
+  await js(`document.querySelector('.sk-bar [data-sknew]').dataset.sknew = '預設專案'; true`);
+  await click('.sk-bar [data-sknew]');
+  await until(() => js("document.querySelectorAll('.sk-new-row').length === 3"), 8000, '手機新增視窗');
+  assert.ok(!(await js('document.documentElement.scrollWidth > innerWidth + 1')), '手機新增視窗不橫向捲動');
+  assert.ok(await js("[...document.querySelectorAll('.sk-new-row .btn')].every(b => b.getBoundingClientRect().right <= innerWidth)"), '按鈕在畫面內');
+  await shot('PLAT-365-B2-新增視窗-375.png');
+  await click('#sk-new-list [data-sknew-all]');
+  await until(() => js("!!document.querySelector('.sk-new-pv')"), 5000, '手機看全部');
+  assert.ok(await js("document.querySelector('.sk-new-pv').getBoundingClientRect().right <= innerWidth"), '預覽在畫面內');
+  assert.match(await txt('.sk-new-rech'), /點一列在下方看全文/, '手機預覽在下方');
+  await shot('PLAT-365-B3-看全部-375.png');
+  await click('.sk-new-item [data-sktpl="testing-rules"]');
   await until(() => js("!!document.querySelector('#sk-ap-text')"), 8000, '手機套用彈窗');
   assert.ok(!(await js('document.documentElement.scrollWidth > innerWidth + 1')), '手機套用彈窗不橫向捲動');
   assert.ok(await js("document.querySelector('#sk-ap-text').getBoundingClientRect().right <= innerWidth"), '編輯框在畫面內');
   await shot('PLAT-365-2-套用編輯-375.png');
   await cdp('Emulation.clearDeviceMetricsOverride');
 
-  // 6. 英文介面：範本區英文、編輯框是英文範本
+  // 6. 英文介面：按鈕、卡片標籤、新增視窗都是英文；編輯框是英文範本
   await openLib(boss, 'en');
-  await until(() => js("document.documentElement.lang === 'en' && document.querySelectorAll('.sk-tpl').length === 6"), 8000, '英文範本區');
-  assert.match(await txt('.sk-tpl-sec .sk-tpl-h'), /Template skills/);
-  assert.match(await txt('.sk-tpl-sec'), /Default project: applied/, '已套用的標籤也是英文');
-  assert.ok(!/已套用|範本有新版/.test(await txt('.sk-tpl-sec')), '範本區沒有中文殘留');
-  await shot('PLAT-365-5-範本區-英文-1280.png', '.sk-tpl-sec');
-  // 英文狀態標籤（Published）較長：卡名換行、不被截成「commit-convent…」（UX 小提醒 2）
+  await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.sk-view .sk-card')"), 8000, '英文技能庫');
+  assert.equal(await txt('.sk-bar [data-sknew]'), '+ Add skill');
+  assert.match(await js("[...document.querySelectorAll('.sk-card')].map(c => c.textContent).join(' ')"), /📚 From template v1/);
+  // 英文狀態標籤（Published）較長：卡名換行、不被截成「commit-convent…」
   assert.ok(await js("[...document.querySelectorAll('.sk-card .sk-nm')].every(e => e.scrollWidth <= e.clientWidth + 1)"), '英文卡名完整顯示');
   await shot('PLAT-365-6-卡片-英文-1280.png', '.sk-card');
-  await click('[data-sktpl="security-checklist"]');
+  await js(`document.querySelector('.sk-bar [data-sknew]').dataset.sknew = '預設專案'; true`);
+  await click('.sk-bar [data-sknew]');
+  await until(() => js("document.querySelectorAll('.sk-new-row').length === 3"), 8000, '英文新增視窗');
+  const enText = await js("document.querySelector('.modal').innerText");
+  assert.match(enText, /Add skill[\s\S]*Recommended for[\s\S]*See all 6 templates[\s\S]*Upload your own SKILL\.md/);
+  const left = enText.replace(/預設專案|程式開發/g, '').match(/[一-鿿]+/g);
+  assert.ok(!left, '新增視窗沒有中文殘留：' + (left || []).join(' '));
+  await shot('PLAT-365-B2-新增視窗-英文-1280.png');
+  await click('[data-sknew-cat="security"]');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 1"), 5000, '英文安全分類');
+  assert.match(await txt('.sk-new-pv'), /# Security basics/);
+  await shot('PLAT-365-B3-搜尋與預覽-英文-1280.png');
+  await click('.sk-new-pv [data-sktpl]');
   await until(() => js("!!document.querySelector('#sk-ap-text')"), 8000, '英文套用彈窗');
   assert.match(await js("document.querySelector('#sk-ap-text').value"), /# Security basics/, '英文介面給英文範本');
+  assert.match(await txt('.sk-up-sec .field-hint'), /Keep the first few lines/);
   await shot('PLAT-365-5b-套用編輯-英文-1280.png');
-  await noHScroll(1280);
   console.log('skill-template-ui-test：全部通過');
 } catch (e) {
   console.error('skill-template-ui-test 失敗：', e.message);
