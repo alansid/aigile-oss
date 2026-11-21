@@ -61,6 +61,8 @@ try {
   // 讀出某張決策卡／某則 [需確認] 的選項按鈕：哪些是綠色主按鈕、哪些有「建議」標籤、標籤看不看得到
   const decBtns = id => js(`JSON.stringify([...document.querySelectorAll('[data-inl-root="c:${id}"] [data-inl-act="decide"][data-result]')].filter(b => b.offsetParent && /^決定「/.test(b.textContent)).map(b => { const t = b.querySelector('.rec-tag'); return { r: b.dataset.result, ok: b.classList.contains('ok'), tag: !!t, seen: !!t && t.getBoundingClientRect().width > 0 && getComputedStyle(t).visibility !== 'hidden', bg: getComputedStyle(b).backgroundColor }; }))`).then(JSON.parse);
   const qBtns = id => js(`JSON.stringify([...document.querySelectorAll('[data-q-root="${id}"] .q-opt')].filter(b => b.offsetParent).map(b => { const t = b.querySelector('.rec-tag'); return { k: b.dataset.qOpt, rec: b.classList.contains('rec'), seen: !!t && t.getBoundingClientRect().width > 0, bw: getComputedStyle(b).borderTopWidth }; }))`).then(JSON.parse);
+  // 重壓時（全套一起跑）收件匣會因為通知、團隊狀態陸續回來而重畫：等按鈕數量對了再讀，不要只讀一次
+  const ready = (read, n, label) => until(async () => { const x = await read(); return x.length === n ? x : null; }, 10000, label);
   const openInl = async key => { await js(`document.querySelector('[data-inl-open="${key}"]')?.click(); true`); };
 
   for (const w of [1280, 375]) {
@@ -71,8 +73,7 @@ try {
     for (const [id, want] of [[one, '先不做'], [none, null], [many, null]]) {
       await openInl('c:' + id);
       await until(() => js(`!!document.querySelector('[data-inl-root="c:${id}"]')`), 5000, L1 + '展開 ' + id);
-      const b = await decBtns(id);
-      assert.equal(b.length, 2, L1 + '兩個選項按鈕：' + JSON.stringify(b));
+      const b = await ready(() => decBtns(id), 2, L1 + id + ' 兩個選項按鈕畫好');
       if (want) {
         assert.deepEqual(b.map(x => x.ok), b.map(x => x.r === want), L1 + '只有建議的是主按鈕：' + JSON.stringify(b));
         assert.ok(b.find(x => x.r === want).seen && !b.find(x => x.r !== want).tag, L1 + '建議的有「建議」標籤且看得到');
@@ -82,13 +83,11 @@ try {
         assert.equal(b[0].bg, b[1].bg, L1 + id + ' 沒對到：同一種樣式');
       }
     }
-    await until(() => js(`!!document.querySelector('[data-q-root="${qOne}"] .q-opt')`), 8000, L1 + '[需確認] 選項');
-    const q1 = await qBtns(qOne), q2 = await qBtns(qNone);
+    const q1 = await ready(() => qBtns(qOne), 2, L1 + '[需確認] 建議 B 的選項畫好'), q2 = await ready(() => qBtns(qNone), 2, L1 + '[需確認] 沒寫建議的選項畫好');
     assert.deepEqual(q1.map(x => x.rec), [false, true], L1 + '[需確認] 建議：B → 只有 B 標建議：' + JSON.stringify(q1));
     assert.ok(q1[1].seen && q1[1].bw !== q1[0].bw, L1 + '[需確認] 建議的看得出來');
     assert.ok(q2.length === 2 && q2.every(x => !x.rec && !x.seen) && q2[0].bw === q2[1].bw, L1 + '[需確認] 沒寫建議：同一種樣式');
-    await until(() => js(`!!document.querySelector('[data-q-root="${qHuman}"] .q-opt')`), 8000, L1 + '同仁發的 [需確認] 有選項按鈕');
-    assert.deepEqual((await qBtns(qHuman)).map(x => x.rec), [true, false], L1 + '同仁發的 [需確認] 建議 A 有標示');
+    assert.deepEqual((await ready(() => qBtns(qHuman), 2, L1 + '同仁發的 [需確認] 有選項按鈕')).map(x => x.rec), [true, false], L1 + '同仁發的 [需確認] 建議 A 有標示');
     if (w === 1280) {
       assert.ok(await js(`/等你回答的問題/.test(document.body.innerText) && !/AI 等你回答的問題/.test(document.body.innerText)`), L1 + '副標寫「等你回答的問題」');
       await js(`location.href = '/p/%E9%A0%90%E8%A8%AD%E5%B0%88%E6%A1%88/messages'; true`);
