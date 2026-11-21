@@ -1668,7 +1668,7 @@
     for (const g of work.sugg || []) items.push({ p: g.project || null, kind: '建議', title: g.kind === 'create' ? `建立卡片「${g.create?.title || ''}」` : `${ckey(g.card?.cardId || '')} 改為「${g.to}」`, key: 's:' + g.suggestionId });
     for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
     for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId, mid: n.messageId });
-    for (const n of (work.notes || []).filter(x => x.dm)) items.push({ p: n.project ?? null, kind: n.sender?.system ? '通知' : '私訊', title: n.sender?.system ? `平台通知：${oneLine(dmGist(n.preview, true), 60)}` : `${n.sender?.name || ''} 回你了`, key: 'n:' + n.notificationId });
+    for (const { list, last: n } of dmGroups((work.notes || []).filter(x => x.dm))) items.push({ p: n.project ?? null, kind: n.sender?.system ? '通知' : '私訊', title: (n.sender?.system ? `平台通知：${oneLine(dmGist(n.preview, true), 60)}` : `${n.sender?.name || ''} 回你了`) + (list.length > 1 ? `（${list.length} 則）` : ''), key: 'n:' + n.notificationId }); // PLAT-388 E：連發的合併成一項
     for (const j of (work.joins || []).filter(j => dueForMe(j.project, j.createdAt))) items.push({ p: myProjects().includes(j.project) ? j.project : null, kind: '申請', title: `${j.name} 申請加入${j.projectName}`, key: 'j:' + j.id }); // PLAT-381 先給 leader
     for (const k of (work.skillRev || []).filter(k => dueForMe(k.project, k.uploadedAt))) items.push({ p: myProjects().includes(k.project) ? k.project : null, kind: '核准', title: `技能待核准：${k.name} v${k.version}`, key: 'k:' + k.skillId }); // PLAT-381
     return items.filter(x => !x.p || myProjects().includes(x.p));
@@ -3636,6 +3636,17 @@
   const askCardElsewhere = n => [...(state.msgCards.get(n.messageId) || []), cardIdOf(n.preview || '')].filter(Boolean).some(id => { const c = work.cards.get(id); return c && (verifyingMe(c) || decidingMe(c)); });
   const askNotes = () => askNoteRaw().filter(n => msgInView(n.project ?? null));
   const dmNotes = () => (work.notes || []).filter(n => n.dm && msgInView(n.project ?? null));
+  // PLAT-388 C／E：同一專案、同一隻 AI 的私訊通知合併成一列（含 watcher 連發的叫醒逾時）：幾則、最後一則、最後時間
+  // 平台通知只合併同一類（數字、時間不算），技能新版和同步失敗仍分兩列
+  const dmGroups = notes => {
+    const g = new Map();
+    for (const n of notes) {
+      const k = `${n.project ?? ''}|${n.sender?.participantId}|${n.sender?.system ? 's:' + dmGist(n.preview, true).replace(/\d+/g, '#') : 'a'}`, x = g.get(k);
+      if (!x) g.set(k, { list: [n], last: n });
+      else { x.list.push(n); if (String(n.createdAt) >= String(x.last.createdAt)) x.last = n; }
+    }
+    return [...g.values()];
+  };
   const noteList = () => { const dup = new Set(legacyConfirms().map(d => d.messageId)); return work.notes.filter(n => !n.dm && n.ask !== true && msgInView(n.project ?? null) && !dup.has(n.messageId) && !cardOfConfirm({ messageId: n.messageId, title: n.preview }) && !decidedCardNote(n)); };
   // 講已經決定完的決策卡的通知，不再列在「給你知道的」
   const decidedCardNote = n => cardRefsIn(state.byId.get(n.messageId)?.text || n.preview || '').some(id => { const c = work.cards.get(id); return c?.type === '決策' && (!!c.decision?.result || closedSt(c.status)); });
@@ -3808,7 +3819,7 @@
     if (key[0] === 'j') return openJoinReview(work.joins.find(j => j.id === id)?.project || '');
     if (key[0] === 'k') return skOpenDrawer(id); // PLAT-381 技能待核准
     await setProjectView(r.dataset.hubProj, 'inbox');
-    work.focusItem = { sel: key[0] === 'n' ? `#fyi-${CSS.escape(id)}` : `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row', v: 'data-ver-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
+    work.focusItem = { sel: key[0] === 'n' ? `:is(#fyi-${CSS.escape(id)}, [data-fyi~="${CSS.escape(id)}"])` : `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row', v: 'data-ver-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
     if (!applyFocusItem() && key[0] === 'c') openCard(id);
   });
   $('#m-todo').addEventListener('click', () => { closeSheet(false); openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }); });
@@ -3881,10 +3892,12 @@
           ${cm ? `<div class="conf-text">${esc(cm.text.replace(/^\s*\[需確認\]\s*/, ''))}</div>` : ''}
           ${quick || inlineHtml('m:' + d.messageId, 'confirm', d)}
         </div>`; }).join('')}</section>` : '';
-    const dmSection = dms.length ? `
-      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dms.length}</span><span class="muted small">只有你看得到</span></div>
-        ${dms.map(n => `<div class="sugg-row" id="fyi-${esc(n.notificationId)}"><div class="sugg-main"><b>${n.sender.system ? '平台通知' : `${esc(n.sender.name)} 回你了`}</b><span class="muted small">${esc(oneLine(n.sender.system ? dmGist(n.preview, true) : String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${agoText(n.createdAt)}</span></div>
-          <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}">打開私訊</button></div></div>`).join('')}</section>` : '';
+    const dmg = dmGroups(dms); // PLAT-388 E：同一隻 AI 連發的合併成一列
+    const dmSection = dmg.length ? `
+      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dmg.length}</span><span class="muted small">只有你看得到</span></div>
+        ${dmg.map(({ list, last: n }) => { const k = list.length, ids = esc(list.map(x => x.notificationId).join(' '));
+          return `<div class="sugg-row dm-note" id="fyi-${esc(n.notificationId)}" data-fyi="${ids}"><div class="sugg-main"><b>${n.sender.system ? '平台通知' : `${esc(n.sender.name)} 回你了`}${k > 1 ? ` <span class="pill-tag">${k} 則</span>` : ''}</b><span class="muted small">${esc(oneLine(n.sender.system ? dmGist(n.preview, true) : String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${k > 1 ? '最後一則 ' : ''}${agoText(n.createdAt)}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}" data-dm-pj="${esc(n.project || '')}">打開私訊</button><button type="button" class="link small" data-dm-read="${ids}" title="不打開對話，直接從這裡清掉">${k > 1 ? `全部已讀（${k}）` : '已讀'}</button></div></div>`; }).join('')}</section>` : '';
     // PLAT-381「👑 你負責的專案」：自己專案的加入申請、技能核准；管理員看到的是沒有 leader 或 leader 超過 1 天沒處理的
     const leadPjs = [...new Set([...joins.map(j => j.project), ...skRev.map(k => k.project)])].filter(pj => leadersOf(pj).includes(meId()));
     const late = pj => !leadersOf(pj).includes(meId()) && otherLeads(pj).length ? `<span class="pill-tag yellow">leader ${esc(leadNames(pj))} 還沒處理</span> ` : ''; // 管理員看到的（已超過 1 天）
@@ -5288,7 +5301,7 @@
     if (dmSumFromItems() && d.items.length) drawDmSide();
     const before = (work.notes || []).length;
     work.notes = (work.notes || []).filter(n => !(n.dm && n.sender.participantId === dm.aiId)); // 伺服器已標已讀
-    if (work.notes.length !== before) { updateTodoBadge(); drawDmSide(); }
+    if (work.notes.length !== before) { updateTodoBadge(); drawDmSide(); if (state.page === 'inbox') renderWork(); } // PLAT-388 D：要你處理的那幾列馬上消失
     return d;
   }
   // 私訊在右側面板打開（每頁都能開、可一直開著；手機全螢幕）；重新整理後照樣開著
@@ -5311,8 +5324,17 @@
     document.documentElement.style.setProperty('--dmp-top', `${tb && tb.offsetParent ? Math.round(tb.getBoundingClientRect().bottom) : 0}px`);
     return renderDmPanel();
   }
-  function openDm(aiId) {
+  async function openDm(aiId, pj) {
     if (document.querySelector('#modal-root .modal')) closeModal();
+    // PLAT-388 B：總覽、跨專案頻道、或這個專案沒有這隻 AI 時，原本按了沒反應 → 自動切到它所在、有開私訊的專案
+    if (aiId && !(dmEntry() && myAisHere().some(a => a.participantId === aiId))) {
+      const ai = state.participants.get(aiId), pjs = [pj, ...(ai?.projects || [])].filter(Boolean);
+      const can = x => isMyAi(ai) && ai.status !== 'disabled' && myProjects().includes(x) && (ai.projects || []).includes(x) && !meRO(x);
+      const to = pjs.find(x => can(x) && dmOn(x)) || pjs.find(can); // 都沒開私訊：切過去看「怎麼打開」
+      if (!to) return toast(ai && ai.status !== 'disabled' ? `你跟 ${ai.name} 沒有可以私訊的共同專案；這幾則可以按「已讀」清掉` : '這隻 AI 已停用或不在了；這幾則可以按「已讀」清掉');
+      await setProjectView(to);
+      toast(`已切到「${projName(to)}」打開私訊`);
+    }
     state.dmAi = aiId || null;
     return dmPanel(true);
   }
@@ -5392,7 +5414,9 @@
   }
   document.addEventListener('click', async e => {
     const o = e.target.closest?.('[data-dm-open]');
-    if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen); }
+    if (o) { if (o.closest('#sheet')) closeSheet(false); return openDm(o.dataset.dmOpen, o.dataset.dmPj); }
+    const rd = e.target.closest?.('[data-dm-read]'); // PLAT-388 C：不打開也能清掉（同一隻 AI 的幾則一次清）
+    if (rd) return ackNotesNow(rd.dataset.dmRead.split(' ').filter(Boolean), '已標為已讀');
     if (e.target.closest?.('[data-dm-more]')) { state.dmMore = !state.dmMore; return drawDmList(dmVisible() ? myAisHere() : []); }
     if (e.target.closest?.('[data-dm-toggle]')) {
       if (e.target.closest('#sheet')) closeSheet(false);
