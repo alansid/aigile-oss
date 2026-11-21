@@ -785,7 +785,7 @@
             if (!command) throw new Error('這個工具沒有一行啟動，請用「複製接入文字」');
             st.copied = await copyText(command);
             st.manualText = st.copied ? '' : command;
-            toast(st.copied ? '已複製' : '複製失敗，請手動複製');
+            if (!st.copied) toast('複製失敗，請手動複製');
           } finally { st.copying = false; }
         } else if (act === 'ai') {
           const r = tpl.find(x => x.key === el.querySelector('#sw-role').value) || tpl[0];

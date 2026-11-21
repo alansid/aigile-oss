@@ -88,6 +88,7 @@ for (const [lang, width] of [['zh', 1280], ['en', 375]]) {
         assert.doesNotMatch(copied, /node -e|sandbox_mode/);
       }
       await until(async () => /✓/.test(await js("document.querySelector('[data-sw=copyai]').textContent")), 5000, 'copy confirmed');
+      assert.ok(await js("document.querySelector('#toast').hidden"), 'successful copy keeps wizard controls unobstructed');
     }
 
     await click('[data-sw-tool=codex]');
