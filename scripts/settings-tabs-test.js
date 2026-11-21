@@ -12,6 +12,8 @@ try {
   await kit.call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: '程式開發', name: '程式助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' });
   const { js, login, key, cdp } = await kit.browser();
   await login(boss.token);
+  // 登入完成只等到主畫面出現，成員清單還在背景載入；「請我的 AI 幫我做」要等成員清單裡有自己的 AI 才會出現
+  await until(() => js("[...document.querySelectorAll('.sb-presence-text, .presence-text')].some(el => el.textContent.trim() && el.textContent.trim() !== '…')"), 20000, '成員清單載入');
 
   const open = async () => {
     await js("document.querySelector('.topbar .av-btn').click(); true");
