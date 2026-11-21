@@ -189,18 +189,34 @@
 
   let joinHealth = {};
   async function showJoin() {
+    const startup = $('#join-startup'), message = $('#join-startup-message'), retry = $('#join-retry');
     $('#boot').hidden = true;
     $('#app').hidden = true;
     $('#invite').hidden = true;
+    $('#join-title').textContent = '歡迎回來';
+    $('#join-form').hidden = true;
+    $('#login-main').hidden = true;
+    retry.hidden = true;
+    startup.hidden = false;
+    message.textContent = '正在檢查登入服務…';
     $('#join').hidden = false;
     if ($('#token-error').textContent) { showOtherLogins(true); setLoginTab('code', false); } // 登入碼出錯就停在登入碼分頁
     try {
-      joinHealth = await api('/api/health');
+      const health = await api('/api/health', { timeoutMs: 10000 });
+      if (health?.ok !== true || typeof health.setup !== 'boolean') throw new Error('Invalid health response');
+      joinHealth = health;
       ts.key = joinHealth.turnstileSiteKey || '';
-      $('#first-admin').hidden = !joinHealth.defaultCredentials; // 還沒改預設帳密：同一句先講管理員去看 README
-      joinMode(joinHealth.setup ? 'setup' : 'login'); // 群組還沒有人：建立群組
-    } catch {}
+      $('#first-admin').hidden = !joinHealth.defaultCredentials;
+      joinMode(joinHealth.setup ? 'setup' : 'login');
+      startup.hidden = true;
+    } catch (error) {
+      message.textContent = error.code === 'ADMIN_SETUP_FAILED'
+        ? '無法初始化預設管理員。請主機管理員檢查資料庫連線、寫入權限與伺服器日誌，再按重試。'
+        : '無法確認登入服務狀態。請確認伺服器已啟動且連線正常，再按重試。';
+      retry.hidden = false;
+    }
   }
+  $('#join-retry').addEventListener('click', showJoin);
   // 登入頁三種模式：login 登入；setup 建立群組（第一位）；register 開放註冊時自己註冊
   function joinMode(mode) {
     const h = joinHealth, form = mode !== 'login';
@@ -671,7 +687,7 @@
     const st = { step: 0, invites: [], ai: null, link: null, tool: 'claude', copied: false, demo: null };
     const SW_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['other', '其他 AI']];
     const STEPS = ['群組名稱', '第一個專案', '邀請成員', '第一隻 AI'];
-    const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '四個步驟，每步都可以略過；之後在管理頁都改得到。' });
+    const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '每步都可以略過，之後可在「成員管理」、「專案管理」和「我的 AI」調整。' });
     const el = body.querySelector('#sw');
     const finish = async skipped => { try { await api('/api/setup-wizard/done', { method: 'POST' }); } catch {} if (skipped) store.set(NEXT_KEY(), '1'); closeModal(); location.reload(); };
     const btns = (main, mainLabel) => `<div class="sw-actions"><button type="button" class="link" data-sw="skipall">全部略過</button><span class="grow"></span>${st.step < 3 ? '<button type="button" class="btn" data-sw="skip">略過這步</button>' : ''}${main ? `<button type="button" class="btn primary" data-sw="${main}">${mainLabel}</button>` : ''}</div>`;
@@ -684,7 +700,7 @@
         ${pj ? `<div class="switch-row sw-pj-join"><div><b id="sw-pjj-t">新成員可以申請加入「${esc(pj.name)}」</b><span class="small muted">${swJoinOpen(pj) ? '打開中：自己註冊的人會在主畫面看到這個專案、按「申請加入」，你核准後就加入。' : '關閉中：註冊的人看不到這個專案，要你在「成員管理」把人加進來。'}</span></div><button type="button" class="switch" role="switch" aria-checked="${swJoinOpen(pj)}" aria-labelledby="sw-pjj-t" data-sw="pjjoin"><span></span></button></div>` : ''}
         <div class="sw-inv" data-msg-host><label class="field">邀請成員（產生一次性連結，直接加進「${esc(pj?.name || '')}」）<input id="sw-inv-name" maxlength="40" placeholder="成員名字"></label><button type="button" class="btn" data-sw="invite">產生邀請連結</button></div>
         ${st.invites.length ? `<ul class="sw-links">${st.invites.map((v, i) => `<li><b>${esc(v.name)}</b><code>${esc(v.url)}</code><button type="button" class="btn small" data-sw-copy="${i}">複製連結</button></li>`).join('')}</ul>` : ''}${btns('next', '下一步')}`;
-      else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p>${btns('ai', '建立 AI')}`;
+      else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p><p class="field-hint">要套用技能範本，完成設定後到「我的 AI」的「技能庫」，按「＋ 新增技能」。</p>${btns('ai', '建立 AI')}`;
       else html = `<p class="small">已建立「${esc(st.ai.name)}」。選你用的 AI 工具，按「複製」貼給它，它就會自己接入：</p>
         <div class="seg-scope sw-tool" role="group" aria-label="你的 AI 工具">${SW_TOOLS.map(([k, t]) => `<button type="button" data-sw-tool="${k}" aria-pressed="${st.tool === k}">${t}</button>`).join('')}</div>
         <textarea class="sw-text" readonly rows="9" aria-label="接入指令">${esc(shortOnboardingText(st.ai, st.link, st.tool))}</textarea><p class="field-hint">連結 15 分鐘內有效、只能讀一次；過期到「我的 AI」按「複製接入文字」重新產生。</p><div class="sw-actions"><span class="grow"></span><button type="button" class="btn" data-sw="done">完成</button><button type="button" class="btn primary" data-sw="copyai">${st.copied ? '✓ 已複製' : '複製'}</button></div>`;

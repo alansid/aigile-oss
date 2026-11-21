@@ -1,5 +1,5 @@
 // 走查建議的畫面細節（真的瀏覽器，正式啟動：有預設管理員）
-// 1. 還沒改預設帳密：登入頁提示「看 README」（不寫出密碼）；改好後不再提示
+// 1. 首次登入提示、服務失敗後重試、登入後強制改帳密；改好不再提示
 // 2. 註冊的帳號不合規則：不能有的字一個一個列（不能有：空白、!）
 // 3. 第一次設定引導按「全部略過」：主畫面出現「接下來可以做的事」，按「知道了」收起
 // 4. 審核加入申請：角色預先帶入註冊時填的，兩個下拉都有標籤
@@ -25,8 +25,35 @@ try {
   await open();
   await until(() => visible('#pwd-form'), 15000, '登入頁');
   await until(() => visible('#first-admin'), 5000, '登入頁提示看 README');
-  assert.ok(!/admin/i.test(await js("document.querySelector('.join-first').textContent")), '提示不寫出帳號密碼');
-  assert.match(await js("document.querySelector('.join-first').textContent"), /^第一次使用？管理員：帳號密碼看安裝說明（README）；其他人：自己註冊，或請管理員傳邀請連結給你。$/, '「第一次使用」只有一句');
+  assert.match(await js("document.querySelector('#first-admin').textContent"), /預設管理員帳號是 admin。密碼請看安裝說明（README）或主機設定的 ADMIN_PASSWORD/);
+  assert.equal(await js("document.querySelector('#pwd-form [name=password]').value"), '', '密碼不預填');
+  assert.equal(await visible('#join-form'), false, '預設管理員站不顯示建立群組');
+
+  for (const { lang, failure, errorText, hintText } of [
+    { lang: 'en', failure: "Promise.reject(new TypeError('network unavailable'))", errorText: /Could not check sign-in availability/, hintText: /The default administrator username is admin/ },
+    { lang: 'zh', failure: "Promise.resolve(Response.json({ error: { code: 'ADMIN_SETUP_FAILED' } }, { status: 503 }))", errorText: /請主機管理員檢查資料庫連線/, hintText: /預設管理員帳號是 admin/ },
+  ]) {
+    const script = await cdp('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+      localStorage.setItem('aigile-lang', ${q(lang)});
+      const fetch = window.fetch.bind(window);
+      let failHealth = true;
+      window.fetch = (url, options) => {
+        if (url !== '/api/health' || !failHealth) return fetch(url, options);
+        failHealth = false;
+        return ${failure};
+      };
+    })()` });
+    await goto('/');
+    await cdp('Page.removeScriptToEvaluateOnNewDocument', { identifier: script.result.identifier });
+    await until(() => visible('#join-retry'), 5000, '登入服務失敗可重試');
+    assert.match(await js("document.querySelector('#join-startup-message').textContent"), errorText);
+    assert.equal(await visible('#join-form'), false);
+    assert.equal(await visible('#pwd-form'), false);
+    await js("document.querySelector('#join-retry').click(); true");
+    await until(() => visible('#pwd-form'), 5000, '重試顯示登入');
+    await until(async () => hintText.test(await js("document.querySelector('#first-admin').textContent")), 5000, '登入提示語言正確');
+    assert.equal(await visible('#join-retry'), false);
+  }
 
   // 2. 註冊帳號的錯誤：分開列
   await js("document.querySelector('#self-join').click(); true");
@@ -38,6 +65,12 @@ try {
   console.log('✓ 登入頁提示、註冊錯誤分開列');
 
   // 改好帳密：提示不見
+  await js("document.querySelector('#join-back').click(); true");
+  await type('#pwd-form [name=username]', 'admin');
+  await type('#pwd-form [name=password]', 'admin');
+  await js("document.querySelector('#pwd-form').requestSubmit(); true");
+  await until(() => visible('#must-change'), 10000, '預設管理員先改帳密');
+  assert.equal(await visible('[data-sw="skipall"]'), false, '改帳密之前不能進引導');
   const boss = (await kit.call(null, '/api/auth/password', 'POST', { username: 'admin', password: 'admin' })).body.token;
   assert.equal((await kit.call(boss, '/api/me/password', 'PUT', { username: 'boss.lin', currentPassword: 'admin', newPassword: 'longpassword1', newPasswordAgain: 'longpassword1' })).status, 200);
   assert.equal((await kit.call(null, '/api/health')).body.defaultCredentials, undefined, '改好後不再回 defaultCredentials');

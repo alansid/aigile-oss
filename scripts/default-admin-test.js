@@ -78,11 +78,38 @@ try {
   assert.equal(r.status, 200, '用 ADMIN_PASSWORD 登入');
   assert.equal((await B.call(r.body.token, '/api/me')).body.mustChangeCredentials, true, '一樣要先改');
 
-  // 5. 兩份程式同時收到第一個請求：只建一位
+  // 5. 同一份程式及兩個實例的首次請求都只能看到完整的管理員
   const file = path.join(dataDir, 'race.db');
   const C1 = await mk('race.db', { defaultAdmin: '1' }), C2 = await mk('race.db', { defaultAdmin: '1' });
-  await Promise.all([C1.call(null, '/api/health'), C2.call(null, '/api/health')]);
+  const freshHealth = await Promise.all([C1, C1, C2, C2].map(({ call }) => call(null, '/api/health')));
+  for (const { status, body } of freshHealth) {
+    assert.equal(status, 200, JSON.stringify(body));
+    assert.equal(body.setup, false, '初始化期間不能回建立群組');
+    assert.equal(body.defaultCredentials, true, '每個請求都能讀到預設帳密提示');
+  }
   assert.equal((await C1.db.get("SELECT COUNT(*) AS n FROM participants WHERE kind = 'human'")).n, 1, '只建一位管理員：' + file);
+
+  // 建帳密時出錯，回 503，留下全空的資料庫並允許下一個請求重試。
+  const F = await mk('failed-init.db', { defaultAdmin: '1' });
+  const batch = F.db.batch;
+  F.db.batch = async statements => {
+    const credentials = statements.findIndex(([sql]) => sql.startsWith('INSERT INTO credentials '));
+    if (credentials < 0) return batch(statements);
+    F.db.batch = batch;
+    const failing = [...statements];
+    failing[credentials] = ['INSERT INTO missing_credentials_table VALUES (1)', []];
+    return batch(failing);
+  };
+  r = await F.call(null, '/api/health');
+  assert.equal(r.status, 503);
+  assert.equal(r.body.error?.code, 'ADMIN_SETUP_FAILED');
+  assert.equal(r.body.setup, undefined);
+  assert.equal((await F.db.get("SELECT COUNT(*) AS n FROM participants WHERE kind = 'human'")).n, 0);
+  r = await F.call(null, '/api/health');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.setup, false);
+  assert.equal(r.body.defaultCredentials, true);
+  assert.equal((await login(F.call, 'admin', 'admin')).status, 200);
 
   // 6. 已經有人類的站不建
   const D = await mk('d.db', { openJoin: '1' });
@@ -93,6 +120,7 @@ try {
 
   // 7. 測試模式（defaultAdmin 沒開）：照舊第一位註冊＝管理員、在所有專案
   const E = await mk('e.db', {}, {});
+  assert.equal((await E.call(null, '/api/health')).body.setup, true);
   const first = (await E.call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
   assert.ok((await E.call(first.token, '/api/me')).body.projects.length > 0, '沒開預設管理員：第一位註冊就是管理員');
 
