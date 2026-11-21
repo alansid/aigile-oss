@@ -5710,7 +5710,7 @@
     if (state.page !== 'releases') return;
     const d = rel.data;
     const tabs = `<div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>`;
-    const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">v${esc(APP_VERSION)} · ${rel.tab === 'flows' ? '每個功能從開始到完成怎麼走' : '每一版新增了什麼、修好了什麼'}</span></div>${tabs}</div>`;
+    const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">v${esc(APP_VERSION)} · <span>${rel.tab === 'flows' ? '每個功能從開始到完成怎麼走' : '每一版新增了什麼、修好了什麼'}</span></span></div>${tabs}</div>`;
     if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
     if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
     const q = rel.q.trim().toLowerCase().replace(/^v/, '');
