@@ -57,7 +57,7 @@ const STALE_MS = Math.max(1, Number(opt('stale-min', 30))) * 60_000;  // 門鈴�
 const GRACE_MS = Math.max(0, Number(opt('wake-grace-min', 7))) * 60_000; // 睡醒後等 watcher 補心跳（它每 5 分鐘寫一次）
 const EXIT_ON_TIMEOUT = args.includes('--exit-on-timeout');
 const REPLACE = args.includes('--replace');
-const SID = randomUUID(); // 這次等待的識別碼（向平台登記用，不含任何祕密）
+let SID = randomUUID(); // 這次等待的識別碼（向平台登記用，不含任何祕密）；混合模式下共用同機 watcher 的 SID
 const FRESH_MS = 5 * 60_000; // wait.pid 超過 5 分鐘沒更新＝舊檔（程序可能早就不在、PID 被重用）
 // 測試用：AIGILE_WAIT_TEST_SKEW_FILE 指一個檔，裡面的毫秒數加到時鐘上，模擬電腦睡了一段時間（正式使用不會設）
 const SKEW_FILE = process.env.AIGILE_WAIT_TEST_SKEW_FILE || '';
@@ -65,8 +65,13 @@ const now = () => { let k = 0; if (SKEW_FILE) { try { k = Number(fs.readFileSync
 const BELL = path.join(DIR, 'bell.json');
 const PIDF = path.join(DIR, 'watcher.pid');
 // 沒帶 --env-file 也找得到平台：讀同代號的 watcher.env
-let envBase = '';
-try { envBase = /^AIGILE_BASE=(.*)$/m.exec(fs.readFileSync(path.join(DIR, 'watcher.env'), 'utf8'))?.[1].trim() || ''; } catch {}
+let envBase = '', envWakeCmd = '', envWakeFg = '';
+try {
+  const envText = fs.readFileSync(path.join(DIR, 'watcher.env'), 'utf8');
+  envBase = /^AIGILE_BASE=(.*)$/m.exec(envText)?.[1].trim() || '';
+  envWakeCmd = /^WAKE_CMD=(.*)$/m.exec(envText)?.[1].trim() || '';
+  envWakeFg = /^WAKE_FOREGROUND=(.*)$/m.exec(envText)?.[1].trim() || '';
+} catch {}
 const BASE = (process.env.AIGILE_BASE || envBase).replace(/\/+$/, '');
 const tokenFile = process.env.AIGILE_TOKEN_FILE || path.join(DIR, '.token');
 let TOKEN = '';
@@ -105,6 +110,12 @@ async function wakeExit(line, code) {
   if (ending) return;
   ending = true;
   for (const h of handles) { clearInterval(h); h?.close?.(); }
+  if (line.startsWith('PENDING')) {
+    try {
+      const fgPid = Number(fs.readFileSync(path.join(DIR, 'foreground.lock'), 'utf8').trim()) || 0;
+      if (fgPid > 0 && pidAlive2(fgPid)) fs.writeFileSync(path.join(DIR, 'foreground-state.json'), JSON.stringify({ pid: fgPid, state: 'busy', at: Date.now() }));
+    } catch {}
+  }
   const lines = line.startsWith('PENDING') ? await digest() : [];
   for (const l of lines) console.log(l);
   // 回報時帶 sid；平台說後來有別的對話接上（superseded）就不叫醒這個對話
@@ -145,9 +156,21 @@ const isOurWait = cmd => /aigile-wait\.mjs/.test(cmd) && new RegExp(`--agent[= ]
 }
 try { fs.writeFileSync(WAITPID, String(process.pid)); fs.rmSync(path.join(DIR, 'wait-reminded'), { force: true }); } catch {}
 const touchPid = () => { try { const t = new Date(); fs.utimesSync(WAITPID, t, t); } catch {} }; // 每分鐘碰一下，讓別人知道還在跑（只改本機檔案時間）
-// 向平台登記這次等待（後登記的算數）；舊平台沒有這支 API 就略過
-await fetch(`${BASE}/api/me/online`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'wait' }, body: JSON.stringify({ sid: SID }), signal: AbortSignal.timeout(8_000) })
-  .then(r => (r.ok ? r.json() : null)).then(j => { if (j?.previous) note(`這個代號先前有別的對話在待命（${j.previous.at}${j.previous.host ? '，' + j.previous.host : ''}）：改由這個對話接手，舊的下次醒來會自己停`); }).catch(() => {});
+// 向平台登記這次等待（後登記的算數）；只有 Codex 共用同機 watcher 的 SID，其他維持各對話獨立 SID
+const wakeCmd = process.env.WAKE_CMD || envWakeCmd;
+const hybridWake = /aigile-codex\.mjs\b/.test(wakeCmd);
+let sharedWatcherSid = false;
+if (hybridWake) {
+  try {
+    const wpid = Number(fs.readFileSync(PIDF, 'utf8').trim()) || 0;
+    const wsid = wpid > 0 && pidAlive2(wpid) ? fs.readFileSync(path.join(DIR, 'watcher.sid'), 'utf8').trim() : '';
+    if (wsid) { SID = wsid; sharedWatcherSid = true; }
+  } catch {}
+}
+if (!sharedWatcherSid) {
+  await fetch(`${BASE}/api/me/online`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'wait' }, body: JSON.stringify({ sid: SID }), signal: AbortSignal.timeout(8_000) })
+    .then(r => (r.ok ? r.json() : null)).then(j => { if (j?.previous) note(`這個代號先前有別的對話在待命（${j.previous.at}${j.previous.host ? '，' + j.previous.host : ''}）：改由這個對話接手，舊的下次醒來會自己停`); }).catch(() => {});
+}
 process.on('exit', () => { try { if (fs.readFileSync(WAITPID, 'utf8').trim() === String(process.pid)) fs.rmSync(WAITPID, { force: true }); } catch {} });
 
 class Unauthorized extends Error {}

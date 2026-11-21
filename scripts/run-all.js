@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 const HOME_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-home-')); // 接入檢查會寫 ~/.aigile/，測試用暫存的家目錄
 const CODEX_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-codexhome-')); // Codex 版會改 ~/.codex/config.toml，測試用暫存的
+const GEMINI_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-geminihome-')); // Antigravity CLI 的 ~/.gemini 也隔離
 
 const dir = fileURLToPath(new URL('.', import.meta.url));
 const filters = process.argv.slice(2).filter(a => !a.startsWith('-'));
@@ -25,7 +26,7 @@ if (!files.length) { console.error(`沒有符合「${filters.join(' ')}」的測
 const run = f => new Promise(resolve => {
   const started = Date.now();
   let out = '', timedOut = false;
-  const p = spawn(process.execPath, [f], { cwd: fileURLToPath(new URL('..', import.meta.url)), env: { ...process.env, FORCE_COLOR: '0', AIGILE_HOME: process.env.AIGILE_HOME || HOME_TMP, AIGILE_TEST_CODEX_HOME: CODEX_TMP, CODEX_HOME: CODEX_TMP, AIGILE_CODEX_BIN: fileURLToPath(new URL('./fake-codex.mjs', import.meta.url)) } });
+  const p = spawn(process.execPath, [f], { cwd: fileURLToPath(new URL('..', import.meta.url)), env: { ...process.env, FORCE_COLOR: '0', AIGILE_HOME: process.env.AIGILE_HOME || HOME_TMP, AIGILE_TEST_CODEX_HOME: CODEX_TMP, CODEX_HOME: CODEX_TMP, AIGILE_TEST_GEMINI_HOME: GEMINI_TMP, AIGILE_GEMINI_HOME: GEMINI_TMP, AIGILE_CODEX_BIN: fileURLToPath(new URL('./fake-codex.mjs', import.meta.url)), AIGILE_ANTIGRAVITY_BIN: fileURLToPath(new URL('./fake-antigravity.mjs', import.meta.url)) } });
   p.stdout.on('data', d => { out += d; }); p.stderr.on('data', d => { out += d; });
   const timer = setTimeout(() => { timedOut = true; p.kill(); }, TIMEOUT_MS);
   p.on('close', code => { clearTimeout(timer); resolve({ f, ok: code === 0 && !timedOut, code, timedOut, sec: ((Date.now() - started) / 1000).toFixed(1), out }); });

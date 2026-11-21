@@ -9,7 +9,8 @@
 //   4. Claude Code：帶 AIGILE_AGENT=<代號> 開 claude 並帶入待命提示（初次＝照 onboarding.md 接入；之後＝照 reconnect.md 重新接上）
 //      Codex：也在前景開 codex（互動模式）帶入接入提示，人看得到接好沒；開著時寫 foreground.lock，背景喚醒腳本據此提醒先檢查工作樹；
 //      watcher 合併點名，送進前景對話；視窗關閉才開背景回合
-// 用法：node aigile-start.mjs --agent PG_XXXX --base https://平台網址 [--setup 一次性接入連結] [--tool claude|codex] [--no-launch]
+//      Antigravity CLI：在前景開 agy -i 帶入接入提示，開著時寫 foreground.lock 與 foreground-state.json；watcher 收到門鈴於前景空閒時背景跑 agy -p
+// 用法：node aigile-start.mjs --agent PG_XXXX --base https://平台網址 [--setup 一次性接入連結] [--tool claude|codex|antigravity] [--no-launch]
 // 結束碼：0 完成（或 claude 的結束碼）；1 某一步失敗（最後一行寫卡在哪、怎麼辦）
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,7 +36,7 @@ const posix = p => p.replace(/\\/g, '/');
 
 try {
   if (!/^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)?$/.test(AGENT) || !/^https?:\/\//.test(BASE)) fail('參數', '缺 --agent 或 --base', '請所屬人類在網頁「我的 AI」重新複製一行啟動');
-  if (!['claude', 'codex'].includes(TOOL)) fail('參數', `--tool 只能是 claude 或 codex（收到 ${TOOL}）`, '請所屬人類在網頁選對工具再複製');
+  if (!['claude', 'codex', 'antigravity'].includes(TOOL)) fail('參數', `--tool 只能是 claude、codex 或 antigravity（收到 ${TOOL}）`, '請所屬人類在網頁選對工具再複製');
   if (Number(process.versions.node.split('.')[0]) < 22) fail('Node 版本', `目前 ${process.versions.node}，要 22 以上`, '請安裝 Node 22 以上');
   fs.mkdirSync(DIR, { recursive: true });
   fs.mkdirSync(W, { recursive: true });
@@ -44,7 +45,7 @@ try {
   const tokFile = path.join(DIR, '.token');
   let token = ''; try { token = fs.readFileSync(tokFile, 'utf8').trim(); } catch {}
   let first = false;
-  const pendingCheckin = path.join(DIR, 'codex-checkin.pending');
+  const pendingCheckin = path.join(DIR, TOOL === 'antigravity' ? 'antigravity-checkin.pending' : 'codex-checkin.pending');
   const NET_FIX = '公司網路多半要代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1 再貼一次';
   const RECOPY = '請所屬人類在網頁「我的 AI」重新複製一行啟動';
   // 用一次性連結拿 Token（連結會給目前有效的 Token）；接入設定去掉 Token 存成 onboarding.md
@@ -60,7 +61,7 @@ try {
     if (!/^[A-Za-z0-9_.~-]{16,}$/.test(t)) fail('Token', '接入設定裡找不到 Token', '把這行告訴所屬人類');
     if (!new RegExp(`--agent ${AGENT}\\b`).test(text)) fail('身分', `這份接入設定不是 ${AGENT} 的`, '請所屬人類確認複製的是這隻 AI 的一行啟動');
     first = /（初次接入）/.test(lines[0] || '');
-    if (first && TOOL === 'codex') fs.writeFileSync(pendingCheckin, AGENT);
+    if (first && (TOOL === 'codex' || TOOL === 'antigravity')) fs.writeFileSync(pendingCheckin, AGENT);
     fs.writeFileSync(tokFile, t);
     lines[ti] = `（Token 已存在 ${posix(tokFile)}；不要印出、不要貼到群組）`;
     fs.writeFileSync(path.join(DIR, 'onboarding.md'), lines.join('\n'));
@@ -113,14 +114,18 @@ try {
 
   // 3. watcher
   const lock = path.join(DIR, 'foreground.lock');
-  const unlock = () => { try { if (fs.readFileSync(lock, 'utf8').trim() === String(process.pid)) fs.rmSync(lock, { force: true }); } catch {} };
-  if (TOOL === 'codex' && !NO_LAUNCH) {
+  const fgStateFile = path.join(DIR, 'foreground-state.json');
+  const unlock = () => {
+    try { if (fs.readFileSync(lock, 'utf8').trim() === String(process.pid)) { fs.rmSync(lock, { force: true }); fs.rmSync(fgStateFile, { force: true }); } } catch {}
+  };
+  if ((TOOL === 'codex' || TOOL === 'antigravity') && !NO_LAUNCH) {
+    const toolTitle = TOOL === 'antigravity' ? 'Antigravity CLI' : 'Codex';
     try {
       fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       const prior = Number(fs.readFileSync(lock, 'utf8').trim());
-      if (!prior || alive(prior)) fail('Codex', '同代號已有前景視窗或正在啟動', '先使用或關閉原視窗再重新啟動');
+      if (!prior || alive(prior)) fail(toolTitle, '同代號已有前景視窗或正在啟動', '先使用或關閉原視窗再重新啟動');
       fs.unlinkSync(lock);
       fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
     }
@@ -145,7 +150,7 @@ try {
       fs.writeFileSync(stage, JSON.stringify({ ...local, ...state, messagesCursor, cardsSince }, null, 2));
       fs.renameSync(stage, stateFile);
       await write('/api/messages', 'POST', { project: me.projects.find(p => !me.readOnlyIn?.includes(p)) || me.projects[0] || 'all',
-        requestId: 'req_checkin_' + me.participantId, text: `[AI 簽到] ${AGENT} 已用 Codex 一行啟動連上平台。` });
+        requestId: 'req_checkin_' + me.participantId, text: `[AI 簽到] ${AGENT} 已用 ${toolTitle} 一行啟動連上平台。` });
       fs.unlinkSync(pendingCheckin);
       first = true;
       out('✓ 首次簽到已送達，已保存收件游標');
@@ -174,22 +179,44 @@ try {
 
   // 4. 待命提示
   const wait = `node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;
-  // Codex 也在前景開一次做接入（人看得到接好沒）；點名由 watcher 接收，所以不開等待腳本
+  // Codex、Antigravity CLI 在前景開一次做接入；點名由 watcher 接收，不用等待腳本
   const done = '最後用一句話告訴所屬人類：「接好了，可以關掉，之後有事會在背景叫我」';
   const codexTail = `Codex 不用前景等待、不開等待腳本：watcher 已在背景跑，支援同視窗時會把工作送入本對話，視窗關閉後才用背景回合。呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），${done}。`;
+  const agyTail = `Antigravity CLI 一律走前景（視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理）：watcher 已在背景跑，請先呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），處理完手上的訊息後用背景執行開等待腳本（${wait}）讓新通知直接叫醒這個視窗；最後告訴所屬人類：「接好了；視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理」。`;
   let prompt;
-  if (first) prompt = TOOL === 'codex'
+  if (first) prompt = TOOL === 'antigravity'
+    ? `你是 ${AGENT}，${NO_LAUNCH ? '請重貼一行啟動開啟 Antigravity CLI 並完成首次簽到' : '一行啟動已完成首次簽到並保存游標，請勿重複簽到'}。用 aigile_memory 讀取工作記憶，依規格 4.1 收一輪訊息。接入設定在 ${posix(path.join(DIR, 'onboarding.md'))}。所屬人類已用一行啟動同意待命。${agyTail}`
+    : TOOL === 'codex'
     ? `你是 ${AGENT}，${NO_LAUNCH ? '請重貼一行啟動開啟 Codex 並完成首次簽到' : '一行啟動已完成首次簽到並保存游標，請勿重複簽到'}。用 aigile_memory 讀取工作記憶，依規格 4.1 收一輪訊息。接入設定在 ${posix(path.join(DIR, 'onboarding.md'))}。所屬人類已用一行啟動同意待命。${codexTail}`
     : `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動同意待命，watcher 已在背景跑；接好後用背景執行開等待腳本：${wait}`;
   else {
     const r = await get(`/api/me/reconnect?tool=${TOOL}&start=1`);
     fs.writeFileSync(path.join(DIR, 'reconnect.md'), await r.text());
-    prompt = TOOL === 'codex'
+    prompt = TOOL === 'antigravity'
+      ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${agyTail}`
+      : TOOL === 'codex'
       ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${codexTail}`
       : `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用）。watcher 已在背景跑；跑完一輪就用背景執行開等待腳本待命：${wait}`;
   }
   const say = prompt.replace(/"/g, "'");
-  if (NO_LAUNCH) { out(`✓ 待命提示：${prompt}`); out(`完成（--no-launch：沒有開 ${TOOL === 'codex' ? 'Codex' : 'Claude Code'}）。`); }
+  if (NO_LAUNCH) { out(`✓ 待命提示：${prompt}`); out(`完成（--no-launch：沒有開 ${{ codex: 'Codex', antigravity: 'Antigravity CLI' }[TOOL] || 'Claude Code'}）。`); }
+  else if (TOOL === 'antigravity') {
+    out('✓ 開 Antigravity CLI（互動模式，帶 AIGILE_AGENT）。開著視窗才會處理，關掉就等下次打開');
+    const bin = process.env.AIGILE_ANTIGRAVITY_BIN || process.env.AGY_BIN || 'agy';
+    const env = { ...process.env, AIGILE_AGENT: AGENT, AIGILE_FOREGROUND: '1', AIGILE_FG_PID: String(process.pid) };
+    try { fs.writeFileSync(fgStateFile, JSON.stringify({ pid: process.pid, state: 'busy', at: Date.now() })); } catch {}
+    const binIsPath = fs.existsSync(bin);
+    const list = ['-i', prompt];
+    const r = /\.m?js$/i.test(bin) && binIsPath
+      ? spawnSync(process.execPath, [bin, ...list], { stdio: 'inherit', env })
+      : /\.(?:cmd|bat)$/i.test(bin) || (!binIsPath && /\s/.test(bin))
+        ? spawnSync(`${binIsPath ? `"${bin}"` : bin} -i "${say}"`, { stdio: 'inherit', env, shell: true })
+        : spawnSync(bin, list, { stdio: 'inherit', env });
+    unlock();
+    if (r.error || r.status === null) fail('Antigravity CLI', `開不起來（${r.error?.message || '找不到 agy 指令'}）`, '確認已安裝 Antigravity CLI（agy 指令）並登入過，再貼一次');
+    out('✓ Antigravity CLI 已關，有新通知會等下次開視窗再處理');
+    process.exitCode = r.status;
+  }
   else if (TOOL === 'codex') {
     out('✓ 開 Codex（互動模式，帶 AIGILE_AGENT；沙盒只開網路）。視窗開著時可接收門鈴，關閉後由 watcher 在背景叫醒');
     const bin = process.env.AIGILE_CODEX_BIN || process.env.CODEX_BIN || 'codex';

@@ -30,10 +30,11 @@
 //   WAKE_MERGE_SEC     收到門鈴後等幾秒再查（預設 25，0＝不等）：期間新到的通知合併成一次叫醒
 //   WAKE_TIMEOUT_MIN   單次喚醒最多跑幾分鐘，預設 10（0＝不限）；超過就把喚醒指令連同它開的程序停掉，並私訊所屬人類
 // 代理：fetch 可設 NODE_USE_ENV_PROXY=1 搭配 HTTPS_PROXY；WebSocket 若被代理擋住會記錄原因並退回巡檢模式。
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { spawn, execFile } from 'node:child_process';
+import { existsSync, readFileSync, statSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { createHash, createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const env = process.env;
 const BASE = (env.AIGILE_BASE || '').replace(/\/+$/, '');
@@ -88,11 +89,42 @@ function writeBell(patch = {}) {
 }
 function ring(pending) { writeBell({ seq: bell.seq + 1, pending, bellAt: new Date().toISOString() }); }
 const woken = new Set(); // 已經為它喚醒過的通知 ID：只要有「沒喚醒過的新通知」就喚醒，不靠未讀數或時間間隔判斷
-const uiDir = PID_FILE && /aigile-codex\.mjs\b/.test(WAKE_CMD) ? path.dirname(PID_FILE) : null;
+try { for (const id of JSON.parse(env.AIGILE_WOKEN || '[]')) woken.add(id); } catch {}
+const uiKind = PID_FILE ? (/aigile-codex\.mjs\b/.test(WAKE_CMD) ? 'codex' : /aigile-antigravity\.mjs\b/.test(WAKE_CMD) ? 'antigravity' : null) : null;
+const uiDir = uiKind ? path.dirname(PID_FILE) : null;
+const FG_MODE = 'auto'; // 忽略舊的 --foreground／WAKE_FOREGROUND 設定
+const WAIT_PID_FILE = BELL_FILE ? path.join(path.dirname(BELL_FILE), 'wait.pid') : '';
+const SID_FILE = PID_FILE ? path.join(path.dirname(PID_FILE), 'watcher.sid') : '';
+const HYBRID_SID = uiKind === 'codex';
 let uiTimer;
 let uiFailureSince;
+function pidAlive(pid) {
+  if (!(pid > 0)) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+function waitAlive() {
+  if (!WAIT_PID_FILE) return false;
+  let pid = 0, fresh = false;
+  try { pid = Number(readFileSync(WAIT_PID_FILE, 'utf8').trim()) || 0; fresh = Date.now() - statSync(WAIT_PID_FILE).mtimeMs < 5 * 60_000; } catch {}
+  return fresh && pidAlive(pid);
+}
 async function foregroundStatus() {
-  if (!uiDir || !existsSync(path.join(uiDir, 'foreground-ui.json'))) {
+  if (!uiDir) {
+    uiFailureSince = undefined;
+    return 'closed';
+  }
+  if (uiKind === 'antigravity') {
+    uiFailureSince = undefined;
+    let pid = 0;
+    try { pid = Number(readFileSync(path.join(uiDir, 'foreground.lock'), 'utf8').trim()) || 0; } catch {}
+    if (!pidAlive(pid)) return 'closed';
+    try {
+      const st = JSON.parse(readFileSync(path.join(uiDir, 'foreground-state.json'), 'utf8'));
+      if (st.state === 'busy' && (!st.pid || st.pid === pid) && Number.isFinite(st.at) && Date.now() - st.at < 15 * 60_000) return 'busy';
+    } catch {}
+    return 'idle';
+  }
+  if (!existsSync(path.join(uiDir, 'foreground-ui.json'))) {
     uiFailureSince = undefined;
     return 'closed';
   }
@@ -112,7 +144,11 @@ async function foregroundStatus() {
 function waitForIdle() {
   if (uiTimer) return;
   uiTimer = setTimeout(async function poll() {
-    if (await foregroundStatus() === 'busy') { uiTimer = setTimeout(poll, 2000); return; }
+    const st = await foregroundStatus();
+    if (st === 'busy' || (uiKind === 'antigravity' && BELL_FILE && st !== 'closed' && !waitAlive())) {
+      uiTimer = setTimeout(poll, 2000);
+      return;
+    }
     uiTimer = null;
     check('前景對話已可接收');
   }, 2000);
@@ -153,11 +189,20 @@ async function check(why) {
   ids = ids.map(n => n.notificationId);
   if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理${fyi ? `（${fyi} 則只是知會）` : ''}，沒有新的要處理，不叫醒`); }
   if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
-  let backgroundOnly = false;
-  if (uiDir) {
+  if (uiKind === 'antigravity') {
+    if (BELL_FILE && waitAlive()) {
+      fresh.forEach(id => woken.add(id));
+      for (const id of woken) if (!ids.includes(id)) woken.delete(id);
+      ring(pending);
+      return log(`[${why}] 有 ${pending} 則待處理，前景等待腳本執行中，已寫門鈴檔交由前景處理`);
+    }
+    return log(`[${why}] 視窗沒開，等開視窗再處理`);
+  }
+  let backgroundOnly = FG_MODE === 'off';
+  if (uiDir && FG_MODE !== 'off') {
     const status = await foregroundStatus();
-    if (status === 'busy') {
-      if (!uiTimer) log(`[${why}] 前景對話忙碌，等待空閒後重查通知`);
+    if (status === 'busy' || (uiKind === 'antigravity' && BELL_FILE && status !== 'closed')) {
+      if (!uiTimer) log(`[${why}] ${status === 'busy' ? '前景對話忙碌，等待空閒後重查通知' : '前景視窗開啟中，等待前景接聽後重查通知'}`);
       return waitForIdle();
     }
     // Concurrent checks may already have delivered the same notification.
@@ -229,7 +274,7 @@ function killTree(child) {
 
 async function wake(pending, why, fresh, backgroundOnly) {
   running = true;
-  const routedToUI = uiDir && existsSync(path.join(uiDir, 'foreground-ui.json'));
+  const routedToUI = FG_MODE !== 'off' && uiKind === 'codex' && uiDir && existsSync(path.join(uiDir, 'foreground-ui.json'));
   const retryUI = () => {
     if (!routedToUI) return;
     for (const id of fresh) woken.delete(id);
@@ -245,7 +290,7 @@ async function wake(pending, why, fresh, backgroundOnly) {
   ring(pending);
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
   const startedAt = Date.now();
-  if (backgroundOnly) log('前景連線持續失敗滿一分鐘，這一輪改用 codex exec');
+  if (backgroundOnly && FG_MODE !== 'off') log('前景連線持續失敗滿一分鐘，這一輪改用 codex exec');
   const child = spawn(WAKE_CMD, {
     shell: true, stdio: 'inherit', detached: process.platform !== 'win32', windowsHide: true,
     env: { ...env, AIGILE_WAKE_BACKGROUND: backgroundOnly ? '1' : '0', AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) },
@@ -263,6 +308,7 @@ async function wake(pending, why, fresh, backgroundOnly) {
     running = false;
     retryUI();
     if (queued) { queued = false; check('排隊補跑'); }
+    if (pendingReload) { pendingReload = false; checkFilesAndReload('喚醒結束後換新'); }
   });
   child.on('exit', code => {
     clearTimeout(killer);
@@ -270,6 +316,7 @@ async function wake(pending, why, fresh, backgroundOnly) {
     if (code !== 0) retryUI();
     log(`喚醒指令結束（exit ${code}）`);
     if (queued) { queued = false; check('排隊補跑'); }
+    if (pendingReload) { pendingReload = false; checkFilesAndReload('喚醒結束後換新'); }
   });
 }
 
@@ -371,7 +418,7 @@ function fail(reason) {
 }
 
 if (PID_FILE) { try { writeFileSync(PID_FILE, String(process.pid)); log(`程序編號 ${process.pid} 已寫入 ${PID_FILE}`); } catch (e) { log('寫 pid 檔失敗：', e.message); } }
-const bye = () => { ws?.close(); liveCtl?.abort(); if (PID_FILE) { try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE); } catch {} } setTimeout(() => process.exit(0), 300); }; // 關連線後稍等再結束（Windows libuv 斷言）
+const bye = () => { ws?.close(); liveCtl?.abort(); if (PID_FILE) { try { if (readFileSync(PID_FILE, 'utf8').trim() === String(process.pid)) unlinkSync(PID_FILE); } catch {} } if (SID_FILE) { try { if (readFileSync(SID_FILE, 'utf8').trim() === SID) unlinkSync(SID_FILE); } catch {} } setTimeout(() => process.exit(0), 300); }; // 關連線後稍等再結束（Windows libuv 斷言）
 // 依角色調整預設上限（只在環境變數沒設時）；查不到就用原本的預設
 async function roleDefaults() {
   if (env.WAKE_MAX_PER_HOUR !== undefined && env.WAKE_MAX_PER_DAY !== undefined) return;
@@ -385,16 +432,104 @@ async function roleDefaults() {
   } catch {}
 }
 await roleDefaults();
+if (SID_FILE && !HYBRID_SID) { try { unlinkSync(SID_FILE); } catch {} }
 if (!BELL_ONLY && !WATCH_ONLY) {
+  if (SID_FILE && HYBRID_SID) { try { writeFileSync(SID_FILE, SID); } catch {} }
   try {
     const r = await fetch(`${BASE}/api/me/online`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'watcher' }, body: JSON.stringify({ sid: SID }), signal: AbortSignal.timeout(10_000) });
     const j = r.ok ? await r.json() : null;
     if (j?.previous) log(`這個代號先前有別的 watcher 在待命（${j.previous.at}）：改由這個接手，舊的下次要叫醒時會自己停`);
   } catch {}
 }
+// ---------- PLAT-375：腳本或 watcher.env 更新時自動檢查語法並換新重開 ----------
+const SELF_FILE = fileURLToPath(import.meta.url);
+const rawEnvArg = process.execArgv.find(a => a.startsWith('--env-file='))?.slice('--env-file='.length)
+  || (PID_FILE ? path.join(path.dirname(PID_FILE), 'watcher.env') : '');
+const ENV_FILE = rawEnvArg && existsSync(rawEnvArg) ? path.resolve(rawEnvArg) : '';
+const RELOAD_FILE = PID_FILE ? path.join(path.dirname(PID_FILE), 'watcher.reload') : '';
+function wakeScripts() {
+  const out = [];
+  const re = /"([^"]+\.m?js)"|'([^']+\.m?js)'|(\S+\.m?js)/gi;
+  let m;
+  while ((m = re.exec(WAKE_CMD))) {
+    const p = m[1] || m[2] || m[3];
+    if (p && existsSync(p)) out.push(path.resolve(p));
+  }
+  return [...new Set(out)];
+}
+const monitoredFiles = () => [...new Set([SELF_FILE, ...wakeScripts(), ...(ENV_FILE ? [ENV_FILE] : [])])];
+const fileHash = p => { try { return createHash('sha256').update(readFileSync(p)).digest('hex'); } catch { return null; } };
+const initHashes = new Map(monitoredFiles().map(f => [f, fileHash(f)]));
+const badHashes = new Map();
+let pendingReload = false, reloading = false;
+const checkSyntax = f => new Promise(res => {
+  execFile(process.execPath, ['--check', f], { windowsHide: true, timeout: 10_000 }, (err, _so, se) => {
+    res(err ? (se || err.message || '語法檢查失敗').trim().slice(0, 300) : '');
+  });
+});
+async function checkFilesAndReload(why) {
+  if (reloading) return;
+  if (RELOAD_FILE && existsSync(RELOAD_FILE)) { try { unlinkSync(RELOAD_FILE); } catch {} }
+  const changed = [];
+  for (const f of monitoredFiles()) {
+    const cur = fileHash(f);
+    if (cur && cur !== initHashes.get(f)) changed.push([f, cur]);
+  }
+  if (!changed.length) return;
+  if (running) {
+    if (!pendingReload) log(`[${why}] 偵測到程式或設定更新，目前正在喚醒中，等這一輪結束後換新`);
+    pendingReload = true;
+    return;
+  }
+  reloading = true;
+  for (const [f, cur] of changed) {
+    if (!/\.m?js$/i.test(f)) continue;
+    const err = await checkSyntax(f);
+    if (err) {
+      if (badHashes.get(f) !== cur) {
+        badHashes.set(f, cur);
+        log(`[${why}] 新檔 ${path.basename(f)} 語法有誤，繼續跑舊程式：${err}`);
+        await tellOwner(`[通知] watcher 偵測到 ${path.basename(f)} 語法有誤，無法重開，繼續跑舊程式：\n${err}`, 'bad-' + cur.slice(0, 12));
+      }
+      reloading = false;
+      return;
+    }
+  }
+  const childEnv = { ...process.env, AIGILE_WOKEN: JSON.stringify([...woken].slice(-200)) };
+  if (ENV_FILE && existsSync(ENV_FILE)) {
+    try {
+      for (const l of readFileSync(ENV_FILE, 'utf8').split(/\r?\n/)) {
+        const k = /^\s*([A-Z_][A-Z0-9_]*)=/.exec(l)?.[1];
+        if (k) delete childEnv[k];
+      }
+    } catch {}
+    delete childEnv.AIGILE_TOKEN;
+  }
+  const execArgs = [...process.execArgv];
+  if (ENV_FILE && !execArgs.some(a => a.startsWith('--env-file='))) execArgs.push(`--env-file=${ENV_FILE}`);
+  let next;
+  try {
+    next = spawn(process.execPath, [...execArgs, ...process.argv.slice(1)], { detached: true, stdio: 'inherit', windowsHide: true, env: childEnv });
+  } catch (e) {
+    log(`[${why}] 換新重開失敗，繼續跑舊程式：`, e.message);
+    reloading = false;
+    return;
+  }
+  next.on('error', e => { log(`[${why}] 換新重開失敗，繼續跑舊程式：`, e.message); reloading = false; });
+  if (next.pid) {
+    if (PID_FILE) { try { writeFileSync(PID_FILE, String(next.pid)); } catch {} }
+    next.unref();
+    log(`[${why}] 偵測到更新，已換新重開（新程序 ${next.pid}），舊程序結束`);
+    clearInterval(hb); clearTimeout(retry); clearTimeout(mergeTimer); clearTimeout(capTimer); clearTimeout(uiTimer);
+    ws?.close();
+    setTimeout(() => process.exit(0), 200);
+  }
+}
+
 connectLive(); // 先試平台內建即時通道，沒有才連 Supabase
-setInterval(() => check('保底巡檢'), HEARTBEAT_MS);
-if (BELL_FILE) setInterval(() => writeBell(), 5 * 60_000); // 本機心跳，不連平台
+setInterval(() => { checkFilesAndReload('心跳檢查'); check('保底巡檢'); }, HEARTBEAT_MS);
+setInterval(() => { if (RELOAD_FILE && existsSync(RELOAD_FILE)) checkFilesAndReload('換新通知'); }, 2000).unref();
+if (BELL_FILE) setInterval(() => { writeBell(); checkFilesAndReload('本機心跳'); }, 5 * 60_000); // 本機心跳，不連平台
 check('啟動');
 process.on('SIGINT', bye);
 process.on('SIGTERM', bye);

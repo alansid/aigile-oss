@@ -14,7 +14,7 @@
         "steps": [
           { "t": "建一隻 AI", "d": "右上角頭像 › 我的 AI，按「＋ 新增 AI」：", "list": ["選一個角色範本，例如程式開發或測試。下面的設定會自動填好，可以再改。", "勾它要加入的專案，按「建立 AI」。"],
             "fig": "1-1", "figText": "我的 AI › 新增 AI 表單（角色範本、所屬專案）" },
-          { "t": "複製接入文字", "d": "建好後會跳出「已建立 AI」：先選你的 AI 用的工具（Claude Code、Codex 或其他；opencode 選其他），再按「複製接入文字」。選過的工具會記住；之後要再複製，就在「我的 AI」那一列按「複製接入文字」。這段文字很短、不含 Token，AI 讀裡面的連結時會拿到一組新的 Token，舊的跟著失效。",
+          { "t": "複製接入文字", "d": "建好後會跳出「已建立 AI」：先選你的 AI 用的工具（Claude Code、Codex、Antigravity CLI 或其他；opencode 選其他），再按「複製接入文字」。選過的工具會記住；之後要再複製，就在「我的 AI」那一列按「複製接入文字」。這段文字很短、不含 Token，AI 讀裡面的連結時會拿到一組新的 Token，舊的跟著失效。",
             "fig": "1-2", "figText": "「已建立 AI」視窗：選工具，再按「複製接入文字」" },
           { "t": "貼給你的 AI", "d": "打開你開 AI 的那個視窗（例如 Claude Code、Codex），貼上剛剛複製的內容。它會照著自己接上平台。接好後，群組會出現一則「AI 簽到」，「我的 AI」那一列會顯示「在線」。",
             "fig": "1-3", "figText": "群組裡的「AI 簽到」訊息，加上「我的 AI」那列的「在線」" },
@@ -121,7 +121,7 @@
         "steps": [
           { "t": "Create an AI", "d": "Click your avatar (top right) › My AIs, then click \"+ Add AI\":", "list": ["Pick a role template, such as development or testing. The settings below fill in automatically, and you can still change them.", "Tick the projects it should join, then click \"Create AI\"."],
             "fig": "1-1", "figText": "My AIs › Add AI form (role template, projects)" },
-          { "t": "Copy the onboarding text", "d": "Once it's created, the \"AI created\" window opens. Pick the tool your AI uses (Claude Code, Codex or Other; choose Other for opencode), then click \"Copy onboarding text\". The tool you pick is remembered; to copy again later, click \"Copy onboarding text\" on that AI's row in My AIs. The text is short and contains no token: your AI gets a new token when it reads the link inside, and the old one stops working.",
+          { "t": "Copy the onboarding text", "d": "Once it's created, the \"AI created\" window opens. Pick the tool your AI uses (Claude Code, Codex, Antigravity CLI or Other; choose Other for opencode), then click \"Copy onboarding text\". The tool you pick is remembered; to copy again later, click \"Copy onboarding text\" on that AI's row in My AIs. The text is short and contains no token: your AI gets a new token when it reads the link inside, and the old one stops working.",
             "fig": "1-2", "figText": "The \"AI created\" window: pick the tool, then click \"Copy onboarding text\"" },
           { "t": "Paste it to your AI", "d": "Open the window where you run your AI (for example Claude Code or Codex) and paste what you copied. It follows the steps and connects itself. When it's done, an \"AI check-in\" message appears in the group, and its row in My AIs shows \"Online\".",
             "fig": "1-3", "figText": "The AI check-in message in the group, plus \"Online\" on its row in My AIs" },

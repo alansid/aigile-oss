@@ -9,13 +9,14 @@
 //   6. watcher 已在跑、但檔案或設定剛更新 → 提醒要重開（不會自己停掉它）
 //   7. 同步技能：下載專案已上架的技能、核對雜湊、裝到工具的技能資料夾；含腳本的要主人允許才裝；下架的移除（只移除自己裝的）
 //   8. Claude Code：裝通用 MCP aigile（使用者範圍，整台電腦一次；已裝就跳過）與 hook（.claude/settings.local.json）；Codex 印設定讓你自己加
+//      Antigravity CLI：~/.gemini/config/mcp_config.json 加 aigile（先備份；已有就不改；其他 MCP 不動）、.agents/rules/aigile.md、.agents/hooks.json 前景狀態 hook
 //   9. 先比對自己跟平台的 SHA-256，不同就下載、核對後用新版重跑；同步開始、結束、失敗都回報平台（主人的同步清單看得到）
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
-// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|other] [--mode auto|fresh|keep] [--skills-only]
-//   --tool 決定沒勾角色的技能裝哪裡：claude → .claude/skills、codex → .agents/skills、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
+// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|antigravity|other] [--mode auto|fresh|keep] [--skills-only]
+//   --tool 決定沒勾角色的技能裝哪裡：claude → .claude/skills、codex 與 antigravity → .agents/skills、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
 //   有指定（角色或 AI）的技能一律裝 .aigile/<代號>/skills（同資料夾別的 AI 不會載入）
-//   --mode（只有 codex 用）：對話接續方式；--tool codex 時把 watcher.env 的 WAKE_CMD 設成 Codex 喚醒腳本（有事才開 codex exec 跑一輪）
+//   --mode（codex、antigravity 用）：對話接續方式；設 WAKE_CMD 指向對應喚醒腳本（有事才在背景跑一輪）
 //   --skills-only 只同步技能（主人在網頁按「同步」時用），不動 watcher
 //   Token 先讀 .aigile/<代號>/.token；沒有檔才用環境變數 AIGILE_TOKEN_<代號>（例 AIGILE_TOKEN_PG）或 AIGILE_TOKEN。
 //   環境變數跟檔案不一樣會提醒（舊的環境變數會蓋掉 watcher 讀的檔案，換了 Token 還是 401）。代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1。
@@ -111,13 +112,13 @@ if (cfg.setup && SELF_SHA !== cfg.setup) {
 // ---------- 技能同步 ----------
 async function syncSkills() {
   REPORT = true;
-  if (!['claude', 'codex', 'other'].includes(TOOL)) fail('技能', `--tool 只能是 claude、codex、other（收到 ${TOOL}）`, '照接入設定寫的 --tool 原樣執行');
+  if (!['claude', 'codex', 'antigravity', 'other'].includes(TOOL)) fail('技能', `--tool 只能是 claude、codex、antigravity、other（收到 ${TOOL}）`, '照接入設定寫的 --tool 原樣執行');
   await report('/api/me/skills/sync-status', { state: 'running', tool: TOOL, setupSha: SELF_SHA });
   const r = await fetch(BASE + '/api/me/skills', { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Aigile-Source': 'setup' }, signal: AbortSignal.timeout(20_000) }).catch(() => null);
   if (!r || r.status === 404) return out('（平台沒有技能庫，略過技能）');
   if (!r.ok) fail('技能', `/api/me/skills 回 HTTP ${r.status}`, '把這行告訴所屬人類');
   const list = (await r.json()).items;
-  const root = { claude: '.claude/skills', codex: '.agents/skills' }[TOOL] || path.join(DIR, 'skills');
+  const root = { claude: '.claude/skills', codex: '.agents/skills', antigravity: '.agents/skills' }[TOOL] || path.join(DIR, 'skills');
   // 249：有指定（角色或 AI）的技能一律裝到自己的代號資料夾（同資料夾的別的 AI 不會載入）；發給所有 AI 的才照 --tool 裝到共用區
   // 平台回 own；舊平台沒有 own 時照舊看 roles
   const own = path.join(DIR, 'skills');
@@ -211,12 +212,23 @@ if (old) for (const [k, v] of old) if (k === 'WAKE_CMD' || !std.has(k)) merged.s
 const added = old ? [...std.keys()].filter(k => !old.has(k)) : [];
 const fixed = old ? ['AIGILE_BASE', 'AIGILE_ME'].filter(k => old.has(k) && old.get(k) !== std.get(k)) : [];
 // Codex 不前景常駐，watcher 有待處理才叫 Codex 喚醒腳本跑一輪。原本是 echo（只寫門鈴）或已是 Codex 腳本才改，自己寫的 WAKE_CMD 不動
-const CODEX_MODE = ['auto', 'fresh', 'keep'].includes(opt('mode')) ? opt('mode') : '';
+const WAKE_MODE = ['auto', 'fresh', 'keep'].includes(opt('mode')) ? opt('mode') : '';
 const codexCmd = m => `node .aigile/watcher/aigile-codex.mjs --agent ${AGENT} --mode ${m}`;
+const antigravityCmd = m => `node .aigile/watcher/aigile-antigravity.mjs --agent ${AGENT} --mode ${m}`;
+if (merged.has('WAKE_FOREGROUND')) { merged.delete('WAKE_FOREGROUND'); fixed.push('WAKE_FOREGROUND'); }
 if (TOOL === 'codex') {
   const cur = merged.get('WAKE_CMD') || '';
   const curMode = /aigile-codex\.mjs\b.*--mode[ =](\w+)/.exec(cur)?.[1];
-  const want = /^\s*echo\b/i.test(cur) || !cur ? codexCmd(CODEX_MODE || 'auto') : curMode && CODEX_MODE && curMode !== CODEX_MODE ? codexCmd(CODEX_MODE) : cur;
+  const hasFg = /--foreground[ =](auto|off)\b/.test(cur);
+  const want = /^\s*echo\b/i.test(cur) || !cur ? codexCmd(WAKE_MODE || 'auto')
+    : curMode && (hasFg || (WAKE_MODE && curMode !== WAKE_MODE)) ? codexCmd(WAKE_MODE || curMode) : cur;
+  if (want !== cur) { merged.set('WAKE_CMD', want); fixed.push('WAKE_CMD'); }
+} else if (TOOL === 'antigravity') {
+  const cur = merged.get('WAKE_CMD') || '';
+  const curMode = /aigile-antigravity\.mjs\b.*--mode[ =](\w+)/.exec(cur)?.[1];
+  const hasFg = /--foreground[ =](auto|off)\b/.test(cur);
+  const want = /^\s*echo\b/i.test(cur) || !cur ? antigravityCmd(WAKE_MODE || 'auto')
+    : curMode && (hasFg || (WAKE_MODE && curMode !== WAKE_MODE)) ? antigravityCmd(WAKE_MODE || curMode) : cur;
   if (want !== cur) { merged.set('WAKE_CMD', want); fixed.push('WAKE_CMD'); }
 }
 if (!old || added.length || fixed.length) {
@@ -236,10 +248,17 @@ const running = pid > 0 && alive(pid);
 const envArg = `--env-file=${envPath.replace(/\\/g, '/')}`;
 await syncSkills();
 out('');
-if (running && changed) out(`! watcher（程序 ${pid}）用的是舊檔或舊設定：先停掉它，再用下面的指令重開`);
-else if (running) out(`✓ watcher 已在執行（程序 ${pid}），不用再開`);
+if (running && changed) {
+  try {
+    fs.writeFileSync(path.join(DIR, 'watcher.reload'), String(Date.now()));
+    out(`✓ 已通知 ${AGENT} 的 watcher（程序 ${pid}）換成新程式／新設定`);
+  } catch {
+    out(`! watcher（程序 ${pid}）用的是舊檔或舊設定：先停掉它，再用下面的指令重開`);
+  }
+} else if (running) out(`✓ watcher 已在執行（程序 ${pid}），不用再開`);
 out(`啟動 watcher：node ${envArg} .aigile/watcher/watcher.mjs >> ${DIR.replace(/\\/g, '/')}/watcher.log 2>&1`);
 if (TOOL === 'codex') out(`Codex 不用前景等待：watcher 有待處理才執行 WAKE_CMD=${merged.get('WAKE_CMD')}（開 codex exec 跑一輪就結束，輸出在 ${DIR.replace(/\\/g, '/')}/wake.log）`);
+else if (TOOL === 'antigravity') out(`Antigravity CLI 一律走前景（開著視窗才會處理，關掉就等下次打開）：等待腳本 node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`);
 else out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}（沒事不會結束，結束就是有事）`);
 // 通用 MCP（aigile，整台電腦裝一次）：轉接腳本複製到家目錄 ~/.aigile/aigile-mcp.mjs，Claude Code 裝在使用者範圍（-s user）。
 // 從哪個資料夾開都用同一個；身分由轉接腳本看環境變數 AIGILE_AGENT 或資料夾裡唯一的 Token 決定，新增 AI、換角色、加專案不用重裝。
@@ -304,6 +323,68 @@ if (cfg.files['aigile-mcp.mjs']) {
   // Codex 預設不把環境變數傳給 MCP 子程序，要 env_vars 才帶得到 AIGILE_AGENT（喚醒腳本會設）
   const codexManual = `  Codex → ~/.codex/config.toml 加 [mcp_servers.aigile]，command = "node"，args = ["${mcpPath}"]，env_vars = ["AIGILE_AGENT"]（整台電腦一個；env_vars 那行一定要有，Codex 預設不傳環境變數給 MCP；資料夾有多隻 AI 又沒帶 AIGILE_AGENT 時先呼叫 aigile_use）`;
   if (TOOL === 'codex') codexMcp(mcpPath, codexManual); else out(codexManual);
+  if (TOOL === 'antigravity') { antigravityMcp(mcpPath); antigravityWorkspace(); }
+}
+
+// Antigravity CLI 的全域 MCP 設定在 ~/.gemini/config/mcp_config.json（AIGILE_GEMINI_HOME 可隔離測試）。
+// 先備份、已有 aigile 就不改、其他 MCP 原樣保留、壞 JSON 不碰；不寫 Token（agy 會把環境變數 AIGILE_AGENT／AIGILE_WAKE_AGENT 傳給 stdio MCP）。
+function antigravityMcp(mcpPath) {
+  const dir = path.join(process.env.AIGILE_GEMINI_HOME || process.env.AIGILE_TEST_GEMINI_HOME || path.join(os.homedir(), '.gemini'), 'config');
+  const file = path.join(dir, 'mcp_config.json'), shown = file.replace(/\\/g, '/');
+  const entry = { command: 'node', args: [mcpPath] };
+  const manual = `  請自己在 ${shown} 的 mcpServers 加 "aigile": ${JSON.stringify(entry)}（或執行 agy mcp add aigile node "${mcpPath}"）`;
+  let had = null; try { had = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') { out(`! MCP：讀不到 ${shown}（${e.code}）`); return out(manual); } }
+  let j = {};
+  if (had !== null && had.trim()) {
+    try { j = JSON.parse(had); } catch { out(`! MCP：${shown} 不是合法的 JSON，沒有改它`); return out(manual); }
+    const bad = v => !v || typeof v !== 'object' || Array.isArray(v);
+    if (bad(j) || (j.mcpServers !== undefined && bad(j.mcpServers))) { out(`! MCP：${shown} 的格式看不懂（要有 mcpServers 物件），沒有改它`); return out(manual); }
+  }
+  if (j.mcpServers?.aigile) return out(`✓ MCP：Antigravity CLI 已有 aigile（${shown}，不改）`);
+  j.mcpServers = { ...(j.mcpServers || {}), aigile: entry };
+  const bak = had !== null ? `${file}.aigile-bak-${new Date().toISOString().replace(/[:.]/g, '-')}` : '';
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    if (bak) fs.writeFileSync(bak, had);
+    fs.writeFileSync(file, JSON.stringify(j, null, 2) + '\n');
+  } catch (e) { try { if (had !== null) fs.writeFileSync(file, had); } catch {} out(`! MCP：寫不進 ${shown}（${e.code || e.message}）`); return out(manual); }
+  out(`✓ MCP：已在 ${shown} 加好通用的 aigile${bak ? `，原檔備份在 ${bak.replace(/\\/g, '/')}` : ''}；其他 MCP 沒動，新開的 Antigravity CLI 就有 aigile 工具`);
+}
+
+// 放規則到 .agents/rules/aigile.md（不動使用者既有的 AGENTS.md 或其他規則）與前景狀態 hook 到 .agents/hooks.json
+function antigravityWorkspace() {
+  const ruleFile = path.join('.agents', 'rules', 'aigile.md');
+  const marker = '<!-- aigile-managed -->';
+  const ruleText = `${marker}\n# Aigile Collaboration Rules\n\n- Use the \`aigile\` MCP tools (\`aigile_me\`, \`aigile_inbox\`, \`aigile_read\`, \`aigile_card_get\`, \`aigile_post\`, \`aigile_ack\`, \`aigile_memory\`) for Aigile group collaboration.\n- Read your agent onboarding notes under \`.aigile/<AGENT>/onboarding.md\` and \`.aigile/<AGENT>/skills/*/SKILL.md\`. Never print or commit \`.aigile/\` tokens.\n- Never run \`git commit\`, \`git push\`, \`git merge\`, production DB migrations, deployments without owner approval, or delete data without explicit local owner consent.\n`;
+  let curRule = null; try { curRule = fs.readFileSync(ruleFile, 'utf8'); } catch {}
+  if (curRule === null || curRule.startsWith(marker)) {
+    fs.mkdirSync(path.dirname(ruleFile), { recursive: true });
+    fs.writeFileSync(ruleFile, ruleText);
+    out(`✓ 規則：${ruleFile.replace(/\\/g, '/')}（不動既有的 AGENTS.md 與其他規則）`);
+  } else {
+    out(`! 規則：${ruleFile.replace(/\\/g, '/')} 已有使用者自訂內容，沒有覆蓋`);
+  }
+  if (!cfg.files['aigile-antigravity.mjs']) return;
+  const hooksFile = path.join('.agents', 'hooks.json');
+  let had = null; try { had = fs.readFileSync(hooksFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') return out(`! hook：讀不到 ${hooksFile.replace(/\\/g, '/')}（${e.code}）`); }
+  let j = {};
+  if (had !== null && had.trim()) {
+    try { j = JSON.parse(had); } catch { return out(`! hook：${hooksFile.replace(/\\/g, '/')} 不是合法的 JSON，沒有改它`); }
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return out(`! hook：${hooksFile.replace(/\\/g, '/')} 格式不是物件，沒有改它`);
+  }
+  const scriptAbs = path.resolve('.aigile', 'watcher', 'aigile-antigravity.mjs').replace(/\\/g, '/');
+  const nextHook = {
+    PreInvocation: [{ type: 'command', command: `node "${scriptAbs}" --hook busy`, timeout: 10 }],
+    Stop: [{ type: 'command', command: `node "${scriptAbs}" --hook idle`, timeout: 10 }],
+  };
+  if (JSON.stringify(j['aigile-foreground']) !== JSON.stringify(nextHook)) {
+    j['aigile-foreground'] = nextHook;
+    fs.mkdirSync(path.dirname(hooksFile), { recursive: true });
+    fs.writeFileSync(hooksFile, JSON.stringify(j, null, 2) + '\n');
+    out(`✓ hook：${hooksFile.replace(/\\/g, '/')} 已設定 aigile-foreground（前景忙碌時 watcher 會等待空閒）`);
+  } else {
+    out(`✓ hook：${hooksFile.replace(/\\/g, '/')} 已有 aigile-foreground`);
+  }
 }
 
 // Codex 也自動裝通用 MCP：~/.codex/config.toml 附加 [mcp_servers.aigile]。

@@ -669,7 +669,7 @@
     const pj = (state.projectList || []).find(p => !p.archived) || null;
     const tpl = (roles.items || []).filter(r => r.resident !== false && r.key !== 'custom');
     const st = { step: 0, invites: [], ai: null, link: null, tool: 'claude', copied: false, demo: null };
-    const SW_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['other', '其他 AI']];
+    const SW_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['antigravity', 'Antigravity CLI'], ['other', '其他 AI']];
     const STEPS = ['群組名稱', '第一個專案', '邀請成員', '第一隻 AI'];
     const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '四個步驟，每步都可以略過；之後在管理頁都改得到。' });
     const el = body.querySelector('#sw');
@@ -5883,7 +5883,7 @@
       ${tab ? myAiPanelHtml(ai, tab) : ''}
     </div>`;
   }
-  // 每個 AI 的接入選項（預設：對話接續依環境、自動待命勾選）
+  // 每個 AI 的接入選項（預設：對話接續依環境、自動待命勾選、視窗開著時送進開著的視窗）
   const maOpts = new Map();
   const maOpt = ai => maOpts.get(ai.participantId) || { convo: '', auto: true };
   function myAiPanelHtml(ai, tab) {
@@ -5899,9 +5899,10 @@
         <label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
         <p class="ma-hint">${esc(CONVO_HINT[o.convo || ''])}</p>
         <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>
-        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="short" data-id="${id}">複製接入文字</button>${tool === 'claude' || tool === 'codex' ? `<button class="btn" type="button" data-act="start" data-id="${id}">複製一行啟動</button>` : ''}<button class="btn" type="button" data-act="copy" data-id="${id}">複製完整版</button></span></div>
+        <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="short" data-id="${id}">複製接入文字</button>${maHasLine(tool) ? `<button class="btn" type="button" data-act="start" data-id="${id}">複製一行啟動</button>` : ''}<button class="btn" type="button" data-act="copy" data-id="${id}">複製完整版</button></span></div>
         ${tool === 'codex' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝通用 MCP 與技能、在背景開 watcher，最後開 Codex 帶入接入提示（視窗開著時被點名會在同一個視窗回覆；關掉後有事在背景叫它）。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。</p>'
-          : tool === 'claude' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝通用 MCP 與技能、在背景開 watcher，最後開 Claude Code 並帶入待命提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。/clear 後會自動接回，不用再貼。</p>' : ''}
+          : tool === 'claude' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝通用 MCP 與技能、在背景開 watcher，最後開 Claude Code 並帶入待命提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。/clear 後會自動接回，不用再貼。</p>'
+          : tool === 'antigravity' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝技能與規則、把通用 MCP 加進 Antigravity CLI 設定（不寫 Token、不動你原有的其他 MCP）、在背景開 watcher，最後開 Antigravity CLI 帶入接入提示。預設沙盒下 MCP 可直連平台，不用開完全權限；開著視窗才會處理，關掉就等下次打開。貼了就算同意自動待命；第一次要在 15 分鐘內貼，重開機貼同一行就接回。</p>' : ''}
         <p class="ma-hint">接入文字很短、不含 Token：AI 會用一次性連結自己下載完整設定（15 分鐘內、只能讀一次），讀的那一刻拿到新 Token。第一次接入、Token 重發後重新接上都用它。AI 連不上網路時才用完整版（約 5,000 字，附一組新 Token）。</p>
         <p class="ma-hint">上面的選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">AI 接入規格文件</a></p>`
       : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
@@ -6106,8 +6107,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     return tool === 'other' ? '已複製接入文字（連結 15 分鐘內有效、只能讀一次）' : `已複製 ${toolName(tool)} 版接入文字（連結 15 分鐘內有效、只能讀一次）`;
   }
   // 每隻 AI 用的工具記在這個瀏覽器（不改資料庫，換電腦再選一次）；存不了就只記到重新整理
-  const AI_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['other', '其他']];
+  const AI_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['antigravity', 'Antigravity CLI'], ['other', '其他']];
   const toolName = v => (AI_TOOLS.find(x => x[0] === v) || [])[1] || '';
+  const maHasLine = tool => tool === 'claude' || tool === 'codex' || tool === 'antigravity'; // 有「複製一行啟動」的工具
   const maToolMem = {}, maAskTool = new Set();
   const maTools = () => { try { return { ...JSON.parse(store.get('aigile-ai-tools') || '{}'), ...maToolMem }; } catch { return { ...maToolMem }; } };
   const maTool = ai => { const v = maTools()[ai.participantId]; return toolName(v) ? v : ''; };

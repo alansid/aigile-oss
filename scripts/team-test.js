@@ -209,7 +209,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(ob.includes(shaOf('aigile-setup.mjs')), '接入設定的檢查腳本 SHA-256 與 public/aigile-setup.mjs 一致');
     const baTok = ba.token;
     const wenv = (await call(baTok, '/api/me/watcher-env')).body;
-    assert.deepEqual(wenv.files, { 'watcher.mjs': shaOf('watcher.mjs'), 'aigile-wait.mjs': shaOf('aigile-wait.mjs'), 'aigile-opencode.mjs': shaOf('aigile-opencode.mjs'), 'aigile-mcp.mjs': shaOf('aigile-mcp.mjs'), 'aigile-codex.mjs': shaOf('aigile-codex.mjs'), 'aigile-codex-ui.mjs': shaOf('aigile-codex-ui.mjs'), 'aigile-start.mjs': shaOf('aigile-start.mjs'), 'aigile-hook.mjs': shaOf('aigile-hook.mjs') }, 'watcher、等待腳本的 SHA-256 與 public 一致');
+    assert.deepEqual(wenv.files, { 'watcher.mjs': shaOf('watcher.mjs'), 'aigile-wait.mjs': shaOf('aigile-wait.mjs'), 'aigile-opencode.mjs': shaOf('aigile-opencode.mjs'), 'aigile-mcp.mjs': shaOf('aigile-mcp.mjs'), 'aigile-codex.mjs': shaOf('aigile-codex.mjs'), 'aigile-codex-ui.mjs': shaOf('aigile-codex-ui.mjs'), 'aigile-antigravity.mjs': shaOf('aigile-antigravity.mjs'), 'aigile-start.mjs': shaOf('aigile-start.mjs'), 'aigile-hook.mjs': shaOf('aigile-hook.mjs') }, 'watcher、等待腳本的 SHA-256 與 public 一致');
     assert.ok(wenv.env.includes(`AIGILE_ME=${ba.participantId}`) && wenv.env.includes('BELL_FILE=') && wenv.env.includes('PID_FILE='), 'watcher.env 有身分與門鈴檔');
     for (const s of ['/aigile-setup.mjs', 'Node 22', 'watcher.env', '要求停止', '401 INVALID_TOKEN', '429 RATE_LIMITED']) {
       assert.ok(ob.includes(s), `接入設定含 ${s}`);

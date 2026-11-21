@@ -28,7 +28,7 @@ const call = async (token, p, method = 'GET', body) => {
 };
 // 腳本是獨立程序：開本機埠，靜態檔（watcher.mjs 等）直接回 public 裡的檔
 const server = http.createServer(async (req, res) => {
-  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
+  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-antigravity|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const base = `http://${req.headers.host}`;
@@ -65,7 +65,7 @@ try {
   // 端點：只給 AI；內容就是標準 watcher.env 與兩個檔的雜湊
   assert.equal((await call(boss.token, '/api/me/watcher-env')).status, 403, '人類拿不到');
   const cfg = (await call(tok, '/api/me/watcher-env')).body;
-  assert.deepEqual(cfg.files, { 'watcher.mjs': sha(pub('watcher.mjs')), 'aigile-wait.mjs': sha(pub('aigile-wait.mjs')), 'aigile-opencode.mjs': sha(pub('aigile-opencode.mjs')), 'aigile-mcp.mjs': sha(pub('aigile-mcp.mjs')), 'aigile-codex.mjs': sha(pub('aigile-codex.mjs')), 'aigile-codex-ui.mjs': sha(pub('aigile-codex-ui.mjs')), 'aigile-start.mjs': sha(pub('aigile-start.mjs')), 'aigile-hook.mjs': sha(pub('aigile-hook.mjs')) }, '雜湊跟 public 的檔一致');
+  assert.deepEqual(cfg.files, { 'watcher.mjs': sha(pub('watcher.mjs')), 'aigile-wait.mjs': sha(pub('aigile-wait.mjs')), 'aigile-opencode.mjs': sha(pub('aigile-opencode.mjs')), 'aigile-mcp.mjs': sha(pub('aigile-mcp.mjs')), 'aigile-codex.mjs': sha(pub('aigile-codex.mjs')), 'aigile-codex-ui.mjs': sha(pub('aigile-codex-ui.mjs')), 'aigile-antigravity.mjs': sha(pub('aigile-antigravity.mjs')), 'aigile-start.mjs': sha(pub('aigile-start.mjs')), 'aigile-hook.mjs': sha(pub('aigile-hook.mjs')) }, '雜湊跟 public 的檔一致');
   assert.ok(cfg.env.includes(`BELL_FILE=.aigile/${AG}/bell.json`));
   assert.ok(!cfg.env.includes(tok), 'watcher.env 不放 Token（用 AIGILE_TOKEN_FILE）');
 
@@ -90,7 +90,7 @@ try {
   r = await setup(a);
   assert.match(r.out, /watcher\.mjs 已是最新/); assert.match(r.out, /watcher\.env 完整/, '再跑一次不動東西');
 
-  // 2) ：舊 watcher.env（以前）缺 BELL_FILE、PID_FILE；自己改過的 WAKE_CMD 要保留；watcher 在跑就提醒重開
+  // 2) 舊 watcher.env 缺 BELL_FILE、PID_FILE；保留自訂的 WAKE_CMD，通知執行中的 watcher 換新
   const b = work(); putToken(b);
   fs.writeFileSync(path.join(b, `.aigile/${AG}/watcher.env`), `AIGILE_BASE=${BASE}\nAIGILE_ME=${ai.participantId}\nAIGILE_TOKEN_FILE=.aigile/${AG}/.token\nWAKE_CMD=.aigile\\${AG}\\wake.cmd\n`);
   fs.writeFileSync(path.join(b, `.aigile/${AG}/watcher.pid`), String(process.pid)); // 一個活著的程序
@@ -101,7 +101,8 @@ try {
   assert.equal(env.BELL_FILE, `.aigile/${AG}/bell.json`, '補上門鈴檔'); assert.equal(env.PID_FILE, `.aigile/${AG}/watcher.pid`, '補上 pid 檔');
   assert.equal(env.WAKE_CMD, `.aigile\\${AG}\\wake.cmd`, '保留自己的 WAKE_CMD');
   assert.match(r.out, /補上 .*BELL_FILE/); assert.match(r.out, /watcher\.mjs 已更新/, '舊版 watcher 換新');
-  assert.match(r.out, new RegExp(`watcher（程序 ${process.pid}）用的是舊檔或舊設定：先停掉它`), '提醒重開 watcher');
+  assert.match(r.out, new RegExp(`watcher（程序 ${process.pid}）換成新程式／新設定`), '通知執行中的 watcher 換新');
+  assert.match(fs.readFileSync(path.join(b, '.aigile', AG, 'watcher.reload'), 'utf8'), /^\d+$/, '寫入換新通知檔');
 
   // 3) Token 失效：停在 Token 那步，最後一行說怎麼辦
   const c = work(); fs.mkdirSync(path.join(c, `.aigile/${AG}`), { recursive: true }); fs.writeFileSync(path.join(c, `.aigile/${AG}/.token`), 'tok_bad');

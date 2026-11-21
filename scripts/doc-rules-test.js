@@ -102,7 +102,7 @@ try {
   const role = { duties: '負責平台的程式開發：照卡片需求實作、寫測試、修 bug、部署到兩站；交接時寫影響範圍與測試名稱。', style: '繁體中文、先講結論', autonomy: '實作、測試、commit、部署', mustConfirm: 'push、資料庫遷移、刪資料', handoff: '交 UX 驗收' };
   const ai = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: '程式開發', name: '程式助手', ...role })).body;
   // 接入設定分初次版／重接版、待命依工具三種；初次＋重接合起來加規格要涵蓋全部規則（其他工具不跑等待腳本，排除那一條）
-  const TOOLS = ['claude', 'codex', 'other'];
+  const TOOLS = ['claude', 'codex', 'antigravity', 'other'];
   const get = async tool => (await call(boss.token, `/api/my-ais/${ai.participantId}/onboarding?tool=${tool}`)).body.text;
   const first = {}, again = {};
   for (const t of TOOLS) first[t] = await get(t);

@@ -39,7 +39,7 @@ let mcpHits = 0; // 打到 /api/mcp 的次數（驗「沒接平台就不打網�
 const server = http.createServer(async (req, res) => {
   if (req.url === '/api/mcp') mcpHits++;
   fs.appendFileSync(REQ_LOG, req.url + String.fromCharCode(10));
-  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
+  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-antigravity|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const base = `http://${req.headers.host}`;

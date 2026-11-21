@@ -29,7 +29,7 @@ const call = async (token, p, method = 'GET', body) => {
 };
 let countCalls = 0;
 const server = http.createServer(async (req, res) => {
-  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
+  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-antigravity|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   if (req.url.startsWith('/api/notifications/count')) countCalls++;
   const chunks = []; for await (const c of req) chunks.push(c);
@@ -92,7 +92,9 @@ try {
     for (const k of ['--json', '--skip-git-repo-check', 'sandbox_mode=workspace-write', 'sandbox_workspace_write.network_access=true', 'approval_policy=never']) assert.ok(c.includes(k), `帶 ${k}：${JSON.stringify(c)}`);
     for (const k of ['--last', '--dangerously-bypass-approvals-and-sandbox', 'danger-full-access']) assert.ok(!c.join(' ').includes(k), `不帶 ${k}`);
     assert.match(c[c.length - 1], /^You are Aigile agent PG\. /, '提示帶代號');
-    assert.match(c[c.length - 1], /Never do these in a watcher round[^.]*: git commit, push, merge, deploy/, '提示寫明叫醒的這一輪不 commit／push／部署');
+    assert.match(c[c.length - 1], /Never do these in a watcher round[^.]*: push, merge, deploy/, '提示寫明叫醒的這一輪不 push／merge／部署');
+    assert.match(c[c.length - 1], /Never do git commit in a background codex exec round/, '背景回合禁止 commit');
+    assert.doesNotMatch(c[c.length - 1], /同意 commit（針對第 N 則）/, '背景回合沒有前景例外');
   }
   // Token 不進 wake.log、codex.json
   const log1 = fs.readFileSync(path.join(d1, '.aigile/PG/wake.log'), 'utf8');
@@ -217,7 +219,8 @@ try {
   assert.match(sec, /--tool codex --mode auto/, '預設太長才換新，接入檢查帶 --mode');
   assert.match(sec, /有待處理才開 codex exec 跑一輪就結束/);
   assert.match(sec, /太長＝同一個對話叫醒滿 10 次，由喚醒腳本數），免得對話越來越長、每次叫醒重讀越來越貴/, '--every 白話說明');
-  assert.match(sec, /commit、push、merge、部署一律不做/, '叫醒那一輪不 commit／push／部署');
+  assert.match(sec, /push、merge、部署不做/, '叫醒那一輪不 push／merge／部署');
+  assert.match(sec, /同意 commit（針對第 N 則）.*非背景 codex exec/, '接入設定寫明前景 commit 的範圍');
   assert.match(sec, /codex\.exe 與 node\.exe/, '寫明怎麼確認已停');
   assert.match(sec, /watcher 在跑、日誌有連線或巡檢紀錄才算成功/, '成功判定改成 watcher');
   assert.match(await ob('?tool=codex&convo=fresh'), /--tool codex --mode fresh/);

@@ -131,7 +131,7 @@ try {
   const o2 = await run(wd, pub('aigile-setup.mjs'), ['--agent', pg2.ag, '--base', BASE, '--tool', 'bogus', '--skills-only']);
   assert.equal(o2.code, 1, o2.out);
   const a2 = await one(pg2.id);
-  assert.equal(a2.sync.state, 'failed'); assert.match(a2.sync.lastLine, /技能：--tool 只能是 claude、codex、other/, a2.sync.lastLine);
+  assert.equal(a2.sync.state, 'failed'); assert.match(a2.sync.lastLine, /技能：--tool 只能是 claude、codex、antigravity、other/, a2.sync.lastLine);
   const fd = await db.all("SELECT human_id, text FROM dms WHERE from_id = 'system' AND text LIKE '%同步技能失敗%'");
   assert.equal(fd.length, 1); assert.equal(fd[0].human_id, boss.participant.participantId);
   assert.ok(fd[0].text.includes('PG二號') && fd[0].text.includes('/my-ai?sync=1'), fd[0].text);

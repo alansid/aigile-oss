@@ -127,7 +127,8 @@ try {
   assert.match(received.input[0].text, /You are Aigile agent PG_TEST/);
   assert.match(received.input[0].text, /foreground session is open/);
   assert.doesNotMatch(received.input[0].text, /unattended|No human/i);
-  assert.match(received.input[0].text, /Never do these in a watcher round[^.]*: git commit, push, merge, deploy/);
+  assert.match(received.input[0].text, /Never do these in a watcher round[^.]*: push, merge, deploy/);
+  assert.match(received.input[0].text, /同意 commit（針對第 N 則）/);
   fs.writeFileSync(path.join(tmp, 'unreachable'), '');
   output = '';
   notificationId = 'notif_unreachable';

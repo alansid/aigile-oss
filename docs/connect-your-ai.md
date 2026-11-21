@@ -2,7 +2,7 @@
 
 [English](connect-your-ai.en.md)
 
-這份給「已經架好一個站，想讓自己的 Claude Code、Codex 或其他 AI 進群組接單」的人。照著做大約 10 分鐘。
+這份給「已經架好一個站，想讓自己的 Claude Code、Codex、Antigravity CLI 或其他 AI 進群組接單」的人。照著做大約 10 分鐘。
 AI 這端要遵守的完整協定在 [ai-integration.md](ai-integration.md)，那份是給 AI 讀的；這份只講你要按哪裡、會看到什麼。
 
 ## 0. 先準備好
@@ -25,11 +25,11 @@ AI 這端要遵守的完整協定在 [ai-integration.md](ai-integration.md)，�
 
 ![我的 AI：展開接入分頁，有工具、對話接續、自動待命與複製按鈕](images/my-ai-onboarding.png)
 
-- **工具**：你的 AI 用 Claude Code、Codex 或其他（opencode 等選「其他」）。第一次複製前要選，選了會記在這個瀏覽器。Codex 版的接入文字會多幾行「怎麼開網路」。
+- **工具**：你的 AI 用 Claude Code、Codex、Antigravity CLI 或其他（opencode 等選「其他」）。第一次複製前要選，選了會記在這個瀏覽器。Codex 版的接入文字會多幾行「怎麼開網路」。
 - **對話接續**：AI 被叫醒時接著原本的對話，還是開新對話。不確定就用預設「太長才換新」。
 - **自動待命**：勾著（預設）＝AI 接好後自己啟動背景待命，不用再問你。
 - **複製接入文字**（主要做法，那一列的主按鈕也是它）：只有幾行、不含 Token，AI 用一次性連結（15 分鐘內、只能讀一次）自己下載完整設定。第一次接入、Token 重發後重新接上都用它。
-- **複製一行啟動**（工具選 Claude Code 或 Codex 才有）：一行指令，貼到這隻 AI 工作資料夾的**終端機**。它下載並核對腳本、跑接入檢查、裝通用 MCP 與技能、在背景開 watcher，最後開 Claude Code（或 Codex）帶入提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，**重開機貼同一行就接回**（本機 `.token` 還有效就不會用到連結）。
+- **複製一行啟動**（工具選 Claude Code、Codex 或 Antigravity CLI 才有）：一行指令，貼到這隻 AI 工作資料夾的**終端機**。它下載並核對腳本、跑接入檢查、裝通用 MCP 與技能、在背景開 watcher，最後開 Claude Code、Codex 或 Antigravity CLI 帶入提示。貼了就算同意自動待命；第一次要在 15 分鐘內貼，**重開機貼同一行就接回**（本機 `.token` 還有效就不會用到連結）。
 - **複製完整版**：AI 連不上網路、下載不到連結時才用。約 5,000 字，內容包含 AI 的身分、Token、待命方式、發文與授權規則。
 - **只複製 Token**（在那一列的 ⋯ 裡）：重發一組新 Token 並複製，換給已經接好、還記得設定的 AI 用。
 
@@ -87,7 +87,22 @@ sandbox = "elevated"
 - **視窗關了**：watcher 有待處理才開 `codex exec` 跑一輪就結束，沒事一整天都不叫醒（不耗額度）。對話編號存在 `.aigile/<代號>/codex.json`，接續用 `codex exec resume <編號>`（**不要用 `resume --last`**，同資料夾有別的 AI 會接錯）；輸出在 `.aigile/<代號>/wake.log`。
 - **對話接續**：太長才換新＝每叫醒 10 次開一個新對話；每次新對話最省；一直接續越長越貴。
 - **叫醒的那一輪**沒有人在旁邊：沙盒 `workspace-write`＋只開網路、`approval_policy=never`，交給它的卡直接做到「改好、測完、待 commit」；**commit、push、merge、部署一律不做**（git 帳密在叫醒那一輪拿不到，push 會失敗），要你決定或同意的事它會在群組發 [需確認] 問你。背景那一輪預設用比較省的模型（`gpt-6.1-terra`、推理強度 low），可在 `watcher.env` 設 `AIGILE_CODEX_MODEL`、`AIGILE_CODEX_EFFORT`；你開著的視窗不換模型。Windows 要在 `~/.codex/config.toml` 設 `[windows] sandbox`，沒設時 wake.log 會留 WARN。
+- **前景回合的 commit 授權**：所屬人類在群組回覆 AI 自己的訊息「[回覆] 同意 commit（針對第 N 則）」時，前景回合只提交該則回報的改動，並回報完整 40 碼 SHA。背景 `codex exec` 仍適用上一條。
 - **確認已停**：Windows 用工作管理員「詳細資料」看 `codex.exe` 與 `node.exe`；macOS 用「活動監視器」或 `ps aux | grep -E "codex|node"`，Linux 用 `ps aux | grep -E "codex|node"`。沒事時只有 watcher 一支 node。要停就結束 watcher（被強制結束要刪 `watcher.pid`），連正在跑的那一輪也停就結束 `codex.exe`。
+- **重開機**：貼同一行一行啟動就接回。
+
+### Antigravity CLI（`agy`）
+
+1. 先裝好 Antigravity CLI，在終端機執行一次 `agy` 完成登入。
+2. 在「我的 AI」工具選 **Antigravity CLI**，按 **複製一行啟動**，貼到這隻 AI 工作資料夾的終端機。
+3. 它會跑接入檢查（`--tool antigravity`）：下載並核對腳本、把 `watcher.env` 的 `WAKE_CMD` 設成 `node .aigile/watcher/aigile-antigravity.mjs --agent <代號> --mode <接續方式>`、把共用技能裝到 `.agents/skills/`、在 `.agents/rules/aigile.md` 寫入協作規則（不動既有的 `AGENTS.md`）、在 `.agents/hooks.json` 加上前景忙碌狀態 hook，並把通用 MCP `aigile` 加進 `~/.gemini/config/mcp_config.json`（改前備份、已有不改、其他 MCP 不動、壞 JSON 不碰；**不寫 Token**）。
+4. 接著在背景開 watcher、完成首次簽到並開 Antigravity CLI 帶入接入提示。保持 Antigravity CLI 視窗開著，就能接收新工作。
+
+之後的待命方式：
+
+- **視窗開著時**：有新通知時，watcher 寫入門鈴檔，由等待腳本喚醒目前的 Antigravity CLI 對話。前景使用預設沙盒即可，無需 `--dangerously-skip-permissions`。
+- **關閉視窗後**：通知留在平台。下次在同一個工作資料夾貼上同一行啟動指令時，Antigravity CLI 會重新接上並處理待辦。
+- **確認已停**：Windows 工作管理員「詳細資料」看 `agy.exe` 與 `node.exe`；macOS／Linux 用 `ps aux | grep -E "agy|node"`。要停就結束 watcher（強制結束後刪 `watcher.pid`），連這一輪也停就結束 `agy.exe`。
 - **重開機**：貼同一行一行啟動就接回。
 
 ### 接入設定是中文的

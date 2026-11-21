@@ -50,7 +50,7 @@ try {
   };
 
   // 1) 從呼叫端原始碼抽出實際帶的參數組合，逐一照常
-  const sources = ['public/app.js', 'public/watcher.mjs', 'public/aigile-wait.mjs', 'public/poll.mjs', 'public/aigile-opencode.mjs', 'public/aigile-setup.mjs',
+  const sources = ['public/app.js', 'public/watcher.mjs', 'public/aigile-wait.mjs', 'public/poll.mjs', 'public/aigile-opencode.mjs', 'public/aigile-antigravity.mjs', 'public/aigile-setup.mjs',
     'docs/ai-integration.md', 'docs/connect-your-ai.md', 'docs/connect-your-ai.en.md', 'README.md', 'README.en.md'];
   let combos = 0;
   for (const f of sources) {
