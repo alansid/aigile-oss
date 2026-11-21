@@ -212,7 +212,18 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     || !(ask === false || (reasons.length === 1 && reasons[0] === 'reply') || FYI_PREFIX.test(text || ''));
   const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 168) * 3600_000; // 預設 7 天
   const HUMAN_TOKEN_TTL_MS = (Number(config.humanTokenTtlHours) || 720) * 3600_000;
-  const FILE_TTL_MS = (Number(config.fileTtlHours) || 1) * 3600_000; // 預設保存 1 小時
+  // 訊息附件保存時間：管理員在「管理員設定 › 稽核與儲存」調整，存 app_settings 的 file_ttl＝{ hours, log }（不改資料表）。
+  // 沒改過就用主機的 FILE_TTL_HOURS（沒設＝24 小時）；改過一次就以這裡為準。只影響之後上傳的檔：到期時間在上傳時就寫進 files.expires_at
+  const FILE_TTL_DEFAULT_H = Number(config.fileTtlHours) > 0 ? Number(config.fileTtlHours) : 24;
+  const FILE_TTL_CHOICES = [1, 6, 24, 72, 168, 720]; // 1、6、24 小時，3、7、30 天
+  const FILE_TTL_LOG_MAX = 20;
+  async function fileTtlCfg() {
+    const v = await getJson('file_ttl');
+    return { hours: FILE_TTL_CHOICES.includes(v?.hours) ? v.hours : FILE_TTL_DEFAULT_H, set: FILE_TTL_CHOICES.includes(v?.hours), log: Array.isArray(v?.log) ? v.log : [] };
+  }
+  const fileTtlHours = async () => (await fileTtlCfg()).hours;
+  // 「1 小時」「24 小時」「3 天」；不到 1 小時（測試用）寫分鐘
+  const ttlLabel = ms => { const m = Math.round(ms / 60_000), h = Math.round(m / 60); return m < 60 ? `${Math.max(1, m)} 分鐘` : h >= 48 && h % 24 === 0 ? `${h / 24} 天` : `${h} 小時`; };
   const MAX_TOTAL = (Number(config.fileMaxTotalMb) || 0) * 1048576 || MAX_TOTAL_BYTES; // 測試用可調低
   const rate = new Map();
   const postBlocks = dbBlockCounter(db); // 同一草稿被擋幾次（存 D1，多執行個體共用）
@@ -1432,6 +1443,7 @@ ${ending}`;
       readOnlyIn: roList(me, await loadReadOnly()), // 在這些專案只能看
       isOnline: true,
       expiresAt: iso(me.token_expires_at),
+      fileTtlHours: await fileTtlHours(), // 訊息附件保存時間（小時），網頁與 AI 的說明照這個寫
       ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId, prefs: await prefsOf(me), onboard: await onboardOf(me) } : {}), // 個人偏好（風格）、新手上路記在帳號
       ...(me.mustChangeCredentials ? { mustChangeCredentials: true } : {}), // 還在用預設帳密：網頁只顯示改帳密
       ...(me.kind === 'human' && adminOf(people)?.id === me.id && (await db.get("SELECT value FROM app_settings WHERE key = 'setup_wizard'"))?.value === 'pending' ? { setupWizard: true } : {}), // 第一次設定引導還沒做完
@@ -2089,6 +2101,21 @@ ${ending}`;
       ...(closed.length ? [projEvent(GROUP_EVT, me.id, `${me.name} 關閉 AI 工具：${names(closed)}`, at)] : []),
       ...(opened.length ? [projEvent(GROUP_EVT, me.id, `${me.name} 打開 AI 工具：${names(opened)}`, at)] : [])]);
     return toolsOut(off);
+  });
+  // 訊息附件保存時間（全站一份）。誰都能讀（網頁、AI 寫說明要用），只有管理員能改、看紀錄
+  // envHours：主機 FILE_TTL_HOURS（沒設＝null）；custom：管理員改過（之後就不看 FILE_TTL_HOURS）
+  const fileTtlOut = (cfg, admin) => ({ hours: cfg.hours, defaultHours: FILE_TTL_DEFAULT_H, choices: FILE_TTL_CHOICES,
+    ...(admin ? { custom: cfg.set, envHours: Number(config.fileTtlHours) > 0 ? Number(config.fileTtlHours) : null, log: cfg.log } : {}) });
+  route('GET', '/api/file-ttl', async ({ ctx, me }) => fileTtlOut(await fileTtlCfg(), adminOf(await peopleMap(ctx))?.id === me.id));
+  route('PUT', '/api/file-ttl', async ({ ctx, me, req }) => {
+    await requireAdmin(ctx, me, '設定訊息附件保存時間');
+    const hours = (await readJson(req)).hours;
+    if (!FILE_TTL_CHOICES.includes(hours)) throw invalid(`hours 只能是 ${FILE_TTL_CHOICES.join('、')}（小時）`);
+    const cur = await fileTtlCfg();
+    if (cur.hours === hours) return fileTtlOut(cur, true); // 沒變：不存、不記（還沒改過的話照舊跟著 FILE_TTL_HOURS）
+    const next = { hours, log: [{ at: nowIso(), by: me.id, byName: me.name, from: cur.hours, to: hours }, ...cur.log].slice(0, FILE_TTL_LOG_MAX) };
+    await setJson('file_ttl', next);
+    return fileTtlOut({ ...next, set: true }, true);
   });
   route('GET', '/api/projects/:id/events', async ({ ctx, me, params, url }) => {
     // 只有該專案成員或管理員看得到（含程式庫網址、成員異動）
@@ -3270,7 +3297,7 @@ ${ending}`;
     const now = Date.now();
     await storage.put(id, bytes, { mime: info.mime, name });
     await db.run(`INSERT INTO files (id, uploader_id, name, ext, mime, size, sha256, declared, created_at, expires_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`, id, me.id, name, info.ext, info.mime, bytes.length, hash, 1, nowIso(), now + FILE_TTL_MS);
+      VALUES (?,?,?,?,?,?,?,?,?,?)`, id, me.id, name, info.ext, info.mime, bytes.length, hash, 1, nowIso(), now + (await fileTtlHours()) * 3600_000); // 照上傳當下的設定
     const file = await db.get('SELECT * FROM files WHERE id = ?', id);
     await audit('upload', me, file);
     return file;
@@ -3297,9 +3324,11 @@ ${ending}`;
   }
 
   const MAX_MSG_FILES = 4; // 一則訊息最多掛 4 個檔
-  const ttlText = () => { const hours = Math.round(FILE_TTL_MS / 3600_000); return hours >= 1 ? `${hours} 小時` : `${Math.max(1, Math.round(FILE_TTL_MS / 60_000))} 分鐘`; };
+  // 內文照檔案自己的到期時間寫（上傳後管理員改設定也不會寫錯）
+  const fileTtlOf = f => ttlLabel(f.expires_at - Date.parse(f.created_at));
+  const ttlText = files => { const t = [...new Set(files.map(fileTtlOf))]; return t.length === 1 ? `${t[0]}後自動刪除` : '依各檔上傳時的保存時間自動刪除'; };
   // 多檔訊息的內文；每個檔都列下載連結，只讀 text 的舊版 AI 也拿得到全部
-  const filesText = (note, files) => `${note ? note + '\n' : ''}[文件] ${files.length} 個檔案（已聲明不含程式碼與客戶個資；${ttlText()}後自動刪除）\n${
+  const filesText = (note, files) => `${note ? note + '\n' : ''}[文件] ${files.length} 個檔案（已聲明不含程式碼與客戶個資；${ttlText(files)}）\n${
     files.map((f, i) => `${i + 1}. ${f.name}（${formatBytes(f.size)}，SHA-256 ${f.sha256.slice(0, 12)}…）下載：GET /api/files/${f.id}`).join('\n')}`;
   // POST /api/messages 帶 fileIds＝先用 POST /api/files?post=false 上傳、再一次發成一則（通知只發一次）；
   // 只能掛自己上傳、還沒掛到訊息、沒過期的檔；內文由平台照檔案產生（text 當附註，可空）
@@ -3336,7 +3365,7 @@ ${ending}`;
 
     // 自動在群組發一則附下載連結的訊息
     const note = (q.get('text') || '').trim();
-    const text = `${note ? note + '\n' : ''}[文件] ${name}（${formatBytes(size)}，SHA-256 ${hash.slice(0, 12)}…）\n已聲明不含程式碼與客戶個資；${ttlText()}後自動刪除。下載：GET /api/files/${id}`;
+    const text = `${note ? note + '\n' : ''}[文件] ${name}（${formatBytes(size)}，SHA-256 ${hash.slice(0, 12)}…）\n已聲明不含程式碼與客戶個資；${ttlText([file])}。下載：GET /api/files/${id}`;
     const recipientIds = (q.get('recipientIds') || '').split(',').map(x => x.trim()).filter(Boolean);
     const { message } = await createMessage(ctx, me, {
       text: text.slice(0, MAX_TEXT), requestId: 'req_file_' + id,
@@ -3428,7 +3457,7 @@ ${ending}`;
     const used = rows.reduce((n, f) => n + f.size, 0);
     return {
       items: rows.map(f => ({ ...fileView(f), project: f.msg_project ?? null, uploader: people.get(f.uploader_id) ? identity(people.get(f.uploader_id), people) : null })),
-      usedBytes: used, limitBytes: MAX_TOTAL, maxFileBytes: MAX_FILE_BYTES, enabled: !!storage,
+      usedBytes: used, limitBytes: MAX_TOTAL, maxFileBytes: MAX_FILE_BYTES, enabled: !!storage, ttlHours: await fileTtlHours(),
     };
   });
   route('POST', '/api/files', ({ ctx, me, req, url }) => uploadFile(ctx, me, req, url));

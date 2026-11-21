@@ -99,7 +99,8 @@ try {
   await shot('5-電腦-帳號與救援');
   await sec('audit', '.adm-store');
   await until(() => js("!!document.querySelector('.adm-audit')"), 8000, '稽核');
-  assert.match(await js("document.querySelector('.adm-store').innerText"), /專案文件區：(已|未)開通[\s\S]*訊息附件：(已|未)開通[\s\S]*FILE_TTL_HOURS/, '儲存空間狀態、附件保存時間');
+  assert.match(await js("document.querySelector('.adm-store').innerText"), /專案文件區：(已|未)開通[\s\S]*訊息附件：(已|未)開通[\s\S]*上傳 24 小時後自動刪除/, '儲存空間狀態、附件保存時間');
+  assert.match(await js("document.querySelector('.adm-ttl').innerText"), /訊息附件保存時間[\s\S]*FILE_TTL_HOURS/, '保存時間設定、說明 FILE_TTL_HOURS 只是初始值');
   await shot('6-電腦-稽核與儲存');
   await sec('system', '[data-bk="export"]');
   assert.match(await js("document.querySelector('.adm-main').innerText"), /版本[\s\S]*下載備份[\s\S]*匯入備份/, '系統與備份：版本、下載、匯入');

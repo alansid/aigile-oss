@@ -68,7 +68,7 @@ try {
   assert.equal(m.file.fileId, f[0], '2 file＝第一個（舊版照讀）');
   assert.deepEqual(m.files.map(x => x.fileId), f, '2 files＝全部、照上傳順序');
   assert.deepEqual(m.files.map(x => x.name), ['1-搜尋結果.png', '2-搜尋框.png', '3-錯誤訊息.png']);
-  assert.match(m.text, /^@陳大文 搜尋框打「台北」.*\n\[文件\] 3 個檔案（已聲明不含程式碼與客戶個資；1 小時後自動刪除）\n1\. 1-搜尋結果\.png（12 B，SHA-256 [0-9a-f]{12}…）下載：GET \/api\/files\/file_/s, '2 內文：附註＋每個檔的下載連結：' + m.text);
+  assert.match(m.text, /^@陳大文 搜尋框打「台北」.*\n\[文件\] 3 個檔案（已聲明不含程式碼與客戶個資；24 小時後自動刪除）\n1\. 1-搜尋結果\.png（12 B，SHA-256 [0-9a-f]{12}…）下載：GET \/api\/files\/file_/s, '2 內文：附註＋每個檔的下載連結：' + m.text);
   for (const id of f) assert.ok(m.text.includes(`GET /api/files/${id}`), '2 每個檔都有下載連結');
   const nt = (await req(chen.token, '/api/notifications')).body.items.filter(n => n.messageId === m.messageId);
   assert.equal(nt.length, 1, '2 通知只發一次');

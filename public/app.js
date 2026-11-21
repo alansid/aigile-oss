@@ -490,6 +490,25 @@
   }
   document.querySelectorAll('.logout-btn').forEach(b => b.addEventListener('click', () => logout(true)));
 
+  // 訊息附件保存時間（管理員在「管理員設定 › 稽核與儲存」調，/api/me 的 fileTtlHours；沒改過＝主機 FILE_TTL_HOURS，沒設 24 小時）
+  // 中文「1 小時」「24 小時」「3 天」；英文分單複數（1 hour、24 hours、3 days），整句用 L() 組，不靠字典拼單位
+  const ttlUnit = h => (h < 1 ? ['m', Math.max(1, Math.round(h * 60))] : h >= 48 && h % 24 === 0 ? ['d', h / 24] : ['h', Math.round(h)]);
+  const ttlZh = h => { const [u, n] = ttlUnit(h); return u === 'm' ? `${n} 分鐘` : u === 'd' ? `${n} 天` : `${n} 小時`; };
+  const ttlEn = h => { const [u, n] = ttlUnit(h); return `${n} ${u === 'm' ? 'minute' : u === 'd' ? 'day' : 'hour'}${n === 1 ? '' : 's'}`; };
+  const ttlLabel = h => L(ttlZh(h), ttlEn(h));
+  const curTtl = () => Number(state.me?.fileTtlHours) || 24;
+  // 畫面上跟著保存時間的整句；元素標 data-file-ttl="hint|sub|note"，設定變了 applyFileTtl() 整句重寫
+  const TTL_TEXT = {
+    hint: h => L(`Enter 送出 · Shift+Enter 換行 · 輸入 @ 提及成員 · 上傳的文件 ${ttlZh(h)}後自動刪除`, `Enter to send · Shift+Enter for new line · type @ to mention · uploaded files are deleted after ${ttlEn(h)}`),
+    sub: h => L(`上傳 ${ttlZh(h)}後自動刪除`, `Deleted automatically ${ttlEn(h)} after upload`),
+    note: h => L(`保存時間由管理員設定，目前上傳 ${ttlZh(h)}後自動刪除；設定改了只影響之後上傳的檔，已上傳的照各自顯示的時間刪除。`,
+      `The admin sets how long attachments are kept. Files uploaded now are deleted automatically after ${ttlEn(h)}. A change only applies to later uploads; files already uploaded are deleted at the time shown for each.`),
+  };
+  const ttlSpan = k => `<span data-file-ttl="${k}">${esc(TTL_TEXT[k](curTtl()))}</span>`;
+  function applyFileTtl(h) {
+    if (h != null && state.me) state.me.fileTtlHours = h;
+    document.querySelectorAll('[data-file-ttl]').forEach(x => { const f = TTL_TEXT[x.dataset.fileTtl]; if (f) x.textContent = f(curTtl()); });
+  }
   function drawMe() {
     const meCard = `<button type="button" class="me-avatar-btn" data-open-profile title="個人資料" aria-label="個人資料（更換頭像）">${avatar(state.me)}</button><div class="me-info"><b>${esc(state.me.name)}</b><span class="muted small">${esc(roleNoPj(state.me) || '未設定角色')} · 本人</span></div>`;
     $('#sheet-me').innerHTML = meCard;
@@ -598,7 +617,7 @@
     }
     rememberStyle(state.me.prefs?.style || 'a'); // 帳號上的風格
     $('#join').hidden = true; // 主畫面等資料載完才顯示（先留在「載入中」）
-    drawMe();
+    drawMe(); applyFileTtl();
     // 專案、成員、訊息同時抓（原本一支等一支，每支都要等資料庫）
     const winP = api(windowUrl());
     winP.catch(() => {});
@@ -2697,7 +2716,8 @@
             <input id="av-text" maxlength="16" placeholder="留白＝${esc(fallback)}" value="${esc(cur.text || '')}">
             <span class="field-hint">最多 2 個字，可用表情符號。</span>
           </label>
-          <p class="muted small">頭像會裁成正方形、縮成 256 × 256 px 後儲存，不會在 1 小時後刪除。請勿使用含客戶個資的圖片。</p>`,
+          <p class="muted small">${esc(L(`頭像會裁成正方形、縮成 256 × 256 px 後儲存，不會像訊息附件在 ${ttlZh(curTtl())}後刪除。請勿使用含客戶個資的圖片。`,
+            `The avatar is cropped to a square and resized to 256 × 256 px before saving; unlike message attachments, it is not deleted after ${ttlEn(curTtl())}. Do not use images containing customers' personal data.`))}</p>`,
         foot: `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-ok>儲存</button>`,
       });
       document.body.append(host);
@@ -2953,7 +2973,7 @@
     toast(r.notifyError ? L('卡片已退回，但未能發送回覆：', 'Card returned, but the reply could not be sent: ') + r.notifyError
       : L('已退回給 ' + owner, 'Sent back to ' + owner));
   }
-  // 附件格＋原因＋聲明在同一框，底列 📎「Enter 換行 · 可直接貼上截圖」；附件 1 小時後自動刪除
+  // 附件格＋原因＋聲明在同一框，底列 📎「Enter 換行 · 可直接貼上截圖」；附件照訊息附件保存時間自動刪除
   function promptReason(id, submit, project = 'all') {
     return new Promise(resolve => {
       const key = 'rj:' + id;
@@ -3745,7 +3765,7 @@
   function refreshOnboard() {
     if (Date.now() - obAt < 60_000) return;
     obAt = Date.now();
-    api('/api/me').then(m => { if (JSON.stringify(m.onboard) !== JSON.stringify(state.me?.onboard)) { state.me = { ...state.me, onboard: m.onboard }; if (state.page === 'hub') renderWork(); } }).catch(() => {});
+    api('/api/me').then(m => { if (m.fileTtlHours !== state.me?.fileTtlHours) applyFileTtl(m.fileTtlHours); if (JSON.stringify(m.onboard) !== JSON.stringify(state.me?.onboard)) { state.me = { ...state.me, onboard: m.onboard }; if (state.page === 'hub') renderWork(); } }).catch(() => {});
   }
   async function setOnboard(patch, done) {
     const prev = state.me.onboard;
@@ -7875,7 +7895,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const body = openModal('上傳截圖', `
       <section class="up-multi" aria-label="要上傳的檔案"><div class="up-mh"><span id="up-count"></span><span class="muted small up-tip">點縮圖可放大檢查</span></div>
         <div class="up-grid" id="up-grid"></div><p class="up-limit small" id="up-limit" role="status" hidden></p></section>
-      <div class="warn-box">上傳到平台後，所有群組成員都能下載，1 小時後自動刪除。每張截圖都請先確認沒有客戶資料。</div>
+      <div class="warn-box">${esc(L(`上傳到平台後，所有群組成員都能下載，${ttlZh(curTtl())}後自動刪除。每張截圖都請先確認沒有客戶資料。`,
+        `Once uploaded, every group member can download these. They are deleted automatically after ${ttlEn(curTtl())}. Make sure no screenshot contains customer data.`))}</div>
       <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea autocomplete="off" autocorrect="on" id="up-note" rows="3" maxlength="1500" placeholder="例如：@程式開發助手 1 是結果、2 是輸入中"></textarea></div></label>
       <p class="mention-warn" id="up-warn" role="status" hidden></p>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span id="up-declare-t"></span></label>
@@ -7970,7 +7991,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <div class="file-info"><b class="file-name">${esc(file.name)}</b><span class="muted small">${fmtBytes(file.size)}</span></div></div>
       ${isImg && !problem ? `<img class="up-preview" alt="截圖預覽" src="${previewUrl}">` : ''}
       ${problem ? `<div class="warn-box red">${esc(problem)}</div>` : `
-      <div class="warn-box">上傳到平台後，所有群組成員都能下載，1 小時後自動刪除。${isImg ? '截圖請先確認沒有客戶資料。' : ''}</div>
+      <div class="warn-box">${esc(L(`上傳到平台後，所有群組成員都能下載，${ttlZh(curTtl())}後自動刪除。${isImg ? '截圖請先確認沒有客戶資料。' : ''}`,
+        `Once uploaded, all group members can download it. It's deleted automatically after ${ttlEn(curTtl())}.${isImg ? ' Make sure the screenshot contains no customer data.' : ''}`))}</div>
       <label>附註<span class="field-hint">選填，可用 @ 指定對象</span><div class="input-wrap"><ul id="up-mention" class="mention-list" role="listbox" hidden></ul><textarea autocomplete="off" autocorrect="on" id="up-note" rows="3" maxlength="1500" placeholder="例如：@林志明的程式開發助手 這是今天的會議紀錄"></textarea></div></label>
       <p class="mention-warn" id="up-warn" role="status" hidden></p>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>
@@ -8009,7 +8031,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
   }
 
-  // 文件頁：在專案裡分兩個分頁——「專案文件」（長期保存、資料夾、可多選上傳）與「訊息附件」（1 小時後刪除）
+  // 文件頁：在專案裡分兩個分頁——「專案文件」（長期保存、資料夾、可多選上傳）與「訊息附件」（管理員設定的保存時間後刪除）
   // 總覽、跨專案頻道沒有專案文件區，只有訊息附件
   const filesUi = { tab: 'docs', folder: null, pj: null, data: null };
   const DOC_MAX = 20 * 1024 * 1024;
@@ -8019,7 +8041,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const tab = hasDocs ? filesUi.tab : 'att';
     const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
     const body = openModal('文件', '<div id="files-list" class="stack"></div>', { // 分頁跟其他頁一樣放右側
-      sub: tab === 'docs' ? `${esc(projName(pj))} 的共用文件，不會自動刪除` : '上傳 1 小時後自動刪除',
+      sub: tab === 'docs' ? `${esc(projName(pj))} 的共用文件，不會自動刪除` : ttlSpan('sub'),
       actions: tabs + (tab === 'docs' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>'),
     });
     body.modal.querySelectorAll('[data-files-tab]').forEach(b => { b.onclick = () => { filesUi.tab = b.dataset.filesTab; openFiles(); }; });
@@ -8027,9 +8049,10 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     body.modal.querySelector('#files-up').onclick = () => $('#file-input').click();
     try {
       const d = await api('/api/files');
+      if (d.ttlHours != null) applyFileTtl(d.ttlHours); // 管理員剛改過也跟上
       const pct = Math.min(100, d.usedBytes / d.limitBytes * 100);
       body.querySelector('#files-list').innerHTML = `
-        <p class="muted small">只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg，單檔 2 MB 以內，禁止程式碼與客戶個資。</p>
+        <p class="muted small">只接受 pdf、docx、xlsx、pptx、md、txt、png、jpg，單檔 2 MB 以內，禁止程式碼與客戶個資。<br><span class="files-ttl-note">${ttlSpan('note')}</span></p>
         <div class="usage"><div class="usage-bar"><span style="width:${pct.toFixed(1)}%"></span></div>
           <span class="muted small">已用 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}</span></div>
         <div class="file-list">${(d.items = d.items.filter(f => inView(f.project))).length ? d.items.map(f => `
@@ -8477,18 +8500,34 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (perm.admAudit === undefined) {
       perm.admAudit = null;
       const redraw = () => { if (state.page === 'perm' && perm.tab === 'admin' && perm.adm === 'audit') drawPerm(); };
-      Promise.all([api('/api/files/audit?limit=200'), api('/api/files').catch(() => null), PROJECTS[0] ? api(`/api/projects/${encodeURIComponent(PROJECTS[0])}/docs`).catch(() => null) : null])
-        .then(([a, f, d]) => { perm.admAudit = { a, f, d }; redraw(); }).catch(err => { perm.admAudit = { err: err.message }; redraw(); });
+      Promise.all([api('/api/files/audit?limit=200'), api('/api/files').catch(() => null), PROJECTS[0] ? api(`/api/projects/${encodeURIComponent(PROJECTS[0])}/docs`).catch(() => null) : null, api('/api/file-ttl').catch(() => null)])
+        .then(([a, f, d, t]) => { perm.admAudit = { a, f, d, t }; if (t) applyFileTtl(t.hours); redraw(); }).catch(err => { perm.admAudit = { err: err.message }; redraw(); });
     }
     const x = perm.admAudit;
     if (!x) return '<p class="muted pm-pad">載入中…</p>';
     if (x.err) return `<p class="error pm-pad">${esc(x.err)}</p>`;
-    const st = (ico, t, on, used, sub, how) => `<div class="adm-row"><span class="adm-rico" aria-hidden="true">${ico}</span><div class="adm-rt"><b>${t}：${on ? '已開通' : '未開通'}</b><span class="muted small">${esc(on ? used : sub)}</span>${how ? `<span class="muted small">${how}</span>` : ''}</div></div>`;
+    const st = (ico, t, on, used, sub, how) => `<div class="adm-row"><span class="adm-rico" aria-hidden="true">${ico}</span><div class="adm-rt"><b>${L(`${t}：${on ? '已開通' : '未開通'}`, `${window.aigileI18n?.t?.(t) ?? t}: ${on ? 'enabled' : 'not enabled'}`)}</b><span class="muted small">${esc(on ? used : sub)}</span>${how ? `<span class="muted small">${how}</span>` : ''}</div></div>`;
     return `<div class="pm-projs"><div class="pm-card adm-store"><div class="pm-card-head"><strong>儲存空間</strong></div>
       ${x.d ? st('🗄️', '專案文件區', x.d.enabled, `全部專案已用 ${fmtBytes(x.d.usedBytes)} / ${fmtBytes(x.d.limitBytes)}`, '開通前不能上傳專案文件', x.d.enabled ? '' : 'Cloudflare 版：建 R2 bucket（<code>npx wrangler@4 r2 bucket create aigile-switch-docs</code>），wrangler.toml 綁定 <code>DOCS</code> 後重新部署。本機與 Docker 版存在 data 資料夾，不用開通。') : ''}
-      ${x.f ? st('📎', '訊息附件', x.f.enabled, `已用 ${fmtBytes(x.f.usedBytes)} / ${fmtBytes(x.f.limitBytes)}`, '開通前不能上傳訊息附件', '保存時間由主機的 <code>FILE_TTL_HOURS</code> 設定（預設 1 小時，到期自動刪除），改了要重新啟動或部署。') : ''}</div>
+      ${x.f ? st('📎', '訊息附件', x.f.enabled, L(`已用 ${fmtBytes(x.f.usedBytes)} / ${fmtBytes(x.f.limitBytes)} · 上傳 ${ttlZh(curTtl())}後自動刪除`, `Used ${fmtBytes(x.f.usedBytes)} / ${fmtBytes(x.f.limitBytes)} · deleted automatically ${ttlEn(curTtl())} after upload`), '開通前不能上傳訊息附件', '') : ''}</div>
+      ${admTtlHtml(x.t)}
       <div class="pm-card adm-audit"><div class="pm-card-head"><strong>全站稽核紀錄</strong><span class="muted small">最近 200 筆檔案上傳、下載、刪除、拒絕；一般成員在「文件」只看得到自己的</span><span class="grow"></span><button type="button" class="link small" data-adm-audit-reload>重新整理</button></div>
       ${auditTableHtml(x.a.items || [])}</div></div>`;
+  }
+  // 訊息附件保存時間（全站一份，存資料庫、不用重新啟動）；改了只影響之後上傳的檔
+  // 主機的 FILE_TTL_HOURS 只是初始值：這裡沒改過才用它，改過就以這裡為準
+  function admTtlHtml(t) {
+    if (!t) return '';
+    const hs = t.choices.includes(t.hours) ? t.choices : [...t.choices, t.hours].sort((a, b) => a - b);
+    const env = '<code>FILE_TTL_HOURS</code>';
+    const src = t.custom ? L(`目前用這裡的設定。主機的 ${env} 只決定還沒改過時的初始值，改過之後就以這裡為準。`, `This setting is in use. The server's ${env} only sets the starting value until someone changes it here; after that, this setting wins.`)
+      : t.envHours ? L(`目前用主機 ${env} 的值（${ttlZh(t.envHours)}）。在這裡改過之後就以這裡為準，${env} 不再影響。`, `Currently using the server's ${env} value (${ttlEn(t.envHours)}). Once you change it here, this setting wins and ${env} no longer applies.`)
+        : L(`目前是預設的 24 小時（主機沒設 ${env}）。主機設了 ${env} 會改用它當初始值；在這裡改過之後就以這裡為準。`, `Currently the default of 24 hours (the server has no ${env}). If the server sets ${env}, that becomes the starting value; once you change it here, this setting wins.`);
+    const logs = (t.log || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(L(`${e.byName || ''} 把保存時間從 ${ttlZh(e.from)} 改成 ${ttlZh(e.to)}`, `${e.byName || ''} changed retention from ${ttlEn(e.from)} to ${ttlEn(e.to)}`))}</li>`).join('');
+    return `<div class="pm-card adm-ttl"><div class="pm-setrow"><label for="adm-ttl">訊息附件保存時間</label><select id="adm-ttl" aria-describedby="adm-ttl-hint">${hs.map(h => `<option value="${h}"${h === t.hours ? ' selected' : ''}>${esc(ttlLabel(h))}${h === t.defaultHours ? L('（預設）', ' (default)') : ''}</option>`).join('')}</select><button type="button" class="btn small primary" data-pp="filettl">儲存</button>
+      <span class="muted small" id="adm-ttl-hint">訊息裡上傳的文件、截圖過了這段時間自動刪除（專案文件不受影響）。改了只影響之後上傳的檔；已經上傳的照上傳當時的設定到期，不會提早或延後刪除。存好立即生效，不用重新啟動或部署。</span>
+      <span class="muted small adm-ttl-src">${src}</span></div>
+      <details class="pm-gs-log adm-ttl-log"${perm.ttlLogOpen ? ' open' : ''}><summary>異動紀錄</summary><ul class="pa-log">${logs || '<li class="muted small">還沒有紀錄</li>'}</ul></details></div>`;
   }
   function admBodyHtml() {
     const narrow = narrowPerm();
@@ -9406,6 +9445,18 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (!pp) return;
     const id = pp.closest('[data-pj]')?.dataset.pj, a = pp.dataset.pp;
     if (perm.moreOpen) perm.moreOpen = null; // 選單裡選了就收起
+    if (a === 'filettl') {
+      const hours = Number($('#adm-ttl').value);
+      try {
+        const t = await api('/api/file-ttl', { method: 'PUT', body: { hours } });
+        if (perm.admAudit) perm.admAudit.t = t;
+        applyFileTtl(t.hours);
+        toast(L(`已儲存：之後上傳的訊息附件保存 ${ttlZh(t.hours)}；已上傳的照原本的到期時間`, `Saved: attachments uploaded from now on are kept for ${ttlEn(t.hours)}; files already uploaded keep their original expiry`));
+        perm.ttlLogOpen = !!$('.adm-ttl-log')?.open;
+        drawPerm();
+      } catch (err) { toast(err.message); }
+      return;
+    }
     if (a === 'aitools') {
       const off = [...document.querySelectorAll('[data-pm-tool]')].filter(x => !x.checked).map(x => x.dataset.pmTool);
       if (perm.aiTools?.tools && off.length >= perm.aiTools.tools.length) return toast('至少要留一個工具開著');

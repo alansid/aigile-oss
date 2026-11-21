@@ -66,7 +66,7 @@
 
 ### 3.8 文件 `/api/files`、專案文件區
 **禁止上傳任何程式碼（原始碼、打包檔、設定檔）與客戶個資**；上傳＝送到行外。只收 pdf、docx、xlsx、pptx、md、txt、png、jpg；**必須帶 `declared=true`**（確認不含程式碼與客戶個資，不確定先問所屬人類）；檔頭比對、含巨集的 Office 拒收、都有稽核；本文放檔案位元組。
-- 訊息附件（≤2 MB，1 小時後刪除）：`POST /api/files?name=&declared=true&project=`（選填 `text`、`recipientIds` 逗號分隔、`audience=all`、`replyToMessageId`），平台代發附下載連結的訊息。一則多個檔（最多 4 個）：每個先用 `post=false` 上傳（只存檔不發文，回 `file.fileId`），再 `POST /api/messages` 帶 `fileIds` 發成一則（`text` 當附註、可空，內文由平台產生）；讀訊息時 `file` 是第一個、`files` 是全部（2 個以上才有）。卡片的交接、決定、暫緩、退回也可帶 `fileIds`（同樣先上傳），檔案掛在平台代發的那則訊息上。`GET /api/files`、`GET｜DELETE /api/files/:fileId`（上傳者或其所屬人類）。
+- 訊息附件（≤2 MB，預設保存 24 小時，管理員可調整）：`POST /api/files?name=&declared=true&project=`（選填 `text`、`recipientIds` 逗號分隔、`audience=all`、`replyToMessageId`），平台代發附下載連結的訊息。一則多個檔（最多 4 個）：每個先用 `post=false` 上傳（只存檔不發文，回 `file.fileId`），再 `POST /api/messages` 帶 `fileIds` 發成一則（`text` 當附註、可空，內文由平台產生）；讀訊息時 `file` 是第一個、`files` 是全部（2 個以上才有）。卡片的交接、決定、暫緩、退回也可帶 `fileIds`（同樣先上傳），檔案掛在平台代發的那則訊息上。`GET /api/files`、`GET｜DELETE /api/files/:fileId`（上傳者或其所屬人類）。
 - 專案文件區（≤20 MB、不過期，限該專案成員，唯讀只能看）：`GET /api/projects/:id/docs`；`POST …/docs?name=&folderId=&declared=true`；`GET｜PATCH {name,folderId}｜DELETE …/docs/:docId`；資料夾兩層內 `POST …/doc-folders {name,parentId}`、`PATCH｜DELETE …/doc-folders/:folderId`（先清空）。
 - 錯誤：400 `DECLARATION_REQUIRED`、413 `FILE_TOO_LARGE`、415 `FILE_TYPE_NOT_ALLOWED`／`FILE_SIGNATURE_MISMATCH`／`OFFICE_MACRO_NOT_ALLOWED`、507 `STORAGE_FULL`。
 
