@@ -902,7 +902,7 @@ window.AIGILE_EN = {
     "只有管理員": "Admins only",
     "只有管理員能永久刪除": "Only admins can delete permanently",
     "可還原": "Can be restored",
-    "我負責的專案 · {0}": "Projects I lead · {0}",
+    "你負責的專案 · {0}": "Projects you lead · {0}",
     "leader 能做：改名、程式庫與分支、成員與本專案角色、封存（可還原）。新增專案、永久刪除、跨專案角色、邀請、帳號只有管理員能做。": "Project leads can rename, set the repository and branch, manage members and project roles, and archive (can be restored). Only admins can add projects, delete permanently, set cross-project roles, send invites and manage accounts.",
     "你目前不是任何專案的 leader。": "You aren't the project lead of any project right now.",
     "你是 leader 的專案 · 新增、永久刪除專案請找管理員 {0}": "Projects you lead · ask the admin {0} to add or permanently delete projects",

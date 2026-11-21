@@ -8864,7 +8864,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       return `<tr class="pm-prow${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}"><td class="c-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}</td><td class="c-code" data-label="API 代號" title="${esc(p.id)}">${esc(p.id)}</td><td class="c-num" data-label="成員">${p.memberCount}</td><td class="c-num2" data-label="未結案卡">${p.openCards}</td><td class="c-repo" data-label="程式庫">${repo}</td><td class="c-more">${last}</td></tr>${log}`;
     }).join('');
     return `<div class="pm-projs">
-      <div class="pm-card"><div class="pm-card-head"><strong>我負責的專案 · ${list.filter(p => !p.archived).length}</strong></div>
+      <div class="pm-card"><div class="pm-card-head"><strong>你負責的專案 · ${list.filter(p => !p.archived).length}</strong></div>
         ${list.length ? `<table class="pm-table pm-ptable"><thead><tr><th scope="col">專案</th><th scope="col" class="c-code">API 代號</th><th scope="col" class="c-num">成員</th><th scope="col" class="c-num2">未結案卡</th><th scope="col" class="c-repo">程式庫</th><th scope="col" class="c-more"><span class="sr-only">動作</span></th></tr></thead>
         <tbody>${rows}</tbody></table>` : '<p class="muted small pm-pad">你目前不是任何專案的 leader。</p>'}</div>
       <div class="pm-card pm-lead-note"><p class="muted small">leader 能做：改名、程式庫與分支、成員與本專案角色、封存（可還原）。新增專案、永久刪除、跨專案角色、邀請、帳號只有管理員能做。</p></div></div>`;

@@ -167,7 +167,7 @@ try {
   await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.pm-ptable')"), 10000, '英文專案管理頁');
   const enP = await txt('#page-work');
   assert.match(enP, /Projects you lead · ask the admin 劉昱志 to add or permanently delete projects/, '英文副標：' + enP.slice(0, 200));
-  assert.match(enP, /Projects I lead · 2/, '英文卡片標題');
+  assert.match(enP, /Projects you lead · 2/, '英文卡片標題（跟要你處理同一個說法，UX #6595）');
   await click('[data-pm-more="預設專案"]');
   await until(() => js("!!document.querySelector('.pm-more-menu')"), 5000, '英文 ⋯ 選單');
   const enM = await txt('.pm-more-menu');
