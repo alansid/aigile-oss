@@ -174,6 +174,7 @@ try {
   await js(helpers);
   await shotDialog();
   assert.match(await text('#modal-root .warn-box'), /^Once uploaded, every group member can download these\. They are deleted automatically after 1 hour\. Make sure no screenshot contains customer data\.$/, 'F 英文截圖上傳視窗 1 hour：' + await text('#modal-root .warn-box'));
+  if (await js("document.querySelectorAll('#modal-root .up-cell, #modal-root .att-cell').length") <= 1) assert.equal(await text('#up-declare-t'), 'I have checked it: this screenshot contains no code and no customer personal data', 'F 英文只有 1 張時用單數');
   await shot('09-英文-電腦1280-一般成員-上傳截圖視窗-1小時');
   await closeModal();
   await docDialog();

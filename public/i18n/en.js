@@ -2308,6 +2308,8 @@ window.AIGILE_EN = {
     "從相簿或檔案選": "from photos or files",
     "再加一張": "Add another",
     "再加一個": "Add another",
+    "我已逐張看過，這 1 張截圖都不含任何程式碼與客戶個資": "I have checked it: this screenshot contains no code and no customer personal data",
+    "我已逐個看過，這 1 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資": "I have checked it: this file contains no code (source, builds, config files) and no customer personal data",
     "我已逐張看過，這 {0} 張截圖都不含任何程式碼與客戶個資": "I have checked each one: these {0} screenshots contain no code and no customer personal data",
     "我已逐個看過，這 {0} 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資": "I have checked each one: these {0} files contain no code (source, builds, config files) and no customer personal data",
     "上傳 {0} 張（略過 {1} 張）": "Upload {0} (skip {1})",

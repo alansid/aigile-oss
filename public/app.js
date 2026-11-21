@@ -7802,7 +7802,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <button type="button" class="up-rm" data-up-rm="${k}" aria-label="${esc(`拿掉第 ${k + 1} 張：${x.file.name}`)}" ${busy ? 'disabled' : ''}>×</button>
       <figcaption><span class="up-fn">${k + 1}. ${esc(x.file.name)}</span><span class="muted">${fmtBytes(x.file.size)}</span></figcaption></figure>`).join('')
     + (st.items.length < MAX_UP ? `<button type="button" class="up-add" data-up-add ${busy ? 'disabled' : ''}><b aria-hidden="true">＋</b><span>${attAllImg(st) ? '再加一張' : '再加一個'}</span><span class="muted small"><span class="k-desk">或直接 Ctrl+V 貼上</span><span class="k-mob">從相簿或檔案選</span></span></button>` : '');
-  const attDeclareText = st => { const n = attOk(st).length; return attAllImg(st) ? `我已逐張看過，這 ${n} 張截圖都不含任何程式碼與客戶個資` : `我已逐個看過，這 ${n} 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資`; };
+  const attDeclareText = st => { const n = attOk(st).length; if (n === 1) return attAllImg(st) ? L('我已逐張看過，這 1 張截圖都不含任何程式碼與客戶個資', 'I have checked it: this screenshot contains no code and no customer personal data') : L('我已逐個看過，這 1 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資', 'I have checked it: this file contains no code (source, builds, config files) and no customer personal data'); return attAllImg(st) ? `我已逐張看過，這 ${n} 張截圖都不含任何程式碼與客戶個資` : `我已逐個看過，這 ${n} 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資`; };
   const attViewItems = st => st.items.map(x => ({ url: x.url, name: x.file.name, sub: fmtBytes(x.file.size) + (x.problem ? ` · ${x.problem}` : '') }));
   // 嵌在輸入框裡的附件格：縮圖格放文字框上面、聲明放下面；沒有附件時兩格都是空的
   const attGridHtml = key => { const st = attMap.get(key); return `<div class="att-grid" data-att-grid="${esc(key)}">${st?.items.length ? `<section class="up-multi" aria-label="要附上的截圖"><div class="up-mh"><span class="att-count">${attCountHtml(st)}</span><span class="muted small up-tip">點縮圖可放大檢查</span></div>
@@ -8492,7 +8492,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const auditLabel = { upload: '上傳', download: '下載', delete: '刪除', reject: '拒絕', expire: '到期清除', rename: '改名', move: '搬移' };
   const auditTableHtml = items => (items.length ? `<div class="table-scroll"><table class="audit-table"><thead><tr><th>時間</th><th>動作</th><th>操作者</th><th>檔名</th><th>大小</th><th>SHA-256</th><th>聲明</th><th>備註</th></tr></thead><tbody>${
     items.map(x => `<tr><td>${fmtTime(x.at)}</td><td>${auditLabel[x.action] || x.action}</td>
-      <td>${esc(x.actor.name || x.actor.participantId || '')}${x.actor.memberType === 'ai' ? '（AI）' : x.actor.memberType === 'human' ? '（人類）' : ''}</td>
+      <td>${esc(x.actor.name || x.actor.participantId || '')}${x.actor.memberType === 'ai' ? L('（AI）', ' (AI)') : x.actor.memberType === 'human' ? L('（人類）', ' (human)') : ''}</td>
       <td>${esc(x.name || '')}</td><td>${x.size == null ? '' : fmtBytes(x.size)}</td>
       <td>${x.sha256 ? esc(x.sha256.slice(0, 12)) + '…' : ''}</td><td>${x.declared == null ? '' : x.declared ? '✓' : '✗'}</td>
       <td>${esc(x.detail || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted small">沒有紀錄。</p>');
