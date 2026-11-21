@@ -63,8 +63,25 @@ const runLine = (cwd, code) => new Promise(ok => execFile(process.execPath, ['-e
 const len = s => [...s].length;
 const pidFiles = [];
 const killPid = pid => { try { if (pid > 0) process.kill(pid); } catch {} };
-
+const closeOf = (proc, label = 'process', ms = 15_000) => {
+  if (!proc || proc.exitCode !== null) return Promise.resolve(proc?.exitCode ?? 0);
+  return new Promise((ok, bad) => {
+    const t = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch {}
+      bad(new Error(`等待 ${label} 結束逾時（${ms}ms）`));
+    }, ms);
+    proc.once('close', code => { clearTimeout(t); ok(code); });
+  });
+};
 let watcherChild, mockServer;
+const stopWatcher = async () => {
+  if (!watcherChild) return;
+  const done = closeOf(watcherChild, 'watcherChild', 5000).catch(() => {});
+  try { watcherChild.kill(); } catch {}
+  await done;
+  watcherChild = null;
+};
+const stopMock = () => { mockServer?.closeAllConnections?.(); mockServer?.close(); mockServer = null; };
 
 try {
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
@@ -293,11 +310,8 @@ try {
   assert.equal(wakes, 0, '視窗關著時不呼叫 /api/me/wake');
   assert.equal(fakeCalls().length, wLogBefore, '視窗關著時不 spawn 背景 agy');
   assert.equal(fs.existsSync(path.join(WKD2, 'watcher.sid')), false, 'Antigravity 不寫 watcher.sid');
-  watcherChild.kill();
-  await new Promise(ok => watcherChild.once('close', ok));
-  watcherChild = null;
-  mockServer.close();
-  mockServer = null;
+  await stopWatcher();
+  stopMock();
 
   // 5b. 前景開著跑 aigile-wait.mjs 時只響門鈴叫前景（0 次背景 agy）；關窗期間來訊保留，再開視窗時照樣拿到
   const HYB = fs.mkdtempSync(path.join(dataDir, 'hyb-'));
@@ -341,32 +355,30 @@ try {
   const waitProc = spawn(process.execPath, [pub('aigile-wait.mjs'), '--agent', agent, '--look-sec', '1'], {
     cwd: HYB, windowsHide: true, env: { ...process.env, ...ENV, AIGILE_BASE: hybBase, AIGILE_TOKEN: 'test-token', AIGILE_TOKEN_FILE: '' },
   });
+  const waitDone = closeOf(waitProc, 'waitProc');
   let waitOut = '';
   waitProc.stdout.setEncoding('utf8').on('data', d => { waitOut += d; });
   for (let i = 0; i < 50 && (!fs.existsSync(path.join(HYBD, 'wait.pid')) || !hybWaitReady); i++) await new Promise(ok => setTimeout(ok, 100));
   assert.ok(fs.existsSync(path.join(HYBD, 'wait.pid')) && hybWaitReady, '前景 wait.pid 已建立並進入等門鈴狀態');
   hybPending = [{ notificationId: 'notif_hyb_1', messageId: 'msg_hyb_1', wake: true, ask: true, preview: '前景測試', sender: { name: '昱志' } }];
   await waitHyb(/前景等待腳本執行中，已寫門鈴檔交由前景處理/);
-  const waitExit = await new Promise(ok => waitProc.once('close', ok));
+  const waitExit = await waitDone;
   assert.equal(waitExit, 0, '前景 aigile-wait 醒來並以 exit 0 結束：' + waitOut);
   assert.match(waitOut, /PENDING 1/, '前景拿到 PENDING 1');
-  assert.equal(fakeCalls().length, hybCallsBefore, '前景開著時不 spawn 背景 agy');
   hybPending = [{ notificationId: 'notif_hyb_2', messageId: 'msg_hyb_2', wake: true, ask: true, preview: '關窗保留測試', sender: { name: '昱志' } }];
   await waitHyb(/視窗沒開，等開視窗再處理/);
   assert.equal(fakeCalls().length, hybCallsBefore, '關窗期間不 spawn 背景 agy');
   const waitProc2 = spawn(process.execPath, [pub('aigile-wait.mjs'), '--agent', agent, '--look-sec', '1'], {
     cwd: HYB, windowsHide: true, env: { ...process.env, ...ENV, AIGILE_BASE: hybBase, AIGILE_TOKEN: 'test-token', AIGILE_TOKEN_FILE: '' },
   });
+  const waitDone2 = closeOf(waitProc2, 'waitProc2');
   let waitOut2 = '';
   waitProc2.stdout.setEncoding('utf8').on('data', d => { waitOut2 += d; });
-  const waitExit2 = await new Promise(ok => waitProc2.once('close', ok));
+  const waitExit2 = await waitDone2;
   assert.equal(waitExit2, 0, '重開視窗後 wait 立即拿到保留的通知：' + waitOut2);
   assert.match(waitOut2, /PENDING 1/, '重開視窗拿到 PENDING 1');
-  watcherChild.kill();
-  await new Promise(ok => watcherChild.once('close', ok));
-  watcherChild = null;
-  mockServer.close();
-  mockServer = null;
+  await stopWatcher();
+  stopMock();
 
   // 5c. onboarding-link 不帶 --foreground，setup 清掉舊 --foreground／WAKE_FOREGROUND，Codex 維持原樣
   const fgLinkAgy = await (await fetch(`${BASE}/api/my-ais/${ai.participantId}/onboarding-link`, { method: 'POST', headers: { Authorization: `Bearer ${boss.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tool: 'antigravity', foreground: 'off', autoStandby: true, start: true }) })).json();
@@ -443,6 +455,7 @@ try {
   const w1 = spawn(process.execPath, [pub('aigile-wait.mjs'), '--agent', agent, '--look-sec', '1'], {
     cwd: CCD1, windowsHide: true, env: { ...process.env, ...ENV, AIGILE_BASE: ccBase, AIGILE_TOKEN: 'test-token', AIGILE_TOKEN_FILE: '' },
   });
+  const w1Done = closeOf(w1, 'w1');
   let w1Out = '';
   w1.stdout.setEncoding('utf8').on('data', d => { w1Out += d; });
   for (let i = 0; i < 50 && (ccOnlineSids.length < 1 || ccWaitCount < 1); i++) await new Promise(ok => setTimeout(ok, 100));
@@ -451,6 +464,7 @@ try {
   const w2 = spawn(process.execPath, [pub('aigile-wait.mjs'), '--agent', agent, '--look-sec', '1'], {
     cwd: CCD2, windowsHide: true, env: { ...process.env, ...ENV, AIGILE_BASE: ccBase, AIGILE_TOKEN: 'test-token', AIGILE_TOKEN_FILE: '' },
   });
+  const w2Done = closeOf(w2, 'w2');
   let w2Out = '';
   w2.stdout.setEncoding('utf8').on('data', d => { w2Out += d; });
   for (let i = 0; i < 50 && (ccOnlineSids.length < 2 || ccWaitCount < 2); i++) await new Promise(ok => setTimeout(ok, 100));
@@ -460,16 +474,13 @@ try {
   const bellNow = new Date().toISOString();
   fs.writeFileSync(path.join(CCA1, 'bell.json'), JSON.stringify({ v: 1, seq: 99, pending: 1, bellAt: bellNow, heartbeatAt: bellNow, pid: watcherChild.pid }));
   fs.writeFileSync(path.join(CCA2, 'bell.json'), JSON.stringify({ v: 1, seq: 99, pending: 1, bellAt: bellNow, heartbeatAt: bellNow, pid: watcherChild.pid }));
-  const [w1Code, w2Code] = await Promise.all([new Promise(ok => w1.once('close', ok)), new Promise(ok => w2.once('close', ok))]);
+  const [w1Code, w2Code] = await Promise.all([w1Done, w2Done]);
   assert.equal(w1Code, 51, '舊 wait 必須收到 SUPERSEDED（51）：' + w1Out);
   assert.match(w1Out, /SUPERSEDED/, '舊 wait 輸出 SUPERSEDED');
   assert.equal(w2Code, 0, '新 wait 正常接手（0）：' + w2Out);
   assert.match(w2Out, /PENDING 1/, '新 wait 拿到 PENDING 1');
-  watcherChild.kill();
-  await new Promise(ok => watcherChild.once('close', ok));
-  watcherChild = null;
-  mockServer.close();
-  mockServer = null;
+  await stopWatcher();
+  stopMock();
   console.log('✓ 5 背景喚醒、前景忙碌等待、混合模式、G（auto／off 雙模式含 Codex）與 Claude Code superseded 保護：全過');
 
   // 6. 技能同步狀態認得 antigravity；中英文文件與介面同步
@@ -480,12 +491,10 @@ try {
   assert.ok(fs.readFileSync(pub('i18n/en.js'), 'utf8').includes('Antigravity CLI'));
   console.log('antigravity-cli-test：全部通過');
 } finally {
-  if (watcherChild && watcherChild.exitCode === null) {
-    watcherChild.kill();
-    await new Promise(ok => watcherChild.once('close', ok));
-  }
-  mockServer?.close();
+  await stopWatcher();
+  stopMock();
   for (const f of pidFiles) { try { killPid(Number(fs.readFileSync(f, 'utf8'))); } catch {} }
+  server.closeAllConnections?.();
   server.close();
   db.close?.();
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
