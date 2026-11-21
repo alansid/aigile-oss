@@ -92,9 +92,13 @@ Other environment variables (see "Settings" below) go into `environment` the sam
 On first start a "預設專案" (default project) and an admin account are created automatically:
 
 1. Open the site and log in with username **admin**, password **admin** (or your `ADMIN_PASSWORD`).
-2. On first login you must change the username and password (the username can't be `admin`, the password needs at least 8 characters) before you can use anything else; until then every page shows a red warning.
-3. Then the first-time setup opens with four steps: group name → first project (name; the URL name is optional and generated from the name, e.g. `my-app` or `project-1`) → invite members (creates invite links and shows whether open sign-up is on) → create your first AI and show its onboarding instructions. Every step can be skipped and changed later on the admin pages; you can also "Load demo data" at the top to see what it looks like. "Finish" or "Skip all" closes it for good; closing with × brings it back on next login.
+2. The first sign-in opens the credential change page. Choose a username other than `admin` and a password with at least 8 characters. Save and select **Get started**.
+3. First-time setup walks through the group name, first project, member invitations, and first AI. Leave the project URL name blank to generate one automatically, such as `my-app`. The invitations step also shows whether open sign-up is enabled. After creating a Claude Code or Codex AI, choose **Copy one-line start** and paste it into a terminal in the AI's working folder. For **Other AI**, choose **Copy onboarding text** and paste it into the AI's chat. Every step is optional, and **Load demo data** lets you explore with sample content. **Finish** or **Skip all** ends the guide. Closing it with × brings it back on the next sign-in.
 4. **For a public deployment, set `ADMIN_PASSWORD` first** (Workers: `wrangler secret put ADMIN_PASSWORD`) so nobody can log in with the default password before you.
+
+Use **Member management**, **Project management**, and **My AIs** in the avatar menu to change these settings. To apply a skill template, open the **Skill library** in **My AIs**, select **+ Add skill**, and choose a project and template.
+
+If sign-in availability cannot be checked, confirm that `npm start` or the Docker container is still running, then select **Retry**. If the default administrator could not be initialized, check the database connection, write permissions for the data directory, and server logs.
 
 </details>
 
@@ -132,7 +136,7 @@ Want to see it in use first? After logging in, click "Load demo data" in the set
 | Needs your attention | Everything that needs you, awaits your verification or your decision, in one place |
 | Team status | Online state, current work and token expiry of every member, plus how many times each AI was woken today (flagged above 15); assignments unread for 20+ minutes are flagged "no response yet" |
 | My AIs | 15 role templates pre-fill the six setup questions; copy the onboarding text for each tool, reissue tokens, standing permissions (deploys) |
-| Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent. Six built-in template skills (commit messages, handover, reporting and asking, testing, code review, security basics; in English and Chinese): a lead clicks "Apply" to copy one into a project and edit it before publishing; template updates are flagged, never applied automatically |
+| Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent. Admins and project leads can select **+ Add skill** to choose a project, preview one of the six built-in bilingual templates, and apply it. When a template changes, the app prompts users to review the update before applying it to the project skill |
 | Docs | Message attachments (deleted after 1 hour by default) and a long-term project docs area (stored in R2) |
 | Direct messages | Humans can DM their own AIs |
 | Demo data | Load a fictional demo project (cards, human–AI conversation, a decision card) in one click, and clear it in one click without touching real data |

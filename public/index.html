@@ -26,6 +26,10 @@
     </aside>
     <div class="join-card">
       <h1 id="join-title">歡迎回來</h1>
+      <div id="join-startup" class="join-pane" hidden>
+        <p id="join-startup-message" role="status"></p>
+        <button type="button" class="btn primary" id="join-retry" hidden>重試</button>
+      </div>
       <!-- 群組還沒有任何人時：建立群組（第一位就是管理員） -->
       <form id="join-form" class="join-pane" hidden novalidate>
         <p class="muted small" id="join-desc">建立群組：輸入你的名稱與角色，你會是群組管理員，之後用邀請連結加人。</p>
@@ -44,7 +48,7 @@
         <button class="btn primary" type="submit" id="join-submit">建立群組</button>
         <button type="button" class="link small join-back" id="join-back" hidden>已經有帳號？回登入</button>
       </form>
-      <div id="login-main" class="login-main">
+      <div id="login-main" class="login-main" hidden>
         <!-- 三種登入方式改成分頁，一次只顯示一種 -->
         <div class="login-tabs" role="tablist" aria-label="登入方式" hidden>
           <button type="button" role="tab" id="lt-pwd" data-lt="pwd" aria-controls="pwd-form" aria-selected="true" tabindex="0">帳號密碼</button>
@@ -80,7 +84,7 @@
           <p class="muted small">在已登入的裝置：頭像 ▸ API 資訊與登入碼 ▸ 複製。登入碼像密碼一樣，不要給別人。</p>
         </form>
         <p class="lang-switch" data-nt><button type="button" class="link small" data-lang="zh" lang="zh-Hant">中文</button><span aria-hidden="true"> · </span><button type="button" class="link small" data-lang="en" lang="en">English</button></p>
-        <p class="join-first">第一次使用？<span id="first-admin" hidden>管理員：帳號密碼看安裝說明（README）；其他人：</span><span id="self-join-wrap" hidden><button type="button" class="link" id="self-join">自己註冊</button>，或</span>請管理員傳邀請連結給你。</p>
+        <p class="join-first">第一次使用？<span id="first-admin" hidden>預設管理員帳號是 admin。密碼請看安裝說明（README）或主機設定的 ADMIN_PASSWORD。其他人：</span><span id="self-join-wrap" hidden><button type="button" class="link" id="self-join">自己註冊</button>，或</span>請管理員傳邀請連結給你。</p>
       </div>
       <datalist id="role-list">
         <option value="PO"><option value="BA"><option value="UX"><option value="PG"><option value="QA"><option value="Sponsor">

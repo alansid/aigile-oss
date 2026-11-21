@@ -3325,15 +3325,15 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 .ma-tool button { font: inherit; font-size: 14px; min-height: 44px; padding: 0 16px; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .ma-tool button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, .15); }
 .ma-tool button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-.ma-tool-ask { margin: 0; padding: 8px 12px; border-radius: 8px; background: #fef3c7; color: #92400e; font-weight: 600; font-size: 14px; }
+.ma-tool-ask, .sw-safety { margin: 0; padding: 8px 12px; border-radius: 8px; background: #fef3c7; color: #92400e; font-weight: 600; font-size: 14px; }
 .tok-tool { display: grid; gap: 8px; margin-top: 12px; }
 .tok-tool .ma-tool { justify-self: start; }
 /* 英文按鈕字長：不在按鈕裡斷行，放不下就整顆換到下一行 */
 .modal-foot:has(#tok-short) { flex-wrap: wrap; }
 #tok-short, #tok-copy { white-space: nowrap; }
 #tok-short:disabled { background: var(--surface-2); border-color: var(--border); color: var(--muted); opacity: 1; cursor: not-allowed; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ma-tool-ask { background: #3a3013; color: #f3dc9a; } }
-:root[data-theme="dark"] .ma-tool-ask { background: #3a3013; color: #f3dc9a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) :is(.ma-tool-ask, .sw-safety) { background: #3a3013; color: #f3dc9a; } }
+:root[data-theme="dark"] :is(.ma-tool-ask, .sw-safety) { background: #3a3013; color: #f3dc9a; }
 
 /* 永久刪除已封存的專案 */
 .pm-arch-acts { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }

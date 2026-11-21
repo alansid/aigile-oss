@@ -142,7 +142,7 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
   const MUST_KEY = id => 'must_change_cred:' + id;
   const CRED_ALLOW = new Set(['GET /api/me', 'GET /api/me/password', 'PUT /api/me/password', 'POST /api/auth/logout']);
   const credOk = new Set(); // 已確認不用改帳密的人（每份程式各查一次）
-  let adminReady = false;
+  let adminReady;
   // 即時喚醒門鈴（Supabase Realtime Broadcast）：沒設 URL／金鑰就完全不動作。只送 AI 的 ID、時間與簽章，不帶人名與內文
   const SB_URL = String(config.supabaseUrl || '').replace(/[/]+$/, '');
   const SB_KEY = config.supabaseKey || '';
@@ -898,18 +898,25 @@ export function createApp({ db, docText, flowsText = '', releases = null, config
     if (rows.length) { invalidatePeople(); console.log(`已把 ${rows.length} 個舊的登入碼／AI Token 改存雜湊`); }
   }
   async function ensureDefaultAdmin() {
-    adminReady = true;
-    if (await db.get("SELECT 1 AS x FROM participants WHERE kind = 'human' AND status = 'active' LIMIT 1")) return;
+    const activeHuman = () => db.get("SELECT 1 AS x FROM participants WHERE kind = 'human' AND status = 'active' LIMIT 1");
+    if (await activeHuman()) return;
     const id = randId('p'), ts = nowIso();
-    const r = await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects, is_admin)
-      SELECT ?,?,?,?,?,?,?,?,?,?,?,1 WHERE NOT EXISTS (SELECT 1 FROM participants WHERE kind = 'human' AND status = 'active')`,
-    id, 'human', '管理員', '', await newCode(), await tokenKey(newToken()), Date.now() + HUMAN_TOKEN_TTL_MS, ts, ts, 0, PROJECTS.join(','));
-    if (!r.changes) return; // 別的請求先建好了
-    await db.batch([
-      ['INSERT INTO credentials (participant_id, username, pwd_hash, updated_at) VALUES (?,?,?,?)', [id, 'admin', await hashPassword(ADMIN_PASSWORD), Date.now()]],
-      ["INSERT INTO app_settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'", [MUST_KEY(id)]],
-      ["INSERT INTO app_settings (key, value) VALUES ('setup_wizard', 'pending') ON CONFLICT(key) DO NOTHING", []]]); // 第一次設定引導
+    try {
+      // 管理員、帳密和首次設定必須一起寫入，失敗時才能完整重試。
+      await db.batch([
+        [`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects, is_admin)
+          SELECT ?,?,?,?,?,?,?,?,?,?,?,1 WHERE NOT EXISTS (SELECT 1 FROM participants WHERE kind = 'human' AND status = 'active')`,
+        [id, 'human', '管理員', '', await newCode(), await tokenKey(newToken()), Date.now() + HUMAN_TOKEN_TTL_MS, ts, ts, 0, PROJECTS.join(',')]],
+        ['INSERT INTO credentials (participant_id, username, pwd_hash, updated_at) SELECT ?,?,?,? WHERE EXISTS (SELECT 1 FROM participants WHERE id = ?)', [id, 'admin', await hashPassword(ADMIN_PASSWORD), Date.now(), id]],
+        ["INSERT INTO app_settings (key, value) SELECT ?, '1' WHERE EXISTS (SELECT 1 FROM participants WHERE id = ?) ON CONFLICT(key) DO UPDATE SET value = '1'", [MUST_KEY(id), id]],
+        ["INSERT INTO app_settings (key, value) SELECT 'setup_wizard', 'pending' WHERE EXISTS (SELECT 1 FROM participants WHERE id = ?) ON CONFLICT(key) DO NOTHING", [id]],
+      ]);
+    } catch (error) {
+      // 另一個實例可能已提交完整的管理員；本次交易已回復。
+      if (!(await activeHuman())) throw error;
+    }
     invalidatePeople();
+    if (!(await db.get('SELECT 1 AS x FROM participants WHERE id = ?', id))) return;
     console.log('已建立預設管理員（帳號 admin）：第一次登入要先改帳號和密碼');
     if (ADMIN_PASSWORD === 'admin') console.warn('⚠ 管理員密碼是預設的 admin：公開部署請先設 ADMIN_PASSWORD，並馬上登入改掉帳號密碼（誰先登入誰就拿到管理員）');
   }
@@ -1361,7 +1368,7 @@ ${ending}`;
     routes.push({ method, re, keys, handler, open, pattern });
   };
 
-  // setup＝群組還沒有任何人類，登入頁顯示「建立群組」；adminName 給登入頁「請管理員 X 傳邀請連結」
+  // 只有未啟用預設管理員的空群組才會顯示「建立群組」。
   // 內建即時通道（本機／Docker）：一條長連線，有新訊息、通知、私訊、卡片變動、門鈴就推一行（只有 ID）；Workers 回 404，用戶端退回輪詢
   route('GET', '/api/live', async ({ me, req }) => {
     if (!live) throw new ApiError(404, 'LIVE_DISABLED', '這個環境沒有內建即時通道（Cloudflare 版請設 Supabase，或照舊輪詢）');
@@ -1372,6 +1379,7 @@ ${ending}`;
   route('GET', '/api/health', async ({ ctx }) => {
     const admin = adminOf(await peopleMap(ctx));
     const js = await joinSettings();
+    if (DEFAULT_ADMIN && !admin) throw new ApiError(503, 'ADMIN_SETUP_FAILED', '無法初始化預設管理員');
     const defaultCredentials = DEFAULT_ADMIN && !!(await db.get("SELECT 1 AS x FROM app_settings WHERE key >= 'must_change_cred:' AND key < 'must_change_cred;' LIMIT 1")); // 預設管理員還沒改帳密：登入頁提示去看 README（不寫出密碼）
     return { ok: true, roomCodeRequired: js.roomCodeSet, setup: !admin, openJoin: js.openJoin, ...(defaultCredentials ? { defaultCredentials: true } : {}), loginMethods: login.methods, live: !!live, ...(TURNSTILE ? { turnstileSiteKey: TS_SITE, captchaAfterFails: TS_AFTER } : {}) }; // site key 本來就公開 // 公開端點不回管理員姓名
   }, { open: true });
@@ -3777,7 +3785,11 @@ ${ending}`;
         const ctx = {};
         await loadProjects();
         if (!tokensHashed) await hashOldTokens();
-        if (DEFAULT_ADMIN && !adminReady) await ensureDefaultAdmin();
+        if (DEFAULT_ADMIN) await (adminReady ??= ensureDefaultAdmin().catch(error => {
+          adminReady = undefined;
+          console.error('預設管理員初始化失敗', error);
+          throw new ApiError(503, 'ADMIN_SETUP_FAILED', '無法初始化預設管理員');
+        }));
         const me = r.open ? null : await authenticate(req, url);
         const routeKey = `${r.method} ${r.pattern}`;
         if (me?.kind === 'human' && DEFAULT_ADMIN && !credOk.has(me.id)) {

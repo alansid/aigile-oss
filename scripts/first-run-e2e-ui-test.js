@@ -69,7 +69,7 @@ try {
     const an = await h.val('#sw-ai-name');
     assert.ok(an && an.length <= 40 && !/[\s@]/.test(an), 'AI 名稱預填合法：' + an);
     await h.click('[data-sw="ai"]');
-    await until(() => h.js("!!document.querySelector('.sw-text')"), 10000, '照預設建好 AI：' + await h.swErr());
+    await until(() => h.js("!!document.querySelector('[data-sw=copyai]')"), 10000, '照預設建好 AI：' + await h.swErr());
     await h.click('[data-sw="done"]');
     await until(() => h.js("!!document.querySelector('.confirm-root [data-ok]')"), 5000, '沒複製就完成要先問'); await h.click('.confirm-root [data-ok]');
     await sleep(1500);
@@ -137,7 +137,7 @@ try {
     assert.equal(await h.val('#sw-ai-name'), '管理員', '撞名後打的字留著（不會被預填蓋掉）');
     await h.type('#sw-ai-name', '團隊的程式開發助手');
     await h.click('[data-sw="ai"]');
-    await until(() => h.js("!!document.querySelector('.sw-text')"), 10000, '改名後建好');
+    await until(() => h.js("!!document.querySelector('[data-sw=copyai]')"), 10000, '改名後建好');
     await h.click('[data-sw="done"]');
     await until(() => h.js("!!document.querySelector('.confirm-root [data-ok]')"), 5000, '沒複製就完成要先問'); await h.click('.confirm-root [data-ok]');
     await sleep(1500);

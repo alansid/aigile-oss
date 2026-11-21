@@ -189,18 +189,34 @@
 
   let joinHealth = {};
   async function showJoin() {
+    const startup = $('#join-startup'), message = $('#join-startup-message'), retry = $('#join-retry');
     $('#boot').hidden = true;
     $('#app').hidden = true;
     $('#invite').hidden = true;
+    $('#join-title').textContent = '歡迎回來';
+    $('#join-form').hidden = true;
+    $('#login-main').hidden = true;
+    retry.hidden = true;
+    startup.hidden = false;
+    message.textContent = '正在檢查登入服務…';
     $('#join').hidden = false;
     if ($('#token-error').textContent) { showOtherLogins(true); setLoginTab('code', false); } // 登入碼出錯就停在登入碼分頁
     try {
-      joinHealth = await api('/api/health');
+      const health = await api('/api/health', { timeoutMs: 10000 });
+      if (health?.ok !== true || typeof health.setup !== 'boolean') throw new Error('Invalid health response');
+      joinHealth = health;
       ts.key = joinHealth.turnstileSiteKey || '';
-      $('#first-admin').hidden = !joinHealth.defaultCredentials; // 還沒改預設帳密：同一句先講管理員去看 README
-      joinMode(joinHealth.setup ? 'setup' : 'login'); // 群組還沒有人：建立群組
-    } catch {}
+      $('#first-admin').hidden = !joinHealth.defaultCredentials;
+      joinMode(joinHealth.setup ? 'setup' : 'login');
+      startup.hidden = true;
+    } catch (error) {
+      message.textContent = error.code === 'ADMIN_SETUP_FAILED'
+        ? '無法初始化預設管理員。請主機管理員檢查資料庫連線、寫入權限與伺服器日誌，再按重試。'
+        : '無法確認登入服務狀態。請確認伺服器已啟動且連線正常，再按重試。';
+      retry.hidden = false;
+    }
   }
+  $('#join-retry').addEventListener('click', showJoin);
   // 登入頁三種模式：login 登入；setup 建立群組（第一位）；register 開放註冊時自己註冊
   function joinMode(mode) {
     const h = joinHealth, form = mode !== 'login';
@@ -668,10 +684,10 @@
       state.projectList?.length ? null : loadProjectList().catch(() => {})]); // 專案清單還沒載入完就打開引導（伺服器回得慢時）：先等它，不然第一隻 AI 送出時沒有專案
     const pj = (state.projectList || []).find(p => !p.archived) || null;
     const tpl = (roles.items || []).filter(r => r.resident !== false && r.key !== 'custom');
-    const st = { step: 0, invites: [], ai: null, link: null, tool: 'claude', copied: false, demo: null };
+    const st = { step: 0, invites: [], ai: null, tool: 'claude', copied: false, copying: false, manualText: '', demo: null };
     const SW_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['antigravity', 'Antigravity CLI'], ['other', '其他 AI']];
     const STEPS = ['群組名稱', '第一個專案', '邀請成員', '第一隻 AI'];
-    const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '四個步驟，每步都可以略過；之後在管理頁都改得到。' });
+    const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '每步都可以略過，之後可在「成員管理」、「專案管理」和「我的 AI」調整。' });
     const el = body.querySelector('#sw');
     const finish = async skipped => { try { await api('/api/setup-wizard/done', { method: 'POST' }); } catch {} if (skipped) store.set(NEXT_KEY(), '1'); closeModal(); location.reload(); };
     const btns = (main, mainLabel) => `<div class="sw-actions"><button type="button" class="link" data-sw="skipall">全部略過</button><span class="grow"></span>${st.step < 3 ? '<button type="button" class="btn" data-sw="skip">略過這步</button>' : ''}${main ? `<button type="button" class="btn primary" data-sw="${main}">${mainLabel}</button>` : ''}</div>`;
@@ -684,10 +700,21 @@
         ${pj ? `<div class="switch-row sw-pj-join"><div><b id="sw-pjj-t">新成員可以申請加入「${esc(pj.name)}」</b><span class="small muted">${swJoinOpen(pj) ? '打開中：自己註冊的人會在主畫面看到這個專案、按「申請加入」，你核准後就加入。' : '關閉中：註冊的人看不到這個專案，要你在「成員管理」把人加進來。'}</span></div><button type="button" class="switch" role="switch" aria-checked="${swJoinOpen(pj)}" aria-labelledby="sw-pjj-t" data-sw="pjjoin"><span></span></button></div>` : ''}
         <div class="sw-inv" data-msg-host><label class="field">邀請成員（產生一次性連結，直接加進「${esc(pj?.name || '')}」）<input id="sw-inv-name" maxlength="40" placeholder="成員名字"></label><button type="button" class="btn" data-sw="invite">產生邀請連結</button></div>
         ${st.invites.length ? `<ul class="sw-links">${st.invites.map((v, i) => `<li><b>${esc(v.name)}</b><code>${esc(v.url)}</code><button type="button" class="btn small" data-sw-copy="${i}">複製連結</button></li>`).join('')}</ul>` : ''}${btns('next', '下一步')}`;
-      else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p>${btns('ai', '建立 AI')}`;
-      else html = `<p class="small">已建立「${esc(st.ai.name)}」。選你用的 AI 工具，按「複製」貼給它，它就會自己接入：</p>
-        <div class="seg-scope sw-tool" role="group" aria-label="你的 AI 工具">${SW_TOOLS.map(([k, t]) => `<button type="button" data-sw-tool="${k}" aria-pressed="${st.tool === k}">${t}</button>`).join('')}</div>
-        <textarea class="sw-text" readonly rows="9" aria-label="接入指令">${esc(shortOnboardingText(st.ai, st.link, st.tool))}</textarea><p class="field-hint">連結 15 分鐘內有效、只能讀一次；過期到「我的 AI」按「複製接入文字」重新產生。</p><div class="sw-actions"><span class="grow"></span><button type="button" class="btn" data-sw="done">完成</button><button type="button" class="btn primary" data-sw="copyai">${st.copied ? '✓ 已複製' : '複製'}</button></div>`;
+      else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p><p class="field-hint">要套用技能範本，完成設定後到「我的 AI」的「技能庫」，按「＋ 新增技能」。</p>${btns('ai', '建立 AI')}`;
+      else {
+        const oneLine = st.tool !== 'other';
+        const copyLabel = oneLine ? '複製一行啟動' : '複製接入文字';
+        const pasteHint = oneLine
+          ? '將一行啟動貼到這隻 AI 的工作資料夾的終端機。執行即同意自動待命，重開機可以貼同一行接回。'
+          : '將接入文字貼到這隻 AI 的對話。';
+        html = `<p class="small">已建立「${esc(st.ai.name)}」。請選擇你使用的 AI 工具。</p>
+          <div class="seg-scope sw-tool" role="group" aria-label="你的 AI 工具">${SW_TOOLS.map(([k, t]) => `<button type="button" data-sw-tool="${k}" aria-pressed="${st.tool === k}">${t}</button>`).join('')}</div>
+          <p class="field-hint">${pasteHint}</p>
+          <p class="field-hint">接入連結 15 分鐘內有效，只能使用一次。過期可到「我的 AI」重新複製。</p>
+          <p class="sw-safety"><span aria-hidden="true">⚠</span> 指令和連結請勿貼到群組。</p>
+          ${st.manualText ? `<textarea class="sw-text" readonly rows="4" aria-label="接入指令">${esc(st.manualText)}</textarea>` : ''}
+          <div class="sw-actions"><span class="grow"></span><button type="button" class="btn" data-sw="done">完成</button><button type="button" class="btn primary" data-sw="copyai">${st.copied ? '✓ 已複製' : copyLabel}</button></div>`;
+      }
       const demoLine = st.demo ? `<p class="sw-demo small" role="status">已載入示範資料「${esc(st.demo)}」，完成設定後在專案清單看得到；看完到「成員管理 › 系統」清除。</p>`
         : '<p class="sw-demo small">想先看看用起來的樣子？<button type="button" class="link" data-sw="demo">載入示範資料</button>（虛構的示範專案，看完可以清掉）</p>';
       el.innerHTML = head + demoLine + `<p class="error sw-err" role="alert"${msg ? '' : ' hidden'}>${esc(msg)}</p>` + html;
@@ -697,15 +724,14 @@
     };
     el.addEventListener('click', async e => {
       const b = e.target.closest('[data-sw], [data-sw-copy], [data-sw-tool]');
-      if (!b || b.disabled) return;
+      if (!b || b.disabled || st.copying) return;
       const act = b.dataset.sw;
       if (b.dataset.swCopy !== undefined) return toast((await copyText(st.invites[+b.dataset.swCopy].url)) ? '已複製邀請連結' : '複製失敗，請手動複製');
-      if (b.dataset.swTool) { if (st.tool !== b.dataset.swTool) { st.tool = b.dataset.swTool; st.copied = false; draw(); el.querySelector(`[data-sw-tool="${st.tool}"]`)?.focus(); } return; }
+      if (b.dataset.swTool) { if (st.tool !== b.dataset.swTool) { st.tool = b.dataset.swTool; st.copied = false; st.manualText = ''; draw(); el.querySelector(`[data-sw-tool="${st.tool}"]`)?.focus(); } return; }
       if (act === 'done' && st.ai && !st.copied && !await confirmDialog({ title: '還沒複製接入指令', confirmText: '直接完成', cancelText: '回去複製', cancelPrimary: true,
-        message: '這段指令只在這裡顯示，連結 15 分鐘內有效。沒複製也沒關係：之後到「我的 AI」按「複製接入文字」重新產生。' })) return;
+        message: '稍後可到「我的 AI」的接入分頁複製指令。' })) return;
       if (act === 'skipall' || act === 'done') return finish(act === 'skipall');
       if (act === 'skip' || act === 'next') { st.step++; return draw(); }
-      if (act === 'copyai') { maSetTool(st.ai, st.tool); /* 選的工具記下來，之後在「我的 AI」不用再選 */ const ok = await copyText(shortOnboardingText(st.ai, st.link, st.tool)); toast(ok ? '已複製，貼到你的 AI 對話' : '複製失敗，請手動複製'); if (ok) { st.copied = true; draw(); } return; }
       // 錯誤不重畫（使用者打的字留著，改了就能繼續）：對得到欄位就紅框＋欄位下小字，對不到才放上方
       const showErr = (msg, focusSel) => {
         const p = el.querySelector('.sw-err'), f = focusSel && el.querySelector(focusSel);
@@ -747,11 +773,20 @@
           if (!name) { b.disabled = false; return inp.focus(); }
           const r = await api('/api/invites', { method: 'POST', body: { name, projects: pj ? [pj.id] : [] } });
           st.invites.push({ name, url: r.url });
+        } else if (act === 'copyai') {
+          st.copying = true;
+          maSetTool(st.ai, st.tool);
+          try {
+            const command = st.tool === 'other' ? await requestShortOnboarding(st.ai, { auto: false }) : await requestOneLineOnboarding(st.ai);
+            if (!command) throw new Error('這個工具沒有一行啟動，請用「複製接入文字」');
+            st.copied = await copyText(command);
+            st.manualText = st.copied ? '' : command;
+            toast(st.copied ? '已複製' : '複製失敗，請手動複製');
+          } finally { st.copying = false; }
         } else if (act === 'ai') {
           const r = tpl.find(x => x.key === el.querySelector('#sw-role').value) || tpl[0];
           const ai = await api('/api/my-ais', { method: 'POST', body: { projects: pj ? [pj.id] : [], roleKey: r.key, role: r.role, name: el.querySelector('#sw-ai-name').value.trim(), duties: r.duties, style: r.style, autonomy: r.autonomy, mustConfirm: r.mustConfirm, handoff: r.handoff } });
-          const link = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: {} });
-          st.ai = ai; st.link = link;
+          st.ai = ai;
         }
         draw();
       } catch (err) { b.disabled = false; showErr(err.message, { group: '#sw-group', project: '#sw-pj-name', invite: '#sw-inv-name', ai: '#sw-ai-name' }[act]); }
@@ -6137,10 +6172,9 @@
           toast((await copyText(text)) ? '已複製，貼到你的 AI 對話即可' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'start') { // 一行啟動：裡面帶一次性連結，本機沒有可用的 .token 才會用（用了才換新 Token）
           if (ai.tokenExpired) return toast('Token 已過期，請先按「重發 Token」');
-          const o = maOpt(ai), tool = maTool(ai);
-          const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: true, start: true, ...(o.convo ? { convo: o.convo } : {}), tool } });
-          if (!r.startLine) return toast('這個工具沒有一行啟動，請用「複製接入文字」');
-          toast((await copyText(r.startLine)) ? '已複製一行啟動：貼到這隻 AI 工作資料夾的終端機（第一次 15 分鐘內貼；重開機貼同一行）' : '複製失敗，請手動複製');
+          const command = await requestOneLineOnboarding(ai);
+          if (!command) return toast('這個工具沒有一行啟動，請用「複製接入文字」');
+          toast((await copyText(command)) ? '已複製一行啟動：貼到這隻 AI 工作資料夾的終端機（第一次 15 分鐘內貼；重開機貼同一行）' : '複製失敗，請手動複製');
         } else if (b.dataset.act === 'short') { // 幾行、不含 Token，連結 15 分鐘、只能讀一次；AI 讀連結時拿到新 Token。主要做法、依工具出文字
           if (!maTool(ai)) { // 沒選過工具：不複製，展開接入分頁請他先選
             maAskTool.add(id); open.set(id, 'conn'); row(id);
@@ -6209,10 +6243,19 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   }
   // 產一次性連結＋複製；回傳 toast 文字（列上、接入分頁、建立／重發後的視窗共用）
   async function copyShortOnboarding(ai) {
-    const o = maOpt(ai), tool = maTool(ai);
-    const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!o.auto, ...(o.convo ? { convo: o.convo } : {}), tool } });
-    if (!await copyText(shortOnboardingText(ai, r, tool))) return '複製失敗，請手動複製';
+    const tool = maTool(ai);
+    if (!await copyText(await requestShortOnboarding(ai))) return '複製失敗，請手動複製';
     return tool === 'other' ? '已複製接入文字（連結 15 分鐘內有效、只能讀一次）' : `已複製 ${toolName(tool)} 版接入文字（連結 15 分鐘內有效、只能讀一次）`;
+  }
+  async function requestShortOnboarding(ai, options = maOpt(ai)) {
+    const tool = maTool(ai);
+    const r = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: !!options.auto, ...(options.convo ? { convo: options.convo } : {}), tool } });
+    return shortOnboardingText(ai, r, tool);
+  }
+  async function requestOneLineOnboarding(ai) {
+    const { convo } = maOpt(ai);
+    const { startLine } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: true, start: true, ...(convo ? { convo } : {}), tool: maTool(ai) } });
+    return startLine;
   }
   // 每隻 AI 用的工具記在這個瀏覽器（不改資料庫，換電腦再選一次）；存不了就只記到重新整理
   const AI_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['antigravity', 'Antigravity CLI'], ['copilot', 'Copilot CLI'], ['other', '其他']];
