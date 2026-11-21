@@ -99,20 +99,21 @@ try {
   const selector = '[data-ver-no="' + returnCard.cardId + '"]';
   await until(() => js('!!document.querySelector(' + JSON.stringify(selector) + ')'), 20000, '退回按鈕');
   await js("Object.defineProperty(navigator, 'language', { configurable: true, value: 'zh-TW' }); document.querySelector(" + JSON.stringify(selector) + ").click(); true");
-  assert.equal(await js("document.querySelector('#rj-file').labels[0].textContent.trim()"), 'Attachment (optional)');
-  assert.ok(await js("document.querySelector('#rj-file').getBoundingClientRect().right <= innerWidth"), '手機附件欄留在畫面內');
-  const choose = (name, contents) => js("(() => { const input = document.querySelector('#rj-file'); const data = new DataTransfer(); data.items.add(new File([" +
+  // 退回改用共用附件格（📎／貼上、縮圖、聲明一次勾）
+  assert.match(await js("document.querySelector('label[for=rj-input]').textContent.trim()"), /^Reason \(required/);
+  assert.ok(await js("document.querySelector('.confirm-root [data-att-pick]').getBoundingClientRect().right <= innerWidth"), '手機 📎 留在畫面內');
+  const choose = (name, contents) => js("(() => { document.querySelector('.confirm-root [data-att-pick]').click(); const input = document.querySelector('#att-file'); const data = new DataTransfer(); data.items.add(new File([" +
     JSON.stringify(contents) + "], " + JSON.stringify(name) + ")); input.files = data.files; input.dispatchEvent(new Event('change')); return true; })()");
   await choose('broken.png', 'not a PNG');
-  await js("document.querySelector('#rj-input').value = '請參考附件'; document.querySelector('[data-rj=\"1\"]').click(); true");
-  assert.match(await js("document.querySelector('#rj-err').textContent"), /declaration/);
-  await js("document.querySelector('#rj-declare').checked = true; document.querySelector('[data-rj=\"1\"]').click(); true");
+  await js("document.querySelector('#rj-input').value = '請參考附件'; true");
+  assert.equal(await js("document.querySelector('[data-rj=\"1\"]').disabled"), true, '有附件沒勾聲明：退回停用');
+  await js("document.querySelector('.confirm-root [data-att-declare]').click(); document.querySelector('[data-rj=\"1\"]').click(); true");
   await until(() => js("document.querySelector('#rj-err')?.textContent.includes('Could not return with attachment')"), 10000, '上傳失敗提示');
   assert.equal(await js("document.querySelector('#rj-input').value"), '請參考附件');
-  await js("document.querySelector('#rj-clear').click(); true");
+  await js("document.querySelector('.confirm-root .up-rm').click(); true");
   await choose('review.txt', 'Synthetic review attachment');
-  assert.equal(await js("document.querySelector('#rj-declare').checked"), false);
-  await js("document.querySelector('#rj-declare').checked = true; document.querySelector('[data-rj=\"1\"]').click(); true");
+  assert.equal(await js("document.querySelector('.confirm-root [data-att-declare]').checked"), false);
+  await js("document.querySelector('.confirm-root [data-att-declare]').click(); document.querySelector('[data-rj=\"1\"]').click(); true");
   await until(() => js("!document.querySelector('#rj-input')"), 10000, '附檔退回成功');
   const returned = (await call(boss.token, '/api/cards/' + returnCard.cardId)).body;
   assert.equal(returned.status, '進行中');

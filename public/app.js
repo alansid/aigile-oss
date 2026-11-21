@@ -2132,15 +2132,15 @@
   // 捲到最底下：膠囊消失
   $('#messages').addEventListener('scroll', () => { if (nearBottom()) clearNew(); }, { passive: true });
 
-  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (!t) return; quickState(t.dataset.qText).text = t.value; const sb = t.closest('[data-q-root]')?.querySelector('[data-q-send]'); if (sb && cardOfConfirm({ messageId: t.dataset.qText })) sb.disabled = !t.value.trim(); else if (sb) { const m = state.byId.get(t.dataset.qText), qs = m ? parseQuestions(m.text) : [], q = quickState(t.dataset.qText); if (qs.length === 1 && !q.sels[0]) { sb.disabled = !t.value.trim(); sb.textContent = t.value.trim() ? '送出想法' : '先選一個選項'; } } });
+  $('#messages').addEventListener('input', e => { const t = e.target.closest?.('[data-q-text]'); if (!t) return; quickState(t.dataset.qText).text = t.value; quickBtnUpdate(t.dataset.qText); });
   $('#page-work').addEventListener('click', e => { if (state.page === 'inbox') authClick(e); });
-  $('#page-work').addEventListener('input', e => { const t = state.page === 'inbox' && e.target.closest?.('[data-q-text]'); if (t) { quickState(t.dataset.qText).text = t.value; const sb = t.closest('[data-q-root]')?.querySelector('[data-q-send]'); if (sb) { const m = state.byId.get(t.dataset.qText), qs = m ? parseQuestions(m.text) : [], q = quickState(t.dataset.qText); if (qs.length === 1 && !q.sels[0]) { sb.disabled = !t.value.trim(); sb.textContent = t.value.trim() ? '送出想法' : '先選一個選項'; } } } });
+  $('#page-work').addEventListener('input', e => { const t = state.page === 'inbox' && e.target.closest?.('[data-q-text]'); if (t) { quickState(t.dataset.qText).text = t.value; quickBtnUpdate(t.dataset.qText); } });
   $('#page-work').addEventListener('keydown', e => {
-    if (state.page !== 'inbox' || e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
+    if (state.page !== 'inbox' || !e.target.matches?.('[data-q-text]') || !enterSends(e)) return;
     e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
   });
   $('#messages').addEventListener('keydown', e => {
-    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-q-text]')) return;
+    if (!e.target.matches?.('[data-q-text]') || !enterSends(e)) return;
     e.preventDefault(); const b = e.target.closest('.quick')?.querySelector('[data-q-send]'); if (b && !b.disabled) b.click();
   });
   // 記住哪些「細節」打開了，重畫後維持
@@ -2931,17 +2931,8 @@
   }
   async function rejectCard(id) {
     const c = work.cards.get(id);
-    const r = await promptReason(id, async (reason, file) => {
-      let body = { reason, version: c?.version };
-      if (file) {
-        body = new FormData();
-        body.set('reason', reason);
-        if (c?.version !== undefined) body.set('version', String(c.version));
-        body.set('file', file);
-        body.set('declared', 'true');
-      }
-      return api('/api/cards/' + encodeURIComponent(id) + '/reject', { method: 'POST', body });
-    });
+    // 附件先用 post=false 上傳，再帶 fileIds 退回（一次最多 4 張）
+    const r = await promptReason(id, async (reason, fileIds) => api('/api/cards/' + encodeURIComponent(id) + '/reject', { method: 'POST', body: { reason, version: c?.version, ...(fileIds ? { fileIds } : {}) } }), c?.project);
     if (!r) return;
     work.cards.set(id, r);
     fadeOutRow(verRow(id), id);
@@ -2950,55 +2941,50 @@
     toast(r.notifyError ? L('卡片已退回，但未能發送回覆：', 'Card returned, but the reply could not be sent: ') + r.notifyError
       : L('已退回給 ' + owner, 'Sent back to ' + owner));
   }
-  function promptReason(id, submit) {
+  // 附件格＋原因＋聲明在同一框，底列 📎「Enter 換行 · 可直接貼上截圖」；附件 1 小時後自動刪除
+  function promptReason(id, submit, project = 'all') {
     return new Promise(resolve => {
+      const key = 'rj:' + id;
+      attClear(key);
       const host = document.createElement('div');
       host.className = 'confirm-root';
-      host.innerHTML = modalFrame({ title: L('退回 ' + id + '？', 'Send ' + id + ' back?'), size: 'narrow', body: `
-        <label class="field"><span class="field-label">${L('退回原因（會回覆到交接訊息，交過來的 AI 會收到）', 'Reason (sent as a reply to the AI’s handover message)')}</span><textarea autocomplete="off" autocorrect="on" id="rj-input" rows="3" maxlength="500"></textarea></label>
-        <label class="field"><span class="field-label">${L('附檔（選填）', 'Attachment (optional)')}</span><input type="file" id="rj-file" accept="${FILE_EXTS.map(ext => '.' + ext).join(',')}" style="max-width:100%"></label>
-        <div id="rj-attachment" hidden>
-          <p class="muted small">${L('上限 2 MB，1 小時後自動刪除。', 'Maximum 2 MB. Automatically deleted after one hour.')}</p>
-          <label class="declare-box"><input type="checkbox" id="rj-declare"><span>${L('我確認此檔案不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資', 'I confirm this file contains no code (source, builds, config files) and no customer personal data')}</span></label>
-          <button class="btn small" type="button" id="rj-clear">${L('移除附件', 'Remove attachment')}</button>
-        </div>
+      host.innerHTML = modalFrame({ title: L('退回 ' + id + '？', 'Send ' + id + ' back?'), size: 'form', body: `
+        <div class="field"><label class="field-label" for="rj-input">${L('退回原因（必填，會回覆到交接訊息，交過來的 AI 會收到）', 'Reason (required; sent as a reply to the AI’s handover message)')}</label>
+          <div class="att-box">${attGridHtml(key)}<textarea autocomplete="off" autocorrect="on" id="rj-input" class="inl-text" rows="3" maxlength="500" data-att-key="${esc(key)}" placeholder="${esc(L('哪裡不對、要怎麼改；可以直接貼上截圖', 'What is wrong and how to fix it; you can paste screenshots'))}"></textarea>
+          ${attDeclHtml(key)}<div class="att-bar">${attPickBtn(key)}${attHint('Enter 換行 · 可直接貼上截圖')}</div></div></div>
         <p class="error" id="rj-err" role="alert"></p>`,
         foot: `<button class="btn" type="button" data-rj="0">${L('取消', 'Cancel')}</button><button class="btn primary" type="button" data-rj="1">${L('退回', 'Send back')}</button>` });
       document.body.appendChild(host);
       const input = host.querySelector('#rj-input');
-      const picker = host.querySelector('#rj-file');
-      const declaration = host.querySelector('#rj-declare');
       const error = host.querySelector('#rj-err');
-      const updateFile = () => {
-        host.querySelector('#rj-attachment').hidden = !picker.files.length;
-        declaration.checked = false;
-        error.textContent = '';
-      };
-      picker.addEventListener('change', updateFile);
-      host.querySelector('#rj-clear').addEventListener('click', () => { picker.value = ''; updateFile(); picker.focus(); });
       input.focus();
       let busy = false;
-      const close = result => { host.remove(); resolve(result); };
+      // 有附件還沒勾聲明 →「退回」停用（跟群組上傳一樣）
+      const goBtn = host.querySelector('[data-rj="1"]');
+      const goLabel = () => L('退回', 'Send back');
+      const syncGo = k => { if (k !== key || busy) return; const st = attMap.get(key); goBtn.disabled = !!st?.items.length && !st.declared; goBtn.title = goBtn.disabled ? L('先勾選上面的聲明', 'Check the declaration above first') : ''; if (!goBtn.disabled && error.dataset.decl) { error.textContent = ''; delete error.dataset.decl; } };
+      attListeners.add(syncGo);
+      const close = result => { attListeners.delete(syncGo); host.remove(); attClear(key); resolve(result); };
       const send = async () => {
-        const reason = input.value.trim(), file = picker.files[0];
+        const reason = input.value.trim(), hasFiles = attHas(key);
         if (!reason) { error.textContent = L('請寫退回原因', 'Please enter a reason'); return input.focus(); }
-        if (file && (!file.size || file.size > MAX_FILE || !FILE_EXTS.includes(file.name.split('.').pop().toLowerCase()))) {
-          error.textContent = L('請選擇 2 MB 以內的有效檔案：PDF、DOCX、XLSX、PPTX、MD、TXT、PNG、JPG。', 'Choose a valid file up to 2 MB: PDF, DOCX, XLSX, PPTX, MD, TXT, PNG or JPG.');
-          return picker.focus();
-        }
-        if (file && !declaration.checked) {
-          error.textContent = L('請先勾選附件聲明', 'Confirm the attachment declaration first');
-          return declaration.focus();
-        }
+        const bad = attProblem(key);
+        if (bad) { error.textContent = bad; error.dataset.decl = '1'; return host.querySelector('[data-att-declare]')?.focus(); }
         busy = true;
         error.textContent = '';
-        const controls = host.querySelectorAll('button, input, textarea');
+        const controls = host.querySelectorAll('button, textarea');
         controls.forEach(el => { el.disabled = true; });
-        try { close(await submit(reason, file)); }
-        catch (err) {
-          error.textContent = (file ? L('附檔退回失敗：', 'Could not return with attachment: ') : '') + err.message;
-          controls.forEach(el => { el.disabled = false; });
-          busy = false;
+        attSetBusy(key, true);
+        try {
+          const fileIds = hasFiles ? await attUpload(key, project, (k, n) => { goBtn.textContent = L(`上傳中 ${k} / ${n}…`, `Uploading ${k} / ${n}…`); }) : null;
+          goBtn.textContent = L('退回中…', 'Sending back…');
+          close(await submit(reason, fileIds));
+        } catch (err) {
+          error.textContent = (hasFiles ? L('附檔退回失敗：', 'Could not return with attachment: ') : '') + err.message;
+          attSetBusy(key, false);
+          host.querySelectorAll('button, textarea').forEach(el => { el.disabled = false; });
+          goBtn.textContent = goLabel();
+          busy = false; syncGo(key);
         }
       };
       holdBackdrop(host.firstElementChild);
@@ -3024,8 +3010,10 @@
   work.drafts = {};      // key → 草稿，切換項目不遺失
   work.openInl = null;   // 手機一次只展開一項
   const narrowInl = () => matchMedia('(max-width: 600px)').matches;
-  const inlBtn = (key, act, label, { cls = '', need = false, primary = false, result = '' } = {}) =>
-    `<button type="button" class="btn small ${cls}" data-inl-act="${act}" data-inl="${esc(key)}" ${result ? `data-result="${esc(result)}"` : ''} data-need="${need ? 1 : 0}" ${primary ? 'data-primary="1"' : ''} ${need && !(work.drafts[key] || '').trim() ? 'disabled' : ''}>${label}</button>`;
+  // need：1＝要有文字或附圖才能按（送出、只留言），2＝一定要寫文字（不同意、要求補充、建議）
+  const inlFilled = (key, need) => !!(work.drafts[key] || '').trim() || (need === 1 && attHas(key));
+  const inlBtn = (key, act, label, { cls = '', need = 0, primary = false, result = '' } = {}) =>
+    `<button type="button" class="btn small ${cls}" data-inl-act="${act}" data-inl="${esc(key)}" ${result ? `data-result="${esc(result)}"` : ''} data-need="${+need}" ${primary ? 'data-primary="1"' : ''} ${need && !inlFilled(key, +need) ? 'disabled' : ''}>${label}</button>`;
   const userText = (tpl, ...vals) => { const I = window.aigileI18n, t = (I?.lang === 'en' && I.tr(tpl)) || tpl; return `<span data-nt>${esc(t).replace(/\{(\d+)\}/g, (m, i) => esc(vals[i] ?? ''))}</span>`; }; // 固定的字照字典翻一次、使用者寫的照原文；整段不再給字典翻
   const decOptBtns = (key, c) => { const ri = recommendedIndex(c.decision?.recommendation, optionsOf(c)); return optionsOf(c).map((o, i) => inlBtn(key, 'decide', `${userText('決定「{0}」', o)}${i === ri ? REC_TAG : ''}`, { cls: i === ri ? 'ok rec' : '', result: o })).join(''); };
   function inlineHtml(key, kind, c) {
@@ -3034,28 +3022,38 @@
       // 手機的決策卡：選項按鈕直接看得到，留言、不同意、要求補充、先擱著收在「其他回覆…」
       return `<div class="inl" data-inl-root="${esc(key)}"><div class="inl-actions">${decOptBtns(key, c)}<button type="button" class="btn small inl-open" data-inl-open="${esc(key)}">其他回覆…</button></div><p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
     }
-    let btns = '', hint = '想說什麼都可以寫在這裡（Ctrl+Enter 送出）';
-    if (kind === 'confirm') btns = inlBtn(key, 'send', '送出', { cls: 'primary', need: true, primary: true });
-    else if (kind === 'card') { const n = cardRecipients(key, c).length; btns = inlBtn(key, 'send', cardSendLabel(n), { cls: n ? 'primary' : 'quiet', need: true, primary: true }) + `<button type="button" class="btn small" data-inl-at="${esc(key)}">＠ 加人</button>`; }
-    else if (kind === 'sugg') {
-      hint = '想說明或留言給提案的 AI（Ctrl+Enter 留言）';
-      btns = inlBtn(key, 'sugg-note', '只留言', { need: true, primary: true }) + inlBtn(key, 'sugg-skip', '略過並附原因', { need: true });
-    } else if (kind === 'decision') {
-      hint = '說明可選填；不同意或要求補充一定要寫；先擱著可寫原因（Ctrl+Enter 只留言）';
+    if (kind === 'sugg') { // 建議：照舊（沒有附件格）
+      const btns = inlBtn(key, 'sugg-note', '只留言', { need: 2, primary: true }) + inlBtn(key, 'sugg-skip', '略過並附原因', { need: 2 });
+      return `<div class="inl" data-inl-root="${esc(key)}">
+      <div class="inl-field"><textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="想說明或留言給提案的 AI（Ctrl+Enter 留言）" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea></div>
+      <div class="inl-actions">${btns}</div>
+      <p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
+    }
+    // 附件格在上、文字框、聲明、底列 📎（＠）提示（送出）；電腦 Enter 送出、Shift+Enter 換行（決策只換行）
+    let bar = '', btns = '', placeholder = '想說什麼都可以寫在這裡', hint = attHint('Enter 送出 · Shift+Enter 換行 · 可直接貼上截圖');
+    if (kind === 'confirm') bar = inlBtn(key, 'send', '送出', { cls: 'primary', need: 1, primary: true });
+    else if (kind === 'card') { const n = cardRecipients(key, c).length; placeholder = '想說什麼都可以寫在這裡，打 @ 可以指定人'; bar = inlBtn(key, 'send', cardSendLabel(n), { cls: n ? 'primary' : 'quiet', need: 1, primary: true }); }
+    else if (kind === 'decision') {
+      placeholder = '說明可選填；不同意或要求補充一定要寫；先擱著可寫原因';
+      hint = attHint('Enter 換行 · Ctrl+Enter 只留言 · 可直接貼上截圖');
       btns = decOptBtns(key, c)
-        + inlBtn(key, 'opinion', '只留言，不決定', { need: true, primary: true })
-        + inlBtn(key, 'decide', '不同意', { need: true, result: '不同意' })
-        + inlBtn(key, 'decide', '要求補充', { need: true, result: '要求補充' })
+        + inlBtn(key, 'opinion', '只留言，不決定', { need: 1, primary: true })
+        + inlBtn(key, 'decide', '不同意', { need: 2, result: '不同意' })
+        + inlBtn(key, 'decide', '要求補充', { need: 2, result: '要求補充' })
         + inlBtn(key, 'defer', '先擱著（暫緩）');
     }
     return `<div class="inl" data-inl-root="${esc(key)}">
-      <div class="inl-field"><textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" placeholder="${kind === 'card' ? '想說什麼都可以寫在這裡，打 @ 可以指定人（Ctrl+Enter 送出）' : hint}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
+      <div class="att-box">${attGridHtml(key)}
+      <div class="inl-field"><textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-inl-text="${esc(key)}" data-att-key="${esc(key)}" data-enter="${kind === 'decision' ? 'newline' : 'send'}" placeholder="${placeholder}" aria-label="輸入想法">${esc(work.drafts[key] || '')}</textarea>
         ${kind === 'card' ? '<ul class="mention-list" role="listbox" aria-label="選擇成員" hidden></ul>' : ''}</div>
+      ${attDeclHtml(key)}
+      <div class="att-bar">${attPickBtn(key)}${kind === 'card' ? `<button type="button" class="att-pick att-at" data-inl-at="${esc(key)}" aria-label="＠ 加人" title="＠ 加人">@</button>` : ''}${hint}${bar}</div></div>
       ${kind === 'card' ? cardToHtml(key, c) : ''}
-      <div class="inl-actions">${btns}</div>
+      ${btns ? `<div class="inl-actions">${btns}</div>` : ''}
       ${kind === 'decision' ? '<p class="muted small inl-note">留言會通知提案人；先擱著會移出「要你處理」，之後可在工作頁恢復。</p>' : ''}
       <p class="error small" data-inl-err="${esc(key)}" role="alert"></p></div>`;
   }
+  const inlNeedRefresh = key => document.querySelectorAll(`[data-inl-root="${CSS.escape(key)}"] [data-need]`).forEach(b => { const n = +b.dataset.need; if (n && !b.textContent.includes('送出中')) b.disabled = !inlFilled(key, n); });
   const decisionActions = c => inlineHtml('c:' + c.cardId, 'decision', c);
   // 卡片回覆的收件人
   work.inlRm = {}; // key → 使用者按 × 移除的成員
@@ -3095,13 +3093,15 @@
     const ta = e.target.closest?.('[data-inl-text]');
     if (!ta) return false;
     work.drafts[ta.dataset.inlText] = ta.value;
-    const root = ta.closest('.inl');
-    root.querySelectorAll('[data-need="1"]').forEach(b => { b.disabled = !ta.value.trim(); });
+    inlNeedRefresh(ta.dataset.inlText);
     if (ta.dataset.inlText.startsWith('k:')) refreshCardTo(ta.dataset.inlText);
     return true;
   }
+  // 回覆框電腦 Enter 送出、Shift+Enter 換行，手機 Enter 換行用按鈕送；決策 Enter 只換行。Ctrl+Enter 照舊都能送
+  const enterSends = e => e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !e.defaultPrevented
+    && ((e.ctrlKey || e.metaKey) || (!e.shiftKey && !e.altKey && e.target.dataset.enter === 'send' && isDesktop()));
   function inlineKey(e) {
-    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey) || !e.target.matches?.('[data-inl-text]')) return;
+    if (!e.target.matches?.('[data-inl-text]') || !enterSends(e)) return;
     e.preventDefault();
     const b = e.target.closest('.inl')?.querySelector('[data-primary="1"]');
     if (b && !b.disabled) b.click();
@@ -3136,9 +3136,21 @@
     errEl.textContent = '';
     root.querySelectorAll('button, textarea').forEach(x => { x.disabled = true; });
     btn.textContent = '送出中…';
-    const post = body => postMsg({ requestId: newRequestId(), ...body });
     const others = ids => [...new Set(ids)].filter(x => x && x !== meId());
+    const useAtt = act !== 'sugg-note' && act !== 'sugg-skip';
+    const st = useAtt ? attMap.get(key) : null;
+    const requestId = (st && (st.requestId ||= newRequestId())) || newRequestId(); // 重試沿用，避免附件已掛上又發一次
+    let fileIds = null;
+    const post = async body => postMsg({ requestId, ...body, ...(fileIds ? { fileIds } : {}) });
     try {
+      if (useAtt && attHas(key)) {
+        const bad = attProblem(key);
+        if (bad) throw new Error(bad);
+        st.busy = true; attRefresh(key);
+        const proj = key.startsWith('m:') ? await msgProject({ replyToMessageId: id }) : (work.cards.get(id)?.project || 'all');
+        fileIds = await attUpload(key, proj, (k, n) => { btn.textContent = `上傳中 ${k} / ${n}…`; });
+        btn.textContent = '送出中…';
+      }
       if (act === 'send' && key.startsWith('m:')) {
         let m = state.byId.get(id); if (!m) m = await api(`/api/messages/${encodeURIComponent(id)}`);
         await post({ text: `[回覆] ${text}`, replyToMessageId: id, recipientIds: others([m.author.participantId]) });
@@ -3153,12 +3165,12 @@
       } else if (act === 'decide') {
         const c = work.cards.get(id), result = btn.dataset.result;
         if (['不同意', '要求補充'].includes(result) && !text) throw new Error('請先寫說明');
-        const r = await api(`/api/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { result, note: text, version: c?.version } });
+        const r = await api(`/api/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: { result, note: text, version: c?.version, ...(fileIds ? { fileIds } : {}) } });
         work.cards.set(id, r);
         toast(result === '要求補充' ? `已請 ${r.waitFor?.name || '提案人'} 補充` : `已記錄決定：${result}`);
       } else if (act === 'defer') {
         const c = work.cards.get(id);
-        work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/defer`, { method: 'POST', body: { reason: text, version: c?.version } }));
+        work.cards.set(id, await api(`/api/cards/${encodeURIComponent(id)}/defer`, { method: 'POST', body: { reason: text, version: c?.version, ...(fileIds ? { fileIds } : {}) } }));
         toast('已暫緩，會從「要你處理」移出；要繼續請到「工作」按「恢復」');
       } else if (act === 'sugg-note' || act === 'sugg-skip') {
         const g = (work.sugg || []).find(x => x.suggestionId === id);
@@ -3167,15 +3179,16 @@
         if (act === 'sugg-skip') await api(`/api/suggestions/${encodeURIComponent(id)}/skip`, { method: 'POST', body: {} });
         await post({ text: `[回覆] ${act === 'sugg-skip' ? '略過了你的建議' : '關於你的建議'}（${what}）：${text}`, ...(g.card?.cardId ? { cardId: g.card.cardId } : {}), recipientIds: others([g.from?.participantId]) });
       }
-      delete work.drafts[key]; work.openInl = null;
+      delete work.drafts[key]; work.openInl = null; attClear(key);
       if (act !== 'decide' && act !== 'defer') toast(work.sentTo || '已送出');
       work.sentTo = null;
       await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]);
       updateTodoBadge(); renderWork();
       if (work.openId) openCard(work.openId);
     } catch (err) {
+      if (st) { st.busy = false; attRefresh(key); }
       root.querySelectorAll('button, textarea').forEach(x => { x.disabled = false; });
-      root.querySelectorAll('[data-need="1"]').forEach(x => { x.disabled = !(work.drafts[key] || '').trim(); });
+      inlNeedRefresh(key);
       btn.innerHTML = label;
       errEl.textContent = '送出失敗：' + err.message + '（內容還在，可以再試一次）';
     }
@@ -4237,27 +4250,39 @@
     return `<div class="handover-chain"><span class="muted small">交接歷程</span> ${names.map(n => `<b>${esc(shortOf(n))}</b>`).join(' → ')}</div>`;
   }
   function openHandover() {
-    const d = work.detail;
+    const d = work.detail, hoKey = 'ho:' + d.cardId;
+    attClear(hoKey);
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && memberIn(p, d.project));
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
         <div class="info-box">${esc(ckeyOf(d))} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
         <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
-        <label>交接說明（必填）<textarea autocomplete="off" autocorrect="on" name="note" rows="3" required maxlength="300" placeholder="我做完了什麼、希望對方接著做什麼"></textarea></label>
-        <p class="muted small">說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。</p>
+        <div class="field"><label for="ho-note">交接說明（必填）</label>
+          <div class="att-box">${attGridHtml(hoKey)}<textarea autocomplete="off" autocorrect="on" id="ho-note" class="inl-text" name="note" rows="3" required maxlength="300" data-att-key="${esc(hoKey)}" placeholder="我做完了什麼、希望對方接著做什麼"></textarea>
+          ${attDeclHtml(hoKey)}<div class="att-bar">${attPickBtn(hoKey)}${attHint('Enter 換行 · 可直接貼上截圖')}</div></div></div>
+        <p class="muted small">${d.type === '人類紀錄' ? '說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。' : '說明和截圖會公開在群組，請勿填入內部路徑、程式碼或客戶個資。'}</p>
         <p class="error" id="handover-error" role="alert"></p>
       </form>`, { size: 'form', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="handover-form">確認交接</button>' });
+    if (d.type === '人類紀錄') body.querySelectorAll('.att-pick').forEach(b => { b.hidden = true; }); // 人類紀錄交接不發群組訊息，不能附圖
+    let busy = false;
     body.querySelector('#handover-form').addEventListener('submit', async e => {
       e.preventDefault();
-      const f = e.target;
+      if (busy) return;
+      const f = e.target, go = body.modal.querySelector('[type=submit]'), err = body.querySelector('#handover-error'), goText = go.textContent;
+      const bad = attProblem(hoKey);
+      if (bad) { err.textContent = bad; return; }
+      busy = true; err.textContent = ''; go.disabled = true;
       try {
-        const c = await api(`/api/cards/${encodeURIComponent(d.cardId)}/handover`, { method: 'POST', body: { toId: f.toId.value, note: f.note.value.trim(), version: d.version } });
+        let fileIds = null;
+        if (attHas(hoKey)) { attSetBusy(hoKey, true); fileIds = await attUpload(hoKey, d.project, (k, n) => { go.textContent = `上傳中 ${k} / ${n}…`; }); }
+        const c = await api(`/api/cards/${encodeURIComponent(d.cardId)}/handover`, { method: 'POST', body: { toId: f.toId.value, note: f.note.value.trim(), version: d.version, ...(fileIds ? { fileIds } : {}) } });
         work.cards.set(c.cardId, { ...c, log: undefined, messageIds: undefined });
+        attClear(hoKey);
         closeModal();
         toast(`已交接給 ${c.owner?.name}`);
         renderWork();
         openCard(c.cardId);
-      } catch (err) { body.querySelector('#handover-error').textContent = err.message; }
+      } catch (e2) { err.textContent = e2.message; busy = false; go.disabled = false; go.textContent = goText; attSetBusy(hoKey, false); }
     });
   }
   // 「可能過時」：抽屜裡一鍵跳到最新相關訊息（抽屜不在工作頁容器內，所以掛在 document）
@@ -4676,8 +4701,10 @@
     if (dcard) { // 這則在講一張等我決定的決策卡：只送意見，或暫緩；選項與「同意」到決策卡上按
       const id = esc(m.messageId);
       return `<div class="auth-row quick" data-q-root="${id}"><p class="small muted">這是決策卡 ${esc(ckeyOf(dcard))} 的說明；要決定請到<button type="button" class="link small" data-card="${esc(dcard.cardId)}">決策卡</button>。</p>
-      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 只留言）" aria-label="輸入想法">${esc(q.text)}</textarea>
-      <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !q.text.trim() ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
+      <div class="att-box">${attGridHtml('q:' + m.messageId)}
+      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" data-att-key="q:${id}" data-enter="newline" placeholder="想說什麼都可以寫在這裡" aria-label="輸入想法">${esc(q.text)}</textarea>
+      ${attDeclHtml('q:' + m.messageId)}<div class="att-bar">${attPickBtn('q:' + m.messageId)}${attHint('Enter 換行 · Ctrl+Enter 只留言 · 可直接貼上截圖')}</div></div>
+      <div class="inl-actions"><button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || !quickFilled(m.messageId) ? 'disabled' : ''}>${q.busy ? '送出中…' : '只留言，不決定'}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy || q.proxyAsk ? 'disabled' : ''}>先擱著（暫緩）</button></div>
       <p class="muted small inl-note">留言會通知提案人；先擱著會移出「要你處理」，之後可在工作頁恢復。</p>
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
@@ -4685,7 +4712,7 @@
     const qs = parseQuestions(m.text);
     const id = esc(m.messageId);
     const missing = qs.filter((_, i) => !q.sels[i]).length, picked = qs.length - missing;
-    const textOnly = qs.length === 1 && missing && q.text.trim(); // 只有一題時，不選選項也能直接送出想法
+    const textOnly = qs.length === 1 && missing && quickFilled(m.messageId); // 只有一題時，不選選項也能直接送出想法（只附圖也算）
     const sendLabel = !qs.length ? '同意照辦' : textOnly ? '送出想法' : missing ? (qs.length === 1 ? '先選一個選項' : `還有 ${missing} 題未選`) : qs.length > 1 ? `送出 ${qs.length} 題回覆` : `選 ${esc(q.sels[0])} 並送出`;
     const recs = questionRecs(m.text, qs);
     const qBlock = (qq, i) => {
@@ -4696,7 +4723,9 @@
     };
     return `<div class="auth-row quick" data-q-root="${id}">
       ${qs.map(qBlock).join('')}
-      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" placeholder="想說什麼都可以寫在這裡（Ctrl+Enter 送出）" aria-label="輸入想法">${esc(q.text)}</textarea>
+      <div class="att-box">${attGridHtml('q:' + m.messageId)}
+      <textarea autocomplete="off" autocorrect="on" class="inl-text" rows="2" maxlength="1500" data-q-text="${id}" data-att-key="q:${id}" data-enter="send" placeholder="想說什麼都可以寫在這裡" aria-label="輸入想法">${esc(q.text)}</textarea>
+      ${attDeclHtml('q:' + m.messageId)}<div class="att-bar">${attPickBtn('q:' + m.messageId)}${attHint('Enter 送出 · Shift+Enter 換行 · 可直接貼上截圖')}</div></div>
       <div class="inl-actions">
         <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || q.proxyAsk || (missing && !textOnly) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy || q.proxyAsk ? 'disabled' : ''}>暫緩處理</button>
@@ -4709,24 +4738,46 @@
       })() : ''}
       ${q.error ? `<p class="error small" role="alert">送出失敗：${esc(q.error)}（內容還在，可以再試一次）</p>` : ''}</div>`;
   }
+  // [需確認] 回覆的附件格（key＝q:訊息編號）
+  function quickFilled(id) { return !!quickState(id).text.trim() || attHas('q:' + id); }
+  function quickAttRefresh(key) { if (key.startsWith('q:')) quickBtnUpdate(key.slice(2)); }
+  function quickBtnUpdate(id) {
+    document.querySelectorAll(`[data-q-root="${CSS.escape(id)}"] [data-q-send]`).forEach(sb => {
+      if (quickState(id).busy) return;
+      if (cardOfConfirm({ messageId: id })) { sb.disabled = !quickFilled(id); return; }
+      const m = state.byId.get(id), qs = m ? parseQuestions(m.text) : [], q = quickState(id);
+      if (qs.length === 1 && !q.sels[0]) { sb.disabled = !quickFilled(id); sb.textContent = quickFilled(id) ? '送出想法' : '先選一個選項'; }
+    });
+  }
+  async function quickFiles(id) { // 有附件：檢查聲明、先上傳，回傳 fileIds
+    const key = 'q:' + id;
+    if (!attHas(key)) return null;
+    const bad = attProblem(key);
+    if (bad) throw new Error(bad);
+    const st = attOf(key), project = await msgProject({ replyToMessageId: id });
+    st.busy = true;
+    try { return await attUpload(key, project); } finally { st.busy = false; }
+  }
+  const quickReqId = id => (quickState(id).requestId ||= newRequestId());
   async function quickSend(id, kind, confirmed = false) {
     const m = state.byId.get(id), q = quickState(id);
     if (!m || q.busy) return;
     const dcard = cardOfConfirm({ messageId: id });
     if (dcard) {
-      if (kind === 'send' && !q.text.trim()) return;
+      if (kind === 'send' && !quickFilled(id)) return;
       q.busy = true; q.error = ''; refreshMsg(id);
       try {
-        if (kind === 'hold') work.cards.set(dcard.cardId, await api(`/api/cards/${encodeURIComponent(dcard.cardId)}/defer`, { method: 'POST', body: { reason: q.text.trim(), version: dcard.version } }));
-        else onNewMessage(await postMsg({ text: `[回覆] ${dcard.cardId}（決策意見）：${q.text.trim()}`, requestId: newRequestId(), replyToMessageId: id, cardId: dcard.cardId, recipientIds: [m.author.participantId] }));
-        quickMap.delete(id); refreshMsg(id);
+        const fileIds = await quickFiles(id), withFiles = fileIds ? { fileIds } : {};
+        if (kind === 'hold') work.cards.set(dcard.cardId, await api(`/api/cards/${encodeURIComponent(dcard.cardId)}/defer`, { method: 'POST', body: { reason: q.text.trim(), version: dcard.version, ...withFiles } }));
+        else onNewMessage(await postMsg({ text: `[回覆] ${dcard.cardId}（決策意見）：${q.text.trim()}`, requestId: quickReqId(id), replyToMessageId: id, cardId: dcard.cardId, recipientIds: [m.author.participantId], ...withFiles }));
+        quickMap.delete(id); attClear('q:' + id); refreshMsg(id);
         toast(kind === 'hold' ? '已暫緩，決策卡已移出「要你處理」' : '已送出');
         await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]); updateTodoBadge();
       } catch (err) { q.busy = false; q.error = err.message; refreshMsg(id); }
       return;
     }
     const qs = parseQuestions(m.text);
-    const textOnly = kind === 'send' && qs.length === 1 && !q.sels[0] && q.text.trim();
+    const textOnly = kind === 'send' && qs.length === 1 && !q.sels[0] && quickFilled(id);
     if (kind === 'send' && !textOnly && qs.some((_, i) => !q.sels[i])) return;
     const picks = qs.length === 1 && !qs[0].named ? `選 ${q.sels[0]}` : qs.map((qq, i) => `問題${qq.no} 選 ${q.sels[i]}`).join('；');
     const head = kind === 'hold' ? '暫緩處理' : qs.length ? picks : '同意照辦';
@@ -4735,8 +4786,9 @@
     const text = textOnly ? `[回覆] ${proxy}${q.text.trim()}` : `[回覆] ${proxy}${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
     q.busy = true; q.error = ''; refreshMsg(id);
     try {
-      const r = await postMsg({ text, requestId: newRequestId(), replyToMessageId: id, recipientIds: [m.author.participantId] });
-      quickMap.delete(id);
+      const fileIds = await quickFiles(id);
+      const r = await postMsg({ text, requestId: quickReqId(id), replyToMessageId: id, recipientIds: [m.author.participantId], ...(fileIds ? { fileIds } : {}) });
+      quickMap.delete(id); attClear('q:' + id);
       if (state.page === 'inbox') { // 收件匣裡回答：該項立刻淡出移走
         work.answered.add(id);
         const row = document.querySelector(`#page-work [data-conf-row="${CSS.escape(id)}"]`);
@@ -7474,6 +7526,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const el = document.createElement('div');
     el.className = 'viewer';
     document.body.classList.add('viewer-open'); // 確認框要疊在大圖上
+    const under = [...document.querySelectorAll('.confirm-root:not(.under-viewer)')]; // 從退回框裡點縮圖 → 大圖疊在退回框上面
+    under.forEach(x => x.classList.add('under-viewer'));
     el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', '看大圖');
     document.body.append(el);
     const src = it => (it.url ? Promise.resolve(it.url) : it.fileId ? thumbUrl(it.fileId) : Promise.reject(new Error('no')));
@@ -7493,9 +7547,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       el.querySelector('.vw-x').focus();
     };
     const go = d => { if (items.length > 1) { i = (i + d + items.length) % items.length; draw(); } };
-    const close = () => { el.remove(); document.body.classList.toggle('viewer-open', !!document.querySelector('.viewer')); window.removeEventListener('keydown', onKey, true); if (prev?.isConnected) prev.focus(); };
+    const close = () => { el.remove(); under.forEach(x => x.classList.remove('under-viewer')); document.body.classList.toggle('viewer-open', !!document.querySelector('.viewer')); window.removeEventListener('keydown', onKey, true); if (prev?.isConnected) prev.focus(); };
     const onKey = e => {
-      if (document.querySelector('.confirm-root')) return;
+      if (document.querySelector('.confirm-root:not(.under-viewer)')) return;
       if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); }
       else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); e.stopImmediatePropagation(); go(e.key === 'ArrowLeft' ? -1 : 1); }
       else if (e.key === 'Tab') { const f = [...el.querySelectorAll('button')]; if (!f.length) return; const a = f.indexOf(document.activeElement); if (e.shiftKey && a <= 0) { e.preventDefault(); f.at(-1).focus(); } else if (!e.shiftKey && a === f.length - 1) { e.preventDefault(); f[0].focus(); } }
@@ -7632,25 +7686,128 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const MAX_UP = 4;
   const isImgFile = f => /^image\/(png|jpeg)$/.test(f.type) || /\.(png|jpe?g)$/i.test(f.name);
   const upProblem = f => { const ext = (f.name.split('.').pop() || '').toLowerCase(); return !FILE_EXTS.includes(ext) ? '不支援這種檔案，不會上傳' : f.size > MAX_FILE ? '超過 2 MB，不會上傳' : ''; };
+  // ---------- 共用附件格：群組上傳視窗、卡片回覆、決策回覆、[需確認] 回覆、退回、交接都用這一份 ----------
+  // 狀態以 key 存（切換畫面、重畫都還在）：{ items: [{ file, url, problem, fileId }], declared, redeclare, limit, busy }
+  const attMap = new Map();
+  const attNew = () => ({ items: [], declared: false, redeclare: '', limit: '', busy: false });
+  const attOf = key => { let st = attMap.get(key); if (!st) attMap.set(key, st = attNew()); return st; };
+  const attHas = key => !!attMap.get(key)?.items.length;
+  const attOk = st => st.items.filter(x => !x.problem);
+  const attAllImg = st => st.items.every(x => isImgFile(x.file));
+  function attAdd(st, list) {
+    const unique = name => { if (!st.items.some(x => x.file.name === name)) return name; const dot = name.lastIndexOf('.'); for (let k = 2; ; k++) { const n = `${name.slice(0, dot)}-${k}${name.slice(dot)}`; if (!st.items.some(x => x.file.name === n)) return n; } };
+    let added = 0, over = 0;
+    for (const f0 of list) {
+      if (st.items.length >= MAX_UP) { over++; continue; }
+      const name = unique(f0.name), f = name === f0.name ? f0 : new File([f0], name, { type: f0.type });
+      st.items.push({ file: f, url: isImgFile(f) ? URL.createObjectURL(f) : '', problem: upProblem(f), fileId: null });
+      added++;
+    }
+    st.limit = over ? `最多 ${MAX_UP} 張，有 ${over} 張沒有加進來` : '';
+    if (added && st.declared) { st.declared = false; st.redeclare = `你剛加了第 ${st.items.length} 張，聲明已自動取消勾選，請再看一次全部截圖後重新勾選。`; }
+    return added;
+  }
+  function attRemove(st, k) { const [x] = st.items.splice(k, 1); if (x?.url) URL.revokeObjectURL(x.url); st.limit = ''; if (!st.items.length) Object.assign(st, attNew()); }
+  function attClear(key) { const st = attMap.get(key); if (st) for (const x of st.items) if (x.url) URL.revokeObjectURL(x.url); attMap.delete(key); }
+  // 張／個分開寫整句，英文介面才對得到字典
+  const attCountHtml = st => (attAllImg(st)
+    ? `<b>${st.items.length} 張</b><span class="muted small">（最多 ${MAX_UP} 張，每張 2 MB 以內）</span>`
+    : `<b>${st.items.length} 個</b><span class="muted small">（最多 ${MAX_UP} 個，每個 2 MB 以內）</span>`);
+  const attCellsHtml = (st, { busy = false } = {}) => st.items.map((x, k) => `<figure class="up-cell${x.problem ? ' bad' : ''}">
+      <button type="button" class="up-th" data-up-view="${k}" aria-label="${esc(`放大看第 ${k + 1} 張：${x.file.name}`)}">${x.url ? `<img alt="" src="${x.url}">` : `<span class="up-ico" aria-hidden="true">${fileIcon((x.file.name.split('.').pop() || '').toLowerCase())}</span>`}${x.problem ? `<span class="up-bad"><b>${esc(x.problem)}</b></span>` : ''}</button>
+      <button type="button" class="up-rm" data-up-rm="${k}" aria-label="${esc(`拿掉第 ${k + 1} 張：${x.file.name}`)}" ${busy ? 'disabled' : ''}>×</button>
+      <figcaption><span class="up-fn">${k + 1}. ${esc(x.file.name)}</span><span class="muted">${fmtBytes(x.file.size)}</span></figcaption></figure>`).join('')
+    + (st.items.length < MAX_UP ? `<button type="button" class="up-add" data-up-add ${busy ? 'disabled' : ''}><b aria-hidden="true">＋</b><span>${attAllImg(st) ? '再加一張' : '再加一個'}</span><span class="muted small"><span class="k-desk">或直接 Ctrl+V 貼上</span><span class="k-mob">從相簿或檔案選</span></span></button>` : '');
+  const attDeclareText = st => { const n = attOk(st).length; return attAllImg(st) ? `我已逐張看過，這 ${n} 張截圖都不含任何程式碼與客戶個資` : `我已逐個看過，這 ${n} 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資`; };
+  const attViewItems = st => st.items.map(x => ({ url: x.url, name: x.file.name, sub: fmtBytes(x.file.size) + (x.problem ? ` · ${x.problem}` : '') }));
+  // 嵌在輸入框裡的附件格：縮圖格放文字框上面、聲明放下面；沒有附件時兩格都是空的
+  const attGridHtml = key => { const st = attMap.get(key); return `<div class="att-grid" data-att-grid="${esc(key)}">${st?.items.length ? `<section class="up-multi" aria-label="要附上的截圖"><div class="up-mh"><span class="att-count">${attCountHtml(st)}</span><span class="muted small up-tip">點縮圖可放大檢查</span></div>
+      <div class="up-grid">${attCellsHtml(st, { busy: st.busy })}</div>${st.limit ? `<p class="up-limit small" role="status">${esc(st.limit)}</p>` : ''}</section>` : ''}</div>`; };
+  const attDeclHtml = key => { const st = attMap.get(key); return `<div class="att-decl" data-att-decl="${esc(key)}">${st?.items.length ? `<label class="declare-box"><input type="checkbox" data-att-declare="${esc(key)}" ${st.declared ? 'checked' : ''} ${st.busy ? 'disabled' : ''}><span class="att-declare-t">${esc(attDeclareText(st))}</span></label>${st.redeclare ? `<p class="warn-box up-redeclare small" role="status">${esc(st.redeclare)}</p>` : ''}` : ''}</div>`; };
+  const attPickBtn = key => `<button type="button" class="att-pick" data-att-pick="${esc(key)}" aria-label="附加截圖或檔案" title="${esc(`附加截圖或檔案（最多 ${MAX_UP} 張）`)}">📎</button>`;
+  const attHint = (desk, mob = '可附截圖') => `<span class="att-hint muted small"><span class="k-desk">${desk}</span><span class="k-mob">${mob}</span></span>`;
+  const attListeners = new Set([inlNeedRefresh, quickAttRefresh]); // 附件變了要更新的送出鈕
+  function attRefresh(key) {
+    document.querySelectorAll(`[data-att-grid="${CSS.escape(key)}"]`).forEach(el => { el.outerHTML = attGridHtml(key); });
+    document.querySelectorAll(`[data-att-decl="${CSS.escape(key)}"]`).forEach(el => { el.outerHTML = attDeclHtml(key); });
+    for (const f of attListeners) f(key);
+  }
+  // 送出前檢查：有附件就要勾聲明、要有可上傳的檔；回傳錯誤訊息（沒問題回空字串）
+  function attProblem(key) {
+    const st = attMap.get(key);
+    if (!st?.items.length) return '';
+    if (!attOk(st).length) return '附件都不能上傳（超過 2 MB 或格式不支援），請拿掉或換一張';
+    if (!st.declared) return `請先勾選「${attDeclareText(st)}」`;
+    return '';
+  }
+  // 先逐張存檔（不發文），回傳 fileIds；重試時已上傳的不再傳
+  async function attUpload(key, project, onStep = () => {}) {
+    const st = attMap.get(key);
+    if (!st?.items.length) return null;
+    const list = attOk(st);
+    for (const [k, x] of list.entries()) {
+      if (x.fileId) continue;
+      onStep(k + 1, list.length);
+      const q = new URLSearchParams({ name: x.file.name, declared: 'true', project: project || 'all', post: 'false' });
+      const r = await fetch(`/api/files?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: x.file });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(`${x.file.name}：${data?.error?.message || `HTTP ${r.status}`}`);
+      x.fileId = data.file.fileId;
+    }
+    return list.map(x => x.fileId);
+  }
+  function attSetBusy(key, busy) { const st = attMap.get(key); if (st) { st.busy = busy; attRefresh(key); } }
+  // 共用的選檔框
+  const attFile = Object.assign(document.createElement('input'), { type: 'file', multiple: true, hidden: true, accept: FILE_EXTS.map(x => '.' + x).join(',') });
+  attFile.id = 'att-file';
+  document.body.appendChild(attFile);
+  let attFileKey = null;
+  const attPick = key => { attFileKey = key; attFile.click(); };
+  attFile.addEventListener('change', () => { const l = [...attFile.files]; attFile.value = ''; if (attFileKey && l.length) { attAdd(attOf(attFileKey), l); attRefresh(attFileKey); } });
+  document.addEventListener('click', e => {
+    const pick = e.target.closest?.('[data-att-pick]');
+    if (pick) { if (!pick.disabled) attPick(pick.dataset.attPick); return; }
+    const g = e.target.closest?.('[data-att-grid]');
+    if (!g) return;
+    const key = g.dataset.attGrid, st = attMap.get(key);
+    if (!st) return;
+    const rm = e.target.closest('[data-up-rm]'), v = e.target.closest('[data-up-view]');
+    if (rm && !rm.disabled) { attRemove(st, +rm.dataset.upRm); return attRefresh(key); }
+    if (v) return openViewer(attViewItems(st), +v.dataset.upView);
+    const add = e.target.closest('[data-up-add]');
+    if (add && !add.disabled) attPick(key);
+  });
+  document.addEventListener('change', e => {
+    const c = e.target.closest?.('[data-att-declare]');
+    if (!c) return;
+    const key = c.dataset.attDeclare, st = attOf(key);
+    st.declared = c.checked; if (st.declared) st.redeclare = '';
+    attRefresh(key);
+  });
+  // 掛了附件格的文字框：Ctrl+V 貼上截圖就加進附件格（純文字照舊貼上）
+  document.addEventListener('paste', e => {
+    const ta = e.target.closest?.('[data-att-key]');
+    if (!ta) return;
+    const l = pastedImages(e);
+    if (!l.length) return;
+    e.preventDefault();
+    if (attMap.get(ta.dataset.attKey)?.busy) return;
+    attAdd(attOf(ta.dataset.attKey), l); attRefresh(ta.dataset.attKey);
+  });
+  // 讀不出來的縮圖（例如超過 2 MB 的大圖）換成 🖼，不出現破圖
+  document.addEventListener('error', e => {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.closest('.up-th')) return;
+    const i = document.createElement('span'); i.className = 'up-ico'; i.setAttribute('aria-hidden', 'true'); i.textContent = '🖼'; img.replaceWith(i);
+  }, true);
+
   function openUpload(files) {
     if (files.length === 1 && !isImgFile(files[0])) return openUploadOne(files[0]); // 單一份文件（pdf 等）照舊
-    const items = [];
-    let declared = false, redeclare = '', limit = '', busy = false;
-    const unique = name => { if (!items.some(x => x.file.name === name)) return name; const dot = name.lastIndexOf('.'); for (let k = 2; ; k++) { const n = `${name.slice(0, dot)}-${k}${name.slice(dot)}`; if (!items.some(x => x.file.name === n)) return n; } };
-    const add = list => {
-      let added = 0, over = 0;
-      for (const f0 of list) {
-        if (items.length >= MAX_UP) { over++; continue; }
-        const name = unique(f0.name), f = name === f0.name ? f0 : new File([f0], name, { type: f0.type });
-        items.push({ file: f, url: isImgFile(f) ? URL.createObjectURL(f) : '', problem: upProblem(f), fileId: null });
-        added++;
-      }
-      limit = over ? `最多 ${MAX_UP} 張，有 ${over} 張沒有加進來` : '';
-      if (added && declared) { declared = false; redeclare = `你剛加了第 ${items.length} 張，聲明已自動取消勾選，請再看一次全部截圖後重新勾選。`; }
-      return added;
-    };
+    const st = attNew(), items = st.items;
+    let busy = false;
+    const add = list => attAdd(st, list);
     add(files);
-    const ok = () => items.filter(x => !x.problem), allImg = () => items.every(x => isImgFile(x.file));
+    const ok = () => attOk(st), allImg = () => attAllImg(st);
     const body = openModal('上傳截圖', `
       <section class="up-multi" aria-label="要上傳的檔案"><div class="up-mh"><span id="up-count"></span><span class="muted small up-tip">點縮圖可放大檢查</span></div>
         <div class="up-grid" id="up-grid"></div><p class="up-limit small" id="up-limit" role="status" hidden></p></section>
@@ -7668,37 +7825,31 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const draw = () => {
       const n = ok().length, skip = items.length - n, img = allImg(); // 張／個分開寫整句，英文介面才對得到字典
       modal.querySelector('#modal-title').textContent = img ? `上傳截圖（${items.length} 張）` : `上傳文件（${items.length} 個）`;
-      body.querySelector('#up-count').innerHTML = img ? `<b>${items.length} 張</b><span class="muted small">（最多 ${MAX_UP} 張，每張 2 MB 以內）</span>`
-        : `<b>${items.length} 個</b><span class="muted small">（最多 ${MAX_UP} 個，每個 2 MB 以內）</span>`;
-      body.querySelector('#up-grid').innerHTML = items.map((x, k) => `<figure class="up-cell${x.problem ? ' bad' : ''}">
-          <button type="button" class="up-th" data-up-view="${k}" aria-label="${esc(`放大看第 ${k + 1} 張：${x.file.name}`)}">${x.url ? `<img alt="" src="${x.url}">` : `<span class="up-ico" aria-hidden="true">${fileIcon((x.file.name.split('.').pop() || '').toLowerCase())}</span>`}${x.problem ? `<span class="up-bad"><b>${esc(x.problem)}</b></span>` : ''}</button>
-          <button type="button" class="up-rm" data-up-rm="${k}" aria-label="${esc(`拿掉第 ${k + 1} 張：${x.file.name}`)}">×</button>
-          <figcaption><span class="up-fn">${k + 1}. ${esc(x.file.name)}</span><span class="muted">${fmtBytes(x.file.size)}</span></figcaption></figure>`).join('')
-        + (items.length < MAX_UP ? `<button type="button" class="up-add" data-up-add><b aria-hidden="true">＋</b><span>${img ? '再加一張' : '再加一個'}</span><span class="muted small"><span class="k-desk">或直接 Ctrl+V 貼上</span><span class="k-mob">從相簿或檔案選</span></span></button>` : '');
-      body.querySelectorAll('.up-th img').forEach(img => img.addEventListener('error', () => { const i = document.createElement('span'); i.className = 'up-ico'; i.setAttribute('aria-hidden', 'true'); i.textContent = '🖼'; img.replaceWith(i); }, { once: true }));
-      const lm = body.querySelector('#up-limit'); lm.textContent = limit; lm.hidden = !limit;
-      body.querySelector('#up-declare-t').textContent = img ? `我已逐張看過，這 ${n} 張截圖都不含任何程式碼與客戶個資` : `我已逐個看過，這 ${n} 個檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資`;
-      chk.checked = declared;
-      const rd = body.querySelector('#up-redeclare'); rd.textContent = redeclare || ''; rd.hidden = !redeclare;
-      if (!busy) { go.textContent = img ? (skip ? `上傳 ${n} 張（略過 ${skip} 張）` : `上傳 ${n} 張`) : skip ? `上傳 ${n} 個（略過 ${skip} 個）` : `上傳 ${n} 個`; go.disabled = !declared || !n; }
+      body.querySelector('#up-count').innerHTML = attCountHtml(st);
+      body.querySelector('#up-grid').innerHTML = attCellsHtml(st);
+      const lm = body.querySelector('#up-limit'); lm.textContent = st.limit; lm.hidden = !st.limit;
+      body.querySelector('#up-declare-t').textContent = attDeclareText(st);
+      chk.checked = st.declared;
+      const rd = body.querySelector('#up-redeclare'); rd.textContent = st.redeclare || ''; rd.hidden = !st.redeclare;
+      if (!busy) { go.textContent = img ? (skip ? `上傳 ${n} 張（略過 ${skip} 張）` : `上傳 ${n} 張`) : skip ? `上傳 ${n} 個（略過 ${skip} 個）` : `上傳 ${n} 個`; go.disabled = !st.declared || !n; }
     };
     const more = list => { if (busy) return; if (list.length) add(list); else return; draw(); };
     body.addEventListener('click', e => {
       const rm = e.target.closest('[data-up-rm]'), v = e.target.closest('[data-up-view]');
-      if (rm && !busy) { const [x] = items.splice(+rm.dataset.upRm, 1); if (x.url) URL.revokeObjectURL(x.url); limit = ''; if (!items.length) return closeModal(); return draw(); }
-      if (v) { const k = +v.dataset.upView; return openViewer(items.map(x => ({ url: x.url, name: x.file.name, sub: fmtBytes(x.file.size) + (x.problem ? ` · ${x.problem}` : '') })), k); }
+      if (rm && !busy) { const [x] = items.splice(+rm.dataset.upRm, 1); if (x.url) URL.revokeObjectURL(x.url); st.limit = ''; if (!items.length) return closeModal(); return draw(); }
+      if (v) return openViewer(attViewItems(st), +v.dataset.upView);
       if (e.target.closest('[data-up-add]')) body.querySelector('#up-more').click();
     });
     body.querySelector('#up-more').addEventListener('change', e => { const l = [...e.target.files]; e.target.value = ''; more(l); });
     // 視窗開著時 Ctrl+V 連貼（附註欄裡貼純文字照舊）
     modal.addEventListener('paste', e => { const l = pastedImages(e); if (!l.length) return; e.preventDefault(); more(l); });
-    chk.addEventListener('change', () => { declared = chk.checked; if (declared) redeclare = ''; draw(); });
+    chk.addEventListener('change', () => { st.declared = chk.checked; if (st.declared) st.redeclare = ''; draw(); });
     attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'));
     body.querySelector('#up-note').addEventListener('input', e => { const w = body.querySelector('#up-warn'), t = outsideText(outsideMentions(e.target.value)); w.textContent = t; w.hidden = !t; });
     new MutationObserver((_, ob) => { if (!modal.isConnected) { ob.disconnect(); for (const x of items) if (x.url) URL.revokeObjectURL(x.url); } }).observe($('#modal-root'), { childList: true });
     let requestId = null;
     go.addEventListener('click', async () => {
-      const list = ok(); if (!declared || !list.length || busy) return;
+      const list = ok(); if (!st.declared || !list.length || busy) return;
       busy = true; go.disabled = true; body.querySelector('#up-error').textContent = '';
       body.querySelectorAll('.up-rm, .up-add').forEach(b => { b.disabled = true; });
       const note = body.querySelector('#up-note').value.trim(), rec = note ? resolveRecipients(note) : {};
@@ -8013,6 +8164,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         ${ep('POST', '/api/notifications/ack', '確認通知（notificationIds）')}
         ${ep('POST', '/api/files?name=&amp;declared=true', '上傳文件（原始位元組）')}
         ${ep('POST', '/api/files?name=&amp;declared=true&amp;post=false', '只存檔不發文；再用 POST /api/messages 帶 fileIds 一次發多張（最多 4 個）')}
+        ${ep('POST', '/api/cards/:id/handover｜decide｜defer｜reject', '卡片的交接、決定、暫緩、退回也可帶 fileIds（同樣先 post=false 上傳），檔案掛在平台代發的那則訊息')}
         ${ep('GET', '/api/files', '文件清單；/api/files/:id 下載')}
       </ul>
       <p><a href="/api/docs/ai-integration" target="_blank" rel="noopener">完整規格：AI 代理人接入通訊協定指南</a></p>

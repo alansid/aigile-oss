@@ -3269,7 +3269,7 @@ ${ending}`;
     const type = req.headers.get('content-type') || '';
     if (!type.toLowerCase().startsWith('multipart/form-data;')) {
       const body = await readJson(req);
-      return { reason: body?.reason, version: body?.version };
+      return { reason: body?.reason, version: body?.version, fileIds: body?.fileIds }; // 先上傳再帶 fileIds
     }
     const bytes = await readBody(req, MAX_FILE_BYTES + 16 * 1024, '檔案超過上傳上限', 'FILE_TOO_LARGE');
     let form;
@@ -3292,12 +3292,12 @@ ${ending}`;
     files.map((f, i) => `${i + 1}. ${f.name}（${formatBytes(f.size)}，SHA-256 ${f.sha256.slice(0, 12)}…）下載：GET /api/files/${f.id}`).join('\n')}`;
   // POST /api/messages 帶 fileIds＝先用 POST /api/files?post=false 上傳、再一次發成一則（通知只發一次）；
   // 只能掛自己上傳、還沒掛到訊息、沒過期的檔；內文由平台照檔案產生（text 當附註，可空）
-  async function attachableFiles(me, body) {
-    if (!Array.isArray(body.fileIds) || !body.fileIds.length) throw invalid(`fileIds 需為 1～${MAX_MSG_FILES} 個 fileId 的陣列`);
-    const ids = [...new Set(body.fileIds.map(String))];
-    if (ids.length !== body.fileIds.length) throw invalid('fileIds 不可重複');
+  // checkFiles 只驗證、不動內文；卡片動作（決定、暫緩、退回、交接）也用它，驗過才改卡片
+  async function checkFiles(me, fileIds, requestId = '') {
+    if (!Array.isArray(fileIds) || !fileIds.length) throw invalid(`fileIds 需為 1～${MAX_MSG_FILES} 個 fileId 的陣列`);
+    const ids = [...new Set(fileIds.map(String))];
+    if (ids.length !== fileIds.length) throw invalid('fileIds 不可重複');
     if (ids.length > MAX_MSG_FILES) throw new ApiError(400, 'TOO_MANY_FILES', `一則訊息最多 ${MAX_MSG_FILES} 個檔案`);
-    const requestId = typeof body.requestId === 'string' ? body.requestId.trim() : '';
     const dup = requestId ? await db.get('SELECT id FROM messages WHERE author_id = ? AND request_id = ?', me.id, requestId) : null; // 重送同一則：檔案已掛在它上面
     const rows = await db.all('SELECT * FROM files WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(ids));
     const byId = new Map(rows.map(x => [x.id, x]));
@@ -3306,6 +3306,11 @@ ${ending}`;
       if (!f || f.uploader_id !== me.id || f.deleted_at || f.expires_at <= Date.now()) throw new ApiError(404, 'NOT_FOUND', `找不到可以掛的檔案 ${ids[i]}（要是你自己上傳、還沒過期的）`);
       if (f.message_id && f.message_id !== dup?.id) throw new ApiError(409, 'FILE_ALREADY_POSTED', `檔案 ${f.name} 已經掛在別的訊息上`);
     }
+    return files;
+  }
+  async function attachableFiles(me, body) {
+    const files = await checkFiles(me, body.fileIds, typeof body.requestId === 'string' ? body.requestId.trim() : '');
+    const ids = files.map(f => f.id);
     const note = typeof body.text === 'string' ? body.text.trim() : '';
     body.text = filesText(note, files).slice(0, MAX_TEXT);
     return ids;
@@ -3648,7 +3653,7 @@ ${ending}`;
   registerUpdateCheck({ route, db, requireAdmin, requireHuman, config });
   registerDemo({ route, db, ApiError, randId, nowIso, requireAdmin, requireHuman, newCode, newToken,
     afterChange: async () => { invalidatePeople(); await bumpPeopleVer(); await loadProjects(true); } });
-  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
+  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
 
   // 只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
   async function scopeTeamMembers(me, members, priv) {

@@ -71,7 +71,7 @@ export async function teamCards(db, keyOf = c => cardNo(c.seq)) {
   return { work, open, decisions: decisions.map(d => ({ cardId: keyOf(d), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, readCardReturn, storeCardReturnFile, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, readCardReturn, storeCardReturnFile, checkFiles = async () => { throw new Error('checkFiles 未提供'); }, filesText = (note, files) => note, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // 卡片多久沒更新才可能過時
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
@@ -547,6 +547,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const note = String(body.note ?? '').trim();
     if (note.length > CARD_LIMITS.note) throw invalid(`說明上限 ${CARD_LIMITS.note} 字`);
     if (BUILTIN_RESULTS.includes(result) && !note) throw invalid(result === '不同意' ? '不同意請寫原因' : '要求補充請寫要補什麼');
+    const files = await cardFiles(me, body); // 附圖跟著通知發出；先驗過再改卡片
     const people = await peopleMap(ctx), at = nowIso();
     if (result === '要求補充') {
       const back = c.proposer_id && people.get(c.proposer_id)?.status === 'active' ? c.proposer_id : c.created_by;
@@ -559,7 +560,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const back2 = result === '要求補充'
       ? (c.proposer_id && people.get(c.proposer_id)?.status === 'active' ? c.proposer_id : c.created_by)
       : (c.proposer_id || c.created_by);
-    await notifyCard(ctx, me, c, [back2], result === '要求補充' ? `要求補充：${note}` : `決定「${result}」${note ? '：' + note : ''}`, 'decide');
+    await notifyCard(ctx, me, c, [back2], result === '要求補充' ? `要求補充：${note}` : `決定「${result}」${note ? '：' + note : ''}`, 'decide', files);
     return view(await load(params.id), people);
   });
 
@@ -581,9 +582,10 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const reason = String(body.reason ?? '').trim();
     const blocker = `${DEFER_PREFIX}${people.get(me.id)?.name || me.name}）${reason ? '：' + reason : ''}`;
     if (blocker.length > CARD_LIMITS.blocker) throw invalid(`暫緩原因太長（整句上限 ${CARD_LIMITS.blocker} 字）`);
+    const files = await cardFiles(me, body);
     await save(c, { status: '受阻', blocker, wait_for_id: c.decider_id }, ['狀態 待確認 → 受阻', blocker], me, at);
     invalidatePeople();
-    await notifyCard(ctx, me, c, [c.proposer_id || c.created_by, c.decider_id], blocker, 'defer');
+    await notifyCard(ctx, me, c, [c.proposer_id || c.created_by, c.decider_id], blocker, 'defer', files);
     return view(await load(params.id), people);
   });
   route('POST', '/api/cards/:id/resume', async ({ ctx, me, params }) => {
@@ -612,13 +614,18 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const hos = await db.all("SELECT m.id, m.author_id FROM card_msgs cm JOIN messages m ON m.id = cm.message_id WHERE cm.card_seq = ? AND m.text LIKE '[交接]%' ORDER BY m.seq DESC LIMIT 20", c.seq);
     const ho = hos.find(m => people.get(m.author_id)?.kind === 'ai' && people.get(m.author_id)?.status === 'active');
     if (!ho) throw new ApiError(400, 'NO_HANDOVER_SOURCE', '找不到把這張卡交過來的 AI，請改用「交接」交給要處理的人。');
+    if (body.file && body.fileIds != null) throw invalid('附件請擇一：multipart 的 file，或 JSON 的 fileIds');
+    const files = await cardFiles(me, body);
     const file = body.file ? await storeCardReturnFile(me, body, c.project) : null;
+    const list = files || (file ? [file] : null);
     const ai = people.get(ho.author_id), at = nowIso();
     await save(c, { owner_id: ai.id, status: '進行中', wait_for_id: null }, [`退回 ${me.name} → ${ai.name}：${reason}（狀態 待確認 → 進行中）`], me, at);
     invalidatePeople();
     let messageId = null, notifyError = null;
     try {
-      const r = await createMessage(ctx, me, { text: `[退回] ${c.project ? `【${projectName(c.project)}】` : ''}${pub(c)} ${plainTitle(c.title)} → @${ai.name}：${reason}`, requestId: `reject_${c.uid}_${c.version}`, replyToMessageId: ho.id, recipientIds: [ai.id], project: c.project }, { fileId: file?.id ?? null });
+      // 附檔時原因放在「[文件]」前面（之前內文沒有 [文件]，畫面只剩檔案卡、看不到原因）
+      const base = `[退回] ${c.project ? `【${projectName(c.project)}】` : ''}${pub(c)} ${plainTitle(c.title)} → @${ai.name}：${reason}`;
+      const r = await createMessage(ctx, me, { text: list ? filesText(base, list) : base, requestId: `reject_${c.uid}_${c.version}`, replyToMessageId: ho.id, recipientIds: [ai.id], project: c.project }, { fileIds: list ? list.map(f => f.id) : null });
       messageId = r.message.messageId;
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
     } catch (err) { notifyError = err.message; }
@@ -637,18 +644,21 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
 
   // 卡片動作通知：以動作者身分在群組發一則 [通知] 並 @ 相關成員（走既有 @ 通知與門鈴）。
   // requestId 帶卡號＋事件＋卡片版本，同一動作不會重複發；動作者自己不通知；失敗不影響動作本身。
-  async function notifyCard(ctx, me, c, toIds, summary, key) {
+  async function notifyCard(ctx, me, c, toIds, summary, key, files = null) {
     const ids = [...new Set(toIds.filter(id => id && id !== me.id))];
-    if (!ids.length) return;
+    if (!ids.length && !files?.length) return; // 有附圖時沒人可通知也照發（只留紀錄），檔案才看得到
     const cur = await load(cardNo(c.seq));
     const tag = cur.project ? `【${projectName(cur.project)}】` : '';
     const plain = plainTitle(cur.title);
     const msg = `[通知] ${tag}${pub(cur)} ${plain}：${summary}`.slice(0, 1900);
     try {
-      const r = await createMessage(ctx, me, { text: msg, requestId: `cardev_${c.uid}_${key}_${cur.version}`.slice(0, 128), recipientIds: ids, project: cur.project });
+      const r = await createMessage(ctx, me, { text: files?.length ? filesText(msg, files) : msg, requestId: `cardev_${c.uid}_${key}_${cur.version}`.slice(0, 128), recipientIds: ids, project: cur.project }, { fileIds: files?.length ? files.map(f => f.id) : null });
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, r.message.messageId);
     } catch (err) { console.error('card notify failed:', err.message); }
   }
+
+  // 卡片動作附檔（先用 POST /api/files?post=false 上傳），沒帶就是 null
+  const cardFiles = (me, body) => (body.fileIds === undefined || body.fileIds === null ? null : checkFiles(me, body.fileIds));
 
   // 交接：負責人把自己的卡交給指定成員。接手者回到「待處理」；伺服器代交接者在群組發一則 [交接] 並 @ 對方（既有 @ 通知）
   route('POST', '/api/cards/:id/handover', async ({ ctx, me, req, params }) => {
@@ -671,6 +681,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (structured && (!four.progress || !four.nextStep)) throw invalid('交接四欄至少要寫 progress（做到哪）與 nextStep（下一步）；changes（改了什麼）、caution（注意）選填');
     const note = text({ handover: body.note }, 'handover', { required: !structured }) || (structured ? `做到哪：${four.progress}；下一步：${four.nextStep}`.slice(0, CARD_LIMITS.handover) : undefined);
     if (note === undefined) throw invalid('交接說明（note）為必填；或改寫四欄：progress、changes、nextStep、caution');
+    if (c.type === NOTE && body.fileIds != null) throw invalid('人類紀錄交接不發群組訊息，不能附檔');
+    const files = await cardFiles(me, body);
     const at = nowIso(), fromName = people.get(c.owner_id || me.id)?.name || me.name, toName = people.get(to).name;
     // 交接只換負責人、留紀錄，狀態維持（進行中還是進行中）；接手者接單時自己改
     // 唯一例外——AI 交給人類＝請人類驗收：狀態改「待確認」、等誰＝那位人類（人類紀錄、決策卡不套用）
@@ -696,7 +708,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     let messageId = null, notifyError = null;
     if (c.type === NOTE) return { ...view(await load(params.id), people), handoverMessageId: null }; // 人類紀錄交接不發群組訊息
     try {
-      const r = await createMessage(ctx, me, { text: msgText, requestId: `handover_${c.uid}_${c.version}`, recipientIds: [to], project: c.project });
+      const r = await createMessage(ctx, me, { text: files ? filesText(msgText, files) : msgText, requestId: `handover_${c.uid}_${c.version}`, recipientIds: [to], project: c.project }, { fileIds: files ? files.map(f => f.id) : null });
       messageId = r.message.messageId;
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, messageId);
     } catch (err) { notifyError = err.message; }
