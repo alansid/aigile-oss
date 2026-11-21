@@ -3463,7 +3463,16 @@
     box.classList.remove('is-board');
     // 收件匣、總覽重畫時留在原本的捲動位置
     const keepTop = html => { const top = box.scrollTop; box.innerHTML = html; if (box.scrollTop !== top) box.scrollTop = top; };
-    if (state.page === 'inbox') { keepTop(inboxHtml()); applyFocusItem(); return; }
+    if (state.page === 'inbox') {
+      const focused = document.activeElement;
+      const control = box.contains(focused) && ['data-ask-all', 'data-conf-all', 'data-ask-check', 'data-conf-check']
+        .find(attr => focused.hasAttribute(attr));
+      const value = control && focused.getAttribute(control);
+      keepTop(inboxHtml());
+      if (control) box.querySelector(`[${control}="${CSS.escape(value)}"]`)?.focus({ preventScroll: true });
+      applyFocusItem();
+      return;
+    }
     if (state.page === 'hub') { keepTop(hubHtml()); return; }
     const all = visibleCards();
     const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
