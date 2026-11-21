@@ -681,14 +681,15 @@
   const swJoinOpen = pj => state.projMeta.join?.[pj.id]?.open !== false; // 專案預設開放申請
   // 第一次設定引導：群組名稱 → 第一個專案 → 邀請成員 → 第一隻 AI。每步可略過；做完或「全部略過」不再出現；按 × 先關，下次登入再出現
   async function openSetupWizard() {
-    const [group, health, roles] = await Promise.all([api('/api/group').catch(() => ({})), api('/api/health').catch(() => ({})), loadRoles().catch(() => ({ items: [] })),
-      state.projectList?.length ? null : loadProjectList().catch(() => {})]); // 專案清單還沒載入完就打開引導（伺服器回得慢時）：先等它，不然第一隻 AI 送出時沒有專案
+    const [group, health, roles, toolSettings] = await Promise.all([api('/api/group').catch(() => ({})), api('/api/health').catch(() => ({})), loadRoles().catch(() => ({ items: [] })),
+      api('/api/ai-tools').catch(() => null), state.projectList?.length ? null : loadProjectList().catch(() => {})]); // 專案清單還沒載入完就打開引導（伺服器回得慢時）：先等它，不然第一隻 AI 送出時沒有專案
     const pj = (state.projectList || []).find(p => !p.archived) || null;
     const tpl = (roles.items || []).filter(r => r.resident !== false && r.key !== 'custom');
-    const st = { step: 0, invites: [], ai: null, tool: 'claude', copied: false, copying: false, manualText: '', demo: null };
-    const SW_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['antigravity', 'Antigravity CLI'], ['other', '其他 AI']];
+    if (toolSettings) maToolsOff = new Set(toolSettings.off);
+    const wizardTools = maToolsOn();
+    const st = { step: 0, invites: [], ai: null, tool: wizardTools[0][0], copied: false, copying: false, manualText: '', demo: null };
     const STEPS = ['群組名稱', '第一個專案', '邀請成員', '第一隻 AI'];
-    const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '每步都可以略過，之後可在「成員管理」、「專案管理」和「我的 AI」調整。' });
+    const body = openModal('第一次設定', '<div class="sw" id="sw"></div>', { size: 'setup', sub: '每步都可以略過。之後可從頭像選單開啟「管理員設定」，或到「我的 AI」調整接入方式。' });
     const el = body.querySelector('#sw');
     const finish = async skipped => { try { await api('/api/setup-wizard/done', { method: 'POST' }); } catch {} if (skipped) store.set(NEXT_KEY(), '1'); closeModal(); location.reload(); };
     const btns = (main, mainLabel) => `<div class="sw-actions"><button type="button" class="link" data-sw="skipall">全部略過</button><span class="grow"></span>${st.step < 3 ? '<button type="button" class="btn" data-sw="skip">略過這步</button>' : ''}${main ? `<button type="button" class="btn primary" data-sw="${main}">${mainLabel}</button>` : ''}</div>`;
@@ -703,13 +704,15 @@
         ${st.invites.length ? `<ul class="sw-links">${st.invites.map((v, i) => `<li><b>${esc(v.name)}</b><code>${esc(v.url)}</code><button type="button" class="btn small" data-sw-copy="${i}">複製連結</button></li>`).join('')}</ul>` : ''}${btns('next', '下一步')}`;
       else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p><p class="field-hint">要套用技能範本，完成設定後到「我的 AI」的「技能庫」，按「＋ 新增技能」。</p>${btns('ai', '建立 AI')}`;
       else {
-        const oneLine = st.tool !== 'other';
+        const oneLine = maHasLine(st.tool);
         const copyLabel = oneLine ? '複製一行啟動' : '複製接入文字';
-        const pasteHint = oneLine
+        const pasteHint = st.tool === 'copilot' ? '將一行啟動貼到這隻 AI 的工作資料夾的終端機。需要它工作時開啟 Copilot CLI。'
+          : st.tool === 'antigravity' ? '將一行啟動貼到這隻 AI 的工作資料夾的終端機。保持 Antigravity CLI 視窗開啟即可接收工作。'
+          : oneLine
           ? '將一行啟動貼到這隻 AI 的工作資料夾的終端機。執行即同意自動待命，重開機可以貼同一行接回。'
           : '將接入文字貼到這隻 AI 的對話。';
         html = `<p class="small">已建立「${esc(st.ai.name)}」。請選擇你使用的 AI 工具。</p>
-          <div class="seg-scope sw-tool" role="group" aria-label="你的 AI 工具">${SW_TOOLS.map(([k, t]) => `<button type="button" data-sw-tool="${k}" aria-pressed="${st.tool === k}">${t}</button>`).join('')}</div>
+          <div class="seg-scope sw-tool" role="group" aria-label="你的 AI 工具">${wizardTools.map(([k, t]) => `<button type="button" data-sw-tool="${k}" aria-pressed="${st.tool === k}">${k === 'other' ? '其他 AI' : t}</button>`).join('')}</div>
           <p class="field-hint">${pasteHint}</p>
           <p class="field-hint">接入連結 15 分鐘內有效，只能使用一次。過期可到「我的 AI」重新複製。</p>
           <p class="sw-safety"><span aria-hidden="true">⚠</span> 指令和連結請勿貼到群組。</p>
@@ -6264,7 +6267,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   }
   async function requestOneLineOnboarding(ai) {
     const { convo } = maOpt(ai);
-    const { startLine } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: true, start: true, ...(convo ? { convo } : {}), tool: maTool(ai) } });
+    const { startLine } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/onboarding-link`, { method: 'POST', body: { autoStandby: maAutoWake(maTool(ai)), start: true, ...(convo ? { convo } : {}), tool: maTool(ai) } });
     return startLine;
   }
   // 每隻 AI 用的工具記在這個瀏覽器（不改資料庫，換電腦再選一次）；存不了就只記到重新整理

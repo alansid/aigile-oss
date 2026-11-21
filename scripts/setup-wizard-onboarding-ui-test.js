@@ -67,7 +67,7 @@ for (const [lang, width] of [['zh', 1280], ['en', 375]]) {
     assert.equal(await js("document.querySelector('[data-sw-tool=claude]').getAttribute('aria-pressed')"), 'true');
     const copyLabel = start => (lang === 'zh' ? (start ? '複製一行啟動' : '複製接入文字') : (start ? 'Copy one-line start' : 'Copy onboarding text'));
 
-    for (const [tool, start, stage] of [['claude', true, '05-claude'], ['codex', true, '06-codex'], ['other', false, '07-other']]) {
+    for (const [tool, start, stage] of [['claude', true, '05-claude'], ['codex', true, '06-codex'], ['antigravity', true, 'antigravity'], ['copilot', true, 'copilot'], ['other', false, '07-other']]) {
       await click(`[data-sw-tool=${tool}]`);
       await until(async () => await js("document.querySelector('[data-sw=copyai]').textContent.trim()") === copyLabel(start), 6000, stage);
       const info = await js("document.querySelector('#sw').textContent");
@@ -80,7 +80,7 @@ for (const [lang, width] of [['zh', 1280], ['en', 375]]) {
       await js('window.copiedOnboarding = null; true');
       await click('[data-sw=copyai]');
       const copied = await until(() => js('window.copiedOnboarding'), 10000, stage);
-      assert.deepEqual(await js('window.onboardingRequests.at(-1)'), { autoStandby: start, ...(start ? { start: true } : {}), tool });
+      assert.deepEqual(await js('window.onboardingRequests.at(-1)'), { autoStandby: start && tool !== 'copilot', ...(start ? { start: true } : {}), tool });
       if (start) {
         assert.ok(copied.startsWith('node -e "') && copied.includes(`'--tool','${tool}'`));
       } else {
@@ -99,4 +99,4 @@ for (const [lang, width] of [['zh', 1280], ['en', 375]]) {
     assert.equal(await visible('.sw-text'), false, 'switching tools clears the previous command');
   } finally { await kit.stop(); }
 }
-console.log('setup-wizard-onboarding-ui-test: passed (zh/en, 1280/375, all three tools)');
+console.log('setup-wizard-onboarding-ui-test: passed (zh/en, 1280/375, all five tools)');

@@ -3074,7 +3074,7 @@ html[lang="en"] .lang-switch [data-lang="en"], html[lang="zh-Hant"] .lang-switch
 #page-work { overflow-anchor: none; }
 /* 第一次設定：按鈕列固定在視窗底部（手機上內容長，「下一步」不會被擠到看不到）；選 AI 工具的分段按鈕靠左 */
 .sw .sw-actions { position: sticky; bottom: -12px; z-index: 2; margin: 0 -20px -12px; padding: 10px 20px; background: var(--surface); border-top: 1px solid var(--border); }
-.sw .sw-tool { justify-self: start; }
+.sw .sw-tool { justify-self: start; max-width: 100%; flex-wrap: wrap; }
 .sw-links .btn { min-height: 36px; }
 /* 總覽：還沒接入的 AI */
 .hub-newai { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 14px; border-radius: 12px; background: var(--surface-2); margin-bottom: 12px; font-size: 14px; }
