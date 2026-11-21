@@ -5685,7 +5685,13 @@
     if (rel.tab === 'flows' && rel.flows === null) rel.flows = await fetch('/api/flows', { headers: { Authorization: `Bearer ${state.token}` } }).then(r => (r.ok ? r.text() : '')).catch(() => '');
     drawReleases();
   }
-  const relTime = iso => { const t = new Date(iso); return `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
+  function releaseTitle(commit) {
+    if (commit.sha) return commit.title;
+    const separator = commit.title.indexOf(' · ');
+    if (separator >= 0) return L(commit.title.slice(0, separator), commit.title.slice(separator + 3));
+    return commit.title;
+  }
+  const relDate = iso => new Date(iso).toLocaleDateString(L('zh-TW', 'en-US'));
   // 很小的 Markdown 顯示：標題、清單、程式碼區塊、表格、粗體、行內程式碼
   function mdHtml(md) {
     const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -5714,13 +5720,13 @@
     if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
     if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
     const q = rel.q.trim().toLowerCase().replace(/^v/, '');
-    const list = d.items.filter(r => !q || r.version.includes(q) || r.cards.some(c => c.toLowerCase() === q || c.toLowerCase().startsWith(q)) || r.commits.some(c => c.title.toLowerCase().includes(q) || c.sha.startsWith(q)));
+    const list = d.items.filter(r => !q || r.version.includes(q) || r.cards.some(c => c.toLowerCase() === q || c.toLowerCase().startsWith(q)) || r.commits.some(c => releaseTitle(c).toLowerCase().includes(q) || c.sha.startsWith(q)));
     const row = r => `<article class="rel-item${rel.hit === r.version ? ' hit' : ''}" id="v${esc(r.version)}">
-      <div class="rel-head"><b>v${esc(r.version)}</b><span class="muted small">${esc(relTime(r.at))}${r.deployedAt ? ' 上線' : '（commit 時間）'}</span>${r.cards.map(c => `<span class="cid-chip">${esc(c)}</span>`).join('')}</div>
+      <div class="rel-head"><b>v${esc(r.version)}</b><span class="muted small">${esc(relDate(r.at))}</span>${r.cards.map(c => `<span class="cid-chip">${esc(c)}</span>`).join('')}</div>
       ${r.fixes.map(f => `<div class="rel-inc fix">🩹 修正 ${esc(f.cause)}（<button type="button" class="link small" data-rel-ver="${esc(f.causeVersion)}">v${esc(f.causeVersion)}</button>）造成的問題：${esc(f.note)}${f.flow ? `（流程 ${esc(f.flow)}）` : ''}</div>`).join('')}
       ${r.causes.map(c => `<div class="rel-inc cause">⚠ 這版造成的問題，由 ${esc(c.fix)}（<button type="button" class="link small" data-rel-ver="${esc(c.fixVersion)}">v${esc(c.fixVersion)}</button>）修好：${esc(c.note)}</div>`).join('')}
-      <ul class="rel-commits">${r.commits.map(c => `<li><code>${esc(c.sha)}</code> ${esc(c.title)}</li>`).join('')}</ul></article>`;
-    box.innerHTML = head + `<div class="work-filters"><input id="rel-q" type="search" placeholder="找版本、卡號或關鍵字（例：MAIN-12、0.62、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}"></div>
+      <ul class="rel-commits">${r.commits.map(c => `<li>${c.sha ? `<code>${esc(c.sha)}</code> ` : ''}${esc(releaseTitle(c))}</li>`).join('')}</ul></article>`;
+    box.innerHTML = head + `<div class="work-filters"><input id="rel-q" type="search" placeholder="找版本、卡號或關鍵字（例：MAIN-12、1.0.5、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}"></div>
       ${d.incidents?.length && !q ? `<section class="wpanel rel-incidents"><b>事故對照</b>${d.incidents.map(i => `<div class="small">${esc(i.fix)}（v${esc(i.fixVersion)}）← ${esc(i.cause)}（<button type="button" class="link small" data-rel-ver="${esc(i.causeVersion)}">v${esc(i.causeVersion)}</button>）：${esc(i.note)}${i.flow ? `（${esc(i.flow)}）` : ''}</div>`).join('')}</section>` : ''}
       <section class="rel-list">${list.map(row).join('') || '<p class="muted">找不到符合的版本。</p>'}</section>`;
     if (rel.hit) { const el = document.getElementById('v' + rel.hit); if (el) setTimeout(() => el.scrollIntoView({ block: 'center' }), 0); }
