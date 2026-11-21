@@ -1910,7 +1910,7 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 .pm-set { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; padding: 12px 14px; border-top: 1px solid var(--border); }
 .pm-set-t { display: grid; gap: 2px; min-width: 0; }
 .pm-set-t .pm-sub { font-size: 12px; }
-.pm-tab-projects, .pm-tab-invites { overflow: visible; background: transparent; border: 0; }
+.pm-tab-projects, .pm-tab-invites, .pm-tab-admin { overflow: visible; background: transparent; border: 0; } /* 管理員設定也是一張張卡片 */
 .pm-projs { display: grid; gap: 14px; }
 .pm-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .pm-card > .pm-table { border-radius: 0 0 12px 12px; }
@@ -3040,6 +3040,7 @@ input[aria-invalid="true"] { border-color: var(--danger, #c62828); }
 /* 系統：備份 */
 .bk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .bk-check { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.bk-check input { flex: none; width: 18px; height: 18px; margin: 0; } /* 全域 input 樣式會把勾選框撐寬，管理員設定較窄時字會被擠到換行 */
 .bk-preview { margin: 6px 0 10px; padding-left: 20px; }
 #bk-msg:empty { display: none; }
 
@@ -3434,3 +3435,74 @@ button.ob-toggle:focus-visible { outline: 2px solid var(--primary); }
 .pm-tools-list .chk { gap: 6px; }
 .pm-tools-list .chk .muted { margin-left: 4px; }
 .ma-tool-off { margin: 0 0 8px; }
+/* ---------- 管理員設定：電腦左側小目錄＋內容；手機一頁清單點進去 ---------- */
+.av-n.av-n-warn { background: #ea580c; color: #fff; }
+.adm-split { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; align-items: start; padding: 14px; }
+.adm-split.m-detail { display: block; padding: 0; }
+.adm-nav { position: sticky; top: 8px; display: grid; gap: 2px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.adm-li { all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 12px; border-radius: 8px; font-size: 14px; color: var(--text); }
+.adm-li:hover { background: var(--surface-2, #f1f5f9); }
+.adm-li.sel { background: var(--human-bg, #eff6ff); color: var(--primary); }
+.adm-li:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.adm-ico { flex: none; width: 22px; text-align: center; font-size: 16px; }
+.adm-t { flex: 1; min-width: 0; display: grid; }
+.adm-t b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-li.sel .adm-t b { font-weight: 700; }
+.adm-sub, .adm-go { display: none; }
+.adm-n { flex: none; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: #ea580c; color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.adm-c { flex: none; }
+.adm-main { min-width: 0; }
+.adm-h { margin: 2px 0 12px; font-size: 18px; }
+.adm-main > .pm-projs { padding: 0; }
+.adm-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.adm-rico { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-2, #f1f5f9); display: inline-flex; align-items: center; justify-content: center; font-size: 18px; }
+.adm-rt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.adm-rt .muted { overflow-wrap: anywhere; }
+.adm-row > .btn { flex: none; }
+.adm-acc .c-cross { width: 110px; text-align: center; }
+.adm-acc .c-reset { width: 130px; text-align: center; }
+.adm-rescue { padding-bottom: 12px; }
+.adm-rescue > p { margin: 0 16px 8px; }
+.adm-cmd { margin: 0 16px 8px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2, #f1f5f9); overflow-x: auto; font-size: 13px; }
+.adm-audit .table-scroll { padding: 0 16px 12px; }
+.pm-detail > .pm-acc-line { margin: 4px 0 12px; padding: 0 14px; color: var(--muted); }
+.adm-audit > p { margin: 0 16px 12px; }
+.adm-todo > .adm-todo-note { margin: 12px 0 10px; padding: 0 16px; }
+.adm-main .pm-ptable .c-pname b { white-space: nowrap; }
+.adm-lbl { display: none; }
+/* 手機：一頁清單（帶說明、›），點進去才看內容 */
+.adm-list { position: static; margin: 12px; padding: 0; gap: 0; overflow: hidden; }
+.adm-list .adm-li { min-height: 64px; padding: 10px 14px; border-radius: 0; border-top: 1px solid var(--border); }
+.adm-list .adm-li:first-child { border-top: 0; }
+.adm-list .adm-li.sel { background: none; color: var(--text); }
+.adm-list .adm-t b { font-weight: 700; font-size: 15px; }
+.adm-list .adm-sub { display: block; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adm-list .adm-go { display: inline; flex: none; color: var(--muted); font-size: 18px; }
+.adm-list .adm-c { display: none; }
+.adm-split.m-detail .adm-main { padding: 0 12px 12px; }
+.adm-split.m-detail .adm-h { margin-top: 6px; }
+@media (max-width: 899px) {
+  .adm-row { flex-wrap: wrap; }
+  .adm-rt { flex-basis: calc(100% - 60px); }
+  .adm-row > .btn { margin-left: 48px; }
+  .adm-acc .pm-sub { display: block; }
+  .adm-acc .c-cross { width: 72px; padding: 0 6px; }
+  .adm-acc tr.pm-tr .c-cross { display: flex; align-items: center; gap: 8px; }
+  .adm-acc .adm-lbl { display: inline; font-size: 12px; color: var(--muted); }
+  .adm-acc .c-reset { width: 108px; padding: 0 6px; }
+  .adm-acc th { line-height: 1.3; }
+}
+@container pmp (max-width: 720px) {
+  .adm-split:not(.m-detail) { grid-template-columns: 180px minmax(0, 1fr); gap: 12px; }
+}
+/* 開源版：帳號動作有重設登入、停用、交接管理員三顆，排一排、窄時換行 */
+.adm-acc .c-reset { width: auto; }
+.adm-acts { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.adm-main .pm-disabled { margin: 0; border-radius: 12px; }
+.adm-main .pm-projs > * { min-width: 0; } /* 救援指令較長：卡片不被撐寬，指令自己換行 */
+.adm-cmd code { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 899px) {
+  .adm-acc .c-reset { width: 108px; padding: 0 4px; }
+  .adm-acts { flex-direction: column; align-items: stretch; }
+  .adm-acts .btn { padding: 0 6px; font-size: 13px; white-space: nowrap; }
+}

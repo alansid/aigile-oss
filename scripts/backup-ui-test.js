@@ -1,5 +1,5 @@
-// 畫面測試（真的瀏覽器，手機寬 375）：管理頁「系統」下載備份、在空站匯入
-// 1. 管理員才有「系統」分頁；有資料的站不給匯入
+// 畫面測試（真的瀏覽器，手機寬 375）：管理員設定 › 系統與備份 下載備份、在空站匯入
+// 1. 管理員才有「系統與備份」；有資料的站不給匯入
 // 2. 按「下載備份」：分批拿完、下載一個 JSON 檔，訊息顯示數量
 // 3. 新站（空站）選檔 → 預覽數量 → 確認 → 匯入完成，重新整理後你是備份裡的管理員，看得到原本的卡片
 // 需要 Chrome 或 Edge；找不到就略過。用法：node scripts/backup-ui-test.js
@@ -20,9 +20,7 @@ try {
   assert.equal((await A.call(chen.token, '/api/admin/backup/status')).status, 403, '非管理員不能用');
   // 2. 管理員下載備份
   const ba = await A.browser(375, 800);
-  await ba.login(boss.token, '/members');
-  await until(() => ba.js("!!document.querySelector('[data-pm-tab=\"system\"]')"), 15000, '系統分頁');
-  await ba.js("document.querySelector('[data-pm-tab=\"system\"]').click(); true");
+  await ba.login(boss.token, '/admin/system'); // 管理員設定 › 系統與備份
   await until(() => ba.js("!!document.querySelector('[data-bk=\"export\"]') && /這個站已經有資料，不能匯入/.test(document.querySelector('#page-work').textContent)"), 15000, '有資料的站不給匯入');
   assert.equal(await ba.js('document.documentElement.scrollWidth <= innerWidth + 1'), true, '375 沒有橫向捲動');
   await ba.js("window.__bk = null; const o = URL.createObjectURL.bind(URL); URL.createObjectURL = b => { window.__bk = b; return o(b); }; document.querySelector('[data-bk=\"export\"]').click(); true");
@@ -38,9 +36,7 @@ try {
   B = await startKit('bkb');
   const me = (await B.call(null, '/api/join', 'POST', { name: '新站管理員', role: 'PO' })).body;
   const bb = await B.browser(375, 800);
-  await bb.login(me.token, '/members');
-  await until(() => bb.js("!!document.querySelector('[data-pm-tab=\"system\"]')"), 15000, '新站的系統分頁');
-  await bb.js("document.querySelector('[data-pm-tab=\"system\"]').click(); true");
+  await bb.login(me.token, '/admin/system'); // 新站的管理員設定 › 系統與備份
   await until(() => bb.js("!!document.querySelector('[data-bk-file]')"), 15000, '空站可以匯入');
   await bb.js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(json)}], 'aigile-backup.json', { type: 'application/json' })); const i = document.querySelector('[data-bk-file]'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
   await until(() => bb.js("/成員 2 位（人類 2、AI 0）/.test(document.body.textContent) && /王小明/.test(document.querySelector('.modal')?.textContent || '')"), 15000, '預覽數量與管理員');

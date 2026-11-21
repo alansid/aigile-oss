@@ -3352,7 +3352,8 @@ ${ending}`;
     const people = await peopleMap(ctx);
     // 全站稽核只給管理員；其他人只看自己專案的檔案紀錄＋自己做的動作
     // （發到「全部專案」、沒有專案的檔案與別人被拒的上傳，只有管理員看得到）
-    const isAdmin = adminOf(people)?.id === me.id;
+    // ?scope=mine 讓管理員在文件頁也只看自己的（全站在管理員設定）；只會變少，不會放寬
+    const isAdmin = adminOf(people)?.id === me.id && url.searchParams.get('scope') !== 'mine';
     const mine = projectsOf(me).filter(pj => PROJECTS.includes(pj));
     const rows = isAdmin
       ? await db.all('SELECT * FROM file_audit ORDER BY at DESC LIMIT ?', limit)

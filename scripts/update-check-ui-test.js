@@ -1,7 +1,7 @@
 // 畫面測試（真的瀏覽器，375）：管理頁「有新版本」提示（不連 GitHub：先把查詢結果放進快取）
 // 1. 管理員打開成員與權限：頂端寫「有新版本 vX（目前 vY）」與版本說明連結；375 沒有橫向捲動
 // 2. 按 × 這一版就不再提醒（重新整理也一樣）
-// 3. 「系統」分頁寫目前版本與有新版本
+// 3. 管理員設定 › 系統與備份寫目前版本與有新版本
 // 需要 Chrome 或 Edge；找不到就略過。用法：node scripts/update-check-ui-test.js
 import assert from 'node:assert';
 import { startKit, findBrowser, until } from './browser-kit.js';
@@ -23,14 +23,14 @@ try {
   assert.equal(await js("document.querySelector('.upd-banner a').href"), url, '版本說明連結');
   assert.equal(await js("document.querySelector('.upd-banner a').rel"), 'noopener noreferrer');
   assert.equal(await js('document.documentElement.scrollWidth <= innerWidth + 1'), true, '375 沒有橫向捲動');
-  // 3. 系統分頁
-  await js("document.querySelector('[data-pm-tab=\"system\"]').click(); true");
-  await until(() => js("/目前 v[\\d.]+ · 有新版本/.test(document.querySelector('#page-work').textContent)"), 10000, '系統分頁寫版本');
+  // 3. 管理員設定 › 系統與備份
+  await login(boss.token, '/admin/system');
+  await until(() => js("/目前 v[\\d.]+ · 有新版本/.test(document.querySelector('#page-work').textContent) && !!document.querySelector('.upd-banner')"), 10000, '系統與備份寫版本');
   // 2. 按 × 不再提醒這一版
   await js("document.querySelector('[data-upd-hide]').click(); true");
   await until(() => js("!document.querySelector('.upd-banner')"), 5000, '收起來');
   await js('location.reload(); true');
-  await until(() => js("!!document.querySelector('[data-pm-tab]')"), 15000, '重新整理');
+  await until(() => js("!!document.querySelector('.adm-main')"), 15000, '重新整理');
   await new Promise(r => setTimeout(r, 1500));
   assert.equal(await js("!!document.querySelector('.upd-banner')"), false, '重新整理也不再提醒');
   console.log('update-check-ui-test：全部通過');
