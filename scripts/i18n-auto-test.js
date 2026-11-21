@@ -156,7 +156,7 @@ try {
     '在做{0}': [['在做', 'Working on']], // 現況列卡號另包 data-nt；aria-label 用 L()
     '{0}交來': [['40 分鐘前交來', 'handed in 40 min ago'], ['剛剛交來', 'handed in just now']], // 時間另包一層，由「{0} 分鐘前交來」等接住
   };
-  const viaL = { '{0}加入{1}': 'joins', '{0}離開{1}': 'leaves', '{0}成為{1} leader': 'becomes project lead of', '{0}的': "'s", '在做{0}': 'Working on' }; // 程式直接給英文
+  const viaL = { '{0}加入{1}': 'joins', '{0}離開{1}': 'leaves', '{0}成為{1} leader': 'becomes project lead of', '{0}的': "'s", '在做{0}': 'Working on', '{0}上傳': 'uploaded by', '還有 {0} 個專案沒有技能：': 'more project' }; // 程式直接給英文（{0}上傳：PLAT-381 技能待核准列）
   const names = ['{0}助手']; // AI 名稱預填（中文介面才用；英文另有 -PG-AI），是名字不是介面字
   for (const k of skipped) {
     assert.ok(covered[k] || viaL[k] || names.includes(k), `字典樣板「${k}」永遠不會生效：改成變數另包一層（data-nt／span）、或用 L() 直接給英文，再加進這裡`);

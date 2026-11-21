@@ -506,6 +506,14 @@
   const roOf = (id, pj) => { const p = state.participants?.get(id); const hid = p?.memberType === 'ai' ? p.ownerParticipantId : id; return !!pj && (state.projMeta.readOnly?.[pj] || []).includes(hid); };
   const meRO = (pj = projectView()) => (PROJECTS.includes(pj) ? roOf(meId(), pj) : pj === 'cross' && PROJECTS.some(x => roOf(meId(), x)));
   const myLeadProjects = () => (state.me ? PROJECTS.filter(pj => leadersOf(pj).includes(state.me.participantId)) : []);
+  // PLAT-381：我當 leader 的專案（含已封存的，leader 能還原）
+  const myLeadRows = () => (state.me ? state.projectList.filter(p => (p.archived ? state.projMeta.archivedLeaders?.[p.id] || [] : leadersOf(p.id)).includes(state.me.participantId)) : []);
+  // 加入申請、技能核准交給 leader；管理員只在「專案沒有別的 leader」或「leader 超過 1 天沒處理」時才算自己的待處理
+  const LEAD_GRACE = 24 * 3600 * 1000;
+  const otherLeads = pj => leadersOf(pj).filter(id => id !== state.me?.participantId);
+  const dueForMe = (pj, at) => !state.me ? false : leadersOf(pj).includes(state.me.participantId) || (isAdmin() && (!otherLeads(pj).length || Date.now() - Date.parse(at || 0) > LEAD_GRACE));
+  const leadLate = (pj, at) => !leadersOf(pj).includes(state.me?.participantId) && otherLeads(pj).length > 0 && Date.now() - Date.parse(at || 0) > LEAD_GRACE; // 管理員看到的：leader 超過 1 天沒處理
+  const leadNames = pj => otherLeads(pj).map(id => state.participants.get(id)?.name).filter(Boolean).join('、');
   const leaderTag = (id, pj) => (leadersOf(pj).includes(id) ? '<span class="lead-tag" title="專案 leader">★ leader</span>' : '');
   state.myAiCount = null;
   function drawAvatarMenu() {
@@ -514,7 +522,7 @@
     $('#av-menu').innerHTML = `<button type="button" role="menuitem" class="av-head" data-av="profile" title="個人資料（更換頭像）">${avatar(state.me)}<span class="av-head-txt"><b>${esc(state.me.name)}</b><span class="muted small">${esc([roleIn(state.me, projectView()) || '未設定角色', isAdmin() ? '管理員' : '', '本人'].filter(Boolean).join(' · '))}</span></span><span class="av-head-go" aria-hidden="true">›</span></button>
       <button type="button" role="menuitem" data-av="settings"><span class="av-ico" aria-hidden="true">⚙️</span>個人設定<span class="muted small">裝置、登入碼</span></button>
       <button type="button" role="menuitem" data-av="myai"><span class="av-ico" aria-hidden="true">🤖</span>我的 AI${state.myAiCount != null ? `<span class="av-n">${state.myAiCount}</span>` : ''}</button>
-      ${isAdmin() || myLeadProjects().length ? `<div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">管理</div>${isAdmin() ? `<button type="button" role="menuitem" data-av="admin"><span class="av-ico" aria-hidden="true">⚙️</span>管理員設定${admTodoN() ? `<span class="av-n av-n-warn" aria-label="${admTodoN()} 件待處理">${admTodoN()}</span>` : '<span class="muted small">專案、邀請、帳號</span>'}</button><button type="button" role="menuitem" data-av="pm-projects"><span class="av-ico" aria-hidden="true">📁</span>專案管理<span class="muted small">新增、改名、封存</span></button>` : ''}<button type="button" role="menuitem" data-av="perm"><span class="av-ico" aria-hidden="true">👥</span>成員管理<span class="muted small">成員、角色、技能</span></button>` : ''}
+      ${isAdmin() || myLeadProjects().length ? `<div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">管理</div>${isAdmin() ? `<button type="button" role="menuitem" data-av="admin"><span class="av-ico" aria-hidden="true">⚙️</span>管理員設定${admTodoN() ? `<span class="av-n av-n-warn" aria-label="${admTodoN()} 件待處理">${admTodoN()}</span>` : '<span class="muted small">專案、邀請、帳號</span>'}</button><button type="button" role="menuitem" data-av="pm-projects"><span class="av-ico" aria-hidden="true">📁</span>專案管理<span class="muted small">新增、改名、封存</span></button>` : myLeadRows().length ? `<button type="button" role="menuitem" data-av="lead-projects"><span class="av-ico" aria-hidden="true">📁</span>專案管理<span class="muted small">你負責的 ${myLeadRows().length} 個專案</span></button>` : ''}<button type="button" role="menuitem" data-av="perm"><span class="av-ico" aria-hidden="true">👥</span>成員管理<span class="muted small">成員、角色、技能</span></button>` : ''}
       <div class="av-sep" role="separator"></div><div class="av-group" aria-hidden="true">平台</div>
       <button type="button" role="menuitem" data-av="releases"><span class="av-ico" aria-hidden="true">📜</span>版本紀錄<span class="muted small">v${APP_VERSION}</span></button>
       ${(l => `<button type="button" role="menuitem" data-lang="${l === 'en' ? 'zh' : 'en'}" lang="${l === 'en' ? 'zh-Hant' : 'en'}" data-nt><span class="av-ico" aria-hidden="true">🌐</span>${l === 'en' ? '中文' : 'English'}</button>`)(window.aigileI18n?.lang)}
@@ -549,6 +557,7 @@
     else if (k === 'perm') openPermTab('members'); // 成員管理
     else if (k === 'admin') openAdmin(); // 管理員設定
     else if (k === 'pm-projects') openAdmin('projects'); // 專案管理＝管理員設定 › 專案
+    else if (k === 'lead-projects') openLeadProjects(); // PLAT-381：leader 的專案管理
     else if (k === 'settings') openSettings();
     else if (k === 'profile') openSettings({ tab: 'me' }); // 更換頭像只在個人設定 › 個人資料
     else if (k === 'releases') openReleases();
@@ -1617,7 +1626,7 @@
   async function loadProjectList() {
     const d = await api('/api/projects');
     state.projectList = d.items;
-    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, readOnly: d.readOnly || {}, join: d.join || {}}; // join // 、
+    state.projMeta = { adminId: d.adminId, adminName: d.adminName || '', crossRoleIds: d.crossRoleIds || [], leaders: d.leaders || {}, archivedLeaders: d.archivedLeaders || {}, readOnly: d.readOnly || {}, join: d.join || {}}; // join // 、
     document.querySelectorAll('[data-admin-only]').forEach(b => { b.hidden = !d.adminId || d.adminId !== state.me?.participantId; });
     if (typeof drawAvatarMenu === 'function') drawAvatarMenu();
     if (state.me) drawMe(); // 知道誰是管理員後重畫名片
@@ -1660,7 +1669,8 @@
     for (const c of work.cards?.values() || []) if (verifyingMe(c)) items.push({ p: c.project || null, kind: '驗收', title: `${c.key || c.cardId} ${cardTitle(c)}`, key: 'v:' + c.cardId });
     for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId, mid: n.messageId });
     for (const n of (work.notes || []).filter(x => x.dm)) items.push({ p: n.project ?? null, kind: n.sender?.system ? '通知' : '私訊', title: n.sender?.system ? `平台通知：${oneLine(dmGist(n.preview, true), 60)}` : `${n.sender?.name || ''} 回你了`, key: 'n:' + n.notificationId });
-    for (const j of work.joins || []) items.push({ p: myProjects().includes(j.project) ? j.project : null, kind: '申請', title: `${j.name} 申請加入${j.projectName}`, key: 'j:' + j.id });
+    for (const j of (work.joins || []).filter(j => dueForMe(j.project, j.createdAt))) items.push({ p: myProjects().includes(j.project) ? j.project : null, kind: '申請', title: `${j.name} 申請加入${j.projectName}`, key: 'j:' + j.id }); // PLAT-381 先給 leader
+    for (const k of (work.skillRev || []).filter(k => dueForMe(k.project, k.uploadedAt))) items.push({ p: myProjects().includes(k.project) ? k.project : null, kind: '核准', title: `技能待核准：${k.name} v${k.version}`, key: 'k:' + k.skillId }); // PLAT-381
     return items.filter(x => !x.p || myProjects().includes(x.p));
   }
   const todoInView = (x, v = projectView()) => v === 'hub' || (v === 'cross' ? !x.p : x.p === v);
@@ -1682,7 +1692,7 @@
     return n;
   }
   const PAGE_NAME = { messages: '訊息', inbox: '要你處理', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員管理', dm: '私訊', releases: '版本紀錄', help: L('說明', 'Help') }; // 私訊整頁；「說明」在字典是交接的「Notes」，說明頁自己給英文
-  const pageNameOf = p => (p === 'perm' ? (state.permTab === 'admin' ? '管理員設定' : '成員管理') : PAGE_NAME[p]); // 成員管理、管理員設定兩頁
+  const pageNameOf = p => (p === 'perm' ? (state.permTab === 'admin' ? '管理員設定' : state.permTab === 'leadproj' ? '專案管理' : '成員管理') : PAGE_NAME[p]); // 成員管理、管理員設定兩頁
   const canSetProj = pj => PROJECTS.includes(pj) && (isAdmin() || leadersOf(pj).includes(meId())); // 專案卡 ⚙
   const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases', help: '/help' }; // 第一層頁面（不分專案）：版本紀錄、說明等
   const isTop = p => p === 'myai' || p === 'releases' || p === 'help' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
@@ -1800,6 +1810,7 @@
       else if (perm.tab === 'admin') perm.tab = perm.lastMemTab || 'members';
       return { view: null, page: 'perm' };
     }
+    if (seg[0] === 'projects') { perm.tab = 'leadproj'; return { view: null, page: 'perm' }; } // PLAT-381：leader 的專案管理
     if (seg[0] === 'admin') { Object.assign(perm, { tab: 'admin', adm: ADM_SECS.some(x => x[0] === seg[1]) ? seg[1] : null }); return { view: null, page: 'perm' }; }
     if (seg[0] === 'releases') return { view: null, page: 'releases' };
     if (seg[0] === 'help') { help.ch = helpChOf(seg[1]); return { view: null, page: 'help' }; } // 說明：/help 目錄、/help/1～5 各章
@@ -1810,6 +1821,7 @@
     if (state.page === 'myai' && PROJECTS.includes(v)) return `/p/${encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/my-ai`;
     if (state.page === 'help') return help.ch ? `/help/${help.ch}` : '/help';
     if (state.page === 'perm' && perm.tab === 'admin') return perm.adm ? `/admin/${perm.adm}` : '/admin';
+    if (state.page === 'perm' && perm.tab === 'leadproj') return '/projects'; // PLAT-381
     if (TOP_PAGES[state.page]) return TOP_PAGES[state.page];
     if (v === 'hub') return '/';
     return `${v === 'cross' ? '/cross' : '/p/' + encodeURIComponent(state.projectList.find(p => p.id === v)?.slug || v)}/${PAGE_SLUG[state.page] || 'messages'}`; // 網址英文名
@@ -3552,7 +3564,10 @@
     work.notesAt = Date.now();
     const [a, b] = await Promise.all([api('/api/notifications?status=pending&limit=50&order=desc'), api('/api/me/notices').catch(() => ({ items: [] })), loadJoins()]); // 待審申請（只有 leader／管理員讀）
     const dmBefore = (work.notes || []).filter(n => n.dm).map(n => n.notificationId).join();
-    work.notes = a.items; work.sec = b.items;
+    work.notes = a.items;
+    const jr = b.items.filter(n => n.kind === 'join_request'); // PLAT-381：申請在「👑 你負責的專案」處理（管理員是沒有 leader 或超過 1 天才看到），這則通知不再列、直接標已讀
+    work.sec = b.items.filter(n => n.kind !== 'join_request');
+    if (jr.length) api('/api/me/notices/read', { method: 'POST', body: { ids: jr.map(n => n.id) } }).catch(() => {});
     if (b.items.some(n => n.kind === 'join_approved' && !n.readAt) && !work.joinReloaded) { // 申請被核准：重新整理就看得到專案
       const me = await api('/api/me').catch(() => null);
       if (me && (me.projects || []).some(p => !(state.me?.projects || []).includes(p))) { work.joinReloaded = true; toast('申請已核准，正在載入新專案…'); setTimeout(() => location.reload(), 800); }
@@ -3768,7 +3783,7 @@
   function hubTodoHtml(inModal = false) {
     const items = hubTodoItems();
     const groups = [...myProjects(), null].map(p => [p, items.filter(x => x.p === p)]).filter(([, l]) => l.length);
-    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg', 驗收: 'ver', 回覆: 'ask', 私訊: 'sg', 通知: 'sg', 申請: 'ver' };
+    const cls = { 決策: 'dec', 需確認: 'ask', 建議: 'sg', 驗收: 'ver', 回覆: 'ask', 私訊: 'sg', 通知: 'sg', 申請: 'ver', 核准: 'ver' };
     return `${inModal ? '' : `<div class="ht-head"><h3>要你處理</h3>${items.length ? `<span class="ps-count">${items.length}</span>` : ''}<span class="grow"></span><span class="muted small">各專案彙總</span></div>`}
       ${groups.length ? groups.map(([p, l]) => `<div class="ht-group">${esc(p ? projName(p) : '跨專案頻道')}</div>
         ${l.map(x => `<button type="button" class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(p || 'cross')}"><span class="ht-tag ${cls[x.kind]}">${x.kind}</span><span class="ht-title">${esc(x.title)}</span><span class="ht-go" aria-hidden="true">›</span></button>`).join('')}`).join('')
@@ -3782,6 +3797,7 @@
     if (r.closest('.modal')) closeModal();
     const key = r.dataset.hubTodo, id = key.slice(2);
     if (key[0] === 'j') return openJoinReview(work.joins.find(j => j.id === id)?.project || '');
+    if (key[0] === 'k') return skOpenDrawer(id); // PLAT-381 技能待核准
     await setProjectView(r.dataset.hubProj, 'inbox');
     work.focusItem = { sel: key[0] === 'n' ? `#fyi-${CSS.escape(id)}` : `[${{ c: 'data-dcard', m: 'data-conf-row', s: 'data-sugg-row', v: 'data-ver-row' }[key[0]]}="${CSS.escape(id)}"]`, until: Date.now() + 5000, scrolled: false };
     if (!applyFocusItem() && key[0] === 'c') openCard(id);
@@ -3800,8 +3816,7 @@
     const open = todoByView()[projectView()] || 0;
     return `<div class="work-head"><div class="work-title"><h2>要你處理</h2><span class="muted small">${open ? `${open} 件` : '目前沒有'}</span></div></div>
       ${todoHtml(all)}${(markAskClamp(), '')}
-      ${noteList().length || work.sec?.length ? `<div class="inbox-block-title">給你知道的</div>
-      ${notesHtml()}` : ''}`;
+      ${noteList().length || work.sec?.length ? notesHtml() : ''}`;
   }
 
   // 「待你處理」：決策卡、舊式 [需確認] 訊息、待審核的 AI 建議
@@ -3823,8 +3838,10 @@
     const sg = (work.sugg || []).filter(x => inView(x.project));
     const verifyMe = all.filter(verifyingMe);
     const asks = askNotes(), dms = dmNotes();
-    const joins = (work.joins || []).filter(j => projectView() === 'hub' || j.project === projectView());
-    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length) return '<section class="wpanel"><p class="muted">目前沒有要你處理的事。</p></section>';
+    const inV = pj => projectView() === 'hub' || pj === projectView();
+    const joins = (work.joins || []).filter(j => inV(j.project) && dueForMe(j.project, j.createdAt)); // PLAT-381 leader 先處理
+    const skRev = (work.skillRev || []).filter(k => inV(k.project) && dueForMe(k.project, k.uploadedAt));
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length && !skRev.length) return '<section class="wpanel"><p class="muted">目前沒有要你處理的事。</p></section>';
     for (const id of [...work.askSel]) if (!asks.some(n => n.notificationId === id)) work.askSel.delete(id); // 清單變了就丟掉不在的勾選
     const askN = work.askSel.size, askAll = asks.length > 0 && askN === asks.length;
     const askSection = asks.length ? `
@@ -3859,11 +3876,17 @@
       <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>🔒 私訊</h3><span class="wcount ora">${dms.length}</span><span class="muted small">只有你看得到</span></div>
         ${dms.map(n => `<div class="sugg-row" id="fyi-${esc(n.notificationId)}"><div class="sugg-main"><b>${n.sender.system ? '平台通知' : `${esc(n.sender.name)} 回你了`}</b><span class="muted small">${esc(oneLine(n.sender.system ? dmGist(n.preview, true) : String(n.preview).replace(/^\[頭像提案 [^\]]+\]\s*/, '🖼 頭像提案：'), 80))} · ${agoText(n.createdAt)}</span></div>
           <div class="sugg-actions"><button type="button" class="btn small primary" data-dm-open="${esc(n.sender.participantId)}">打開私訊</button></div></div>`).join('')}</section>` : '';
-    const joinSection = joins.length ? `
-      <section class="wsugg"><div class="wsugg-head"><span class="wdot"></span><h3>待審申請</h3><span class="wcount ora">${joins.length}</span><span class="muted small">同仁申請加入專案，要你核准或拒絕</span></div>
-        ${joins.map(j => `<div class="sugg-row" data-join-row="${esc(j.id)}"><div class="sugg-main"><b>${esc(j.name)} 申請加入${esc(j.projectName)}</b><span class="muted small">${j.note ? `「${esc(oneLine(j.note, 60))}」` : '沒寫原因'} · ${agoText(j.createdAt)}</span></div>
-          <div class="sugg-actions"><button type="button" class="btn small primary" data-join-review="${esc(j.project)}">審核</button></div></div>`).join('')}</section>` : '';
-    return dmSection + joinSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
+    // PLAT-381「👑 你負責的專案」：自己專案的加入申請、技能核准；管理員看到的是沒有 leader 或 leader 超過 1 天沒處理的
+    const leadPjs = [...new Set([...joins.map(j => j.project), ...skRev.map(k => k.project)])].filter(pj => leadersOf(pj).includes(meId()));
+    const late = pj => !leadersOf(pj).includes(meId()) && otherLeads(pj).length ? `<span class="pill-tag yellow">leader ${esc(leadNames(pj))} 還沒處理</span> ` : ''; // 管理員看到的（已超過 1 天）
+    const joinSection = joins.length || skRev.length ? `
+      <section class="wsugg wlead"><div class="wsugg-head"><span class="wdot"></span><h3>${leadPjs.length ? '👑 你負責的專案' : '🛡 專案待處理'}</h3><span class="wcount ora">${joins.length + skRev.length}</span></div>
+        <p class="muted small wlead-note">${leadPjs.length ? `你是「${esc(leadPjs.map(projName).join('、'))}」的 leader，這些由你處理；超過 1 天沒處理，會提醒管理員。` : '專案沒有 leader，或 leader 超過 1 天沒處理的，會出現在這裡；你也可以直接處理。'}</p>
+        ${joins.map(j => `<div class="sugg-row lead-row" data-join-row="${esc(j.id)}"><span class="lead-ic" aria-hidden="true">🙋</span><div class="sugg-main"><b>加入申請：${esc(j.name)}</b><span class="muted small">${late(j.project)}<span>想加入「${esc(j.projectName)}」</span> · <span>${agoText(j.createdAt)}</span>${j.note ? ` · 「${esc(oneLine(j.note, 60))}」` : ''}</span></div>
+          <div class="sugg-actions"><button type="button" class="btn small" data-lead-jno="${esc(j.id)}">${L('拒絕', 'Reject')}</button><button type="button" class="btn small primary" data-join-review="${esc(j.project)}">${L('核准', 'Approve')}</button></div></div>`).join('')}
+        ${skRev.map(k => `<div class="sugg-row lead-row" data-skrev-row="${esc(k.skillId)}"><span class="lead-ic" aria-hidden="true">🧩</span><div class="sugg-main"><b>技能待核准：${esc(k.name)}</b><span class="muted small">${late(k.project)}<span>${esc(projName(k.project))}</span> · ${k.scripts ? `${esc(L(`含腳本 ${k.scripts} 個`, `${k.scripts} script${k.scripts > 1 ? 's' : ''}`))} · ` : ''}${esc(L(`${k.uploadedBy?.name || ''}上傳`, `uploaded by ${k.uploadedBy?.name || ''}`))} · <span>${agoText(k.uploadedAt)}</span></span></div>
+          <div class="sugg-actions"><button type="button" class="btn small" data-lead-skview="${esc(k.skillId)}">${L('看內容', 'View')}</button><button type="button" class="btn small primary" data-lead-skok="${esc(k.skillId)}">${L('核准', 'Approve')}</button></div></div>`).join('')}</section>` : '';
+    return joinSection + dmSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
@@ -6485,7 +6508,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   async function skLoad() {
     if (skv.loading) return;
     skv.loading = true;
-    try { skv.data = await api('/api/skills'); } catch (e) { toast(e.message); }
+    try { skv.data = await api('/api/skills'); if (joinReviewer()) { work.skillRev = skv.data.items.filter(x => x.canReview); updateTodoBadge(); } } catch (e) { toast(e.message); } // PLAT-381：核准後「要你處理」跟著少
     // PLAT-365 範本技能：跟著程式走，讀一次就好（照介面語言）；讀不到不影響技能清單
     if (!skv.tpls) try { skv.tpls = (await api('/api/skill-templates?lang=' + (window.aigileI18n?.lang === 'en' ? 'en' : 'zh'))).items; } catch { skv.tpls = null; }
     skv.loading = false;
@@ -6531,7 +6554,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       ${review.length ? `<div class="sk-alert" role="status">⏳ <b>${review.length} 個技能等你核准上架</b>：${review.slice(0, 2).map(s => `${esc(s.uploadedBy.name)} 上傳的 ${esc(s.name)} v${s.version}（含腳本 ${s.scripts} 個）`).join('、')}${review.length > 2 ? '…' : ''}<span class="grow"></span><button type="button" class="btn small" data-skc="${esc(review[0].skillId)}">看腳本並核准</button></div>` : ''}
       <div class="sk-grid">
         ${shown.map(card).join('')}
-        ${emptyPjs.map(skEmptyHtml).join('')}
+        ${(skv.filter ? emptyPjs : emptyPjs.slice(0, 1)).map((p, i) => skEmptyHtml(p, skv.filter ? [] : emptyPjs.slice(1))).join('')}
         ${!shown.length && !emptyPjs.length ? `<p class="muted">${q ? '沒有符合的技能。' : '目前沒有技能。'}</p>` : ''}
       </div>
     </div>`;
@@ -6550,13 +6573,15 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     return [...new Set([...hit.slice(0, 2), ...all, ...hit, ...tpls])];
   }
   const skTplShort = t => (t.description || '').replace(/(。|\.\s).*$/s, '$1').trim(); // 列表只放第一句，全文在 title
-  function skEmptyHtml(p) {
+  // more：「全部」時其他沒有技能的專案（只出一張卡，其餘列名字，點了切到那個專案）
+  function skEmptyHtml(p, more = []) {
     const tp = p.canManage ? skTplRank(p.id) : [];
-    if (!tp.length) return `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>把團隊的做事方法寫成 SKILL.md，該角色的 AI 就照同一套做。</span><button type="button" class="btn small" data-skup="${esc(p.id)}">＋ 上傳到${esc(p.name)}</button></div>`;
+    const rest = more.length ? `<span class="small sk-empty-more">${esc(L(`還有 ${more.length} 個專案沒有技能：`, `${more.length} more project${more.length > 1 ? 's' : ''} without skills: `))}${more.map(x => `<button type="button" class="link small" data-skf="${esc(x.id)}">${esc(x.name)}</button>`).join('、')}</span>` : '';
+    if (!tp.length) return `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>把團隊的做事方法寫成 SKILL.md，該角色的 AI 就照同一套做。</span><button type="button" class="btn small" data-skup="${esc(p.id)}">＋ 上傳到${esc(p.name)}</button>${rest}</div>`;
     return `<div class="sk-empty"><span class="sk-empty-ic" aria-hidden="true">🧩</span><b>${esc(p.name)}還沒有技能</b><span>從範本開始，一鍵複製到${esc(p.name)}，之後可以改：</span>
       <span class="sk-empty-tpls">${tp.slice(0, SK_TPL_REC).map(t => `<button type="button" class="sk-tpl-chip" data-sktpl="${esc(t.name)}" data-sktpl-pj="${esc(p.id)}" title="${esc(t.description)}">${esc(t.title)}</button>`).join('')}</span>
       ${tp.length > SK_TPL_REC ? `<button type="button" class="link small" data-sknew="${esc(p.id)}" data-sknew-all>看全部範本 ›</button>` : ''}
-      <span class="small">或 <button type="button" class="link small" data-skup="${esc(p.id)}">上傳自己的 SKILL.md ›</button></span></div>`;
+      <span class="small">或 <button type="button" class="link small" data-skup="${esc(p.id)}">上傳自己的 SKILL.md ›</button></span>${rest}</div>`;
   }
   // 我的 AI 頁的入口（一般成員進不了成員與權限）：同一個畫面放在彈窗
   function openSkillsView(pj = '') {
@@ -8314,6 +8339,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     Object.assign(perm, { picker: false, addOpen: false, moreOpen: null }, extra);
     permGo();
   }
+  // PLAT-381：leader 的「📁 專案管理」：只列自己當 leader 的專案（管理員直接到管理員設定 › 專案）
+  function openLeadProjects() {
+    if (isAdmin()) return openAdmin('projects');
+    Object.assign(perm, { tab: 'leadproj', picker: false, addOpen: false, moreOpen: null });
+    permGo();
+  }
   function permGo() { if (state.page === 'perm') { drawPerm(); drawChrome(); syncUrl(false); } else goTop('perm'); }
   // ---------- 管理員設定：只有管理員能做的事集中一處 ----------
   // 電腦：左側小目錄＋右邊內容；手機：一頁清單，點進去才看內容。後端權限不變，非管理員打 API 照樣擋
@@ -8342,10 +8373,10 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const joins = todoItems().filter(x => x.kind === '申請').map(x => (work.joins || []).find(j => 'j:' + j.id === x.key)).filter(Boolean);
     if (joins.length) {
       const by = new Map(); for (const j of joins) by.set(j.projectName, [...(by.get(j.projectName) || []), j.name]);
-      out.push({ k: 'join', ico: '🙋', n: joins.length, t: `加入申請 ${joins.length} 人`, sub: [...by].map(([p, ns]) => `${p}：${ns.join('、')}`).join('；'), go: '去核准' });
+      out.push({ k: 'join', ico: '🙋', n: joins.length, t: `加入申請 ${joins.length} 人`, sub: [...by].map(([p, ns]) => `${p}：${ns.join('、')}`).join('；') + (joins.some(j => leadLate(j.project, j.createdAt)) ? `（leader ${[...new Set(joins.filter(j => leadLate(j.project, j.createdAt)).map(j => leadNames(j.project)))].join('、')} 超過 1 天還沒處理）` : ''), go: '去核准' });
     }
-    const sk = perm.admSkills || [];
-    if (sk.length) out.push({ k: 'skill', ico: '🧩', n: sk.length, t: `技能待核准 ${sk.length} 個`, sub: `${sk.map(x => `${projName(x.project)}：${x.name}`).join('、')}（含腳本，要核准才上架）`, go: '去看' });
+    const sk = (perm.admSkills || []).filter(x => dueForMe(x.project, x.uploadedAt)); // PLAT-381：有 leader 的專案先給 leader，超過 1 天才算管理員的
+    if (sk.length) out.push({ k: 'skill', ico: '🧩', n: sk.length, t: `技能待核准 ${sk.length} 個`, sub: `${sk.map(x => `${projName(x.project)}：${x.name}${leadLate(x.project, x.uploadedAt) ? `（leader ${leadNames(x.project)} 還沒處理）` : ''}`).join('、')}（含腳本，要核准才上架）`, go: '去看' });
     const iv = (perm.invites || []).filter(i => i.status === '有效' && Date.parse(i.expiresAt) - now < ADM_SOON);
     if (iv.length) out.push({ k: 'invite', ico: '✉️', n: iv.length, t: `邀請快到期 ${iv.length} 個`, sub: iv.map(i => `${i.name}${i.kind === 'reset' ? '（重設登入）' : ''} 剩 ${invLeftShort(Date.parse(i.expiresAt) - now)}`).join('、'), go: '延長或重發' });
     return out;
@@ -8442,9 +8473,10 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (k === 'invite') return openAdmin('invites');
   });
   // 專案卡的 ⚙：管理員有改名、程式庫、成員；該專案 leader 只有成員與本專案角色；封存只在管理員設定 › 專案
+  // PLAT-381：該專案 leader 也能改名、改程式庫，跟管理員一樣；封存不放 ⚙，只在專案管理頁的 ⋯（昱志 11/20、11/21 #6483 都選維持）
   function psetItems(pj) {
-    const admin = isAdmin(), it = [];
-    if (admin) it.push(['rename', '✏️', '改名'], ['repo', '🔗', '程式庫與分支']);
+    const admin = isAdmin(), lead = leadersOf(pj).includes(meId()), it = [];
+    if (admin || lead) it.push(['rename', '✏️', '改名'], ['repo', '🔗', '程式庫與分支']);
     it.push(['members', '👥', '成員與本專案角色']);
     return it;
   }
@@ -8456,7 +8488,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const pj = btn.dataset.pset;
     m.dataset.pj = pj;
     m.setAttribute('aria-label', `${projName(pj)} 專案設定`);
-    m.innerHTML = `<div class="pset-head"><b>${esc(projName(pj))}</b> · 專案設定</div>` + psetItems(pj).map(([k, ico, t]) => `<button type="button" role="menuitem" data-pset-act="${k}"><span class="av-ico" aria-hidden="true">${ico}</span>${t}</button>`).join('');
+    m.innerHTML = `<div class="pset-head"><b>${esc(projName(pj))}</b> · 專案設定</div>` + psetItems(pj).map(([k, ico, t, sub]) => `<button type="button" role="menuitem" data-pset-act="${k}"><span class="av-ico" aria-hidden="true">${ico}</span>${t}${sub ? `<span class="muted small">${sub}</span>` : ''}</button>`).join('');
     m.hidden = false;
     btn.setAttribute('aria-expanded', 'true');
     const r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
@@ -8801,7 +8833,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">程式庫設定</button>
           <button type="button" role="menuitem" data-pp="dm">${p.dm?.on ? '關閉私訊…' : '開放成員私訊自己的 AI…'}<span class="pm-sub">${p.dm?.on ? `已開放${p.dm.at ? ' · ' + esc(mmdd(p.dm.at)) : ''}${p.dm.byName ? ' ' + esc(p.dm.byName) + ' 打開' : ''}` : '預設關'}</span></button>
           <button type="button" role="menuitem" data-pp="log">異動紀錄</button>
-          <button type="button" role="menuitem" class="danger" data-pp="archive" ${blocked ? `aria-disabled="true" title="${esc(why)}"` : ''}>封存…${blocked ? `<span class="pm-sub">${esc(why)}</span>` : ''}</button></div>` : '';
+          <button type="button" role="menuitem" data-pp="archive" ${blocked ? `aria-disabled="true" title="${esc(why)}"` : ''}>封存…${blocked ? `<span class="pm-sub">${esc(why)}</span>` : ''}</button></div>` : '';
       const last = p.archived ? `<span class="pm-arch-acts"><button type="button" class="btn small" data-pp="unarchive">還原</button>${isAdmin() ? '<button type="button" class="btn small danger-outline" data-pp="purge">永久刪除…</button>' : ''}</span>` // 封存的才能永久刪除（只有管理員）
         : `<span class="pm-more-wrap"><button type="button" class="pm-more" data-pm-more="${esc(p.id)}" aria-haspopup="menu" aria-expanded="${perm.moreOpen === p.id}" aria-label="${esc(p.name)} 的更多動作">⋯</button>${menu}</span>`;
       const log = open ? `<tr class="pm-log-tr" data-pj="${esc(p.id)}"><td colspan="6"><div class="pm-log-head"><b>異動紀錄 · ${esc(p.name)}</b><button type="button" class="link small" data-pp="log" aria-expanded="true">收起</button></div><ul class="pa-log">${(perm.events[p.id] || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul></td></tr>` : '';
@@ -8811,6 +8843,31 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <div class="pm-card"><div class="pm-card-head"><strong>專案 · ${active.length}</strong><span class="grow"></span><button type="button" class="btn primary small" data-pm-newproj>＋ 新增專案</button></div>
         <table class="pm-table pm-ptable"><thead><tr><th scope="col">專案</th><th scope="col" class="c-code">API 代號</th><th scope="col" class="c-num">成員</th><th scope="col" class="c-num2">未結案卡</th><th scope="col" class="c-repo">程式庫</th><th scope="col" class="c-more"><span class="sr-only">動作</span></th></tr></thead>
         <tbody>${rows}</tbody></table></div>${permDelsHtml()}</div>`;
+  }
+  // PLAT-381：leader 的專案管理：只列自己當 leader 的專案；⋯ 有改名、程式庫與分支、成員與本專案角色、封存（永久刪除只有管理員）
+  function permLeadProjectsHtml() {
+    const list = myLeadRows();
+    const rows = list.map(p => {
+      const blocked = !p.archived && p.openCards > 0, why = `還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案`;
+      const repo = p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
+        : p.archived ? '<span class="muted">—</span>' : `<span class="pm-sub">未填 · </span><button type="button" class="link small" data-pm-repo="${esc(p.id)}">設定</button>`;
+      const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
+          <button type="button" role="menuitem" data-pp="rename">✏️ 改名</button>
+          <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">🔗 程式庫與分支</button>
+          <button type="button" role="menuitem" data-pp="members">👥 成員與本專案角色</button>
+          <button type="button" role="menuitem" data-pp="log">🕘 異動紀錄</button>
+          <button type="button" role="menuitem" data-pp="archive" ${blocked ? `aria-disabled="true" title="${esc(why)}"` : ''}>🗄 封存專案<span class="pm-sub">${blocked ? esc(why) : '可還原'}</span></button>
+          <button type="button" role="menuitem" aria-disabled="true" class="pm-off" data-pp="noop" title="只有管理員能永久刪除">🗑 永久刪除<span class="pm-sub">只有管理員</span></button></div>` : '';
+      const last = p.archived ? '<span class="pm-arch-acts"><button type="button" class="btn small" data-pp="unarchive">還原</button></span>'
+        : `<span class="pm-more-wrap"><button type="button" class="pm-more" data-pm-more="${esc(p.id)}" aria-haspopup="menu" aria-expanded="${perm.moreOpen === p.id}" aria-label="${esc(p.name)} 的更多動作">⋯</button>${menu}</span>`;
+      const log = perm.openLog === p.id ? `<tr class="pm-log-tr" data-pj="${esc(p.id)}"><td colspan="6"><div class="pm-log-head"><b>異動紀錄 · ${esc(p.name)}</b><button type="button" class="link small" data-pp="log" aria-expanded="true">收起</button></div><ul class="pa-log">${(perm.events[p.id] || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(e.text)}</li>`).join('') || '<li class="muted small">還沒有紀錄</li>'}</ul></td></tr>` : '';
+      return `<tr class="pm-prow${p.archived ? ' archived' : ''}" data-pj="${esc(p.id)}"><td class="c-pname"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}</td><td class="c-code" data-label="API 代號" title="${esc(p.id)}">${esc(p.id)}</td><td class="c-num" data-label="成員">${p.memberCount}</td><td class="c-num2" data-label="未結案卡">${p.openCards}</td><td class="c-repo" data-label="程式庫">${repo}</td><td class="c-more">${last}</td></tr>${log}`;
+    }).join('');
+    return `<div class="pm-projs">
+      <div class="pm-card"><div class="pm-card-head"><strong>我負責的專案 · ${list.filter(p => !p.archived).length}</strong></div>
+        ${list.length ? `<table class="pm-table pm-ptable"><thead><tr><th scope="col">專案</th><th scope="col" class="c-code">API 代號</th><th scope="col" class="c-num">成員</th><th scope="col" class="c-num2">未結案卡</th><th scope="col" class="c-repo">程式庫</th><th scope="col" class="c-more"><span class="sr-only">動作</span></th></tr></thead>
+        <tbody>${rows}</tbody></table>` : '<p class="muted small pm-pad">你目前不是任何專案的 leader。</p>'}</div>
+      <div class="pm-card pm-lead-note"><p class="muted small">leader 能做：改名、程式庫與分支、成員與本專案角色、封存（可還原）。新增專案、永久刪除、跨專案角色、邀請、帳號只有管理員能做。</p></div></div>`;
   }
   // 已永久刪除的專案（全站紀錄，只有管理員）；第一次畫才去讀
   function permDelsHtml() {
@@ -8878,19 +8935,20 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (state.page !== 'perm') return;
     const keep = document.activeElement?.id, top = box.scrollTop, admin = isAdmin();
     if (ADM_OLD_TABS.includes(perm.tab)) Object.assign(perm, { adm: perm.tab, tab: 'admin' }); // 專案、邀請、群組、系統搬到管理員設定
-    if (!admin && !['roles', 'skills'].includes(perm.tab)) perm.tab = 'members'; // leader 有成員、角色、技能分頁
-    const onAdm = perm.tab === 'admin';
-    if (!onAdm) perm.lastMemTab = perm.tab;
+    if (admin && perm.tab === 'leadproj') Object.assign(perm, { tab: 'admin', adm: 'projects' }); // 管理員的專案管理在管理員設定
+    if (!admin && !['roles', 'skills', ...(myLeadRows().length ? ['leadproj'] : [])].includes(perm.tab)) perm.tab = 'members'; // leader 有成員、角色、技能分頁；PLAT-381 加專案管理
+    const onAdm = perm.tab === 'admin', onLead = perm.tab === 'leadproj';
+    if (!onAdm && !onLead) perm.lastMemTab = perm.tab;
     if (state.permTab !== perm.tab) { state.permTab = perm.tab; drawChrome(); }
     // 管理員設定、成員管理分兩頁（頭像選單各一項），頂端互相連過去
-    const title = onAdm ? '<h2>⚙️ 管理員設定</h2><span class="muted small">只有管理員看得到 · 成員、角色、技能在 <button type="button" class="link small" data-pm-page="members">👥 成員管理 ›</button></span>'
+    const title = onLead ? `<h2>📁 專案管理</h2><span class="muted small">你是 leader 的專案 · 新增、永久刪除專案請找管理員 ${esc(state.projMeta.adminName || '')}</span>` : onAdm ? '<h2>⚙️ 管理員設定</h2><span class="muted small">只有管理員看得到 · 成員、角色、技能在 <button type="button" class="link small" data-pm-page="members">👥 成員管理 ›</button></span>'
       : `<h2>👥 成員管理</h2><span class="muted small">群組管理員：${esc(state.projMeta.adminName || '')}${admin ? ' · <button type="button" class="link small" data-adm="">⚙️ 管理員設定 ›</button>' : ' · 你是 leader'}</span>`;
-    const tabs = onAdm ? '' : `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${[['members', '成員'], ['roles', '角色'], ['skills', '技能']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>`;
-    const body = onAdm ? admBodyHtml() : perm.tab === 'skills' ? permSkillsHtml() : perm.tab === 'roles' ? permRolesHtml() : permView() === 'byMember' ? permByMemberHtml() : permByProjectHtml();
+    const tabs = onAdm || onLead ? '' : `<div class="seg-scope pm-tabs" role="tablist" aria-label="分頁">${[['members', '成員'], ['roles', '角色'], ['skills', '技能']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div>`;
+    const body = onLead ? permLeadProjectsHtml() : onAdm ? admBodyHtml() : perm.tab === 'skills' ? permSkillsHtml() : perm.tab === 'roles' ? permRolesHtml() : permView() === 'byMember' ? permByMemberHtml() : permByProjectHtml();
     const head = onAdm && perm.adm && narrowPerm() ? '' : `<div class="work-head"><div class="work-title">${title}</div>${tabs}</div>`; // 手機點進區塊：只留「‹ 管理員設定」和區塊名稱
     box.innerHTML = `${head}
       ${admin ? updBanner() : ''}
-      ${admin ? '' : `<div class="pm-banner">你是 <b>${esc(myLeadProjects().map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(myLeadProjects().map(projName).join('、'))}的成員。其他專案只能看。</div>`}
+      ${admin || onLead ? '' : `<div class="pm-banner">你是 <b>${esc(myLeadProjects().map(projName).join('、'))}</b> 的 leader，可以加入或移出${esc(myLeadProjects().map(projName).join('、'))}的成員。其他專案只能看。</div>`}
       <section class="wpanel pm-panel pm-tab-${perm.tab}${onAdm ? ` adm-sec-${perm.adm || 'list'}` : ''}">${body}</section>
       <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
     box.scrollTop = top;
@@ -8904,8 +8962,33 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const joinReviewer = () => isAdmin() || myLeadProjects().length > 0;
   async function loadJoins() {
     if (!joinReviewer()) { work.joins = []; return; }
-    try { work.joins = (await api('/api/join-requests')).items; } catch { work.joins = []; }
+    const [j, k] = await Promise.all([api('/api/join-requests').catch(() => null), api('/api/skills').catch(() => null)]); // PLAT-381：申請、技能一起到，畫面不會先少一件
+    work.joins = j?.items || []; work.skillRev = (k?.items || []).filter(x => x.canReview);
   }
+  // PLAT-381：「要你處理」裡直接拒絕加入申請、看技能、核准技能
+  document.addEventListener('click', async e => {
+    const jno = e.target.closest?.('[data-lead-jno]'), skv1 = e.target.closest?.('[data-lead-skview]'), skok = e.target.closest?.('[data-lead-skok]');
+    if (!jno && !skv1 && !skok) return;
+    if (skv1) return skOpenDrawer(skv1.dataset.leadSkview);
+    try {
+      if (jno) {
+        const j = (work.joins || []).find(x => x.id === jno.dataset.leadJno);
+        if (!j) return;
+        const reason = await askJoinReason(j.name);
+        if (!reason) return;
+        await api(`/api/join-requests/${encodeURIComponent(j.id)}/reject`, { method: 'POST', body: { reason } });
+        toast(`已拒絕 ${j.name}，原因會通知他`);
+      } else {
+        const k = (work.skillRev || []).find(x => x.skillId === skok.dataset.leadSkok);
+        if (!k) return;
+        if (!await confirmDialog({ title: `核准「${k.name}」v${k.version} 上架？`, confirmText: '核准上架', message: `${k.scripts ? `含腳本 ${k.scripts} 個。` : ''}上架後會發給「${esc(projName(k.project))}」指定的 AI；含腳本的還要每台 AI 的主人允許才會裝。沒看過內容的話，先按「看內容」。` })) return;
+        await api(`/api/skills/${encodeURIComponent(k.skillId)}/review`, { method: 'POST', body: { action: 'approve', note: '' } });
+        toast('已核准上架，已通知各 AI 的主人');
+      }
+      await afterJoinChange();
+      renderWork();
+    } catch (err) { toast(err.message); }
+  });
   async function afterJoinChange() {
     await Promise.all([loadProjectList(), loadParticipants(), loadJoins()]).catch(() => {});
     updateTodoBadge();
@@ -9291,6 +9374,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       perm.gsLogOpen = !!$('.pm-gs-log')?.open;
       return loadGroupSettings(); // 異動紀錄多一筆
     }
+    if (a === 'noop') { drawPerm(); return toast('只有管理員能永久刪除專案'); } // PLAT-381
+    if (a === 'members') return psetAct('members', id);
     if (a === 'groupname') {
       const name = $('#pm-group-name').value.trim();
       if (!name) return toast('請輸入群組名稱');

@@ -57,7 +57,13 @@ try {
   assert.match(await js(`${emptyCard}.textContent`), /從範本開始，一鍵複製到預設專案，之後可以改：/);
   assert.deepEqual(await js(`[...${emptyCard}.querySelectorAll('[data-sktpl]')].map(b => b.dataset.sktpl)`), ['commit-convention', 'testing-rules', 'handover-format'], '依 PG 推薦 3 個');
   assert.match(await js(`${emptyCard}.textContent`), /看全部範本 ›[\s\S]*或 上傳自己的 SKILL\.md ›/);
+  assert.equal(await js("document.querySelectorAll('.sk-empty').length"), 1, '「全部」只出一張空專案卡（UX #6576）');
+  assert.match(await js(`${emptyCard}.textContent`), /還有 1 個專案沒有技能：第二專案/, '其他沒技能的專案只列名字');
   await shot('PLAT-365-B1-空專案卡-1280.png', '.sk-empty');
+  await openLib(boss, 'en'); // 英文：其他沒技能的專案那行也是英文
+  await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.sk-empty-more')"), 8000, '英文空專案卡');
+  assert.match(await js("document.querySelector('.sk-empty-more').textContent"), /^1 more project without skills: Second project$/, '英文：' + await js("document.querySelector('.sk-empty-more').textContent"));
+  await openLib(boss);
   // 「＋ 新增技能」：範本 6 個 → 有搜尋、分類，預設推薦 3 個、其餘收起
   await js(`document.querySelector('.sk-bar [data-sknew]').dataset.sknew = '預設專案'; true`);
   await click('.sk-bar [data-sknew]');

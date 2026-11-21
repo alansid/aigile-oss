@@ -44,9 +44,9 @@ try {
   await size(1280, 900);
   await login(liu.token, '/');
   await until(() => js("!!document.querySelector('.topbar .av-btn')"), 10000, '登入');
-  await until(() => js("/管理員設定3/.test(document.querySelector('#av-menu [data-av=\"admin\"]')?.textContent || '')"), 10000, '頭像選單的待處理數到 3');
+  await until(() => js("/管理員設定2/.test(document.querySelector('#av-menu [data-av=\"admin\"]')?.textContent || '')"), 10000, '頭像選單的待處理數到 2（技能在有 leader 的預設專案，先給 leader，PLAT-381）');
   const av = await avItems();
-  assert.match(av, /admin=⚙️管理員設定3/, 'A 管理員設定帶待處理 3：' + av);
+  assert.match(av, /admin=⚙️管理員設定2/, 'A 管理員設定帶待處理 2：' + av);
   assert.match(av, /pm-projects=📁專案管理新增、改名、封存/, 'A 有專案管理：' + av);
   assert.match(av, /perm=👥成員管理成員、角色、技能/, 'A 有成員管理：' + av);
   await shot('1-電腦-頭像選單');
@@ -60,15 +60,14 @@ try {
   const nav = await J("[...document.querySelectorAll('.adm-nav [data-adm]')].map(b => b.dataset.adm + ':' + b.querySelector('.adm-t b').textContent)");
   assert.deepEqual(nav, ['todo:待處理', 'group:群組設定', 'projects:專案', 'invites:邀請', 'accounts:帳號與救援', 'audit:稽核與儲存', 'system:系統與備份'], 'B 七區照順序');
   assert.match(await js("document.querySelector('#crumbs').textContent"), /管理員設定/, '麵包屑：管理員設定');
-  assert.equal(await js("document.querySelector('.adm-nav [data-adm=\"todo\"] .adm-n')?.textContent"), '3', 'B 待處理 3');
+  assert.equal(await js("document.querySelector('.adm-nav [data-adm=\"todo\"] .adm-n')?.textContent"), '2', 'B 待處理 2');
   const todo = await J("[...document.querySelectorAll('.adm-todo .adm-row')].map(r => r.innerText.replace(/\\s+/g, ' '))");
-  assert.equal(todo.length, 3, '待處理三列：' + todo.join(' / '));
-  assert.equal(await js("document.querySelector('.adm-main .adm-h').textContent.trim()"), '📋 待處理 · 3', '數字在大標題');
+  assert.equal(todo.length, 2, '待處理兩列（預設專案的技能先給 leader 王小明，PLAT-381）：' + todo.join(' / '));
+  assert.equal(await js("document.querySelector('.adm-main .adm-h').textContent.trim()"), '📋 待處理 · 2', '數字在大標題');
   assert.equal(await js("document.querySelectorAll('.adm-todo .pm-card-head').length"), 0, '卡片不再寫一次「待處理」');
   assert.match(await js("document.querySelector('.adm-todo-note').textContent"), /加入申請也會出現在左側「要你處理」；技能核准和邀請到期只在這裡/, '說明哪些也在左側');
   assert.match(todo[0], /加入申請 1 人 第二專案：陳大文 去核准 ›/, '加入申請：' + todo[0]);
-  assert.match(todo[1], /技能待核准 1 個 預設專案：deploy-check（含腳本，要核准才上架） 去看 ›/, '技能：' + todo[1]);
-  assert.match(todo[2], /邀請快到期 1 個 王小美 剩 .+ 延長或重發 ›/, '只有 1 小時的邀請算快到期：' + todo[2]);
+  assert.match(todo[1], /邀請快到期 1 個 王小美 剩 .+ 延長或重發 ›/, '只有 1 小時的邀請算快到期：' + todo[1]);
   // D 加入申請跟左側「要你處理」同一份
   assert.ok(Number(await js("document.querySelector('.inbox-badge:not([hidden])')?.textContent || 0")) >= 1, 'D 左側「要你處理」也有加入申請');
   assert.ok(!(await hscroll()), '1280 沒有橫向捲動');
@@ -76,10 +75,7 @@ try {
   await click('[data-adm-go="join"]');
   await until(() => js("/陳大文/.test(document.querySelector('#modal-root')?.textContent || '')"), 8000, '去核准開待審申請');
   await js("document.querySelector('#modal-root [data-close]')?.click(); true"); await sleep(200);
-  await login(liu.token, '/admin');
-  await until(() => js("!!document.querySelector('[data-adm-go=\"skill\"]')"), 10000, '待處理');
-  await click('[data-adm-go="skill"]');
-  await until(() => js("location.pathname === '/members' && document.querySelector('[data-pm-tab=\"skills\"]')?.getAttribute('aria-selected') === 'true'"), 8000, '去看 → 成員管理 › 技能');
+  // 技能核准先給預設專案 leader（王小明），1 天內不在管理員待處理（PLAT-381，plat381-ui-test 驗）
   await login(liu.token, '/admin');
   await until(() => js("!!document.querySelector('[data-adm-go=\"invite\"]')"), 10000, '待處理');
   await click('[data-adm-go="invite"]');

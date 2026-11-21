@@ -1496,6 +1496,14 @@ ${ending}`;
     const admin = adminOf(await peopleMap(ctx));
     if (!admin || admin.id !== me.id) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員（${admin?.name || '未設定'}）能${what}。`);
   }
+  // PLAT-381：改名、封存、還原：管理員或這個專案的 leader（新增、永久刪除、跨專案角色、邀請、帳號仍只限管理員）
+  async function requireAdminOrLeader(ctx, me, pj, what) {
+    requireHuman(me);
+    const admin = adminOf(await peopleMap(ctx));
+    if (admin && admin.id === me.id) return;
+    await loadLeaders(true);
+    if (!(leadersMap[pj] || []).includes(me.id)) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員（${admin?.name || '未設定'}）或這個專案的 leader 能${what}。`); // 封存的專案不在 PROJECTS，leader 也要能還原
+  }
   // 跨專案角色：固定屬於所有專案，不能移出。預設是 PO、SM（含人類 PO）； 起管理員可在「成員與權限」開關，
   // 覆寫存在 app_settings 的 cross_roles（{ add: [...], remove: [...] }），不用改資料表結構
   // 新成員一律不自動跨專案（不看 PO／SM 角色），只能管理員手動開。
@@ -1723,7 +1731,9 @@ ${ending}`;
     // 開放申請設定與待審數（一列設定＋只讀待審的列）
     const js = await joinApi.joinSettings(), pend = await db.all("SELECT project, COUNT(*) AS n FROM join_requests WHERE status = 'pending' GROUP BY project").catch(() => []);
     const join = Object.fromEntries(PROJECTS.map(pj => [pj, { open: joinOpen(js, pj), note: js[pj]?.note || '', pending: pend.find(x => x.project === pj)?.n || 0 }]));
-    return { items: await projectViews(ctx), adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, readOnly, join, ...extra };
+    const items = await projectViews(ctx);
+    const archivedLeaders = Object.fromEntries(items.filter(p => p.archived).map(p => [p.id, (leadersMap[p.id] || []).filter(id => people.get(id)?.status === 'active')])); // PLAT-381：leader 要能還原自己封存的專案
+    return { items, adminId: admin?.id || null, adminName: admin?.name || null, crossRoleIds, leaders, archivedLeaders, readOnly, join, ...extra };
   }
 
   // 改成員所屬專案（單人或批次）。移出某專案時，他在該專案負責的未結案卡片退回「待處理」、改為未指派。
@@ -1993,7 +2003,8 @@ ${ending}`;
     return scopeProjects(await projectsResponse(ctx, { dryRun, impact, crossChanges, leaderChanges, roleChanges, roChanges: roChanges.map(({ seqs, ...c }) => c) }), me);
   });
   // UX ：不屬於全部專案的人，專案清單只回自己所屬的專案（不露出別專案名稱）
-  const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = projectsOf(me); return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))), readOnly: Object.fromEntries(Object.entries(r.readOnly || {}).filter(([k]) => mine.includes(k))), join: Object.fromEntries(Object.entries(r.join || {}).filter(([k]) => mine.includes(k))) }; };
+  // PLAT-381：被隔離的成員也列出自己所屬、已封存的專案（leader 才能還原）
+  const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = [...new Set([...projectsOf(me), ...listOf(me)])]; return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))), archivedLeaders: Object.fromEntries(Object.entries(r.archivedLeaders || {}).filter(([k]) => mine.includes(k))), readOnly: Object.fromEntries(Object.entries(r.readOnly || {}).filter(([k]) => mine.includes(k))), join: Object.fromEntries(Object.entries(r.join || {}).filter(([k]) => mine.includes(k))) }; };
   route('GET', '/api/projects', async ({ ctx, me }) => scopeProjects(await projectsResponse(ctx), me));
   // 群組名稱（登入頁也要顯示，所以讀取不用登入）；只有管理員能改
   route('GET', '/api/group', async () => ({ name: await groupName() }), { open: true });
@@ -2116,7 +2127,7 @@ ${ending}`;
     return { __status: 201, ...(await projectsResponse(ctx)), id };
   });
   route('PATCH', '/api/projects/:id', async ({ ctx, me, req, params }) => {
-    await requireAdmin(ctx, me);
+    await requireAdminOrLeader(ctx, me, params.id, '改專案名稱');
     const name = readProjectName((await readJson(req)).name);
     await loadProjects(true);
     const row = projectRows.find(r => r.id === params.id);
@@ -2578,7 +2589,7 @@ ${ending}`;
   route('POST', '/api/my-ais/:id/avatar/revert', async ({ ctx, me, params }) => { requireHuman(me); return avatarRevert(ctx, (await myAi(me, params.id)).id); });
 
   route('POST', '/api/projects/:id/archive', async ({ ctx, me, params }) => {
-    await requireAdmin(ctx, me);
+    await requireAdminOrLeader(ctx, me, params.id, '封存專案');
     await loadProjects(true);
     const row = projectRows.find(r => r.id === params.id);
     if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
@@ -2591,7 +2602,7 @@ ${ending}`;
     return projectsResponse(ctx);
   });
   route('POST', '/api/projects/:id/unarchive', async ({ ctx, me, params }) => {
-    await requireAdmin(ctx, me);
+    await requireAdminOrLeader(ctx, me, params.id, '還原專案');
     await loadProjects(true);
     const row = projectRows.find(r => r.id === params.id);
     if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');

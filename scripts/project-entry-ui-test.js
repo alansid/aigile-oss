@@ -1,5 +1,5 @@
 // 專案設定入口好找：從專案頁就能改名、管成員、設程式庫
-// - 專案卡多一個 ⚙「專案設定」：管理員有改名、程式庫與分支、成員與本專案角色（封存只在管理員設定 › 專案）；該專案 leader 只有成員與本專案角色；一般成員沒有
+// - 專案卡多一個 ⚙「專案設定」：管理員有改名、程式庫與分支、成員與本專案角色（封存只在管理員設定 › 專案）；該專案 leader 跟管理員一樣（PLAT-381）；原本只有成員與本專案角色；一般成員沒有
 // - ⇅ 切換清單最下面「＋ 新增專案」「管理專案…」（只有管理員）
 // - 頭像選單：「⚙️ 管理員設定」「📁 專案管理」（只有管理員；專案管理＝管理員設定 › 專案）、「👥 成員管理」；兩頁頂端互相連過去，麵包屑跟著換名字
 // - 手機：總覽與選單有「＋ 新增專案」（只有管理員）
@@ -70,6 +70,7 @@ try {
   await click('.proj-switch [data-ps-act="manage"]');
   await until(() => js("!!document.querySelector('.pm-ptable')"), 8000, '管理專案… 開專案管理');
   await login(liu.token, '/p/main/messages');
+  await until(() => js("!!document.querySelector('.proj-switch [data-ps-act=\"newproj\"]')"), 8000, '管理員選項畫好'); // 登入後要等成員資料載入，管理員選項才會畫出來（平台 plat359 同修法）
   await click('.proj-switch .ps-btn'); await sleep(100);
   await click('.proj-switch [data-ps-act="newproj"]');
   await until(() => js("!!document.querySelector('#np-form')"), 5000, '新增專案視窗');
@@ -101,8 +102,7 @@ try {
   // 6. 手機 375：總覽與選單的新增專案
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
   await login(liu.token, '/');
-  await until(() => js("!!document.querySelector('.hub-join[data-hub-newproj]')"), 8000, '手機總覽新增專案');
-  assert.ok(await js("document.querySelector('.hub-join[data-hub-newproj]').offsetParent !== null"), '手機總覽看得到「＋ 新增專案」');
+  await until(() => js("document.querySelector('.hub-join[data-hub-newproj]')?.offsetParent != null"), 8000, '手機總覽看得到「＋ 新增專案」'); // 等排版完成再看（原本只等元素出現，偶發失敗；平台 plat359 同修法）
   assert.ok(!(await js("document.getElementById('m-newproj').hidden")), '手機選單有「＋ 新增專案」');
   await click('#m-newproj');
   await until(() => js("!!document.querySelector('#np-form')"), 5000, '手機選單 › 新增專案');
@@ -113,7 +113,7 @@ try {
   // 7. leader：預設專案有 ⚙（只有成員與本專案角色）、第二專案沒有；清單沒有新增；頭像只有成員管理；管理頁沒有切換鈕
   await login(wang.token, '/p/main/messages');
   await openGear();
-  assert.equal(await menuItems(), 'members', 'leader 只有成員與本專案角色');
+  assert.equal(await menuItems(), 'rename,repo,members', 'leader 跟管理員一樣：改名、程式庫、成員與本專案角色（PLAT-381）');
   await click('#pset-menu [data-pset-act="members"]');
   await until(() => js("!!document.querySelector('.pm-tabs')"), 8000, 'leader 成員管理');
   assert.ok(!(await js("!!document.querySelector('.work-title [data-adm]')")), 'leader 沒有管理員設定連結');

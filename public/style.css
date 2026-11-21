@@ -1910,7 +1910,7 @@ html.vv-on .app { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); heig
 .pm-set { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; padding: 12px 14px; border-top: 1px solid var(--border); }
 .pm-set-t { display: grid; gap: 2px; min-width: 0; }
 .pm-set-t .pm-sub { font-size: 12px; }
-.pm-tab-projects, .pm-tab-invites, .pm-tab-admin { overflow: visible; background: transparent; border: 0; } /* 管理員設定也是一張張卡片 */
+.pm-tab-projects, .pm-tab-invites, .pm-tab-admin, .pm-tab-leadproj { overflow: visible; background: transparent; border: 0; } /* 管理員設定也是一張張卡片 */
 .pm-projs { display: grid; gap: 14px; }
 .pm-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .pm-card > .pm-table { border-radius: 0 0 12px 12px; }
@@ -3594,3 +3594,13 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
   .att-pick, .att-bar > .btn { min-height: 44px; }
   .att-pick { width: 44px; height: 44px; }
 }
+/* PLAT-381：leader 的「要你處理」區、專案管理頁 */
+.wlead-note { margin: 0 0 6px; }
+.lead-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; }
+@media (max-width: 640px) { .lead-row { grid-template-columns: auto minmax(0, 1fr); } .lead-row .sugg-actions { grid-column: 2; } }
+.lead-ic { font-size: 22px; flex: 0 0 auto; }
+.pm-more-menu .pm-off, .pm-more-menu .pm-off .pm-sub { color: var(--muted); cursor: not-allowed; }
+.pset-menu [role="menuitem"] .muted.small { margin-left: auto; padding-left: 12px; }
+.pm-lead-note { padding: 12px 16px; }
+.pm-lead-note p { margin: 0; }
+.wlead-note { padding: 0 16px; }
