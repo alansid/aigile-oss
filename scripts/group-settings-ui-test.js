@@ -12,9 +12,7 @@ try {
   const click = sel => js(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return false; e.click(); return true; })()`);
   const open = async w => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: 860, deviceScaleFactor: 1, mobile: w < 600 });
-    await login(boss.token, '/members');
-    await until(() => js("!!document.querySelector('[data-pm-tab=\"group\"]')"), 10000, '成員與權限');
-    await click('[data-pm-tab="group"]');
+    await login(boss.token, '/admin/group'); // 群組設定在管理員設定
     await until(() => js("!!document.querySelector('.pm-join-set [data-pp=\"openjoin\"]')"), 10000, '加入設定');
   };
   const sw = () => js("document.querySelector('.pm-join-set [data-pp=\"openjoin\"]').getAttribute('aria-checked')");

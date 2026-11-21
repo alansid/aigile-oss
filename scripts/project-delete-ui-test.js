@@ -19,9 +19,7 @@ try {
   const { js, login, cdp } = await kit.browser(1280, 900);
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
   const openProjects = async () => {
-    await login(liu.token, '/members');
-    await until(() => js("!!document.querySelector('[data-pm-page=\"projects\"]')"), 10000, '成員與權限');
-    await js("document.querySelector('[data-pm-page=\"projects\"]').click(); true");
+    await login(liu.token, '/admin/projects'); // 專案在管理員設定 › 專案
     await until(() => js("!!document.querySelector('.pm-ptable')"), 8000, '專案表格');
     await sleep(300);
   };

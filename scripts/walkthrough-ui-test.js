@@ -54,7 +54,7 @@ try {
   const acts = await js("[...document.querySelectorAll('.hub-next [data-next]')].map(b => b.dataset.next).join(',')");
   assert.equal(acts, 'wizard,projects,invites,system,close');
   await js("document.querySelector('.hub-next [data-next=\"invites\"]').click(); true");
-  await until(() => js("document.querySelector('[data-pm-tab=\"invites\"]')?.getAttribute('aria-selected') === 'true'"), 10000, '直接到邀請分頁');
+  await until(() => js("!!document.querySelector('.pm-panel.adm-sec-invites') && location.pathname === '/admin/invites'"), 10000, '直接到管理員設定 › 邀請');
   await goto('/');
   await until(() => visible('.hub-next'), 30000, '回主畫面還在'); // 全套一起跑時機器忙，給久一點
   await js("document.querySelector('.hub-next [data-next=\"close\"]').click(); true");

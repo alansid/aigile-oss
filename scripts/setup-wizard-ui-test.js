@@ -97,9 +97,7 @@ try {
   assert.ok(pj && pj.slug === 'project-1', '專案名稱改了、網址英文名留空自動產生：' + JSON.stringify(pj));
 
   // 管理頁改網址英文名（同一個欄位）：改成 test；新增專案留空
-  await login(tok, '/members');
-  await until(() => js("!!document.querySelector('[data-pm-page=\"projects\"]')"), 10000, '成員與權限');
-  await click('[data-pm-page="projects"]');
+  await login(tok, '/admin/projects'); // 專案在管理員設定 › 專案
   await until(() => js("!!document.querySelector('[data-pm-more]')"), 8000, '專案表格');
   await click('[data-pm-more]');
   await until(() => js("!!document.querySelector('[data-pp=\"slug\"]')"), 5000, '⋯ 選單');

@@ -118,7 +118,7 @@ Full protocol: [docs/ai-integration.md](docs/ai-integration.md) (Chinese). Every
 | <img alt="Team status" src="docs/images/readme/team.en.png"><br>**Team status**: who is online and which card each AI is on; assignments unread for 20+ minutes are listed as "Not responded" | <img alt="Skill library" src="docs/images/readme/skills.en.png"><br>**Skill library**: upload skills or skill packs and choose which roles or AIs get them |
 | <img alt="Mobile" src="docs/images/readme/mobile.en.png"><br>**Works on your phone**: messages, "Needs your attention", one-click answers | <img alt="First-time setup" src="docs/images/readme/wizard.en.png"><br>**First-time setup**: group name, project, invite members, first AI — four steps |
 
-Want to see it in use first? After logging in, click "Load demo data" in the setup guide or under "Member management › System", and clear it with one click when you're done.
+Want to see it in use first? After logging in, click "Load demo data" in the setup guide or under "Admin settings › System & backup", and clear it with one click when you're done.
 
 <details>
 <summary><b>All features</b></summary>
@@ -189,7 +189,8 @@ First login and setup are the same as above.
 - **Invite links**: admins can also send one-time invite links (valid 24 hours by default, adjustable) with projects and role preset; invited people also set a username and password when they open the link.
 - **Login**: the login page defaults to username and password; on a new device you can also use "Other ways to sign in" — pair a device (6 digits generated on a signed-in device) or a login code. Usernames are 4–30 characters (letters, digits, `. _ -`), passwords at least 8; `admin` is reserved for the default admin.
 - **Set a group password for public deployments**: once set, everyone must enter it to sign up. To allow invite links only, turn off open sign-up.
-- **Change it on the admin page, no redeploy**: "Member management › Group" toggles open sign-up, sets or clears the group password and renames the group. Changes are stored in the database, take effect immediately and are recorded in the group change log. The group password is stored only as a hash; you can't see it after saving — just reset it if forgotten.
+- **Change it on the admin page, no redeploy**: "Admin settings › Group settings" toggles open sign-up, sets or clears the group password and renames the group. Changes are stored in the database, take effect immediately and are recorded in the group change log. The group password is stored only as a hash; you can't see it after saving — just reset it if forgotten.
+- **Admin settings**: everything only the admin can do is under "⚙️ Admin settings" in the avatar menu (`/admin`): To do (join requests, skills awaiting approval, invites about to expire), Group settings, Projects, Invites, Accounts & recovery, Audit & storage, and System & backup. On a computer it has a sidebar; on a phone it is a list you tap into. "👥 Member management" keeps only members, roles and skills; old links such as `/members?tab=projects` redirect automatically.
 - **`OPEN_JOIN` and `ROOM_CODE` are only initial values**: they apply until changed on the admin page; after that (including clearing the password) the admin page wins, and changing the environment variables won't override it.
 - A site that already has members never creates `admin` again; if the admin forgets the password, use `npm run admin-rescue` (below).
 
@@ -234,7 +235,7 @@ First login and setup are the same as above.
 | `APP_URL` | empty | ✓ | | Public URL (e.g. `https://team.example.com`); when set, invite and onboarding links use it instead of the request's Host header |
 | `JOIN_LIMIT_PER_HOUR` | `20` | ✓ | ✓ | Max self sign-ups per IP per hour; 10 wrong group passwords from one IP means a 10-minute wait |
 | `MAX_BODY_MB` | `26` | ✓ | | Max request size in MB; larger requests get 413 right away (never fully read into memory) |
-| `UPDATE_CHECK` | on | ✓ | ✓ | When an admin opens "Project management" or "Member management", check GitHub for a new version (at most once a day; nothing shown if unreachable); `0` turns it off |
+| `UPDATE_CHECK` | on | ✓ | ✓ | When an admin opens "Admin settings" or "Member management", check GitHub for a new version (at most once a day; nothing shown if unreachable); `0` turns it off |
 | `FEEDBACK_REPO` | `alansid/aigile-oss` | ✓ | ✓ | Feedback destination in Help. Set `owner/repo` to use a fork or `0` to hide feedback |
 
 To let phones or people on the same network join, open the site via your computer's LAN IP (e.g. `http://192.168.1.10:3000`) and set `ROOM_CODE`.
@@ -346,7 +347,7 @@ It checks that the target is empty (stops if it already has data), copies everyt
 <details>
 <summary><b>Show details</b></summary>
 
-Admins, in "Member management › System":
+Admins, in "Admin settings › System & backup":
 
 - **Download backup**: members, projects, messages, DMs, cards, decisions, skills and settings in one JSON file (with the version number). Optionally include message attachments and project docs; skill packs are always included. Data is read in batches and works both locally and on Workers.
 - **Nothing used for login is included**: member and AI tokens, password hashes, device logins, login codes, invite and rescue links, AI onboarding links.
@@ -360,7 +361,7 @@ Admins, in "Member management › System":
 <details>
 <summary><b>Show details</b></summary>
 
-To see what it looks like: in first-time setup or "Member management › System", click "Load demo data". It creates a demo project with:
+To see what it looks like: in first-time setup or "Admin settings › System & backup", click "Load demo data". It creates a demo project with:
 
 - three demo members (one human, two AIs, all named "Demo-…", unable to log in)
 - cards in different states (To do, In progress, Awaiting confirmation, Blocked, Done)

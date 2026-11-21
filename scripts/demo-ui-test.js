@@ -1,6 +1,6 @@
 // 畫面測試（真的瀏覽器，375）：第一次設定引導與管理頁都能載入示範資料，管理頁能清掉
 // 1. 新站（預設管理員改完帳密）：第一次設定引導頂端有「載入示範資料」，按了顯示已載入，示範專案建好
-// 2. 成員與權限 › 系統：顯示已載入，按「清除示範資料」→ 確認 → 示範專案不見、真資料還在
+// 2. 管理員設定 › 系統與備份：顯示已載入，按「清除示範資料」→ 確認 → 示範專案不見、真資料還在
 // 3. 再按「載入示範資料」又能載入；375 沒有橫向捲動
 // 需要 Chrome 或 Edge；找不到就略過。用法：node scripts/demo-ui-test.js
 import assert from 'node:assert';
@@ -41,9 +41,7 @@ try {
   await until(() => js("!!document.querySelector('.av-btn') && !document.querySelector('.sw')"), 15000, '引導關掉、重新整理');
 
   // 2. 管理頁清除
-  await open(tok, '/members');
-  await until(() => js("!!document.querySelector('[data-pm-tab=\"system\"]')"), 15000, '系統分頁');
-  await js("document.querySelector('[data-pm-tab=\"system\"]').click(); true");
+  await open(tok, '/admin/system'); // 管理員設定 › 系統與備份
   await until(() => js("!!document.querySelector('[data-demo=\"clear\"]')"), 15000, '清除按鈕');
   assert.equal(await js('document.documentElement.scrollWidth <= innerWidth + 1'), true, '系統分頁 375 沒有橫向捲動');
   await js("document.querySelector('[data-demo=\"clear\"]').click(); true");
@@ -55,9 +53,7 @@ try {
 
   // 3. 再載入一次
   await new Promise(r => setTimeout(r, 2000)); // 清除後自動重新整理
-  await open(tok, '/members');
-  await until(() => js("!!document.querySelector('[data-pm-tab=\"system\"]')"), 15000, '系統分頁');
-  await js("document.querySelector('[data-pm-tab=\"system\"]').click(); true");
+  await open(tok, '/admin/system'); // 管理員設定 › 系統與備份
   await until(() => js("!!document.querySelector('[data-demo=\"load\"]')"), 15000, '載入按鈕');
   await js("document.querySelector('[data-demo=\"load\"]').click(); true");
   await until(async () => (await kit.call(tok, '/api/admin/demo')).body.loaded === true, 15000, '又載入了');
