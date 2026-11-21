@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { createApp } from '../src/core.js';
@@ -27,8 +28,17 @@ try {
 
   // 沒有 git 也產生得出來：在沒有 .git 的暫存資料夾跑一次
   const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-rel-bare-'));
-  for (const d of ['scripts', 'docs', 'public']) fs.cpSync(new URL(d + '/', root), path.join(bare, d), { recursive: true });
+  for (const d of ['scripts', 'docs', 'public', 'src', 'migrations']) fs.cpSync(new URL(d + '/', root), path.join(bare, d), { recursive: true });
   fs.copyFileSync(new URL('package.json', root), path.join(bare, 'package.json'));
+  fs.copyFileSync(new URL('server.js', root), path.join(bare, 'server.js'));
+  const { startKit } = await import(pathToFileURL(path.join(bare, 'scripts/browser-kit.js')));
+  const kit = await startKit('fresh-releases', { env: { DATABASE_URL: '', AIGILE_TEST_PG_URL: '' } });
+  try {
+    const user = await kit.call(null, '/api/join', 'POST', { name: '測試使用者', role: 'PO' });
+    const releases = await kit.call(user.body.token, '/api/releases');
+    assert.equal(releases.status, 200);
+    assert.deepEqual(releases.body.items.map(r => r.version), notes.releases.map(r => r.version).sort().reverse());
+  } finally { await kit.stop(); }
   execFileSync('node', ['scripts/releases.mjs'], { cwd: bare, encoding: 'utf8', env: { ...process.env, GIT_DIR: path.join(bare, 'no-git'), GIT_CEILING_DIRECTORIES: path.dirname(bare) } });
   const jb = JSON.parse(fs.readFileSync(path.join(bare, 'generated', 'releases.json'), 'utf8'));
   assert.deepEqual(jb.items.map(r => r.version), notes.releases.map(r => r.version).sort().reverse(), '沒有 git：版本照發行說明');

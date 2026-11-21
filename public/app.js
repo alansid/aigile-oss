@@ -5710,13 +5710,13 @@
     if (state.page !== 'releases') return;
     const d = rel.data;
     const tabs = `<div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>`;
-    const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">目前 v${esc(APP_VERSION)}${d ? ` · ${d.items.length} 個版本` : ''} · 修 bug 要附重現測試；改動前寫影響哪張流程圖的哪一段</span></div>${tabs}</div>`;
+    const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">v${esc(APP_VERSION)} · ${rel.tab === 'flows' ? '每個功能從開始到完成怎麼走' : '每一版新增了什麼、修好了什麼'}</span></div>${tabs}</div>`;
     if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
     if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
     const q = rel.q.trim().toLowerCase().replace(/^v/, '');
     const list = d.items.filter(r => !q || r.version.includes(q) || r.cards.some(c => c.toLowerCase() === q || c.toLowerCase().startsWith(q)) || r.commits.some(c => c.title.toLowerCase().includes(q) || c.sha.startsWith(q)));
     const row = r => `<article class="rel-item${rel.hit === r.version ? ' hit' : ''}" id="v${esc(r.version)}">
-      <div class="rel-head"><b>v${esc(r.version)}</b><span class="muted small">${esc(relTime(r.at))}${r.deployedAt ? ' 上線' : '（commit 時間）'}</span>${r.cards.map(c => `<button type="button" class="cid-chip" data-card="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      <div class="rel-head"><b>v${esc(r.version)}</b><span class="muted small">${esc(relTime(r.at))}${r.deployedAt ? ' 上線' : '（commit 時間）'}</span>${r.cards.map(c => `<span class="cid-chip">${esc(c)}</span>`).join('')}</div>
       ${r.fixes.map(f => `<div class="rel-inc fix">🩹 修正 ${esc(f.cause)}（<button type="button" class="link small" data-rel-ver="${esc(f.causeVersion)}">v${esc(f.causeVersion)}</button>）造成的問題：${esc(f.note)}${f.flow ? `（流程 ${esc(f.flow)}）` : ''}</div>`).join('')}
       ${r.causes.map(c => `<div class="rel-inc cause">⚠ 這版造成的問題，由 ${esc(c.fix)}（<button type="button" class="link small" data-rel-ver="${esc(c.fixVersion)}">v${esc(c.fixVersion)}</button>）修好：${esc(c.note)}</div>`).join('')}
       <ul class="rel-commits">${r.commits.map(c => `<li><code>${esc(c.sha)}</code> ${esc(c.title)}</li>`).join('')}</ul></article>`;

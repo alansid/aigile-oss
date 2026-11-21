@@ -8,6 +8,7 @@ import { openNodeDb } from './src/db-node.js';
 import { PAGE_HEADERS } from './src/security-headers.js';
 import { dbStorage } from './src/storage-db.js';
 import { dirStorage } from './src/storage-dir.js'; // 本機的專案文件區（不需要 R2）
+import { releaseData } from './scripts/release-data.mjs';
 import { scriptHashes } from './scripts/script-hashes.mjs';
 import { createLiveHub } from './src/live.js'; // 內建即時通道（不用 Supabase）
 import { parseServerArgs, startupLines, SERVER_USAGE, ServerArgError } from './src/server-args.js'; // 埠號與位址（-p／--port、--host、PORT、HOST）
@@ -56,7 +57,10 @@ const handle = createApp({
   apiRefText: fs.readFileSync(path.join(ROOT, 'docs', 'api-reference.md'), 'utf8'),
   flowsText: fs.readFileSync(path.join(ROOT, 'docs', 'flows.md'), 'utf8'),
   scriptHashes: scriptHashes(), // 從 public/ 現算
-  releases: (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'generated', 'releases.json'), 'utf8')); } catch { return null; } })(), // npm run releases 產生
+  releases: fs.existsSync(path.join(ROOT, 'generated/releases.json'))
+    ? JSON.parse(fs.readFileSync(path.join(ROOT, 'generated/releases.json'), 'utf8'))
+    : releaseData(JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version,
+        JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/releases-notes.json'), 'utf8'))),
   config: {
     roomCode: process.env.ROOM_CODE,
     openJoin: process.env.OPEN_JOIN, // 沒設＝開放自己註冊；設 0 才關（跟 Workers 一樣）
