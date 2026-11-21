@@ -63,13 +63,13 @@ try {
   await until(() => js("!!document.querySelector('#sw-role')"), 8000, '第 4 步');
   assert.match(await js("document.querySelector('#sw-ai-name').value"), /的/, 'AI 名稱自動帶');
   await click('[data-sw="ai"]');
-  await until(() => js("!!document.querySelector('.sw-text')"), 10000, '接入指令');
-  assert.match(await js("document.querySelector('.sw-text').value"), /\/api\/setup\//, '接入指令含短版接入連結');
-  // 依工具顯示：預設 Claude Code，不出現 Codex 的沙盒設定；切到 Codex 才有
+  await until(() => js("!!document.querySelector('[data-sw=copyai]')"), 10000, '接入指令');
+  assert.equal(await js("!!document.querySelector('.sw-text')"), false, '複製前不顯示接入指令');
+  // Claude Code、Codex 都使用一行啟動。
   assert.equal(await js("document.querySelector('[data-sw-tool=\"claude\"]').getAttribute('aria-pressed')"), 'true', '預設 Claude Code');
-  assert.ok(!/Codex|sandbox_mode/.test(await js("document.querySelector('.sw-text').value")), 'Claude Code 不顯示 Codex 段落');
+  assert.equal(await txt('[data-sw=copyai]'), '複製一行啟動');
   await click('[data-sw-tool="codex"]');
-  assert.match(await js("document.querySelector('.sw-text').value"), /sandbox_mode = "workspace-write"/, '切到 Codex 顯示開網路的設定');
+  assert.equal(await txt('[data-sw=copyai]'), '複製一行啟動');
   assert.ok(await js("document.querySelector('[data-sw=\"copyai\"]').classList.contains('primary') && !document.querySelector('[data-sw=\"done\"]').classList.contains('primary')"), '複製是主按鈕、完成不是');
   // 沒複製就按完成：先問；選「回去複製」留在原處
   await click('[data-sw="done"]');
@@ -77,7 +77,7 @@ try {
   assert.ok(await js("(() => { const c = document.querySelector('.confirm-root [data-close]:not(.modal-x)'), o = document.querySelector('.confirm-root [data-ok]'); return c.classList.contains('primary') && !o.classList.contains('primary') && document.activeElement === c; })()"), '「回去複製」是主按鈕、預設選它，「直接完成」不是');
   await click('.confirm-root [data-close]');
   await sleep(300);
-  assert.ok(await js("!!document.querySelector('.sw-text')"), '回去複製：還在接入指令這步');
+  assert.ok(await js("!!document.querySelector('[data-sw=copyai]')"), '回去複製：還在接入指令這步');
   await click('[data-sw="done"]');
   await until(() => js("!!document.querySelector('.confirm-root [data-ok]')"), 5000, '再按完成');
   await click('.confirm-root [data-ok]');
