@@ -34,7 +34,8 @@ try {
   const open = async (w = 1280, wantN = true, lang = 'zh') => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: w < 700 ? 1100 : 1000, deviceScaleFactor: 1, mobile: w < 700 });
     await login(lin.token, '/p/main/messages');
-    await js(`localStorage.setItem('aigile-lang', '${lang}'); location.reload(); true`);
+    await js(`localStorage.setItem('aigile-lang', '${lang}'); window.__staleReload = 1; location.reload(); true`);
+    await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
     await sleep(400);
     await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg').length >= 3"), 20000, '訊息');
     if (wantN) await until(() => js("!document.querySelector('.seg-scope [data-scope=\"mine\"] .scope-n')?.hidden"), 10000, '給我的數字');

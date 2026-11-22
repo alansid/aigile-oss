@@ -31,7 +31,8 @@ try {
 
   // 總覽右側「要你處理」清單跟數字同一個來源（修正前只列決策與建議，等你驗收、要你回覆都漏掉，顯示「目前沒有」）
   await kit.call(tok, '/api/messages', 'POST', { requestId: 'ask1', project: '預設專案', text: '這個要你回答一下', recipientIds: [L] });
-  await js("location.reload(); true");
+  await js("window.__staleReload = 1; location.reload(); true");
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("document.querySelector('.hub-side [data-hub-todo-open] .hs-n')?.textContent === '4'"), 15000, '要你處理變 4');
   await sleep(500);
   const panel = await js(`(() => ({ rows: document.querySelectorAll('.hub-todo .ht-row').length, empty: !!document.querySelector('.hub-todo .ht-empty'),

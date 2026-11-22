@@ -27,7 +27,8 @@ try {
   const done = (await kit.call(ux.tok, '/api/messages', 'POST', { project: '預設專案', requestId: 'r' + ++n, text: '[完成] 草案用文字交棒\n\n主流程：登入→收件匣→卡片', cardId: card.cardId, recipientIds: [boss.participant.participantId], replyFrom: [] })).body;
   assert.ok(done.messageId, JSON.stringify(done));
   await kit.call(ux.tok, `/api/cards/${card.cardId}`, 'PATCH', { next: '請驗收', version: (await kit.call(ux.tok, `/api/cards/${card.cardId}`)).body.version }); // 卡有更新，網頁的增量同步才會重抓
-  await js('location.reload(); true');
+  await js('window.__staleReload = 1; location.reload(); true');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js(`!!${row}?.querySelector('[data-ver-report]')`), 15000, '出現看回報');
   assert.equal(await js(`${row}.querySelector('[data-ver-report]').dataset.verReport`), done.messageId);
   assert.equal(await js('document.documentElement.scrollWidth <= innerWidth + 1'), true, '375 沒有橫向捲動');

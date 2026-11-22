@@ -182,7 +182,8 @@ try {
   // ---------- 英文介面 ----------
   await size(1280, 900);
   await login(liu.token, '/admin/accounts');
-  await js("localStorage.setItem('aigile-lang', 'en'); location.reload(); true");
+  await js("localStorage.setItem('aigile-lang', 'en'); window.__staleReload = 1; location.reload(); true");
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.adm-acc')"), 15000, '英文介面');
   const en = await js("document.querySelector('#page-work').innerText");
   assert.match(en, /Admin settings[\s\S]*To do[\s\S]*Group settings[\s\S]*Accounts & recovery[\s\S]*Audit & storage[\s\S]*System & backup/, '英文目錄');

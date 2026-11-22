@@ -51,7 +51,8 @@ try {
   const open = async (w, h = 900, lang = 'zh') => {
     await size(w, h);
     await login(lin.token, '/p/main/messages');
-    await js(`localStorage.setItem('aigile-lang', '${lang}'); location.reload(); true`);
+    await js(`localStorage.setItem('aigile-lang', '${lang}'); window.__staleReload = 1; location.reload(); true`);
+    await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
     await sleep(400);
     await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg').length >= 1"), 20000, '訊息');
     await js(helpers);

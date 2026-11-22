@@ -45,7 +45,8 @@ try {
     await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
     await login(lin.token, '/p/main/messages');
     await until(() => js("document.querySelectorAll('#messages .msg, #messages .flow-line').length > 0"), 20000, '第一次載入'); // 等第一次載完再設「上次看到」，不然它會蓋掉
-    await js(`localStorage.setItem('aigile-lang', '${lang}'); localStorage.setItem('aigile-switch-view', '${view}'); ${seen ? `localStorage.setItem('aigile-seen:${PJ}', '${seen}')` : `localStorage.removeItem('aigile-seen:${PJ}')`}; location.reload(); true`);
+    await js(`localStorage.setItem('aigile-lang', '${lang}'); localStorage.setItem('aigile-switch-view', '${view}'); ${seen ? `localStorage.setItem('aigile-seen:${PJ}', '${seen}')` : `localStorage.removeItem('aigile-seen:${PJ}')`}; window.__staleReload = 1; location.reload(); true`);
+    await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
     await sleep(400);
     await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg, #messages .flow-line').length > 3"), 20000, `訊息（${view}、${lang}）`);
     await sleep(300);

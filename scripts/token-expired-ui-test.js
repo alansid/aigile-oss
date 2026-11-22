@@ -52,7 +52,8 @@ try {
   await js("history.pushState(null, '', '/p/main/work'); dispatchEvent(new PopStateEvent('popstate')); true");
   await new Promise(r => setTimeout(r, 1000));
   assert.equal(await bar(), '', '換頁不再跳出');
-  await js('location.reload(); true');
+  await js('window.__staleReload = 1; location.reload(); true');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("!!document.querySelector('.av-btn')"), 15000, '重新整理');
   await new Promise(r => setTimeout(r, 1500));
   assert.equal(await bar(), '', '重新整理不再跳出');
@@ -61,7 +62,8 @@ try {
   // 有新的過期才再出現：快到期二號也過期了
   kit.sql('UPDATE participants SET token_expires_at = ? WHERE id = ?', Date.now() - 1000, soon.id);
   await mk('觸發重讀'); // 新增 AI 會讓平台重讀成員表
-  await js('location.reload(); true');
+  await js('window.__staleReload = 1; location.reload(); true');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(async () => /快到期二號 的 Token 已過期/.test(await bar()), 15000, '新的過期再出現：' + await bar());
   console.log('token-expired-ui-test：全部通過');
 } catch (e) {

@@ -29,7 +29,8 @@ try {
   // 2. 按 × 不再提醒這一版
   await js("document.querySelector('[data-upd-hide]').click(); true");
   await until(() => js("!document.querySelector('.upd-banner')"), 5000, '收起來');
-  await js('location.reload(); true');
+  await js('window.__staleReload = 1; location.reload(); true');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("!!document.querySelector('.adm-main')"), 15000, '重新整理');
   await new Promise(r => setTimeout(r, 1500));
   assert.equal(await js("!!document.querySelector('.upd-banner')"), false, '重新整理也不再提醒');

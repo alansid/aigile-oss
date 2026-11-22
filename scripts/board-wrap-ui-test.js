@@ -54,7 +54,8 @@ try {
     for (const [w, h] of [[1280, 900], [375, 800]]) {
       await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: w < 900 });
       for (const theme of ['light', 'dark']) {
-        await js(`history.pushState(null, '', '/p/${pj}/work'); localStorage.setItem('aigile-theme', '${theme}'); location.reload(); true`);
+        await js(`history.pushState(null, '', '/p/${pj}/work'); localStorage.setItem('aigile-theme', '${theme}'); window.__staleReload = 1; location.reload(); true`);
+        await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
         await until(() => js("document.readyState === 'complete' && !!document.querySelector('[data-view=\"B\"]')"), 20000, '工作頁');
         await js(`document.documentElement.dataset.theme = '${theme}'; document.querySelector('[data-view="B"]').click(); true`);
         const cols = w < 900 ? ['待確認', '已完成'] : [null];

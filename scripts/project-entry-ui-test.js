@@ -132,7 +132,8 @@ try {
   assert.ok(await js("document.getElementById('m-newproj').hidden"), '一般成員手機選單沒有新增專案');
   // 8. 英文介面：齒輪選單、頭像選單、管理頁切換鈕
   await login(liu.token, '/p/main/messages');
-  await js("localStorage.setItem('aigile-lang', 'en'); location.reload(); true");
+  await js("localStorage.setItem('aigile-lang', 'en'); window.__staleReload = 1; location.reload(); true");
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.proj-switch [data-pset]')"), 15000, '英文介面');
   await openGear();
   const enMenu = await text('#pset-menu');

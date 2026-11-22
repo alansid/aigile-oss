@@ -25,7 +25,8 @@ try {
 
   for (const lang of ['zh', 'en']) {
     await login(boss.token, '/p/main/inbox');
-    await js(`localStorage.setItem('aigile-lang', '${lang}'); location.reload(); true`);
+    await js(`localStorage.setItem('aigile-lang', '${lang}'); window.__staleReload = 1; location.reload(); true`);
+    await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
     await until(() => js(`!!${row}`), 15000, `${lang}：等你驗收那列`);
     if (lang === 'en') await until(() => js(`${row}.textContent.includes('Send back')`), 15000, 'en：英文已套用');
     await sleep(300);

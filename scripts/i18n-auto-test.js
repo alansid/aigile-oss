@@ -178,7 +178,9 @@ try {
   await login(mate.token, '/p/main/messages');
   const texts = async lang => {
     await js(`localStorage.setItem('aigile-lang', '${lang}'); true`);
+    await js('window.__staleReload = 1; true');
     await cdp('Page.reload');
+    await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
     await until(() => js(`document.documentElement.lang === '${lang === 'en' ? 'en' : 'zh-Hant'}'`), 15000, '換語言');
     await until(() => js(`document.querySelectorAll('.msg-text').length > 3`), 30000, '訊息'); // 全套同時跑時比較慢
     await sleep(800);

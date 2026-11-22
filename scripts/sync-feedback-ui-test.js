@@ -68,17 +68,20 @@ try {
   assert.equal((await bar()).includes('要同步'), false);
   // 只剩等上線（Token 過期那隻先停用）→ 灰色、沒有按鈕；全部裝好才消失
   await kit.call(boss.token, `/api/my-ais/${pg3.id}/disable`, 'POST');
-  await js("location.reload(); true");
+  await js("window.__staleReload = 1; location.reload(); true");
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("(document.querySelector('#ma-sync .sy-banner.wait')?.textContent || '').includes('2 隻已通知，等上線')"), 10000, '灰色已通知');
   assert.equal(await js("!!document.querySelector('#ma-sync button')"), false, '等上線沒有按鈕');
   const sk = (await kit.call(pg1.tok, '/api/me/skills')).body.items.map(x => x.skillId);
   for (const a of [pg1, pg2]) await kit.call(a.tok, '/api/me/skills/installed', 'POST', { skillIds: sk, places: Object.fromEntries(sk.map(x => [x, 'own'])), tool: 'claude', setupSha: SETUP_SHA });
-  await js("location.reload(); true");
+  await js("window.__staleReload = 1; location.reload(); true");
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("!!document.querySelector('#ai-new')"), 10000, '我的 AI 頁');
   await sleep(1500);
   assert.equal(await bar(), '', '全部裝好才消失：' + await bar());
   await kit.call(boss.token, `/api/my-ais/${pg3.id}/enable`, 'POST');
-  await js("location.reload(); true");
+  await js("window.__staleReload = 1; location.reload(); true");
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(async () => (await bar()).includes('1 隻 AI 的 Token 已過期'), 10000, '重新啟用後又提醒 Token 過期');
 
   // 重發入口：確認後重發，Token 不再過期

@@ -64,7 +64,8 @@ try {
   assert.equal((await kit.call(other, '/api/me')).status, 401, '另一台被登出');
   assert.equal((await kit.call(null, '/api/auth/password', 'POST', { username: 'yuchih', password: PW2 })).status, 200, '新密碼可以登入');
   // 英文介面：兩句說明各自翻到、安全通知與連結都是英文
-  await js("localStorage.setItem('aigile-lang', 'en'); location.reload(); true");
+  await js("localStorage.setItem('aigile-lang', 'en'); window.__staleReload = 1; location.reload(); true");
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.sec-note')"), 15000, '英文介面');
   const enNote = await js("[...document.querySelectorAll('.sec-note')].map(n => n.textContent).join('|')");
   assert.match(enNote, /Your password was reset from a signed-in device \([^)]+\) without entering the current password/, '安全通知英文：' + enNote);

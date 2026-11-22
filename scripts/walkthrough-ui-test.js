@@ -92,7 +92,9 @@ try {
   await until(() => visible('.hub-next'), 30000, '回主畫面還在'); // 全套一起跑時機器忙，給久一點
   await js("document.querySelector('.hub-next [data-next=\"close\"]').click(); true");
   await until(async () => !(await visible('.hub-next')), 5000, '按知道了收起');
+  await js('window.__staleReload = 1; true');
   await cdp('Page.reload'); await sleep(1500);
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("!!document.querySelector('.hub')"), 15000, '主畫面');
   assert.equal(await visible('.hub-next'), false, '重新整理後不再出現');
   console.log('✓ 引導略過後的下一步提示');
@@ -104,7 +106,9 @@ try {
   assert.ok(ap.status < 300, JSON.stringify(ap.body));
   const reqs = (await kit.call(boss, '/api/join-requests')).body.items;
   assert.equal(reqs.find(x => x.participantId === lin.participant.participantId)?.role, 'UX', 'API 帶註冊時的角色');
+  await js('window.__staleReload = 1; true');
   await cdp('Page.reload');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("[...document.querySelectorAll('.hub-todo button, .hub-todo a')].some(b => /林新人 申請加入/.test(b.textContent))"), 20000, '主畫面「要你處理」有申請');
   await js("[...document.querySelectorAll('.hub-todo button, .hub-todo a')].find(b => /林新人 申請加入/.test(b.textContent)).click(); true");
   await until(() => js("!!document.querySelector('[data-join-review], [data-jr-role]')"), 15000, '進到收件匣的申請');
@@ -129,7 +133,9 @@ try {
   assert.match(order, /^q,act,box/, '決策卡：問題 → 按鈕 → 建議方案：' + order);
   assert.equal(await js("document.querySelector('.crow-wait.me')?.textContent"), '等你', '卡片列表「等誰」寫「等你」，中間沒有空格');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
+  await js('window.__staleReload = 1; true');
   await cdp('Page.reload'); // 手機寬度下重新打開（行內回覆是否收起在畫的時候決定）
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("!!document.querySelector('.wpanel.mine') && !!document.querySelector('.dcard')"), 20000, '手機工作總覽');
   // 工作總覽會隨卡片、通知陸續回來重畫好幾次，等到畫面穩定成只剩「要你處理」，逾時才算失敗
   const shownNow = () => js("[...document.querySelectorAll('.wpanel')].filter(e => e.offsetParent).map(e => e.classList[1]).join(',')");

@@ -27,7 +27,8 @@ try {
 
   // 1. 斷一次：自動重試、進得去，Token 還在
   fail = 1; failed = 0;
-  await js('location.reload(); true');
+  await js('window.__staleReload = 1; location.reload(); true');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("!!document.querySelector('.av-btn') && document.querySelector('#join')?.hidden !== false"), 20000, '斷一次後自動重試進得去');
   assert.equal(failed, 1, '真的斷過一次');
   assert.ok(await tokenKept(), '斷一次：Token 還在');
@@ -35,7 +36,8 @@ try {
 
   // 2. 一直斷：重試 2 次後停在載入畫面，寫出錯誤、有「重新整理」，沒有變成登入頁、Token 還在
   fail = 99; failed = 0;
-  await js('location.reload(); true');
+  await js('window.__staleReload = 1; location.reload(); true');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("!!document.querySelector('#boot:not([hidden]) .boot-line button')"), 20000, '重試用完停在載入畫面');
   const s = JSON.parse(await js(`JSON.stringify({ text: document.querySelector('#boot .boot-line').textContent, join: !document.querySelector('#join').hidden })`));
   assert.ok(/載入失敗/.test(s.text) && /重新整理/.test(s.text), '寫出載入失敗與重新整理：' + s.text);
@@ -52,7 +54,8 @@ try {
   // 4. Token 真的無效（401）照舊登出、回登入頁
   await cdp('Fetch.disable');
   assert.equal((await kit.call(dev, '/api/auth/logout', 'POST')).status < 300, true, '伺服器端登出');
-  await js('location.reload(); true');
+  await js('window.__staleReload = 1; location.reload(); true');
+  await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("document.querySelector('#join')?.hidden === false"), 20000, 'Token 無效回登入頁');
   assert.equal(await js("localStorage.getItem('aigile-switch-token')"), null, 'Token 無效：刪掉 Token');
   console.log('boot-retry-ui-test：全部通過');
