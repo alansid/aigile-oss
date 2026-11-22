@@ -398,7 +398,8 @@ try {
   fs.writeFileSync(path.join(CXAD, '.token'), aiTok);
   const fakeCxBin = fileURLToPath(new URL('./fake-codex.mjs', import.meta.url));
   r = await run(pub('aigile-codex.mjs'), ['--agent', agent, '--mode', 'fresh', '--foreground', 'off'], CXD, { AIGILE_CODEX_BIN: fakeCxBin, CODEX_BIN: fakeCxBin, FAKE_CODEX_THREAD: '44444444-4444-4444-8444-444444444444' });
-  assert.equal(r.code, 0, 'Codex 視窗關著時背景執行正常：' + r.out);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /視窗沒開，等開視窗再處理/);
 
   // 5d. WAKE_CMD=echo WAKE（Claude Code）不寫／不沿用 watcher.sid，開兩個 wait 時舊的必須判成 superseded
   const CCD1 = fs.mkdtempSync(path.join(dataDir, 'cc1-'));

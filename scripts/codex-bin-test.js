@@ -1,7 +1,4 @@
-// 重現測試：Codex 喚醒腳本找 codex 的順序跟一行啟動、接入檢查不同
-// 修正前：aigile-codex.mjs 只看 CODEX_BIN，只設 AIGILE_CODEX_BIN 時前景用指定的 codex、背景叫醒卻跑到 PATH 上真的 codex
-// 修正後：三支都是 AIGILE_CODEX_BIN → CODEX_BIN → codex；.mjs／.js 用 node 跑
-// 用法：node scripts/codex-bin-test.js（只用假的 codex，不跑真的 Codex）
+// 前景啟動器與接入檢查沿用指定的 Codex；關窗的門鈴不啟動它
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,18 +15,11 @@ const wake = env => new Promise(r => execFile(process.execPath, [CX, '--agent', 
 try {
   fs.mkdirSync(path.join(dir, '.aigile', 'PG_T'), { recursive: true });
   const log = path.join(dir, 'fake.log');
-  // 只設 AIGILE_CODEX_BIN（一行啟動、接入檢查用的名字）：喚醒腳本也要用它
-  let r = await wake({ AIGILE_CODEX_BIN: FAKE, FAKE_CODEX_LOG: log, FAKE_CODEX_THREAD: '01a1f18c-0000-4000-8000-000000000001' });
-  assert.ok(fs.existsSync(log), '叫到 AIGILE_CODEX_BIN 指定的 codex：' + r.out.slice(-300));
-  const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(l => JSON.parse(l));
-  assert.ok(calls.some(a => a[0] === 'exec'), '用 codex exec 跑一輪：' + JSON.stringify(calls));
-  // 兩個都設：AIGILE_CODEX_BIN 優先（跟 aigile-start.mjs 同一個順序）
-  const log2 = path.join(dir, 'fake2.log');
-  fs.rmSync(path.join(dir, '.aigile', 'PG_T', 'codex.json'), { force: true });
-  r = await wake({ AIGILE_CODEX_BIN: FAKE, CODEX_BIN: path.join(dir, 'not-here.mjs'), FAKE_CODEX_LOG: log2, FAKE_CODEX_THREAD: '01a1f18c-0000-4000-8000-000000000002' });
-  assert.ok(fs.existsSync(log2), 'AIGILE_CODEX_BIN 優先於 CODEX_BIN：' + r.out.slice(-300));
-  // 三支腳本的寫法一致
-  for (const f of ['aigile-codex.mjs', 'aigile-start.mjs']) {
+  const result = await wake({ AIGILE_CODEX_BIN: FAKE, CODEX_BIN: FAKE, FAKE_CODEX_LOG: log });
+  assert.equal(result.code, 1);
+  assert.match(result.out, /視窗沒開/);
+  assert.equal(fs.existsSync(log), false, 'closed session never launches the configured binary');
+  for (const f of ['aigile-start.mjs']) {
     const src = fs.readFileSync(fileURLToPath(new URL('../public/' + f, import.meta.url)), 'utf8');
     assert.ok(src.includes("process.env.AIGILE_CODEX_BIN || process.env.CODEX_BIN || 'codex'"), f + '：AIGILE_CODEX_BIN → CODEX_BIN → codex');
   }

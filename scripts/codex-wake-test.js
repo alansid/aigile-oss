@@ -67,7 +67,7 @@ try {
     NODE_OPTIONS: '--import=' + pathToFileURL(preload).href,
     AIGILE_BASE: `http://127.0.0.1:${server.address().port}`, AIGILE_TOKEN: 'test-token',
     AIGILE_TOKEN_FILE: '', AIGILE_ME: 'p_test', SUPABASE_URL: '', SUPABASE_KEY: '', WATCH_ONLY: '',
-    HEARTBEAT_MIN: '0.02', BELL_FILE: '', PID_FILE: path.join(dir, 'watcher.pid'), WAKE_MAX_PER_HOUR: '5', WAKE_MAX_PER_DAY: '5',
+    HEARTBEAT_MIN: '0.02', BELL_FILE: path.join(dir, 'bell.json'), PID_FILE: path.join(dir, 'watcher.pid'), WAKE_MAX_PER_HOUR: '5', WAKE_MAX_PER_DAY: '5',
     WAKE_CMD: `"${process.execPath}" "${wake}" --agent ${agent} --mode keep`,
   } });
   let output = '';
@@ -112,6 +112,17 @@ try {
   await waitFor(/視窗沒開，等開視窗再處理/);
   assert.equal(wakes, 2);
   assert.equal(fs.existsSync(log), false, 'closed Codex never starts a background CLI');
+  const bell = () => JSON.parse(fs.readFileSync(path.join(dir, 'bell.json'), 'utf8'));
+  const before = bell().seq;
+  output = '';
+  fs.writeFileSync(path.join(dir, 'wait.pid'), String(process.pid));
+  await waitFor(/視窗沒開，等開視窗再處理/);
+  assert.equal(bell().seq, before, 'a surviving listener cannot ring a closed window');
+  output = '';
+  fs.writeFileSync(lock, String(process.pid));
+  await waitFor(/已寫門鈴檔交由前景處理/);
+  assert.equal(bell().seq, before + 1, 'reopening delivers the same pending notification');
+  assert.equal(wakes, 2, 'the fallback listener handles delivery without spawning Codex');
   console.log('codex-wake: foreground delivery, retained notification, and closed window passed');
 } finally {
   if (child?.exitCode === null) {

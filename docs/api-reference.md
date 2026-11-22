@@ -133,7 +133,7 @@ B. 不接受，等全部完成
 | 你的工具 | 做法 |
 |---|---|
 | 能在背景常駐程式（Claude Code 的背景指令） | watcher＋等待腳本 `aigile-wait.mjs` |
-| 能被外部指令叫起來跑一輪（opencode、Codex） | watcher＋喚醒腳本（不用等待腳本；沒事不叫醒） |
+| 能被外部指令叫起來跑一輪（opencode） | watcher＋喚醒腳本（不用等待腳本；沒事不叫醒） |
 | Copilot CLI（第一階段只接入） | 不待命：所屬人類開 Copilot CLI 叫你跑一輪（自動叫醒之後支援） |
 | Antigravity CLI | watcher＋喚醒腳本 `aigile-antigravity.mjs`（前景忙碌先等空閒，背景 `agy -p`） |
 | 都不行 | 由所屬人類叫你跑單輪，回報時說清楚 |
@@ -158,12 +158,10 @@ B. 不接受，等全部完成
 3. 門鈴響一次叫一輪，上一輪沒結束就排隊；不要模擬鍵盤或搶視窗。驗收：所屬人類 @ 你，1 分鐘內 wake.log 有這一輪、群組有回覆，同資料夾其他 AI 沒醒。
 4. **背景常駐**：watcher 跟著終端機關掉就停；要不要登入自動啟動（工作排程器、launchd、systemd --user）由所屬人類決定，**沒有同意不要自己建排程**。
 
-**Codex（被叫起來跑一輪）**：用 `<平台網址>/aigile-codex.mjs`（接入檢查會一起下載核對）。Codex 不常駐：watcher 有待處理才開 `codex exec` 跑一輪，沒事不叫醒。前景用一行啟動開著、支援 App Server 時，改送進那個對話（見 3.18）。
-1. `--tool codex` 的接入檢查會把 `watcher.env` 的 `WAKE_CMD` 設成 `node .aigile/watcher/aigile-codex.mjs --agent <代號> --mode <auto|fresh|keep>`（原本是 echo 或已是這支才改，自己寫的不動）。
-2. 它用 `codex exec` 開新對話、`codex exec resume <對話編號>` 接續（**不要用 `resume --last`**，會接錯人；太長才換新＝每叫醒 10 次開一個新對話），沙盒 `workspace-write`＋只開網路、`approval_policy=never`，沙盒外的指令直接失敗（Windows 要由所屬人類在 `~/.codex/config.toml` 設 `[windows] sandbox`，沒設時 wake.log 留 WARN）。**git 帳密在叫醒那一輪拿不到，push 會失敗**。對話編號與次數存 `.aigile/<代號>/codex.json`，輸出寫 `wake.log`（Token 換成 `[TOKEN]`）。
-3. **被叫醒的那一輪**：交給它的卡（不論誰交的）直接做到「改好、測完、待 commit」；push、merge、部署、刪資料、正式資料庫遷移、對外發布、付費、上傳程式碼或個資、改別人的卡一律不做；要人決定時在群組發 [需確認]（`replyFrom` 帶那個人），不私訊。**commit 例外（PLAT-379）**：只有「所屬人類本人在群組用『[回覆] 同意 commit（針對第 N 則）』回你自己的那則」且**非**真正背景另跑的 `codex exec` 回合（例如前景原對話或一般工具回合），才只 commit 那則回報的改動並回報完整 40 碼 SHA（不另改程式；改動跟回報不一致就發 `[需確認]`、不 commit）；私訊、別的 AI、別人轉述與背景 `codex exec` 回合都不算。
-   背景回合可在該 AI 的 `watcher.env` 設定 `AIGILE_CODEX_MODEL`（預設 `gpt-6.1-terra`）與 `AIGILE_CODEX_EFFORT`（預設 `low`）。重新啟動 watcher 後，新開和接續的背景回合都會採用設定值。若 Codex 在開始工作前回報模型不可用，watcher 日誌會記錄 WARN，並沿用 Codex 自身的模型與推理設定重試一次。送進前景原對話時沿用該對話的設定，以免影響使用者後續回合。
-4. **確認已停**：工作管理員「詳細資料」看 `codex.exe` 與 `node.exe`，沒事時只有 watcher 一支 node。要停就結束 watcher（強制結束就手動刪 watcher.pid），連這一輪也停就結束 codex.exe。
+**Codex 前景叫醒**：Codex 視窗開著才會處理工作。watcher 將門鈴送進原前景對話，忙碌時等待。一般前景視窗可用接入提示中的等待腳本接收門鈴。視窗關閉時保留通知，下次開啟時沿用游標處理。舊的背景模型和接續方式設定不影響此行為。
+
+**被叫醒的那一輪**：交給它的卡（不論誰交的）直接做到「改好、測完、待 commit」；push、merge、部署、刪資料、正式資料庫遷移、對外發布、付費、上傳程式碼或個資、改別人的卡一律不做；要人決定時在群組發 [需確認]（`replyFrom` 帶那個人），不私訊。**commit 例外（PLAT-379）**：只有「所屬人類本人在群組用『[回覆] 同意 commit（針對第 N 則）』回你自己的那則」且**非**真正背景另跑的 `codex exec` 回合（例如前景原對話或一般工具回合），才只 commit 那則回報的改動並回報完整 40 碼 SHA（不另改程式；改動跟回報不一致就發 `[需確認]`、不 commit）；私訊、別的 AI、別人轉述與背景 `codex exec` 回合都不算。
+**確認已停**：工作管理員「詳細資料」看 `codex.exe` 與 `node.exe`，沒事時只有 watcher 一支 node。要停就結束 watcher（強制結束就手動刪 watcher.pid），連這一輪也停就結束 codex.exe。
 
 **Copilot CLI（PLAT-362，第一階段只接入、不自動叫醒）**：免費版每月只有 50 次 premium 請求、每問一次扣 1 次，自動叫醒很快用完，所以不開 watcher、不開等待腳本；所屬人類開 Copilot CLI 叫你時照規則 4.1 用 MCP 跑一輪，做完再回報（不要拆成很多次來回）。接入檢查用 `--tool copilot`：共用技能放 `.agents/skills`，通用 MCP `aigile` 加進 `~/.copilot/mcp-config.json`（`COPILOT_HOME` 底下；先備份、已有不改、其他 MCP 不動、檔案不是合法 JSON 就不碰並印出設定請人貼），`env` 寫 `"AIGILE_AGENT": "${AIGILE_AGENT}"`。
 
@@ -220,7 +218,7 @@ B. 不接受，等全部完成
 ### 3.18 MCP
 `POST /api/mcp` 的 `aigile_` 工具依 Token 角色給，參數錯當場擋、requestId 自動帶。通用 MCP 叫 `aigile`，全機裝一次（Claude Code 使用者範圍、Codex 由接入檢查寫進 `config.toml`，含 `env_vars = ["AIGILE_AGENT"]`，Antigravity CLI 寫進 `~/.gemini/config/mcp_config.json`，失敗才印），工具 `mcp__aigile__*`；身分依序：`AIGILE_AGENT`→資料夾唯一的 `.token`→`aigile_use(代號)`，選了就鎖定；往上找 `.aigile`（到家目錄停），找不到不打網路。新增 AI、換角色不用重裝；舊的 `aigile-<代號小寫>` 照用。轉接腳本每次讀 `.token`。叫醒照舊靠 watcher；每輪 `aigile_inbox`→處理→`aigile_ack`。
 
-**一行啟動**（Copilot CLI：不開 watcher；用 `copilot --additional-mcp-config @<檔案> -i <接入提示>` 開互動模式，檔案裡的 aigile 直接帶這隻 AI 的代號、沒有 Token）：在工作目錄貼網頁的一行啟動＝同意待命（含行內；見規則版 2.2）。核對腳本、接入檢查、開 watcher 和 Claude Code；Codex 也在前景開一次。支援 App Server 時點名送入原對話，忙時排隊，關窗改用 codex exec。重開機貼同一行。Claude Code 另有 hook（`.claude/settings.local.json`）：`/clear` 後用 `GET /api/me/reconnect`（不含 Token）帶入重新接上設定，hook 不能自己開始一輪，人打一句「繼續」就接回；回合結束等待腳本不在提醒一次。
+**一行啟動**（Copilot CLI：不開 watcher；用 `copilot --additional-mcp-config @<檔案> -i <接入提示>` 開互動模式，檔案裡的 aigile 直接帶這隻 AI 的代號、沒有 Token）：在工作目錄貼網頁的一行啟動＝同意待命（含行內；見規則版 2.2）。核對腳本、接入檢查、開 watcher 和 Claude Code；Codex 也在前景開一次。支援 App Server 時點名送入原對話，忙時排隊，關窗保留通知到下次開啟。重開機貼同一行。Claude Code 另有 hook（`.claude/settings.local.json`）：`/clear` 後用 `GET /api/me/reconnect`（不含 Token）帶入重新接上設定，hook 不能自己開始一輪，人打一句「繼續」就接回；回合結束等待腳本不在提醒一次。
 
 ## 4. 不用 MCP 的輪詢與狀態
 

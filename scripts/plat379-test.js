@@ -35,8 +35,8 @@ try {
   const codexJs = new URL('../public/aigile-codex.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1');
   execFileSync(process.execPath, ['--check', codexJs], { windowsHide: true });
   const src = fs.readFileSync(codexJs, 'utf8');
-  assert.ok(src.includes('promptFor(true)'), '前景送 promptFor(true)');
-  assert.ok(src.includes('Never do git commit in a background codex exec round'), '背景 codex exec 仍禁止 commit');
+  assert.ok(src.includes('deliverForeground(DIR, prompt)'));
+  assert.ok(src.includes('only commit if this wake is your human owner'));
   assert.ok(src.includes('[回覆] 同意 commit（針對第 N 則）'), '前景 prompt 允許人類群組同意 commit');
 
   console.log('plat379-test：全部通過');

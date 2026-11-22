@@ -182,7 +182,7 @@ try {
   // 4. 待命提示
   const wait = `node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;
   // Codex、Antigravity CLI 在前景開一次做接入；點名由 watcher 接收，不用等待腳本
-  const codexTail = 'Codex 視窗開著才會處理工作；關掉的話，工作會等你下次打開再做。呼叫 aigile_me 核對身分，收完訊息後告訴所屬人類「接好了，請開著視窗接工作」。';
+  const codexTail = 'Codex 視窗開著才會處理工作；關掉的話，工作會等你下次打開再做。呼叫 MCP 工具 aigile_me 確認 MCP 能用並核對身分，收完訊息後告訴所屬人類「接好了，請開著視窗接工作」。';
   const agyTail = `Antigravity CLI 一律走前景（視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理）：watcher 已在背景跑，請先呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），處理完手上的訊息後用背景執行開等待腳本（${wait}）讓新通知直接叫醒這個視窗；最後告訴所屬人類：「接好了；視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理」。`;
   // Copilot CLI 不自動叫醒，不開 watcher、不開等待腳本；平台操作用 MCP
   const copilotTail = 'Copilot CLI 目前不自動叫醒：不開 watcher、不開等待腳本。平台操作用 MCP 工具（先呼叫 aigile_me 確認 MCP 能用，不能用就照實說）。最後用一句話告訴所屬人類：「接好了；要我做事時開 Copilot CLI 叫我」';

@@ -1,11 +1,4 @@
-// 驗收測試：一行啟動選 Codex 也在前景開 codex 做接入；前景開著時背景執行完整工作回合
-// 1. 網頁給的 Codex 一行啟動實際執行：最後開 codex（互動模式）帶入接入提示（簽到、aigile_me、「接好了，可以關掉…」），環境帶 AIGILE_AGENT、沙盒只開網路
-// 2. 前景 codex 開著時有 foreground.lock（內容是一行啟動的程序），關掉就刪
-// 3. Codex 喚醒腳本：前景鎖的程序還在 → 提醒先檢查工作樹；程序不在 → 清掉舊鎖照常跑；已有一輪在跑 → 不再開
-// 4. 前景重接時收到點名 → 背景執行工作回合
-// 5. Windows 沒設 Codex 沙盒 → 接入檢查印清楚、不幫忙改
-// 全部用暫存資料夾、假的 codex／claude、暫存 CODEX_HOME（不動真的 ~/.codex）；測試開的 watcher 用 pid 停
-// 用法：node scripts/codex-start-test.js
+// Codex 一行啟動、前景接入、關窗與重接
 import './test-home.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -113,36 +106,22 @@ try {
   const installedToken = fs.readFileSync(path.join(D, '.token'), 'utf8').trim();
   assert.equal((await api(installedToken, '/api/me/state')).body.state.messagesCursor, cursor);
   assert.match(prompt, /呼叫 MCP 工具 aigile_me 確認 MCP 能用/, '確認 MCP 能用');
-  assert.match(prompt, /「接好了，可以關掉，之後有事會在背景叫我」/, '最後告訴人可以關掉');
-  assert.ok(!/aigile-wait\.mjs/.test(prompt), 'Codex 不開等待腳本');
+  assert.match(prompt, /請開著視窗接工作/);
+  assert.match(prompt, /aigile-wait\.mjs/, 'fallback foreground can listen for notifications');
   assert.ok(!prompt.includes(tok), '提示不含 Token');
   assert.ok(Number(fg.lock) > 0, '前景 codex 開著時有 foreground.lock：' + fg.lock);
   assert.ok(!fs.existsSync(LOCK), '關掉就刪 foreground.lock');
-  assert.match(r.out, /✓ Codex 已關，watcher 會在背景處理待處理通知/);
+  assert.match(r.out, /✓ Codex 已關，通知保留到下次開窗/);
   assert.ok(!calls().some(c => c.args[0] === 'exec'), '沒待處理：不補跑');
   console.log('✓ 1～2 Codex 一行啟動在前景開 codex，開著時有鎖');
 
-  // 3. Codex 喚醒腳本看前景鎖
-  const wakeCx = env => runNode([path.join(wd, '.aigile', 'watcher', 'aigile-codex.mjs'), '--agent', AG, '--mode', 'fresh'], wd, env);
-  fs.rmSync(CXLOG, { force: true });
-  fs.writeFileSync(LOCK, String(process.pid)); // 測試自己當「前景還開著」
-  r = await wakeCx();
-  assert.equal(r.code, 0);
-  assert.ok(calls().some(c => c.args.includes('sandbox_mode=workspace-write')));
-  fs.writeFileSync(LOCK, '999999'); // 程序已不在
-  r = await wakeCx();
-  assert.ok(calls().some(c => c.args[0] === 'exec'), '前景鎖的程序不在：照常叫 codex exec');
-  assert.ok(!fs.existsSync(LOCK), '舊鎖清掉');
-  assert.ok(!fs.existsSync(path.join(D, 'codex-run.lock')), '跑完刪掉自己的執行鎖');
-  fs.rmSync(CXLOG, { force: true });
-  fs.writeFileSync(path.join(D, 'codex-run.lock'), String(process.pid)); // 已有一輪在跑
-  r = await wakeCx();
-  assert.equal(calls().length, 0, '已有一輪在跑：不再開');
-  assert.match(fs.readFileSync(path.join(D, 'wake.log'), 'utf8'), /已有一輪在跑（程序 \d+），這次不再開/);
-  fs.rmSync(path.join(D, 'codex-run.lock'));
-  console.log('✓ 3 前景開著使用可寫 codex exec、一次只跑一輪');
-
-  // 4. 前景重接時收到點名 → 背景執行工作回合（重開機貼同一行＝重新接上）
+  // A stale lock does not authorize a new Codex process.
+  fs.writeFileSync(LOCK, '999999');
+  r = await runNode([path.join(wd, '.aigile', 'watcher', 'aigile-codex.mjs'), '--agent', AG], wd);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /視窗沒開/);
+  assert.ok(!calls().some(c => c.args[0] === 'exec'));
+  // 4. 前景重接時收到點名，關窗後保留通知（重開機貼同一行＝重新接上）
   fs.rmSync(CXLOG, { force: true });
   const release = path.join(wd, 'release-foreground');
   const reconnect = runNode(['-e', code], wd, { FAKE_LOCK_FILE: LOCK, FAKE_FG_RELEASE: release });
@@ -152,7 +131,7 @@ try {
     await api(otherTok, '/api/messages', 'POST', { project: '預設專案', requestId: 'p325-1', text: '[需確認] 看一下\n\n問題1：好嗎？\n選項：\nA. 好\nB. 不好', recipientIds: [ai.participantId], replyFrom: [ai.participantId] });
     const replied = () => calls().some(c => c.args.includes('sandbox_mode=workspace-write'));
     for (let i = 0; i < 100 && !replied(); i++) await new Promise(ok => setTimeout(ok, 100));
-    assert.ok(replied(), '前景開啟時背景收到點名');
+    assert.ok(replied(), '前景啟動後保留點名');
   } finally {
     fs.writeFileSync(release, '');
     r = await reconnect;
@@ -160,10 +139,9 @@ try {
   assert.equal(r.code, 0, r.out);
   const fg2 = calls().find(c => c.args[0] !== 'mcp' && c.args[0] !== 'exec');
   assert.match(fg2.args[fg2.args.length - 1], new RegExp(`照 \\.aigile/${AG}/reconnect\\.md 重新接上（不要重新簽到`), '第二次：重新接上、不再簽到');
-  for (let i = 0; i < 50 && !calls().some(c => c.args[0] === 'exec'); i++) await new Promise(ok => setTimeout(ok, 200));
-  assert.ok(calls().some(c => c.args[0] === 'exec' && c.agent === AG), '背景補跑叫了 codex exec');
+  assert.ok(!calls().some(c => c.args[0] === 'exec'), '關窗後沒有背景回合');
   assert.ok(!fs.existsSync(LOCK));
-  console.log('✓ 4 前景重接時背景執行工作回合');
+  console.log('✓ 4 前景重接時保留待處理通知');
   assert.equal((await checkins()).n, 1, '重接不會重複簽到');
 
   // 5. Windows 沒設 Codex 沙盒 → 印清楚、不幫忙改

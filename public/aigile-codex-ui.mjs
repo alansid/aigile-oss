@@ -150,7 +150,10 @@ export async function launchForeground({ dir, bin, args, env, prompt, onReady })
   const cleanup = () => {
     unpublish();
     if (!server.pid || server.exitCode !== null || server.signalCode !== null) return;
-    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    if (process.platform === 'win32') {
+      const result = spawnSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      if (result.status !== 0) server.kill();
+    }
     else { try { process.kill(-server.pid, 'SIGTERM'); } catch {} }
   };
   process.once('exit', cleanup);

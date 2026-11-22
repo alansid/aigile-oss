@@ -189,8 +189,14 @@ async function check(why) {
   ids = ids.map(n => n.notificationId);
   if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理${fyi ? `（${fyi} 則只是知會）` : ''}，沒有新的要處理，不叫醒`); }
   if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
-  if (uiKind === 'antigravity' || (uiKind === 'codex' && waitAlive())) {
-    if (BELL_FILE && waitAlive()) {
+  const waiting = BELL_FILE && waitAlive();
+  if (uiKind === 'codex' && waiting) {
+    let pid = 0;
+    try { pid = Number(readFileSync(path.join(uiDir, 'foreground.lock'), 'utf8')); } catch {}
+    if (!pidAlive(pid)) return log('視窗沒開，等開視窗再處理');
+  }
+  if (uiKind === 'antigravity' || (uiKind === 'codex' && waiting)) {
+    if (waiting) {
       fresh.forEach(id => woken.add(id));
       for (const id of woken) if (!ids.includes(id)) woken.delete(id);
       ring(pending);
@@ -198,7 +204,6 @@ async function check(why) {
     }
     return log(`[${why}] 視窗沒開，等開視窗再處理`);
   }
-  let backgroundOnly = FG_MODE === 'off';
   if (uiDir && FG_MODE !== 'off') {
     const status = await foregroundStatus();
     if (status === 'busy' || (uiKind === 'antigravity' && BELL_FILE && status !== 'closed')) {
@@ -214,7 +219,7 @@ async function check(why) {
   if (cap) return holdForCap(cap, pending, why);
   fresh.forEach(id => woken.add(id));
   for (const id of woken) if (!ids.includes(id)) woken.delete(id); // 已處理掉的不用再記
-  wake(pending, why, fresh, backgroundOnly);
+  wake(pending, why, fresh);
 }
 
 // 門鈴先等 MERGE_MS 再查，期間再來的門鈴併進同一次（幾十秒內 3 則回覆只叫醒一次）
@@ -272,11 +277,10 @@ function killTree(child) {
   else { try { process.kill(-child.pid, 'SIGTERM'); } catch {} setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 5000).unref(); }
 }
 
-async function wake(pending, why, fresh, backgroundOnly) {
+async function wake(pending, why, fresh) {
   running = true;
-  const routedToUI = FG_MODE !== 'off' && uiKind === 'codex' && uiDir && existsSync(path.join(uiDir, 'foreground-ui.json'));
   const retryUI = () => {
-    if (!routedToUI) return;
+    if (uiKind !== 'codex') return;
     for (const id of fresh) woken.delete(id);
     setTimeout(() => check('重查前景通知'), 30_000).unref();
   };
@@ -290,10 +294,9 @@ async function wake(pending, why, fresh, backgroundOnly) {
   ring(pending);
   log(`[${why}] ${pending} 則待處理，喚醒：${WAKE_CMD}`);
   const startedAt = Date.now();
-  if (backgroundOnly && FG_MODE !== 'off') log('前景連線持續失敗滿一分鐘，這一輪改用 codex exec');
   const child = spawn(WAKE_CMD, {
     shell: true, stdio: 'inherit', detached: process.platform !== 'win32', windowsHide: true,
-    env: { ...env, AIGILE_WAKE_BACKGROUND: backgroundOnly ? '1' : '0', AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) },
+    env: { ...env, AIGILE_WAKE_BACKGROUND: '0', AIGILE_WAKE_REASON: why, AIGILE_PENDING: String(pending) },
   });
   const killer = TIMEOUT_MS > 0 ? setTimeout(() => {
     log(`喚醒指令跑超過 ${TIMEOUT_MS / 60000} 分鐘，停掉它`);

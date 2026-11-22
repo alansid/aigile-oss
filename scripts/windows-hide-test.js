@@ -10,8 +10,7 @@ const ui = read('aigile-codex-ui.mjs');
 
 assert.match(watcher, /spawn\('taskkill',[^\n]+windowsHide:\s*true/);
 assert.match(watcher, /spawn\(WAKE_CMD,\s*\{[^}]*windowsHide:\s*true/s);
-assert.match(codex, /const options = \{[^}]*windowsHide:\s*true[^}]*\}/s);
-assert.match(codex, /spawnSync\(taskkill,[\s\S]*?windowsHide:\s*true/);
+assert.doesNotMatch(codex, /node:child_process/, 'the doorbell has no process-launch fallback');
 assert.match(start, /spawn\(process\.execPath,[\s\S]*?watcher\.mjs[\s\S]*?windowsHide:\s*true/);
 assert.match(ui, /app-server[\s\S]*?windowsHide:\s*true/);
 
