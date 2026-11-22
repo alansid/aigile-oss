@@ -36,8 +36,9 @@ try {
 
   // 登入頁（英文）
   await goto('/', '首頁');
-  await js("localStorage.setItem('aigile-lang', 'en'); location.reload(); true");
-  await until(() => js("!!document.querySelector('#pwd-form') && !document.documentElement.classList.contains('i18n-wait')"), 15000, '英文登入頁');
+  // 重新整理前在舊頁面做記號，等到記號不見（新頁面）才算載入；不然 macOS 這類慢機器會在舊頁面就判定完成
+  await js("window.__staleI18n = 1; localStorage.setItem('aigile-lang', 'en'); location.reload(); true");
+  await until(() => js("!window.__staleI18n && !!document.querySelector('#pwd-form') && !document.documentElement.classList.contains('i18n-wait')"), 15000, '英文登入頁');
   assert.equal(await js('document.documentElement.lang'), 'en', 'html lang 跟著切換');
   assert.equal(await js("document.querySelector('#join-title').textContent.trim()"), 'Welcome back');
   await check('登入頁');
@@ -99,8 +100,8 @@ try {
   await until(() => js("document.documentElement.lang === 'zh-Hant' && document.readyState === 'complete'"), 15000, '切回中文');
   await until(() => js("!!document.querySelector('.av-btn')"), 15000, '中文主畫面');
   assert.equal(await js("localStorage.getItem('aigile-lang')"), 'zh');
-  await js('location.reload(); true');
-  await until(() => js("document.readyState === 'complete' && !!document.querySelector('.av-btn')"), 15000, '重新整理');
+  await js('window.__staleI18n = 1; location.reload(); true');
+  await until(() => js("!window.__staleI18n && document.readyState === 'complete' && !!document.querySelector('.av-btn')"), 15000, '重新整理');
   assert.equal(await js('document.documentElement.lang'), 'zh-Hant', '記住中文');
   console.log('i18n-ui-test：全部通過');
 } catch (e) {
