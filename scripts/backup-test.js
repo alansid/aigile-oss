@@ -28,7 +28,7 @@ const site = async name => {
     const ct = r.headers.get('content-type') || '';
     return { status: r.status, body: ct.includes('json') ? await r.json() : new Uint8Array(await r.arrayBuffer()) };
   };
-  return { db, docs, call };
+  return { db, docs, call, app };
 };
 const b64 = u8 => Buffer.from(u8).toString('base64');
 const enc = s => new TextEncoder().encode(s);
@@ -90,8 +90,12 @@ try {
   assert.equal(sk.status, 201, JSON.stringify(sk.body));
   const pack = await A.call(liu.token, `/api/projects/${pj}/skills`, 'POST', { files: [{ path: '.claude-plugin/plugin.json', text: '{"name":"demo-pack"}' }, { path: 'skills/a/SKILL.md', text: '---\nname: a\ndescription: a\n---\na\n' }] });
   assert.equal(pack.status, 201, JSON.stringify(pack.body));
-  const doc = await A.call(liu.token, `/api/projects/${pj}/docs?name=spec.md&declared=true`, 'POST', null, enc('# 規格\n內容'));
+  const doc = await A.call(liu.token, `/api/projects/${pj}/docs?name=spec.md&declared=true&kb=1`, 'POST', null, enc('# 規格\n內容'));
   assert.equal(doc.status, 201, JSON.stringify(doc.body));
+  await A.app.flushBackground(); // 知識庫：等背景抽字做完
+  const kbDocId = doc.body.docId || doc.body.doc?.docId || doc.body.items?.[0]?.docId;
+  const kbPage = await A.call(aiTok, `/api/projects/${pj}/kb/pages`, 'POST', { kind: 'source', title: '規格摘要', summary: '規格一頁', body: '規格的重點〔spec.md › 規格〕', sources: [kbDocId] });
+  assert.equal(kbPage.status, 201, '知識頁：' + JSON.stringify(kbPage.body));
   const att = await A.call(liu.token, `/api/files?name=note.txt&declared=true&project=${pj}`, 'POST', null, enc('附件內容'));
   assert.equal(att.status, 201, JSON.stringify(att.body));
   await A.db.run("INSERT INTO app_settings (key, value) VALUES ('olink:p_x', '{\"h\":\"secret\"}')");
@@ -108,7 +112,7 @@ try {
   assert.ok(pages > EXPORT_TABLES.length, '分頁拿（訊息 600 多則不是一次）');
   assert.equal(backup.tables.messages.length, (await A.db.get('SELECT COUNT(*) AS n FROM messages')).n, '訊息全部');
   assert.ok(backup.tables.messages.length > 620);
-  for (const t of ['participants', 'projects', 'messages', 'cards', 'skills', 'app_settings', 'docs', 'files']) assert.ok(backup.tables[t]?.length, '有 ' + t);
+  for (const t of ['participants', 'projects', 'messages', 'cards', 'skills', 'app_settings', 'docs', 'files', 'kb_chunks', 'kb_pages']) assert.ok(backup.tables[t]?.length, '有 ' + t);
   for (const t of SKIP_TABLES) assert.equal(backup.tables[t], undefined, '不帶 ' + t);
   const text = JSON.stringify(backup);
   for (const tok of [liu.token, chen.token, aiTok]) assert.ok(!text.includes(tok), '不含 Token');
@@ -121,6 +125,7 @@ try {
   // 不含附件：沒有 files、docs，但技能包還在
   const noFiles = (await exportAll(A, liu.token, false)).backup;
   assert.equal(noFiles.tables.files, undefined); assert.equal(noFiles.tables.docs, undefined); assert.equal(noFiles.docs.length, 0);
+  assert.equal(noFiles.tables.kb_chunks, undefined, '不含附件：文件抽出的文字也不帶'); assert.equal(noFiles.tables.kb_pages?.length, 1, '不含附件：知識頁照樣帶');
   assert.ok(noFiles.tables.file_chunks.every(c => c.file_id.startsWith('skillpack_')) && noFiles.tables.file_chunks.length, '不含附件時只帶技能包');
 
   // 3. 不是空站不能匯入
@@ -146,7 +151,7 @@ try {
   assert.equal(fin.body.admin.name, '王小明', '管理員是備份裡的');
 
   // 5. 資料一樣
-  for (const t of ['participants', 'messages', 'cards', 'card_log', 'skills', 'docs', 'files', 'projects']) {
+  for (const t of ['participants', 'messages', 'cards', 'card_log', 'skills', 'docs', 'files', 'projects', 'kb_chunks', 'kb_pages']) {
     assert.equal((await B.db.get(`SELECT COUNT(*) AS n FROM ${t}`)).n, backup.tables[t].length, t + ' 列數一樣');
   }
   const meB = (await B.call(dev, '/api/me')).body;
@@ -167,6 +172,10 @@ try {
   assert.equal(got.status, 200, '文件下載得到');
   assert.equal(new TextDecoder().decode(got.body), '# 規格\n內容');
   assert.equal(new TextDecoder().decode((await B.call(dev, `/api/files/${att.body.file.fileId}`)).body), '附件內容', '附件');
+  const kbIdx = (await B.call(dev, `/api/projects/${pj}/kb/pages`)).body;
+  assert.deepEqual(kbIdx.items.map(p => p.title), ['規格摘要'], '知識頁匯入後還在');
+  const kbS = (await B.call(dev, `/api/projects/${pj}/kb/search?q=內容`)).body;
+  assert.equal(kbS.items?.[0]?.docName, 'spec.md', '文件段落匯入後搜得到：' + JSON.stringify(kbS).slice(0, 200));
   assert.equal((await B.call(dev, '/api/admin/backup')).body.empty, false, '匯入後不是空站（不能再匯一次）');
   // 匯入後照常發文、建卡：流水號接在備份的最大號後面（Postgres 的自動編號要跟著校正）
   const maxSeq = Math.max(...backup.tables.messages.map(m => m.seq));

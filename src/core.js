@@ -7,9 +7,10 @@
 import { ROLES, SETTING_FIELDS } from './roles.js';
 import { registerCards, teamCards, workFrom, autoArchive, claimsOf, CLAIM_LOG } from './cards.js';
 import { registerLogin } from './login.js';
-import { registerSkills } from './skills.js'; // 角色技能庫
+import { registerSkills, KEYISH } from './skills.js'; // 角色技能庫
 import { registerJoin, joinOpen } from './join.js'; // 申請加入專案
 import { registerDocs, DOC_MAX_TOTAL_BYTES } from './docs.js'; // 專案文件區
+import { registerKbPages } from './kb-pages.js'; // 知識頁、整理卡
 import { registerBackup } from './backup.js'; // 備份匯出與匯入
 import { registerUpdateCheck } from './update.js'; // 管理頁「有新版本」
 import { registerDemo } from './demo.js'; // 示範資料
@@ -161,6 +162,8 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
   // 門鈴送出中的清單。每個請求結束前用「自己的」waitUntil 等它們送完（handle 第三個參數）；
   // 原本 worker 用模組變數記「目前的請求」，並行時會掛到別的（可能已結束的）請求上，門鈴遺失
   const bellPending = new Set();
+  const bgPending = new Set(); // 其他背景工作（知識庫抽字）：同樣用這次請求的 waitUntil 等它做完，不擋回應
+  const background = p => { const q = Promise.resolve(p).catch(e => console.error('background failed:', e.message)).finally(() => bgPending.delete(q)); bgPending.add(q); };
   // 頻道是公開的，拿到 anon key 就能假造門鈴。每位收件 AI 附一個簽章：用它自己的 Token 對
   // 「doorbell|id|at|n」算 HMAC-SHA256（取前 32 個十六進位字）；n 每次門鈴不同，watcher 用它擋重播。
   // watcher 驗不過就略過、不打平台。ids 照舊送，舊版 watcher 不受影響
@@ -583,6 +586,23 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     if (await db.get('SELECT 1 AS x FROM participants WHERE token IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(keys))) leak('Token');
     const dv = cands.filter(s => s.startsWith('dv_'));
     if (dv.length && await db.get('SELECT 1 AS x FROM devices WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(dv.map(s => sha256(s)))))) leak('Token');
+  }
+  // 知識庫抽出的長文字找密鑰（有就不建索引，不然 AI 一搜就把密鑰帶進對話）。回傳找到什麼或 null
+  // 跟 assertNoSecret 同一套（接入連結、成員現在的 Token），但候選字串分批全查；再加常見金鑰樣式與連線字串裡的密碼
+  const CONN_PASS_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@\/]+:[^\s@\/]{3,}@/i;
+  async function findSecret(text) {
+    if (!text) return null;
+    if (SETUP_LINK_RE.test(text)) return '接入連結';
+    if (KEYISH.test(text) || CONN_PASS_RE.test(text)) return '金鑰或密碼';
+    const cands = [...new Set(text.match(TOKENISH_RE) || [])].slice(0, 2000);
+    for (let i = 0; i < cands.length; i += 50) {
+      const part = cands.slice(i, i + 50);
+      const keys = [...part, ...await Promise.all(part.map(tokenKey))]; // 存的是雜湊（h: 開頭）；還沒轉的舊資料是原文
+      if (await db.get('SELECT 1 AS x FROM participants WHERE token IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(keys))) return 'Token';
+      const dv = part.filter(s => s.startsWith('dv_'));
+      if (dv.length && await db.get('SELECT 1 AS x FROM devices WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(dv.map(s => sha256(s)))))) return 'Token';
+    }
+    return null;
   }
 
   // ---------- 訊息 ----------
@@ -3685,7 +3705,12 @@ ${ending}`;
     }
   }
   const joinApi = registerJoin({ liveTo: (ids, type, data) => live?.toPeople(ids, type, data), route, db, ApiError, invalid, readJson, randId, nowIso, requireHuman, peopleMap, projectsOf, PROJECTS, nameOf, loadProjects, projectRows: () => projectRows, loadLeaders, adminOf, applyMembership, loadProjectRoles, saveProjectRoles, projRoles: () => projRoles, readRole, loadReadOnly, invalidatePeople, projEvent });
+  // 知識庫管理（補建索引、整理 AI 設定）：群組管理員或這個專案的 leader（人類）
+  const kbHooks = {}; // 文件區抽字、上傳、刪除時通知知識頁模組（卡片模組建好後才填）
+  const kbManager = async (ctx, me, pj) => me.kind === 'human' && (adminOf(await peopleMap(ctx))?.id === me.id || ((await loadLeaders())[pj] || []).includes(me.id));
   registerDocs({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, identity, projectsOf, PROJECTS, assertWritable, loadReadOnly, roIn, audit, docStorage,
+    findSecret, background, kbManager, kbHooks, kbMaxTotalChars: Number(config.kbMaxTotalChars) || undefined, kbMaxProjectChunks: Number(config.kbMaxProjectChunks) || undefined, // 知識庫上限（環境變數可調）
+    maxFileBytes: (Number(config.docMaxFileMb) || 0) * 1048576 || undefined,
     maxTotalBytes: (Number(config.docMaxTotalMb) || 0) * 1048576 || DOC_MAX_TOTAL_BYTES });
   const skillsApi = registerSkills({ route, db, ApiError, invalid, readJson, randId, nowIso, sha256, peopleMap, projectsOf, PROJECTS, nameOf, loadLeaders, adminOf, assertNoSecret, writeDm, myAi, requireHuman, loadReadOnly, roIn, readOnlyError, setupSha: SETUP_SHA256, roleDefsMap, storage }); // 技能包放分塊儲存 // C-xxx；C-xxx 唯讀；MAIN-240 同步工具版本；MAIN-249 專案自訂角色
   registerBackup({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, requireAdmin, requireHuman, peopleMap, adminOf, storage, docStorage,
@@ -3694,6 +3719,7 @@ ${ending}`;
   registerDemo({ route, db, ApiError, randId, nowIso, requireAdmin, requireHuman, newCode, newToken,
     afterChange: async () => { invalidatePeople(); await bumpPeopleVer(); await loadProjects(true); } });
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage,archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
+  Object.assign(kbHooks, registerKbPages({ route, db, ApiError, invalid, readJson, randId, nowIso, peopleMap, identity, projectsOf, PROJECTS, assertWritable, roIn, kbManager, findSecret, getJson, setJson, createMessage, cardKey, cardsApi, claimsOf, kbSkillState: (pj, ais) => skillsApi.templateState(pj, 'kb-curation', ais) })); // 知識頁、整理卡
 
   // 只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
   async function scopeTeamMembers(me, members, priv) {
@@ -3769,6 +3795,7 @@ ${ending}`;
     return r.changes;
   }
   handle.autoAckPending = autoAckPending;
+  handle.flushBackground = async () => { while (bgPending.size) await Promise.allSettled([...bgPending]); }; // 測試等背景抽字做完
   // 排程工作：清除過期文件
   // 網頁（index.html）送出前：把寫死的預設群組名換成真正的，並加上連結預覽（LINE／Messenger 抓 <title> 與 og:*）
   const escHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -3825,7 +3852,7 @@ ${ending}`;
   }
   async function handle(req, base, wctx = null) {
     try { return await handleInner(req, base); }
-    finally { if (wctx && bellPending.size) wctx.waitUntil(flushBells()); }
+    finally { if (wctx && (bellPending.size || bgPending.size)) wctx.waitUntil(Promise.allSettled([flushBells(), handle.flushBackground()])); } // 背景抽字也等做完
   }
   // 平台 MCP：POST /api/mcp（放在 /api/ 底下，Worker 與本機 server 不用改分流；JSON-RPC 2.0、無狀態、只回 JSON）。工具用同一個 Token 轉呼叫現有 API，權限與限流都一樣
   async function handleMcp(req, url, base) {

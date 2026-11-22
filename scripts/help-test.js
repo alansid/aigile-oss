@@ -1,5 +1,5 @@
 // 說明頁內容（不開瀏覽器）：public/help.json 中英兩份、畫面圖、網址
-// 1. 五章：1 讓你的 AI 加入、2 跟著走一遍、3 AI 會來問你、4 帳號與裝置、5 常見狀況；中英兩份的章、步驟、題號、畫面格、試試看一樣
+// 1. 六章：1 讓你的 AI 加入、2 跟著走一遍、3 AI 會來問你、4 帳號與裝置、5 常見狀況、6 知識庫；中英兩份的章、步驟、題號、畫面格、試試看一樣
 // 2. 英文那份沒有中文字；{桌機|手機} 括號成對；章號互相引用一致
 // 3. 開源版通用說法：不提特定公司、內部系統、真實人名或特定網址
 // 4. imgs 列的圖都在 public/help-img/<語言>/，imgSize 等於圖檔寬高（載入前先留位置）；圖不能太大
@@ -26,16 +26,16 @@ try {
   const zh = help.zh, en = help.en;
   assert.ok(zh?.chapters && en?.chapters, 'help.json 有 zh、en 兩份');
   // 1. 章序與結構
-  assert.deepEqual(zh.chapters.map(c => c.n), [1, 2, 3, 4, 5], '五章');
-  assert.deepEqual(zh.chapters.map(c => c.title), ['讓你的 AI 加入', '跟著走一遍：從交辦到驗收', 'AI 會來問你什麼、怎麼回', '帳號與裝置', '常見狀況'], '中文章名');
-  assert.deepEqual(en.chapters.map(c => c.title), ['Bring your AI on board', 'Walk through it: from request to verification', 'What AIs ask you, and how to answer', 'Account and devices', 'Common situations'], '英文章名');
+  assert.deepEqual(zh.chapters.map(c => c.n), [1, 2, 3, 4, 5, 6], '六章');
+  assert.deepEqual(zh.chapters.map(c => c.title), ['讓你的 AI 加入', '跟著走一遍：從交辦到驗收', 'AI 會來問你什麼、怎麼回', '帳號與裝置', '常見狀況', '知識庫：讓 AI 讀懂你的文件'], '中文章名');
+  assert.deepEqual(en.chapters.map(c => c.title), ['Bring your AI on board', 'Walk through it: from request to verification', 'What AIs ask you, and how to answer', 'Account and devices', 'Common situations', 'Knowledge base: help AI understand your documents'], '英文章名');
   const shape = d => d.chapters.map(c => ({ n: c.n, forAi: !!c.forAi, faq: !!c.faq, steps: c.steps.map(s => [s.id || '', s.fig || '', (s.list || []).length, !!s.d]), note: c.note ? c.note.fig || '-' : '', after: !!c.after, intro: !!c.intro, card: !!c.card, try: c.try?.go || '' }));
   assert.deepEqual(shape(en), shape(zh), '中英兩份的章、步驟、題號、畫面格、清單項數、試試看一樣');
   const ch = n => zh.chapters[n - 1];
   assert.ok(ch(1).forAi && zh.chapters.filter(c => c.forAi).length === 1, '只有第 1 章是要帶 AI 的人看的');
   assert.deepEqual(ch(2).steps.map(s => s.fig), ['2-1', '2-2', '2-3', '2-4'], '跟著走一遍四步各一格畫面');
   assert.equal(ch(2).steps[1].t, 'AI 接單，事情掛到一張卡上', '第 2 章第 2 步標題跟導覽一致');
-  assert.deepEqual(zh.chapters.map(c => c.try?.go || ''), ['myai', 'messages', 'inbox', 'settings', ''], '每章試試看（第 5 章沒有）');
+  assert.deepEqual(zh.chapters.map(c => c.try?.go || ''), ['myai', 'messages', 'inbox', 'settings', '', 'kb'], '每章試試看（第 5 章沒有）');
   assert.deepEqual(ch(5).steps.map(s => s.id), ['1', '2', '3', '4', '5', '6'], '第 5 章每題有題號');
   // 2. 寫法
   const all = JSON.stringify(zh.chapters), allEn = JSON.stringify(en.chapters);
@@ -53,7 +53,8 @@ try {
   let total = 0;
   for (const [lang, d] of [['zh', zh], ['en', en]]) {
     const figs = d.chapters.flatMap(c => [...c.steps, c.note || {}].map(s => s.fig).filter(Boolean));
-    assert.deepEqual([...new Set(figs)].filter(f => !d.imgs.includes(f)), [], `${lang}：每一格都有圖（3-2 共用 2-4）`);
+    const PENDING_FIGS = ['6-1', '6-2', '6-3', '6-4', '6-5']; // 第 6 章（知識庫）的圖之後再拍；沒放進 imgs 的不顯示
+    assert.deepEqual([...new Set(figs)].filter(f => !d.imgs.includes(f) && !PENDING_FIGS.includes(f)), [], `${lang}：每一格都有圖（3-2 共用 2-4）`);
     assert.deepEqual(Object.keys(d.imgSize).sort(), [...d.imgs].sort(), `${lang}：每張圖都有寬高`);
     for (const f of d.imgs) {
       const file = new URL(`public/help-img/${lang}/${f}.webp`, root);

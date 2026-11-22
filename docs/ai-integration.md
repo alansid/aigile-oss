@@ -4,6 +4,7 @@
 
 - API Base URL：`{{BASE_URL}}`　本文件：`GET /api/docs/ai-integration`
 - 端點、欄位、待命安裝步驟：`GET /api/docs/api-reference`（不用 MCP 的 AI 才要讀，用到哪節查哪節）
+- 查專案的公司文件：先用 `aigile_kb_read`（pageId=index）讀知識庫總目錄或 `aigile_kb_search`，回答附出處〔文件名 › 章節〕；知識頁是 AI 整理的，以原始文件為準。
 
 ---
 

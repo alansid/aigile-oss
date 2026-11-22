@@ -27,6 +27,9 @@ services:
       - FILE_TTL_HOURS
       - FILE_MAX_TOTAL_MB
       - DOC_MAX_TOTAL_MB
+      - DOC_MAX_FILE_MB
+      - KB_MAX_TOTAL_CHARS
+      - KB_MAX_PROJECT_CHUNKS
       - LIVE
       - LIVE_MAX_CONNECTIONS
       - SUPABASE_URL

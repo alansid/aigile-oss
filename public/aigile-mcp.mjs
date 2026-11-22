@@ -100,11 +100,31 @@ async function uploadDoc(agent, a) {
   const file = path.resolve(WORK || process.cwd(), String(a.path));
   let bytes; try { bytes = fs.readFileSync(file); } catch (e) { throw new Error(`讀不到 ${file}（${e.code || e.message}）`); }
   const token = fs.readFileSync(path.join(dirOf(agent), '.token'), 'utf8').trim(), base = baseOf(agent);
-  const q = new URLSearchParams({ name: a.name, declared: 'true', ...(a.folderId ? { folderId: a.folderId } : {}) });
+  const q = new URLSearchParams({ name: a.name, declared: 'true', ...(a.folderId ? { folderId: a.folderId } : {}), ...(a.kb ? { kb: '1' } : {}) }); // kb＝放進知識庫
   const r = await fetch(`${base}/api/projects/${encodeURIComponent(a.project)}/docs?${q}`, { method: 'POST', body: bytes, signal: AbortSignal.timeout(120_000), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream', 'X-Aigile-Source': 'mcp' } });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`${j.error?.code || 'HTTP_' + r.status}：${j.error?.message || ''}`);
-  return { docId: j.doc?.docId, name: j.doc?.name, size: j.doc?.size };
+  return { docId: j.doc?.docId, name: j.doc?.name, size: j.doc?.size, inKb: !!j.doc?.kb?.inKb };
+}
+
+// aigile_doc_read 回「只有原檔」（PDF、圖片）時，把原檔下載到 .aigile/<代號>/kb-files/，回傳加 localPath 讓 AI 用自己的讀檔工具打開
+async function fetchOriginal(agent, out) {
+  try {
+    const j = JSON.parse(out), c = j.result?.content?.[0];
+    const r = c?.type === 'text' && !j.result.isError ? JSON.parse(c.text) : null;
+    if (!r?.original || !r.downloadUrl || !/^doc_[A-Za-z0-9]+$/.test(r.docId || '') || !/^[a-z0-9]+$/.test(r.ext || '')) return out;
+    const token = fs.readFileSync(path.join(dirOf(agent), '.token'), 'utf8').trim();
+    const res = await fetch(baseOf(agent) + r.downloadUrl, { signal: AbortSignal.timeout(120_000), headers: { Authorization: `Bearer ${token}`, 'X-Aigile-Source': 'mcp' } });
+    if (!res.ok) r.downloadError = `下載原檔失敗：HTTP ${res.status}`;
+    else {
+      const dir = path.join(dirOf(agent), 'kb-files');
+      fs.mkdirSync(dir, { recursive: true });
+      r.localPath = path.join(dir, `${r.docId}.${r.ext}`);
+      fs.writeFileSync(r.localPath, Buffer.from(await res.arrayBuffer()));
+    }
+    c.text = JSON.stringify(r);
+    return JSON.stringify(j);
+  } catch (e) { log(`下載原檔失敗：${e.message}`); return out; }
 }
 
 async function forward(line) {
@@ -158,6 +178,7 @@ async function forward(line) {
   try { out = await post(AGENT, line); } catch (e) { return fail(e.message); }
   if (out === null) return;
   if (method === 'tools/call') syncState(msg.params?.name, out);
+  if (method === 'tools/call' && msg.params?.name === 'aigile_doc_read') out = await fetchOriginal(AGENT, out);
   if (FIXED && !wakeAgent) return send(out);
   // 通用版：宣告會換工具清單；同資料夾有多隻 AI 時保留 aigile_use（回傳目前身分）
   try {

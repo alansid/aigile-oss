@@ -969,5 +969,17 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     await claim(r, me, nowIso(), null, 'skipped');
     return sugView(await loadSug(params.id), await peopleMap(ctx));
   });
-  return { listCards };
+  // 伺服器代開工作卡（知識庫整理卡）：負責人直接是指定的 AI、狀態待處理；建立者記 me（按的人或上傳的人）
+  async function createCardBy(me, { project, title, reason = '', next = '', criteria = '', ownerId, requestId }) {
+    const at = nowIso(), uid = randId('card');
+    await db.run(`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at, project)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, uid, '工作', title.slice(0, CARD_LIMITS.title), reason.slice(0, CARD_LIMITS.reason), ownerId, '待處理', next.slice(0, CARD_LIMITS.next), '', null,
+      criteria.slice(0, CARD_LIMITS.criteria), me.id, requestId || null, at, at, project);
+    await assignProjNo(uid);
+    const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
+    await db.batch(logStmt(c.seq, me, ['建立卡片（類型：工作）'], at));
+    return { ...c, key: pub(c) };
+  }
+  const cardLog = (seq, me, text) => db.batch(logStmt(seq, me, [text], nowIso()));
+  return { listCards, createCardBy, cardLog };
 }

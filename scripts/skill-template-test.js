@@ -25,8 +25,8 @@ const len = s => [...s].length;
 
 try {
   // 1. 範本內容規則
-  const NAMES = ['commit-convention', 'handover-format', 'report-and-ask', 'testing-rules', 'code-review-checklist', 'security-checklist'];
-  assert.deepEqual(SKILL_TEMPLATES.map(t => t.name), NAMES, '第一批 6 個範本');
+  const NAMES = ['commit-convention', 'handover-format', 'report-and-ask', 'testing-rules', 'code-review-checklist', 'security-checklist', 'kb-curation']; // 加知識庫整理
+  assert.deepEqual(SKILL_TEMPLATES.map(t => t.name), NAMES, '第一批 6 個＋知識庫整理');
   for (const t of SKILL_TEMPLATES) {
     for (const lang of ['zh', 'en']) {
       const x = templateIn(t, lang), fm = parseFrontmatter(x.text);

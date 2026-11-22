@@ -56,7 +56,7 @@ try {
   assert.ok(pos.hw > 0 && pos.right && pos.top, '桌機：說明在搜尋右邊、同一列：' + JSON.stringify(pos));
   assert.equal(pos.text, '？說明');
   await go('.topbar .help-btn');
-  await until(() => js("document.querySelectorAll('.help-toc li').length === 5"), 10000, '目錄');
+  await until(() => js("document.querySelectorAll('.help-toc li').length === 6"), 10000, '目錄');
   assert.equal(await path_(), '/help');
   assert.equal(await crumbs(), '說明', '目錄頁麵包屑');
   assert.equal(await js("document.querySelectorAll('.sidebar .hs-item.on, .sidebar [aria-current=\"page\"]').length"), 0, '說明頁時側欄不亮');
@@ -69,7 +69,7 @@ try {
   assert.ok(toc.order && toc.twoCol, '問句在標題下、清單上；桌機兩欄：' + JSON.stringify(toc));
   assert.deepEqual([toc.pressed, toc.meta, toc.dim], ['會', '第 1 章 · 5 分鐘 · 要帶自己的 AI 的人', 0], '預設選「會」、章首小字');
   await go('[data-help-mode="work"]');
-  assert.deepEqual(await J("[...document.querySelectorAll('.help-toc li')].map(li => li.classList.contains('dim'))"), [true, false, false, false, false], '不會：第 1 章變淡');
+  assert.deepEqual(await J("[...document.querySelectorAll('.help-toc li')].map(li => li.classList.contains('dim'))"), [true, false, false, false, false, false], '不會：第 1 章變淡');
   assert.equal(await js("document.querySelector('.help-toc li.dim .ht-skip')?.textContent"), '不帶 AI 可跳過');
   await go('[data-help-mode="ai"]');
   assert.equal(await js("localStorage.getItem('aigile-help-mode')"), 'ai', '選擇記在這台');
@@ -130,7 +130,7 @@ try {
   await until(() => js("!document.querySelector('#sheet').hidden"), 5000, '選單');
   assert.equal(await js("(() => { const h = document.querySelector('#sheet .sheet-help'); return h.getBoundingClientRect().height > 0 ? h.textContent.trim() : ''; })()"), '？說明與教學', '手機：選單有說明與教學');
   await go('#sheet .sheet-help');
-  await until(() => js("document.querySelectorAll('.help-toc li').length === 5 && document.querySelector('#sheet').hidden"), 8000, '手機目錄、選單收起');
+  await until(() => js("document.querySelectorAll('.help-toc li').length === 6 && document.querySelector('#sheet').hidden"), 8000, '手機目錄、選單收起');
   assert.ok(await noHScroll(), '375 目錄不橫向捲動');
   await go('.help-toc a[href="/help/2"]');
   await chIs(2);
@@ -174,7 +174,7 @@ try {
   assert.ok(!/[㐀-鿿]/.test(await js("document.querySelector('.ob').innerText")), '新手上路沒有中文：' + await js("document.querySelector('.ob').innerText"));
   assert.deepEqual(await J("[document.querySelector('.topbar .help-btn').textContent.trim(), document.querySelector('.topbar .help-btn').getAttribute('aria-label')]"), ['？Help', 'Help'], '英文「？ Help」（不是交接的 Notes）');
   await go('.topbar .help-btn');
-  await until(() => js("document.querySelectorAll('.help-toc li').length === 5"), 10000, '英文目錄');
+  await until(() => js("document.querySelectorAll('.help-toc li').length === 6"), 10000, '英文目錄');
   const etoc = await J(`({ h: document.querySelector('.help-index h2').textContent, q: document.querySelector('#help-ask-q').textContent, btns: [...document.querySelectorAll('[data-help-mode]')].map(b => b.textContent), meta: document.querySelector('.ht-n').textContent, t: document.querySelector('.ht-t').textContent, crumbs: document.querySelector('#crumbs').textContent.trim(), all: document.querySelector('.help-index').innerText })`);
   assert.deepEqual([etoc.h, etoc.q, etoc.btns, etoc.meta, etoc.t, etoc.crumbs], ['Help', 'Will you bring your own AI?', ['Yes', 'No'], 'Chapter 1 · 5 min · If you bring your own AI', 'Bring your AI on board', 'Help'], '英文目錄：' + JSON.stringify(etoc));
   assert.ok(!/[㐀-鿿]/.test(etoc.all), '英文目錄沒有中文');

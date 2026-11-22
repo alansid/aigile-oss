@@ -54,7 +54,7 @@ try {
   assert.equal((await rpc(T, 'initialize', { protocolVersion: '1999-01-01' })).body.result.protocolVersion, '2025-06-18', '不認得的版本回最新');
   assert.equal((await rpc(T, 'notifications/initialized', null, { note: true })).status, 202, '通知回 202、沒有內容');
   const tools = (await rpc(T, 'tools/list')).body.result.tools;
-  assert.deepEqual(tools.map(t => t.name), ['aigile_inbox', 'aigile_read', 'aigile_ack', 'aigile_post', 'aigile_card_get', 'aigile_cards', 'aigile_card_update', 'aigile_card_handover', 'aigile_dm', 'aigile_memory', 'aigile_card_create', 'aigile_doc_upload', 'aigile_history', 'aigile_batch', 'aigile_me', 'aigile_team'], '16 個工具（建卡、上傳文件、讀歷史、批次）');
+  assert.deepEqual(tools.map(t => t.name), ['aigile_inbox', 'aigile_read', 'aigile_ack', 'aigile_post', 'aigile_card_get', 'aigile_cards', 'aigile_card_update', 'aigile_card_handover', 'aigile_dm', 'aigile_memory', 'aigile_card_create', 'aigile_doc_upload', 'aigile_history', 'aigile_batch', 'aigile_me', 'aigile_team', 'aigile_kb_search', 'aigile_kb_read', 'aigile_kb_write', 'aigile_doc_read'], '20 個工具（建卡、上傳文件、讀歷史、批次、知識庫）');
   for (const t of tools) assert.ok(t.description && t.inputSchema?.type === 'object', `${t.name} 有說明與參數格式`);
   assert.equal((await rpc(T, 'ping')).body.result && true, true);
   assert.equal((await rpc(T, 'resources/list')).body.error.code, -32601, '不支援的方法回 -32601');

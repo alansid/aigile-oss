@@ -1,5 +1,5 @@
 // PLAT-369 Postgres 轉接：SQL 轉譯（純函式）＋ SQLite 版與 Postgres 版的資料表對得上
-// 1. 查詢轉譯：? → $n（字串裡的不動）、json_each → ANY／ALL（參數改陣列）、INSERT OR IGNORE、LIKE、索引提示、PRAGMA、json_extract
+// 1. 查詢轉譯：? → $n（字串裡的不動）、json_each → ANY／ALL（參數改陣列）、FROM json_each → json_array_elements、INSERT OR IGNORE、LIKE、索引提示、PRAGMA、json_extract
 // 2. 建表轉譯：型別、AUTOINCREMENT、NOCASE、每張表加隱藏 rowid；欄位叫 text 的不會被當成型別
 // 3. migrations/pg/ 的取代檔都要對到 migrations/ 的同名檔
 // 4. 有 AIGILE_TEST_PG_URL（只准本機）時：實際建表，逐表比對 SQLite 與 Postgres 的欄位；再模擬舊站，確認升級會補套
@@ -24,6 +24,10 @@ const schema = fs.readFileSync(path.join(root, 'src', 'schema.sql'), 'utf8');
   const je = queryToPg('SELECT * FROM t WHERE a = ? AND id IN (SELECT value FROM json_each(?)) AND b NOT IN (SELECT value FROM json_each(?)) LIMIT ?');
   assert.equal(je.text, 'SELECT * FROM t WHERE a = $1 AND id = ANY($2) AND b <> ALL($3) LIMIT $4');
   assert.deepEqual(je.arrays, [1, 2], 'json_each 的參數位置（從 0 起）');
+  // 一次插入多列（知識庫抽字）：FROM json_each(?) → json_array_elements，參數照樣是 JSON 字串（不改陣列）
+  const bulk = queryToPg("INSERT INTO kb_chunks (id, project, idx) SELECT json_extract(value, '$.id'), ?, CAST(json_extract(value, '$.idx') AS INTEGER) FROM json_each(?)");
+  assert.equal(bulk.text, "INSERT INTO kb_chunks (id, project, idx) SELECT (value::json ->> 'id'), $1, CAST((value::json ->> 'idx') AS BIGINT) FROM json_array_elements($2::json) AS j(value)");
+  assert.deepEqual(bulk.arrays, [], 'FROM json_each 的參數不轉陣列');
   assert.equal(queryToPg('INSERT OR IGNORE INTO t (a) VALUES (?)').text, 'INSERT INTO t (a) VALUES ($1) ON CONFLICT DO NOTHING');
   assert.equal(queryToPg('INSERT OR IGNORE INTO t (a) VALUES (?) RETURNING a').text, 'INSERT INTO t (a) VALUES ($1) ON CONFLICT DO NOTHING RETURNING a');
   assert.equal(queryToPg("SELECT 1 FROM t WHERE x LIKE ? AND y NOT LIKE 'LIKE%'").text, "SELECT 1 FROM t WHERE x ILIKE $1 AND y NOT ILIKE 'LIKE%'", 'LIKE 不分大小寫（跟 SQLite 一樣），字串裡的不動');

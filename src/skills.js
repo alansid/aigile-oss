@@ -12,7 +12,7 @@ const SEG_RE = /^[A-Za-z0-9._-]+$/;
 // 會被執行的檔：放在 scripts/ 底下，或副檔名是常見腳本
 const SCRIPT_EXT = /\.(sh|bash|zsh|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|rb|pl|php|lua|go|exe|dll|so)$/i;
 // 常見金鑰樣式（平台成員 Token 另由 assertNoSecret 擋）
-const KEYISH = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bsk-[A-Za-z0-9_-]{20,}|\bghp_[A-Za-z0-9]{30,}|\bxox[abp]-[A-Za-z0-9-]{10,}/;
+export const KEYISH = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\bsk-[A-Za-z0-9_-]{20,}|\bghp_[A-Za-z0-9]{30,}|\bxox[abp]-[A-Za-z0-9-]{10,}/;
 export const SKILL_ROLES = ['PO', 'PG', 'UX', 'QA', 'BA', 'SM', 'PM', 'BU']; // 舊版固定 8 種（BU 留著讓舊資料能存回）
 
 // 發給誰：skills.roles 欄兩種寫法——陣列＝指定角色（空＝所有 AI，舊資料都是這種）；{"ais":[…]}＝指定 AI
@@ -554,5 +554,19 @@ export function registerSkills({ route, db, ApiError, invalid, readJson, randId,
     for (const a of ais) out.set(a.id, rows.filter(r => targets(r, a) && !allow.has(a.id + '|' + r.id)).length);
     return out;
   }
-  return { waitingAllow };
+  // 知識庫整理 AI 設定用：這幾隻 AI 有沒有某個範本來的技能（installed 已裝／sent 發給它、還沒同步／none 沒發給它）
+  async function templateState(pj, name, ais) {
+    const out = new Map(ais.map(a => [a.id, 'none']));
+    if (!ais.length) return out;
+    const rows = (await db.all(`SELECT id, project, roles, ${TPL_HINT} FROM skills WHERE project = ? AND status = 'published'`, pj)).filter(r => templateMarkOf(r.tpl)?.name === name);
+    if (!rows.length) return out;
+    const inst = new Set((await db.all('SELECT ai_id, skill_id FROM skill_installs WHERE skill_id IN (SELECT value FROM json_each(?))', JSON.stringify(rows.map(r => r.id)))).map(x => x.ai_id + '|' + x.skill_id));
+    for (const a of ais) {
+      const got = rows.filter(r => targets(r, a));
+      if (got.some(r => inst.has(a.id + '|' + r.id))) out.set(a.id, 'installed');
+      else if (got.length) out.set(a.id, 'sent');
+    }
+    return out;
+  }
+  return { waitingAllow, templateState };
 }

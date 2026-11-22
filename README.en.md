@@ -136,14 +136,35 @@ Want to see it in use first? After logging in, click "Load demo data" in the set
 | Needs your attention | Everything that needs you, awaits your verification or your decision, in one place |
 | Team status | Online state, current work and token expiry of every member, plus how many times each AI was woken today (flagged above 15); assignments unread for 20+ minutes are flagged "no response yet" |
 | My AIs | 15 role templates pre-fill the six setup questions; copy the onboarding text for each tool, reissue tokens, standing permissions (deploys) |
-| Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent. Admins and project leads can select **+ Add skill** to choose a project, preview one of the six built-in bilingual templates, and apply it. When a template changes, the app prompts users to review the update before applying it to the project skill |
+| Skills | Upload skills (`SKILL.md`) or skill packs (Claude Code plugins), target roles or specific AIs; packs with scripts need approval and the owner's consent. Admins and project leads can select **+ Add skill** to choose a project, preview one of the seven built-in bilingual templates, and apply it. When a template changes, the app prompts users to review the update before applying it to the project skill |
 | Docs | Message attachments (deleted after 24 hours by default; the admin can change this in Admin settings › Audit & storage) and a long-term project docs area (stored in R2) |
+| Knowledge base | You choose which docs go in: their text is extracted so people and AIs can search the originals, and a curator AI turns them into knowledge pages with sources. See "Knowledge base" below |
 | Direct messages | Humans can DM their own AIs |
 | Demo data | Load a fictional demo project (cards, human–AI conversation, a decision card) in one click, and clear it in one click without touching real data |
 | Backup & migration | Admins download the whole group as one JSON file and import it into a fresh, empty site; tokens and passwords are not included |
 | Wake-up | A watcher + wait script on the AI side wakes the AI only when there is something to do, so idle time costs nothing; the Docker / local server has built-in instant notifications (AIs wake within seconds, no Supabase needed); the Cloudflare version can use Supabase Realtime |
 
 **The AI integration spec ([docs/ai-integration.md](docs/ai-integration.md)) and the onboarding instructions given to AIs are currently in Traditional Chinese only.** Messages are never translated, and the protocol tags AIs parse (`[接單]`, `[完成]`, `[需確認]`, `選項：` …) stay in Chinese in both UIs.
+
+</details>
+
+## Knowledge base
+
+<details>
+<summary><b>Show details</b></summary>
+
+The knowledge base holds only the docs you put in it. People use "Docs › 📚 Knowledge base"; AIs use the MCP tools. Regular project docs are stored as originals only: no text extraction, no organizing, not searchable; an AI that needs one downloads the original with `aigile_doc_read` and reads it itself.
+
+**First-time setup** is in help chapter 6 ("? Help" at the top right): add an AI to do the organizing (PO or BA works best) → apply the "📚 Knowledge base curation" template in the skill library and send it to that AI; its owner clicks "Sync" until it shows "Installed" → pick it under the project ⚙ › "Knowledge base curator AI" → a leader clicks "Upload to knowledge base" on the knowledge base tab, or selects project docs and clicks "Add to knowledge base" → answer the [需確認] questions it posts → spot-check a few pages and send back what's wrong. Without the skill the AI still organizes but writes far fewer pages; the setup window shows a yellow warning.
+
+
+- **Putting docs in**: only leaders and the admin can add docs to or remove them from the knowledge base; other members see the buttons but can't use them. Removing a doc deletes its extracted text (the original stays), and pages that cite it are marked "Source removed from the knowledge base" so a leader can decide whether to delete them.
+- **Text extraction**: md, txt, docx, pptx (including speaker notes) and xlsx files in the knowledge base are extracted in the background and split by heading, so the original text is searchable. PDFs and images are kept as original files only; the curator AI downloads and reads them itself. Docs that look like they contain a secret (token, private key, password in a connection string) are not indexed.
+- **Knowledge pages**: pick a curator AI under the project ⚙ menu › "Knowledge base curator AI". Docs put in the knowledge base are queued on an organizing card for it (up to 10 docs per card). It writes one "doc summary" page per doc and "topic" pages for subjects spread across docs, citing a source for each point.
+- **No approval step**: pages take effect as soon as they're written. When two docs conflict, the curator AI posts a [需確認] to the leader and the page shows that the leader was asked. Leaders can send pages back or delete them. When a source doc is replaced or deleted, the page is marked "May be outdated"; "Ask AI to update" opens an update card.
+- **AI tools**: `aigile_kb_read` (index, read a page), `aigile_kb_search` (search pages and original text), `aigile_doc_read` (read a doc section by section; original-only files and docs outside the knowledge base are downloaded locally), `aigile_doc_upload` (`kb=true` puts the doc in the knowledge base, leaders and the admin only; by default it's a regular project doc), `aigile_kb_write` (the curator AI writes pages). Apply the "📚 Knowledge base curation" template in the skill library for the curator AI to keep pages consistent.
+- **Limits**: search has no rate limit. A project with more than `KB_MAX_PROJECT_CHUNKS` sections (default 20,000) can't be searched; delete docs you no longer need or raise the limit. `KB_MAX_TOTAL_CHARS` (default 50 million characters) caps extracted text for the whole site; after that, new docs are stored as originals only. Up to 200,000 characters are extracted per doc.
+- Search matches words exactly (it is not semantic search). The "Common ways to ask" section on knowledge pages lets other wording find them.
 
 </details>
 
@@ -227,6 +248,9 @@ First login and setup are the same as above.
 | `FILE_TTL_HOURS` | `24` | ✓ | ✓ | Initial retention for message attachments (hours). Once the admin changes it in Admin settings › Audit & storage, that setting wins and later changes to this variable have no effect; a change only applies to files uploaded afterwards |
 | `FILE_MAX_TOTAL_MB` | `4096` | ✓ | | Total size of message attachments |
 | `DOC_MAX_TOTAL_MB` | `9216` | ✓ | ✓ | Total size of the project docs area |
+| `DOC_MAX_FILE_MB` | `20` | ✓ | ✓ | Max size of one file in the project docs area |
+| `KB_MAX_PROJECT_CHUNKS` | `20000` | ✓ | ✓ | Knowledge base: a project with more sections than this can't be searched (cost of exact matching) |
+| `KB_MAX_TOTAL_CHARS` | `50000000` | ✓ | ✓ | Knowledge base: total extracted text for the site; after that, new docs are stored as originals only |
 | `STALE_MINUTES` | `20` | ✓ | ✓ | Minutes without activity before an AI is "possibly offline" |
 | `UNANSWERED_MINUTES` | `20` | ✓ | ✓ | Minutes an assignment can stay unread before "no response yet" |
 | `CARD_STALE_HOURS` | `24` | ✓ | ✓ | Hours without updates before a card is considered stale |
@@ -355,7 +379,7 @@ It checks that the target is empty (stops if it already has data), copies everyt
 
 Admins, in "Admin settings › System & backup":
 
-- **Download backup**: members, projects, messages, DMs, cards, decisions, skills and settings in one JSON file (with the version number). Optionally include message attachments and project docs; skill packs are always included. Data is read in batches and works both locally and on Workers.
+- **Download backup**: members, projects, messages, DMs, cards, decisions, skills and settings in one JSON file (with the version number). Optionally include message attachments and project docs (with the text extracted for the knowledge base); skill packs and knowledge pages are always included. Data is read in batches and works both locally and on Workers.
 - **Nothing used for login is included**: member and AI tokens, password hashes, device logins, login codes, invite and rescue links, AI onboarding links.
 - **Import backup**: only on an **empty site** (freshly set up, only you as admin, no other members or data). After choosing the file you see the counts and confirm; if it fails midway, choose the file again to start over. You can't import a backup from a newer version.
 - After import you become the admin from the backup, keeping your current password and this device; others need "Reset login" from their details in "Members" (give them the generated link), and AI owners reissue tokens in "My AIs".

@@ -43,7 +43,8 @@
     days: 'day', hours: 'hour', minutes: 'minute', seconds: 'second', weeks: 'week', mentions: 'mention', requests: 'request', invites: 'invite', skills: 'skill',
     files: 'file', screenshots: 'screenshot', humans: 'human', tasks: 'task', decisions: 'decision', versions: 'version', results: 'result', notifications: 'notification', devices: 'device',
     changes: 'change', times: 'time', links: 'link', roles: 'role', questions: 'question', suggestions: 'suggestion', assignees: 'assignee', owners: 'owner',
-    msgs: 'msg', unread: 'unread', pending: 'pending', documents: 'document', folders: 'folder', tokens: 'token', approvals: 'approval', joins: 'join' };
+    msgs: 'msg', unread: 'unread', pending: 'pending', documents: 'document', folders: 'folder', tokens: 'token', approvals: 'approval', joins: 'join',
+    sections: 'section', pages: 'page', docs: 'doc', sources: 'source' }; // 知識庫
   const plural = s => String(s).replace(/(^|[^\d.,:/])1 ([A-Za-z]+)(?: ([A-Za-z]+))?/g, (m, pre, a, b) =>
     SING[a] ? `${pre}1 ${SING[a]}${b ? ' ' + b : ''}` : b && SING[b] ? `${pre}1 ${a} ${SING[b]}` : m);
   api.plural = plural;

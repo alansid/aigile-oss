@@ -58,7 +58,7 @@ try {
     const t = MCP_TOOLS.find(x => x.name === n);
     assert.ok(t && /[一-鿿]/.test(t.description), `${n} 有繁中說明`);
   }
-  assert.equal(names.length, 16);
+  assert.equal(names.length, 20); // 16 個＋知識庫 4 個
 
   // A 建卡：requestId 不帶自動產生；重送同內容回原卡；負責人 me
   let r = await tool(po.tok, 'aigile_card_create', { project: '預設專案', title: 'PLAT 測試建卡', ownerId: 'me', status: '待處理', criteria: 'A. 做完' });

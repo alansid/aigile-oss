@@ -1,5 +1,5 @@
 {
-  "note": "說明頁五章（/help、/help/1～5）。中文放 zh、英文放 en，網頁照介面語言選一份；兩份的章、步驟、題號、畫面格要一樣（help-test 會檢查）。{桌機|手機} 是桌機與手機寫法不同的地方；**粗體**。card 是目錄卡上那一行（沒寫就用 lead）。畫面圖放 public/help-img/<語言>/<格>.webp（手機版 <格>-m.webp），把檔名（不含副檔名）加進該語言的 imgs，寬高寫進 imgSize（先留位置，載入時版面不跳）；沒加進的不顯示，只有桌機圖時手機寬度也不顯示。figText 是畫面描述（也當圖的替代文字）。",
+  "note": "說明頁六章（/help、/help/1～6）。中文放 zh、英文放 en，網頁照介面語言選一份；兩份的章、步驟、題號、畫面格要一樣（help-test 會檢查）。{桌機|手機} 是桌機與手機寫法不同的地方；**粗體**。card 是目錄卡上那一行（沒寫就用 lead）。畫面圖放 public/help-img/<語言>/<格>.webp（手機版 <格>-m.webp），把檔名（不含副檔名）加進該語言的 imgs，寬高寫進 imgSize（先留位置，載入時版面不跳）；沒加進的不顯示，只有桌機圖時手機寬度也不顯示。figText 是畫面描述（也當圖的替代文字）。",
   "zh": {
     "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2"],
     "imgSize": {"1-1": [1280,1504], "1-2": [880,1014], "1-3": [2060,639], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,270], "2-2": [1942,350], "2-3": [2560,526], "2-4": [1984,262], "3-1": [1942,960], "3-3": [973,988], "3-4": [1958,170], "3-5": [1958,155], "4-1": [1880,1208], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
@@ -104,6 +104,34 @@
           { "id": "5", "t": "手機能做什麼", "d": "看訊息、回覆、按選項、驗收、做決定都可以。新增 AI、管理技能、管理員設定與成員管理，建議用電腦。" },
           { "id": "6", "t": "有問題，或想要新功能", "d": "先在群組裡告訴管理員。這套平台是開源軟體，管理員可以到它的 GitHub 頁面回報問題或提出想要的功能。" }
         ]
+      },
+      {
+        "n": 6,
+        "title": "知識庫：讓 AI 讀懂你的文件",
+        "mins": "10 分鐘",
+        "who": "專案 leader／管理員",
+        "card": "挑出要讓 AI 讀懂的文件放進知識庫，AI 整理成知識頁；大家和 AI 都搜得到，回答附出處。",
+        "lead": "讀完這章，你挑的文件會被 AI 整理成知識頁，大家和 AI 都搜得到，回答會附出處。",
+        "intro": "**專案文件和知識庫有什麼不同？**專案文件是大家共用的檔案櫃，只存檔，AI 不會整理、也搜不到內容。知識庫放的是你挑出來、要讓 AI 讀懂的文件：會抽字、整理成知識頁，大家和 AI 都搜得到。同一份檔案可以先放專案文件，之後再加入知識庫。",
+        "steps": [
+          { "t": "開一個專案", "d": "總覽左側按「＋ 新增專案」（管理員才有）。已經有專案就跳過。" },
+          { "t": "加一隻 AI 負責整理", "d": "專案卡的 ⚙ › 成員與本專案角色，按「＋ 加入成員」，選一隻 AI，建議用 PO 或 BA。還沒有 AI 先看第 1 章。",
+            "fig": "6-1", "figText": "⚙ › 成員與本專案角色，「＋ 加入成員」", "marks": ["＋ 加入成員"] },
+          { "t": "替它裝「知識庫整理」技能", "d": "**這步最容易漏。**沒裝也會整理，但整理出來的頁少很多、也不會照規則問你。",
+            "list": ["⚙ › 成員與本專案角色 › 技能，按「＋ 新增技能」，在「2. 從範本開始」找「知識庫整理」，按「套用」，發給這隻 AI 後上架。", "AI 的主人到「我的 AI」，在那隻 AI 的選單點「🧩 技能」，按「同步」。", "回到技能，打開「知識庫整理」，在「裝到哪些 AI」看到它寫「已裝」才算好。"],
+            "fig": "6-2", "figText": "技能抽屜「裝到哪些 AI」，那隻 AI 顯示「已裝」", "marks": ["已裝"] },
+          { "t": "指定它當整理 AI", "d": "專案卡的 ⚙ › 📚 知識庫整理 AI，選它，按「儲存」。",
+            "fig": "6-3", "figText": "📚 知識庫整理 AI 視窗", "marks": ["儲存"] },
+          { "t": "把文件放進知識庫", "d": "兩種放法，放進來的會自動排進整理卡：",
+            "list": ["新文件：到「📚 知識庫」按「上傳到知識庫」。", "已經在專案文件的：到「專案文件」勾選，按「加入知識庫」。", "PDF、圖片只存原檔，AI 讀不到內容；含密碼或金鑰的不會整理。", "不想讓 AI 再讀：勾選後按「移出知識庫」，原檔還在專案文件。"],
+            "fig": "6-4", "figText": "知識庫分頁「上傳到知識庫」和知識庫文件清單；旁邊放專案文件勾選後的「加入知識庫」", "marks": ["上傳到知識庫", "加入知識庫"] },
+          { "t": "回答整理 AI 的問題", "d": "兩份文件規定不一樣時，整理 AI 會發 [需確認] 問你以哪份為準。到「要你處理」選一個，它會照你的答案寫。" },
+          { "t": "抽看幾頁，不對就退回", "d": "到「📚 知識庫」打開幾頁，跟原文對一下。不對就按「退回」，寫一句哪裡不對，AI 會重寫。原文換了新版，頁面會標「可能過時」，按「請 AI 更新」。",
+            "fig": "6-5", "figText": "知識頁上方「退回」「刪除」，和「可能過時」的頁", "marks": ["退回", "請 AI 更新"] }
+        ],
+        "note": { "t": "用 Codex 的整理 AI", "d": "如果你是自己直接打開 Codex 視窗（不是平台叫醒它），讀文件的工具可能被擋，AI 會回報「requires approval」。請 AI 的主人在 Codex 設定裡把 aigile_kb_search、aigile_kb_read、aigile_kb_write、aigile_doc_read 加進核准，或讓平台叫醒它就好。" },
+        "after": "整理好之後，成員問 AI 公司規定，它會先查知識庫、附上出處。",
+        "try": { "text": "打開這個專案的知識庫。", "label": "打開知識庫", "go": "kb" }
       }
     ]
   },
@@ -211,6 +239,34 @@
           { "id": "5", "t": "What works on a phone", "d": "Reading messages, replying, choosing options, verifying and deciding all work. Adding AIs, managing skills, and members & permissions are best done on a computer." },
           { "id": "6", "t": "A problem, or a feature you'd like", "d": "Tell the admin in the group first. The platform is open-source software, so the admin can report problems or suggest features on its GitHub page." }
         ]
+      },
+      {
+        "n": 6,
+        "title": "Knowledge base: help AI understand your documents",
+        "mins": "10 min",
+        "who": "Project leaders / admins",
+        "card": "Pick the documents AI should understand. AI turns them into knowledge pages that everyone and every AI can search, with sources.",
+        "lead": "After this chapter, the documents you pick will be turned into knowledge pages by AI. Everyone and every AI can search them, and answers will cite their sources.",
+        "intro": "**Project files vs. knowledge base?** Project files are a shared file cabinet: files are stored only, and AI doesn't organize or search them. The knowledge base holds documents you pick for AI to understand: their text is read and turned into knowledge pages that everyone and every AI can search. A file can start in Project files and be added to the knowledge base later.",
+        "steps": [
+          { "t": "Create a project", "d": "On Overview, click \"+ Add project\" on the left (admins only). Skip this if you already have one." },
+          { "t": "Add an AI to organize", "d": "On the project card, ⚙ › Members and roles in this project, click \"+ Add members\" and pick an AI. A PO or BA works best. No AI yet? See chapter 1.",
+            "fig": "6-1", "figText": "⚙ › Members and roles in this project, \"+ Add members\"", "marks": ["+ Add members"] },
+          { "t": "Install the \"Knowledge base curation\" skill", "d": "**This is the step people miss.** Without it the AI still organizes, but writes far fewer pages and won't ask you when documents conflict.",
+            "list": ["⚙ › Members and roles in this project › Skills, click \"+ Add skill\", find \"Knowledge base curation\" under \"2. Start from a template\", click \"Apply\", send it to this AI and publish.", "The AI's owner opens \"My AIs\", picks \"🧩 Skills\" from that AI's menu, and clicks \"Sync\".", "Back in Skills, open \"Knowledge base curation\". It's done when \"Installed on which AIs\" shows this AI as \"Installed\"."],
+            "fig": "6-2", "figText": "Skill drawer \"Installed on which AIs\", the AI shows \"Installed\"", "marks": ["Installed"] },
+          { "t": "Make it the curator AI", "d": "On the project card, ⚙ › 📚 Knowledge base curator AI, pick it and click \"Save\".",
+            "fig": "6-3", "figText": "📚 Knowledge base curator AI dialog", "marks": ["Save"] },
+          { "t": "Put documents in the knowledge base", "d": "Two ways. Anything you add is queued for organizing automatically:",
+            "list": ["New file: in \"📚 Knowledge base\", click \"Upload to knowledge base\".", "Already in Project docs: in \"Project docs\", select it and click \"Add to knowledge base\".", "PDFs and images are stored as files only; AI can't read them. Files with passwords or keys aren't organized.", "To stop AI reading a file: select it and click \"Remove from knowledge base\". The original stays in Project docs."],
+            "fig": "6-4", "figText": "Knowledge base tab with \"Upload to knowledge base\" and the document list; next to it, Project docs with \"Add to knowledge base\"", "marks": ["Upload to knowledge base", "Add to knowledge base"] },
+          { "t": "Answer the curator AI's questions", "d": "When two documents disagree, the curator AI posts a \"Needs confirmation\" message asking which one wins. Pick one in \"Needs your attention\"; it writes the page your way." },
+          { "t": "Spot-check pages and send back mistakes", "d": "Open a few pages in \"📚 Knowledge base\" and compare them with the source. If one is wrong, click \"Send back\" and say what's wrong; the AI rewrites it. When a source gets a new version, the page is marked \"May be outdated\"; click \"Ask AI to update\".",
+            "fig": "6-5", "figText": "\"Send back\" and \"Delete\" on a knowledge page, and a page marked \"May be outdated\"", "marks": ["Send back", "Ask AI to update"] }
+        ],
+        "note": { "t": "Curator AI on Codex", "d": "If you open the Codex window yourself (instead of letting the platform wake it), its document tools may be blocked and it reports \"requires approval\". Ask the AI's owner to approve aigile_kb_search, aigile_kb_read, aigile_kb_write and aigile_doc_read in Codex settings, or just let the platform wake it." },
+        "after": "Once pages are organized, when members ask AI about company rules it checks the knowledge base first and cites sources.",
+        "try": { "text": "Open this project's knowledge base.", "label": "Open knowledge base", "go": "kb" }
       }
     ]
   }

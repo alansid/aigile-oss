@@ -23,7 +23,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MIG_DIR = path.join(ROOT, 'migrations');
 const SCHEMA = fs.readFileSync(path.join(ROOT, 'src/schema.sql'), 'utf8');
 // 1.0.x 的結構＝現在的 schema.sql 去掉 002 加的三欄（有 git 與版本標籤時，再對一次 v1.0.0、v1.0.2 的原檔）
-const OLD = SCHEMA.split('\n').filter(l => !/^\s+wake_(day|count|at) /.test(l) && !/^CREATE INDEX IF NOT EXISTS idx_files_message /.test(l)).join('\n'); // 003 加的索引也去掉
+const OLD = SCHEMA.split('\n').filter(l => !/^\s+wake_(day|count|at) /.test(l) && !/^CREATE INDEX IF NOT EXISTS idx_files_message /.test(l)).join('\n') // 003 加的索引也去掉
+  .replace(/,\n\s*kb_status TEXT[\s\S]*?kb_card INTEGER[^\n]*(\n\s+in_kb [^\n]*)?/, '').replace(/-- 知識庫底層：[\s\S]*?CREATE INDEX IF NOT EXISTS idx_kb_pages [^\n]*\n/, ''); // 004、005、006 知識庫加的欄位與表也去掉
 assert.notEqual(OLD, SCHEMA, '測試用的舊結構真的少了叫醒欄位');
 for (const tag of ['v1.0.0', 'v1.0.2']) {
   const g = spawnSync('git', ['show', `${tag}:src/schema.sql`], { cwd: ROOT, encoding: 'utf8' });

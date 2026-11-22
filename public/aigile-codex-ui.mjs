@@ -11,7 +11,7 @@ const descriptor = dir => path.join(dir, 'foreground-ui.json');
 export const approvedAigileTools = [
   'aigile_ack', 'aigile_batch', 'aigile_card_create', 'aigile_card_get',
   'aigile_card_handover', 'aigile_card_update', 'aigile_cards', 'aigile_dm',
-  'aigile_doc_upload', 'aigile_history', 'aigile_inbox', 'aigile_me',
+  'aigile_doc_read', 'aigile_doc_upload', 'aigile_history', 'aigile_inbox', 'aigile_kb_read', 'aigile_kb_search', 'aigile_kb_write', 'aigile_me', // 知識庫工具（kb_write 只寫知識頁，跟發文、改卡同級）
   'aigile_memory', 'aigile_post', 'aigile_read', 'aigile_team', 'aigile_use',
 ];
 

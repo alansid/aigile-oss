@@ -399,6 +399,48 @@ CREATE TABLE IF NOT EXISTS docs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   deleted_at TEXT,
-  deleted_by TEXT
+  deleted_by TEXT,
+  kb_status TEXT,                      -- 抽字狀態：pending／indexed／original／secret／failed／full；空＝舊文件還沒建索引
+  kb_chunks INTEGER NOT NULL DEFAULT 0,
+  kb_chars INTEGER NOT NULL DEFAULT 0,
+  kb_truncated INTEGER NOT NULL DEFAULT 0,
+  kb_at TEXT,
+  kb_org TEXT,                         -- 整理排程：todo＝排在整理卡裡、還沒寫頁
+  kb_card INTEGER,                     -- 哪張整理卡（cards.seq）
+  in_kb INTEGER NOT NULL DEFAULT 0     -- 1＝放進知識庫（抽字、整理、被搜）；0＝一般專案文件，只存原檔
 );
 CREATE INDEX IF NOT EXISTS idx_docs ON docs (project, deleted_at);
+-- 知識庫底層：文件抽出來的純文字分段（可重建）。每段約 1,000～2,000 字
+CREATE TABLE IF NOT EXISTS kb_chunks (
+  id TEXT PRIMARY KEY,                 -- kbc_xxx
+  project TEXT NOT NULL,
+  doc_id TEXT NOT NULL,                -- docs.id
+  idx INTEGER NOT NULL,                -- 同一份文件的段落序號 0,1,2…
+  section TEXT NOT NULL DEFAULT '',    -- 標題路徑，例如「出貨流程 > 異常處理」「投影片第 3 頁」「工作表：代碼表」
+  content TEXT NOT NULL,
+  doc_sha256 TEXT NOT NULL,            -- 抽字時的文件雜湊
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_kb_chunks ON kb_chunks (project, doc_id, idx);
+-- 知識頁：AI 寫的 Markdown（每份文件一頁 source、跨文件主題 topic）。不需核准：status 只用 published／stale
+CREATE TABLE IF NOT EXISTS kb_pages (
+  id TEXT PRIMARY KEY,                 -- kbp_xxx
+  project TEXT NOT NULL,
+  kind TEXT NOT NULL,                  -- source | topic
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',    -- 一行說明（≤ 120 字），總目錄用
+  body TEXT NOT NULL,                  -- Markdown，≤ 20,000 字
+  sources TEXT NOT NULL DEFAULT '[]',  -- JSON：[{ docId, sha256, name }]
+  status TEXT NOT NULL,                -- published | stale
+  author_id TEXT NOT NULL,             -- 寫的 AI
+  reviewed_by TEXT, reviewed_at TEXT,  -- 保留給之後的核准流程
+  card_id TEXT,                        -- 從哪張整理卡來的（專案卡號）
+  notices TEXT NOT NULL DEFAULT '[]',  -- JSON：整理 AI 發給 leader 的 [需確認] messageId（文件互相矛盾）
+  stale_note TEXT, stale_at TEXT,      -- 為什麼可能過時（來源換版、刪除、被退回）
+  update_card INTEGER,                 -- 正在更新這頁的卡（cards.seq）
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  deleted_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_kb_pages ON kb_pages (project, status, deleted_at);

@@ -5787,7 +5787,7 @@
   });
   document.addEventListener('input', e => { if (e.target.id === 'rel-q') { rel.q = e.target.value; rel.hit = ''; drawReleases(); const q = $('#rel-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); } });
 
-  // ---------- 說明頁：/help 目錄、/help/1～5 五章（內容在 /help.json，中英各一份，照介面語言選） ----------
+  // ---------- 說明頁：/help 目錄、/help/1～6 六章（內容在 /help.json，中英各一份，照介面語言選） ----------
   // 每章有自己的網址可以直接傳；第 5 章每題 /help/5#題號；第 2 章（跟著走一遍）看到最後或按「試試看」就記走完（新手上路打勾）
   // 章節正文是長文，不走畫面字典：help.json 的 zh、en 各存一份，英文介面直接畫英文那份；頁面上的固定字（章號、上一章…）照舊進字典
   const HELP_MODE_KEY = 'aigile-help-mode';
@@ -5795,7 +5795,7 @@
   const help = { data: null, ch: 0, back: null, jump: '', walkSent: false, obs: null };
   const helpLang = () => (window.aigileI18n?.lang === 'en' ? 'en' : 'zh');
   const helpDoc = () => help.data?.[helpLang()] || help.data?.zh || null;
-  const helpChOf = x => { const n = Number(x); return Number.isInteger(n) && n >= 1 && n <= 5 ? n : 0; };
+  const helpChOf = x => { const n = Number(x); return Number.isInteger(n) && n >= 1 && n <= 20 ? n : 0; }; // 沒有的章顯示目錄
   const helpMode = () => (store.get(HELP_MODE_KEY) === 'work' ? 'work' : 'ai'); // 「你會帶自己的 AI 嗎？」預設「會」
   // {桌機|手機} 兩種寫法都畫出來，用 CSS 依螢幕寬度只顯示一種；**粗體**
   const helpText = s => esc(s).replace(/\{([^|{}]*)\|([^{}]*)\}/g, '<span class="h-desk">$1</span><span class="h-mob">$2</span>').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
@@ -5978,6 +5978,7 @@
     if (go === 'inbox') return proj && !hasHub() ? setProjectView(proj, 'inbox') : setProjectView('hub'); // 總覽就有各專案的「要你處理」
     if (go === 'myai') return goTop('myai');
     if (go === 'settings') return openSettings();
+    if (go === 'kb') { const p = proj && PROJECTS.includes(proj) ? proj : myProjects().find(x => PROJECTS.includes(x)); if (!p) return; filesUi.tab = 'kb'; return setProjectView(p, 'files'); } // 第 6 章試試看
   }
   // ---------- 聚光燈導覽：說明頁章首「▶ 帶我在畫面上走一次」、新手上路「帶我走」 ----------
   // 框架在 /tour.js（自寫、沒有外部套件；說明文字由它照介面語言翻）；這裡只寫每條路線框哪裡、說什麼。只框、只說明，不替使用者按、不送出、不動資料。
@@ -8047,19 +8048,20 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
 
   // 文件頁：在專案裡分兩個分頁——「專案文件」（長期保存、資料夾、可多選上傳）與「訊息附件」（管理員設定的保存時間後刪除）
   // 總覽、跨專案頻道沒有專案文件區，只有訊息附件
-  const filesUi = { tab: 'docs', folder: null, pj: null, data: null };
+  const filesUi = { tab: 'docs', folder: null, pj: null, data: null, pick: new Set() }; // pick：勾選要加入／移出知識庫的文件
   const DOC_MAX = 20 * 1024 * 1024;
   async function openFiles() {
     const pj = projectView(), hasDocs = PROJECTS.includes(pj);
-    if (filesUi.pj !== pj) { filesUi.pj = pj; filesUi.folder = null; }
+    if (filesUi.pj !== pj) { filesUi.pj = pj; filesUi.folder = null; filesUi.pick.clear(); }
     const tab = hasDocs ? filesUi.tab : 'att';
-    const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
+    const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['kb', '📚 知識庫'], ['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
     const body = openModal('文件', '<div id="files-list" class="stack"></div>', { // 分頁跟其他頁一樣放右側
-      sub: tab === 'docs' ? `${esc(projName(pj))} 的共用文件，不會自動刪除` : ttlSpan('sub'),
-      actions: tabs + (tab === 'docs' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>'),
+      sub: tab === 'kb' ? 'AI 整理的知識頁，和知識庫文件原文一起搜' : tab === 'docs' ? `${esc(projName(pj))} 的共用文件，不會自動刪除` : ttlSpan('sub'),
+      actions: tabs + (tab !== 'att' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>'),
     });
     body.modal.querySelectorAll('[data-files-tab]').forEach(b => { b.onclick = () => { filesUi.tab = b.dataset.filesTab; openFiles(); }; });
     if (tab === 'docs') return drawDocs(body, pj);
+    if (tab === 'kb') return drawKb(body, pj); // 知識庫
     body.modal.querySelector('#files-up').onclick = () => $('#file-input').click();
     try {
       const d = await api('/api/files');
@@ -8108,10 +8110,19 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const count = id => d.items.filter(x => x.folderId === id).length + d.folders.filter(f => f.parentId === id).length;
     const crumbs = [cur ? `<button type="button" class="link" data-doc-go="">${esc(projName(pj))}</button>` : `<b>${esc(projName(pj))}</b>`,
       ...trail.map((f, i) => (i === trail.length - 1 ? `<b>${esc(f.name)}</b>` : `<button type="button" class="link" data-doc-go="${esc(f.folderId)}">${esc(f.name)}</button>`))];
-    const acts = (kind, id) => (d.canWrite ? ['rename', 'move', 'delete'].map(a => `<button class="btn small${a === 'delete' ? ' danger-outline' : ''}" type="button" data-doc-act="${a}" data-kind="${kind}" data-id="${esc(id)}">${{ rename: '改名', move: '搬移', delete: '刪除' }[a]}</button>`).join('') : '');
+    // 改名、搬移、刪除收進「⋯」；文件的「下載」電腦放外面、手機也收進「⋯」
+    const pickable = d.canWrite; // 勾選後「加入／移出知識庫」只給 leader／管理員，一般成員的動作列只寫一行說明
+    for (const id of [...filesUi.pick]) if (!d.items.some(x => x.docId === id)) filesUi.pick.delete(id);
+    const acts = (kind, id, name) => {
+      const items = [...(kind === 'doc' ? [['download', '下載', ' doc-menu-dl']] : []), ...(d.canWrite ? [['rename', '改名', ''], ['move', '搬移', ''], ['delete', '刪除', ' danger']] : [])];
+      if (!items.length) return '';
+      return `<span class="pm-more-wrap doc-more-wrap${d.canWrite || kind === 'folder' ? '' : ' doc-more-mobile'}"><button type="button" class="pm-more" data-doc-more aria-haspopup="menu" aria-expanded="false" aria-label="${esc(name)} 的更多動作">⋯</button>`
+        + `<div class="pm-more-menu" role="menu" aria-label="${esc(name)} 的動作" hidden>${items.map(([a, t, c]) => `<button type="button" role="menuitem" class="${c.trim()}" data-doc-act="${a}" data-kind="${kind}" data-id="${esc(id)}">${t}</button>`).join('')}</div></span>`;
+    };
     box.innerHTML = `
       ${d.enabled ? '' : `<div class="warn-box">這個環境還沒開通專案文件區的儲存空間（Cloudflare R2），暫時不能上傳。${isAdmin() ? '<button type="button" class="link small" data-adm="audit">怎麼開通：管理員設定 › 稽核與儲存 ›</button>' : '請群組管理員開通。'}</div>`}
       ${d.canWrite ? '' : '<p class="muted small">你在這個專案是唯讀：可以看、下載，不能上傳或整理。</p>'}
+      <p class="muted small">專案文件只存檔，AI 不會整理、也搜不到內容；要讓 AI 讀懂，請加入知識庫。</p>
       <div class="docs-bar">
         <nav class="docs-crumbs" aria-label="資料夾位置">${crumbs.join('<span class="crumb-sep" aria-hidden="true">▸</span>')}</nav>
         <span class="docs-btns">${d.canWrite && d.enabled ? '<button class="btn small primary" type="button" data-doc-act="upload">上傳（可多選）</button>' : ''}${d.canWrite && trail.length < d.maxFolderDepth ? '<button class="btn small" type="button" data-doc-act="mkdir">新資料夾</button>' : ''}</span>
@@ -8121,17 +8132,20 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         ${subs.map(f => `<div class="file-row doc-row">
           <span class="file-icon" aria-hidden="true">📁</span>
           <button type="button" class="file-info doc-open" data-doc-go="${esc(f.folderId)}"><b class="file-name">${esc(f.name)}</b><span class="muted small">${count(f.folderId)} 項</span></button>
-          <span class="doc-acts">${acts('folder', f.folderId)}</span></div>`).join('')}
-        ${docs.map(x => `<div class="file-row doc-row">
+          <span class="doc-acts">${acts('folder', f.folderId, f.name)}</span></div>`).join('')}
+        ${docs.map(x => `<div class="file-row doc-row">${pickable ? `<input type="checkbox" class="kb-pick" data-kb-pick="${esc(x.docId)}" aria-label="選 ${esc(x.name)}"${filesUi.pick.has(x.docId) ? ' checked' : ''}>` : ''}
           <span class="file-icon" aria-hidden="true">${fileIcon(x.ext)}</span>
-          <div class="file-info"><b class="file-name">${esc(x.name)}</b>
+          <div class="file-info"><b class="file-name">${esc(x.name)}${x.kb?.inKb ? ' <span class="kb-tag" title="這份在知識庫裡，會被整理、被搜尋">📚 知識庫</span>' : ''}</b>
             <span class="muted small">${fmtBytes(x.size)} · ${esc(x.uploader?.name || '?')}${x.uploader?.memberType === 'ai' ? '（AI）' : ''} · ${fmtTime(x.updatedAt)}</span></div>
-          <span class="doc-acts"><button class="btn small" type="button" data-doc-act="download" data-kind="doc" data-id="${esc(x.docId)}">下載</button>${acts('doc', x.docId)}</span></div>`).join('')}
+          <span class="doc-acts"><button class="btn small doc-dl" type="button" data-doc-act="download" data-kind="doc" data-id="${esc(x.docId)}">下載</button>${acts('doc', x.docId, x.name)}</span></div>`).join('')}
         ${subs.length || docs.length ? '' : `<p class="muted">${cur ? '這個資料夾是空的。' : '還沒有文件。'}${d.canWrite && d.enabled ? '按「上傳（可多選）」一次放多個檔。' : ''}</p>`}
       </div>
+      ${pickable ? '<div class="kb-selbar" role="region" aria-label="已勾選的文件" hidden></div>' : ''}
       <p class="muted small">只有本專案成員看得到。單檔 ${fmtBytes(d.maxFileBytes)} 以內，只收 pdf、docx、xlsx、pptx、md、txt、png、jpg，禁止程式碼與客戶個資；資料夾最多 ${d.maxFolderDepth} 層。這個專案已用 ${fmtBytes(d.projectBytes)}（全部專案 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}）。</p>
       <details class="audit"><summary>異動紀錄</summary><div id="docs-log" class="muted small">載入中…</div></details>`;
     box.querySelector('#docs-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files); });
+    box.addEventListener('change', e => { const c = e.target.closest('[data-kb-pick]'); if (!c) return; if (c.checked) filesUi.pick.add(c.dataset.kbPick); else filesUi.pick.delete(c.dataset.kbPick); kbSelBar(box, pj); });
+    kbSelBar(box, pj);
     box.querySelector('details.audit').addEventListener('toggle', async e => {
       if (!e.target.open) return;
       const log = box.querySelector('#docs-log');
@@ -8143,9 +8157,324 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     box.onclick = e => {
       const go = e.target.closest('[data-doc-go]');
       if (go) { filesUi.folder = go.dataset.docGo || null; return openFiles(); }
+      if (e.target.closest('[data-kb-pick-clear]')) { filesUi.pick.clear(); box.querySelectorAll('[data-kb-pick]').forEach(c => { c.checked = false; }); return kbSelBar(box, pj); }
+      if (e.target.closest('[data-kb-add]')) return kbMove(pj, true);
+      if (e.target.closest('[data-kb-remove]')) return kbMove(pj, false);
+      const more = e.target.closest('[data-doc-more]'), menu = more?.nextElementSibling;
+      box.querySelectorAll('.doc-more-wrap .pm-more-menu').forEach(m => { if (m !== menu) { m.hidden = true; m.previousElementSibling.setAttribute('aria-expanded', 'false'); } });
+      if (more) { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('[role="menuitem"]:not(.doc-menu-dl)')?.focus(); return; }
       const b = e.target.closest('[data-doc-act]');
       if (b) docAction(pj, b.dataset.docAct, b.dataset.kind, b.dataset.id);
     };
+    box.onkeydown = e => { if (e.key !== 'Escape') return; const m = box.querySelector('.doc-more-wrap .pm-more-menu:not([hidden])'); if (m) { e.stopPropagation(); m.hidden = true; m.previousElementSibling.setAttribute('aria-expanded', 'false'); m.previousElementSibling.focus(); } };
+  }
+  // ---------- 知識庫 ----------
+  // 搜尋文件原文、讀一段；知識頁目錄與內容、退回、請 AI 更新、整理 AI 設定；自己挑文件加入／移出知識庫、上傳到知識庫、知識庫文件清單與狀態字
+  // 知識庫文件清單每份的狀態字；抽字失敗、還沒建索引旁邊放「重試」，沒指定整理 AI 旁邊放「指定整理 AI」（leader／管理員）
+  function kbDocState(x, mgr, aiName) {
+    const k = x.kb, pill = (c, t) => `<span class="kb-pill ${c}" data-kb-status="${esc(k.status)}" data-kb-org="${esc(k.org || 'none')}">${esc(t)}</span>`;
+    const redo = t => (mgr ? `<button type="button" class="link small" data-kb-redo="${esc(x.docId)}">${t}</button>` : '');
+    if (k.status === 'pending') return pill('blue', '抽字中…');
+    if (k.status === 'secret') return pill('red', '含密碼或金鑰，不抽字也不整理');
+    if (k.status === 'failed') return pill('red', '抽字失敗') + redo('重試');
+    if (k.status === 'none') return pill('grey', '還沒抽字') + redo('重試');
+    if (k.status === 'full') return pill('grey', '知識庫已滿，沒有抽字');
+    if (k.org === 'todo') return pill('blue', k.working ? `整理中 · ${k.working}` : '等整理');
+    if (k.org === 'stale') return pill('yellow', '換了新版，等重新整理');
+    if (k.org === 'done') return pill('green', `已整理 · ${k.pages || 1} 頁`);
+    if (k.status === 'original') return pill('grey', '只存原檔，AI 讀不到內容');
+    return aiName ? pill('grey', '只能搜原文') : pill('grey', '只能搜原文 · 還沒指定整理 AI') + (mgr ? '<button type="button" class="link small" data-kb-set-ai>指定整理 AI</button>' : '');
+  }
+  async function kbRedo(pj, docId) {
+    try {
+      await api(`/api/projects/${encodeURIComponent(pj)}/kb/reindex`, { method: 'POST', body: { docId } });
+      toast('開始補建索引，抽字完會顯示段數');
+      openFiles();
+    } catch (err) { toast(err.message); }
+  }
+  // 勾選後底部浮出的列（設計稿 08）：加入／移出知識庫，勾的裡面有哪種才出現哪顆
+  function kbSelBar(box, pj) {
+    const bar = box.querySelector('.kb-selbar');
+    if (!bar) return;
+    const sel = filesUi.data.items.filter(x => filesUi.pick.has(x.docId)), mgr = filesUi.data.canManageKb;
+    const add = sel.filter(x => !x.kb?.inKb).length, rm = sel.length - add;
+    bar.hidden = !sel.length;
+    bar.innerHTML = sel.length ? `<b>已選 ${sel.length} 份</b>${mgr ? '' : '<span class="kb-selbar-note">只有 leader 或管理員能把文件加入知識庫。想加的話，在群組跟 leader 說。</span>'}<span class="kb-grow"></span><button type="button" class="btn small" data-kb-pick-clear>取消</button>`
+      + (mgr && rm ? `<button type="button" class="btn small" data-kb-remove>移出知識庫（${rm}）</button>` : '') + (mgr && add ? `<button type="button" class="btn small primary" data-kb-add>📚 加入知識庫（${add}）</button>` : '') : '';
+    const list = box.querySelector('.file-list');
+    if (list) list.style.paddingBottom = sel.length ? `${bar.offsetHeight + 12}px` : ''; // UX：底部那條不能蓋住最後一列（捲到底也看得到）
+  }
+  // 加入／移出知識庫（leader／管理員）：移出要先確認；加入後提示會交給哪隻整理 AI
+  async function kbMove(pj, add) {
+    const sel = filesUi.data.items.filter(x => filesUi.pick.has(x.docId) && !!x.kb?.inKb !== add);
+    if (!sel.length) return;
+    if (!add && !await confirmDialog({ title: '移出知識庫？', confirmText: '移出', danger: true,
+      message: `這 ${sel.length} 份會停止被搜尋，抽出來的文字會刪掉；原檔還在專案文件。用到它的知識頁會標「來源已移出知識庫」，要不要刪那頁由你決定。` })) return;
+    const base = `/api/projects/${encodeURIComponent(pj)}/kb`;
+    try {
+      await api(`${base}/docs`, { method: 'POST', body: { action: add ? 'add' : 'remove', docIds: sel.map(x => x.docId) } });
+      filesUi.pick.clear();
+      if (add) {
+        const set = await api(`${base}/settings`).catch(() => null), ai = set?.candidates.find(c => c.participantId === set.aiId)?.name;
+        toast(ai ? `已加入知識庫，開始抽字，會排進整理卡給 ${ai}。` : '已加入知識庫，開始抽字。還沒指定整理 AI，先只能搜原文。');
+      } else toast(`已移出知識庫（${sel.length} 份）`);
+      openFiles();
+    } catch (err) { toast(err.message); }
+  }
+  // 片段高亮：每個詞（不分大小寫）包 <mark>
+  function kbMark(text, terms) {
+    const ts = [...new Set((terms || []).filter(Boolean))].sort((a, b) => b.length - a.length);
+    if (!ts.length) return esc(text);
+    const re = new RegExp(ts.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
+    let out = '', at = 0;
+    for (const m of String(text).matchAll(re)) { out += esc(text.slice(at, m.index)) + `<mark>${esc(m[0])}</mark>`; at = m.index + m[0].length; }
+    return out + esc(text.slice(at));
+  }
+  // 知識頁內文：一般 Markdown 用 mdHtml；「> ⚠」新舊不一致（黃色左線，下面列已通知 leader）、「> 🛡」文件含指示性文字（紅框）；出處〔…〕小字
+  function kbMd(body, notices = []) {
+    const out = [], buf = [];
+    let shown = false;
+    const flush = () => { if (buf.length) out.push(mdHtml(buf.join('\n'))); buf.length = 0; };
+    const notice = () => (shown || !notices.length ? '' : (shown = true, notices.map(n => `<div class="kb-notice">${L(`🔔 已通知 leader ${esc(n.to.join('、') || '')}確認以哪份為準`, `🔔 Asked leader ${esc(n.to.join(', ') || '')} which one is correct`)} · ${esc(shortTime(n.at))} <button type="button" class="link small" data-kb-msg="${esc(n.messageId)}">${L('看訊息', 'View message')}</button></div>`).join('')));
+    for (const line of String(body).split('\n')) {
+      const m = /^>\s?(.*)$/.exec(line);
+      if (!m) { buf.push(line); continue; }
+      flush();
+      const t = m[1].trim(), inl = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+      if (t.startsWith('⚠')) out.push(`<div class="kb-conflict">${inl(t)}${notice()}</div>`);
+      else if (t.startsWith('🛡')) out.push(`<div class="kb-guard">${inl(t)}</div>`);
+      else out.push(`<blockquote class="kb-quote">${inl(t)}</blockquote>`);
+    }
+    flush();
+    return out.join('').replace(/〔([^〕<]{1,160})〕/g, '<span class="kb-cite">〔$1〕</span>') + (shown ? '' : notice());
+  }
+  const kbUi = { pj: null, q: '', res: null, read: null, page: null, idx: null, set: null };
+  const KB_ICON = k => (k === 'topic' ? '📘' : '📄');
+  async function drawKb(body, pj) {
+    const box = body.querySelector('#files-list');
+    if (kbUi.pj !== pj) Object.assign(kbUi, { pj, q: '', res: null, read: null, page: null });
+    if (kbUi.read) return kbRead(box, pj);
+    if (kbUi.page) return kbPage(box, pj);
+    const base = `/api/projects/${encodeURIComponent(pj)}/kb`;
+    try { [kbUi.idx, kbUi.set, filesUi.data] = await Promise.all([api(`${base}/pages`), api(`${base}/settings`), api(`/api/projects/${encodeURIComponent(pj)}/docs`)]); }
+    catch (err) { box.innerHTML = `<p class="error">${esc(err.message)}</p>`; return; }
+    const idx = kbUi.idx, set = kbUi.set, aiName = set.candidates.find(c => c.participantId === set.aiId)?.name;
+    // 知識庫有自己的文件清單；leader／管理員可以「上傳到知識庫」，一般成員看到一行說明
+    const kd = filesUi.data, kdocs = kd.items.filter(x => x.kb?.inKb), mgr = kd.canManageKb && kd.canWrite, empty = !kdocs.length && !idx.items.length;
+    box.innerHTML = `
+      <div class="warn-box">⚠ 請勿上傳程式碼或客戶個資。上傳的文件會抽出文字，專案成員和 AI 都搜得到。</div>
+      ${empty || mgr ? '' : '<p class="muted small">要把文件放進知識庫，請 leader 上傳，或請 leader 從專案文件加入。</p>'}
+      <input type="file" id="kb-input" multiple accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.png,.jpg,.jpeg" hidden>
+      <form class="kb-search" role="search" id="kb-form">
+        <input type="search" id="kb-q" maxlength="100" placeholder="搜尋知識頁和知識庫文件原文，例如：年假、WFH、住宿" aria-label="搜尋知識頁和知識庫文件原文" value="${esc(kbUi.q)}">
+        <button class="btn primary" type="submit">搜尋</button>
+        ${!empty && mgr && kd.enabled ? '<button class="btn kb-up-btn" type="button" data-kb-up>⬆ 上傳到知識庫</button>' : ''}
+      </form>
+      <div id="kb-results" aria-live="polite"></div>`;
+    const pageRow = (p, terms, snip) => `
+      <button type="button" class="kb-row" data-kb-page="${esc(p.pageId)}">
+        <span class="kb-ic" aria-hidden="true">${KB_ICON(p.pageKind || p.kind)}</span>
+        <span class="kb-row-main"><span class="kb-row-head"><b>${kbMark(p.title, terms)}</b>${p.status === 'stale' ? (kbOut(p) ? ' <span class="kb-pill grey">來源已移出</span>' : ' <span class="kb-pill yellow">可能過時</span>') : ''}</span>
+          <span class="kb-snip">${snip ? kbMark(snip, terms) : esc(p.summary || '')}</span>
+          <span class="kb-meta-line">${snip ? `${(p.pageKind || p.kind) === 'topic' ? '主題頁' : '文件摘要頁'}<span>${p.sourceCount ? ` · ${p.sourceCount} 份來源` : ''}</span>`
+            : `${esc(p.author?.name || '?')} 整理 · ${esc(shortTime(p.updatedAt))}<span>${p.status === 'stale' && p.staleAt ? ` · 來源 ${esc(shortTime(p.staleAt))} 更新過` : (p.kind === 'topic' ? ` · ${p.sources.length} 份來源` : '')}</span>`}</span></span></button>`;
+    const show = () => {
+      const res = kbUi.res, el = box.querySelector('#kb-results');
+      if (!res) {
+        const topics = idx.items.filter(p => p.kind === 'topic'), srcs = idx.items.filter(p => p.kind !== 'topic');
+        const todo = idx.todo.length ? `<p class="muted small"><span>整理中：${idx.todo.length} 份文件</span>（${[...new Set(idx.todo.map(t => t.cardId).filter(Boolean))].map(c => `<button type="button" class="link small" data-kb-card="${esc(c)}">${esc(c)}</button>`).join('、')}）</p>` : '';
+        const docList = kdocs.length ? `<h3 class="kb-h">知識庫文件（${kdocs.length} 份） <span class="muted small">只有這裡的文件會被整理、被搜尋。</span></h3>
+          <div class="kb-docs">${kdocs.map(x => `<div class="kb-doc-row"><span class="file-icon" aria-hidden="true">${fileIcon(x.ext)}</span><b class="file-name">${esc(x.name)}</b><span class="kb-badges">${kbDocState(x, mgr, aiName)}</span></div>`).join('')}</div>` : '';
+        el.innerHTML = !empty ? `${docList}
+          ${topics.length ? `<h3 class="kb-h">主題頁 <span class="muted small">${topics.length} 頁 · 把多份文件講同一件事的規定整理在一起</span></h3><div class="kb-list">${topics.map(p => pageRow(p)).join('')}</div>` : ''}
+          ${srcs.length ? `<h3 class="kb-h">文件摘要頁 <span class="muted small">${srcs.length} 頁 · 一份文件一頁</span></h3><div class="kb-list">${srcs.map(p => pageRow(p)).join('')}</div>` : ''}
+          ${todo}${idx.items.length ? '<p class="muted small">已發布的頁不另外標示，只標「可能過時」。AI 也搜得到這些頁，回答會附出處。</p>' : ''}`
+          : `<div class="kb-empty"><div class="kb-empty-ic" aria-hidden="true">📚</div><b>知識庫還是空的</b>
+            <p>把想讓 AI 讀懂的文件放進來，例如規章、手冊、流程。放進來的會抽字、整理成知識頁，大家和 AI 都搜得到；一般專案文件不會。</p>
+            ${mgr ? `<span class="kb-empty-btns">${kd.enabled ? '<button type="button" class="btn small primary" data-kb-up>⬆ 上傳到知識庫</button>' : ''}<button type="button" class="btn small" data-kb-go-docs>從專案文件挑</button></span>` : '<p>請 leader 把文件放進來。</p>'}
+            <a class="small" href="/help/6">第一次用？看教學：知識庫怎麼設定 ›</a>${todo}</div>`;
+        return;
+      }
+      if (res.error) { el.innerHTML = `<p class="error">${esc(res.error)}</p>`; return; }
+      const pages = res.pages || [];
+      el.innerHTML = (pages.length ? `<h3 class="kb-h">知識頁 <span class="muted small">${res.pageTotal ?? pages.length} 筆</span></h3><div class="kb-list">${pages.map(p => pageRow(p, res.terms, p.snippet)).join('')}</div>` : '')
+        + (res.items.length ? `
+        <h3 class="kb-h">文件原文 <span class="muted small">${res.total} 段 · 依符合程度排序</span></h3>
+        <div class="kb-list">${res.items.map(x => `
+          <button type="button" class="kb-row" data-kb-doc="${esc(x.docId)}" data-kb-idx="${x.idx}">
+            <span class="kb-ic" aria-hidden="true">📝</span>
+            <span class="kb-row-main"><span class="kb-row-head"><b>${esc(x.docName)}</b> <span class="kb-sec">›${x.section ? ` ${esc(x.section)} ·` : ''} 第 ${x.idx + 1} 段</span></span>
+              <span class="kb-snip">${kbMark(x.snippet, res.terms)}</span></span></button>`).join('')}</div>` : '')
+        + (pages.length || res.items.length ? '<p class="muted small">原文是逐字比對：搜「年假」找不到寫「特別休假」的原文，但知識頁有寫常見問法，所以會出現在上面那區。</p>'
+          : `<p class="muted kb-none">找不到「${esc(res.q)}」。原文是逐字比對，試試換個說法（例如「年假」改搜「特別休假」），或少打幾個詞。</p>`);
+    };
+    show();
+    box.querySelector('#kb-form').onsubmit = async e => {
+      e.preventDefault();
+      const q = box.querySelector('#kb-q').value.trim();
+      if (!q) { kbUi.q = ''; kbUi.res = null; return show(); }
+      if (q.length < 2) return toast('至少打 2 個字');
+      kbUi.q = q;
+      try { kbUi.res = { q, ...(await api(`${base}/search?q=${encodeURIComponent(q)}&limit=20`)) }; }
+      catch (err) { kbUi.res = { q, error: err.message }; }
+      show();
+    };
+    box.querySelector('#kb-q').addEventListener('search', e => { if (!e.target.value) { kbUi.q = ''; kbUi.res = null; show(); } }); // 按輸入框的 × 清空
+    box.onclick = e => {
+      const h = e.target.closest('[data-kb-doc]');
+      if (h) { kbUi.read = { docId: h.dataset.kbDoc, idx: Number(h.dataset.kbIdx) }; return kbRead(box, pj); }
+      const pg = e.target.closest('[data-kb-page]');
+      if (pg) { kbUi.page = pg.dataset.kbPage; return kbPage(box, pj); }
+      const c = e.target.closest('[data-kb-card]');
+      if (c) return openCard(c.dataset.kbCard);
+      if (e.target.closest('[data-kb-set-ai]')) return kbAiSetting(pj);
+      if (e.target.closest('[data-kb-go-docs]')) { filesUi.tab = 'docs'; openFiles(); }
+      const redo = e.target.closest('[data-kb-redo]');
+      if (redo) return kbRedo(pj, redo.dataset.kbRedo);
+      if (e.target.closest('[data-kb-up]')) box.querySelector('#kb-input').click();
+    };
+    box.querySelector('#kb-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files, true); });
+  }
+  const kbOut = p => /^來源已移出知識庫：/.test(p.staleNote || ''); // 來源移出知識庫的頁
+  const kbBackLabel = () => (kbUi.q ? `回搜尋結果「${esc(kbUi.q)}」` : '回知識庫');
+  // 知識頁（設計稿 05、05v2、06）：頂端「AI 整理，以原始文件為準」＋整理的 AI、時間、來源；leader 有退回、刪除；過時頁有「請 AI 更新」
+  async function kbPage(box, pj) {
+    const base = `/api/projects/${encodeURIComponent(pj)}/kb/pages/${encodeURIComponent(kbUi.page)}`;
+    let p;
+    try { p = await api(base); } catch (err) { toast(err.message); kbUi.page = null; return openFiles(); }
+    const returned = /退回：/.test(p.staleNote || '');
+    const out = p.status === 'stale' && kbOut(p) && !p.sources.some(s => s.exists && s.inKb) && /^來源已移出知識庫：(.+)（(.+)）$/.exec(p.staleNote); // 來源都移出知識庫了
+    box.innerHTML = `
+      <button type="button" class="link kb-back" data-kb-back>‹ ${kbBackLabel()}</button>
+      <div class="kb-read-head"><h3>${KB_ICON(p.kind)} ${esc(p.title)}</h3><span class="muted small">${p.kind === 'topic' ? '主題頁' : '文件摘要頁'}</span>
+        ${p.canManage && !out ? '<span class="kb-page-acts"><button type="button" class="btn small" data-kb-return>退回</button><button type="button" class="btn small danger-outline" data-kb-del>刪除</button></span>' : ''}</div>
+      ${out ? `<div class="kb-stale kb-out"><span>⚠ 來源已移出知識庫：${esc(out[1])}（${esc(out[2])}${p.staleAt ? ` · ${esc(shortTime(p.staleAt))}` : ''}）。這頁不會再更新。</span>${p.canManage ? '<button type="button" class="btn small danger-outline" data-kb-del>刪除這頁</button>' : ''}</div>`
+        : p.status === 'stale' ? `<div class="kb-stale"><span><b>⚠ ${returned ? '內容可能過時。' : '來源已更新，內容可能過時。'}</b><span>${esc(p.staleNote || '')}</span>${p.staleAt ? `<span>${L('（', ' (')}${esc(shortTime(p.staleAt))}${L('）', ')')}</span>` : ''}</span>
+        ${p.updateCard ? `<span class="muted small">更新中，卡片 <button type="button" class="link small" data-kb-card="${esc(p.updateCard)}">${esc(p.updateCard)}</button></span>` : p.canManage ? '<button type="button" class="btn small primary" data-kb-refresh>請 AI 更新</button>' : ''}</div>` : ''}
+      <div class="kb-meta">🤖 <b>AI 整理，以原始文件為準</b><span>整理：${esc(p.author?.name || '?')}</span><span>${esc(shortTime(p.updatedAt))}</span>
+        <span>來源：${p.sources.map(s => (s.exists ? `<button type="button" class="link small" data-kb-src="${esc(s.docId)}">${esc(s.name)}</button>` : `<s>${esc(s.name)}</s>（已刪除）`)).join(L('、', ', '))}</span></div>
+      <div class="kb-page-body md-doc">${kbMd(p.body, p.notices)}</div>`;
+    box.onclick = async e => {
+      if (e.target.closest('[data-kb-back]')) { kbUi.page = null; return openFiles(); }
+      const src = e.target.closest('[data-kb-src]');
+      if (src) { kbUi.read = { docId: src.dataset.kbSrc, idx: 0, from: p.title }; return kbRead(box, pj); }
+      const c = e.target.closest('[data-kb-card]');
+      if (c) return openCard(c.dataset.kbCard);
+      const msg = e.target.closest('[data-kb-msg]');
+      if (msg) { showPage('messages'); return jumpTo(msg.dataset.kbMsg); }
+      try {
+        if (e.target.closest('[data-kb-refresh]')) {
+          const r = await api(`${base}/refresh`, { method: 'POST', body: {} });
+          toast(r.reused ? `已經有更新卡 ${r.cardId} 在做` : `開了更新卡 ${r.cardId} 給 ${r.ai?.name || 'AI'}`);
+          return kbPage(box, pj);
+        }
+        if (e.target.closest('[data-kb-return]')) return kbReturn(box, pj, p);
+        if (e.target.closest('[data-kb-del]')) {
+          if (!await confirmDialog({ title: '刪除知識頁？', confirmText: '刪除', danger: true, message: `刪除「${esc(p.title)}」後，大家和 AI 都看不到、搜不到這頁（原始文件不受影響）。` })) return;
+          await api(base, { method: 'DELETE' });
+          toast('已刪除知識頁');
+          kbUi.page = null; return openFiles();
+        }
+      } catch (err) { toast(err.message); }
+    };
+    box.querySelector('[data-kb-back]').focus();
+  }
+  // 退回（設計稿 07）：原因必填；退回後頁面標可能過時，開更新卡給寫的 AI
+  function kbReturn(box, pj, p) {
+    const host = document.createElement('div');
+    host.className = 'confirm-root';
+    host.innerHTML = modalFrame({ title: `退回「${p.title}」`, size: 'narrow',
+      body: `<label class="kb-field" for="kb-reason">退回原因（必填，會寫進更新卡給 AI 看）</label><textarea id="kb-reason" rows="4" maxlength="300" aria-describedby="kb-reason-err"></textarea><p class="kb-err" id="kb-reason-err" role="alert" hidden>請寫退回原因</p>
+        <div class="kb-info">退回後這頁標成「可能過時」，大家還看得到；同時開一張更新卡給 <b>${esc(p.author?.name || '寫這頁的 AI')}</b>。</div>`,
+      foot: '<button class="btn" type="button" data-kbr="0">取消</button><button class="btn primary" type="button" data-kbr="1">退回</button>' });
+    document.body.appendChild(host);
+    holdBackdrop(host.firstElementChild);
+    const close = () => host.remove();
+    host.addEventListener('click', async e => {
+      const b = e.target.closest('[data-kbr]');
+      if (e.target.closest('[data-close]') || b?.dataset.kbr === '0') return close();
+      if (!b) return;
+      const reason = host.querySelector('#kb-reason').value.trim();
+      if (!reason) { host.querySelector('#kb-reason-err').hidden = false; return host.querySelector('#kb-reason').focus(); } // UX：只在空白時出現、放在輸入框下方
+      try {
+        const r = await api(`/api/projects/${encodeURIComponent(pj)}/kb/pages/${encodeURIComponent(p.pageId)}/return`, { method: 'POST', body: { reason } });
+        close();
+        toast(r.reused ? `已退回；更新卡 ${r.cardId} 已經在做` : `已退回，開了更新卡 ${r.cardId} 給 ${r.ai?.name || 'AI'}`);
+        kbPage(box, pj);
+      } catch (err) { toast(err.message); }
+    });
+    host.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
+    host.querySelector('#kb-reason').addEventListener('input', e => { if (e.target.value.trim()) host.querySelector('#kb-reason-err').hidden = true; });
+    host.querySelector('#kb-reason').focus();
+  }
+  // 知識庫整理 AI 設定（設計稿 10、11）：專案 ⚙ 選單；leader／管理員
+  const kbAiNames = {};
+  async function kbAiSetting(pj) {
+    let set;
+    try { set = await api(`/api/projects/${encodeURIComponent(pj)}/kb/settings`); } catch (err) { return toast(err.message); }
+    const host = document.createElement('div');
+    host.className = 'confirm-root';
+    const opt = (v, title, sub, on) => `<label class="kb-ai-opt${on ? ' on' : ''}"><input type="radio" name="kbai" value="${esc(v)}"${on ? ' checked' : ''}><span><b>${esc(title)}</b> <span class="muted small">${esc(sub)}</span></span></label>`;
+    host.innerHTML = modalFrame({ title: '📚 知識庫整理 AI', size: 'narrow',
+      body: `<p class="muted small">文件放進知識庫後，自動開整理卡給這隻 AI，請它寫成知識頁。只能選這個專案裡的 AI。</p><div class="kb-ai-list" role="radiogroup" aria-label="知識庫整理 AI">
+        ${set.candidates.map(c => opt(c.participantId, c.name, `${c.role}${c.working ? ` · ${c.working} 張進行中` : c.standby ? ' · 待命' : ''}`, c.participantId === set.aiId)).join('')}
+        ${opt('', '不自動整理', '放進知識庫的文件只抽字、可以搜原文，不會整理成知識頁。', !set.aiId)}</div><div class="kb-skill-warn" role="status" aria-live="polite" hidden></div>`,
+      foot: '<button class="btn" type="button" data-kbs="0">取消</button><button class="btn primary" type="button" data-kbs="1">儲存</button>' });
+    document.body.appendChild(host);
+    holdBackdrop(host.firstElementChild);
+    const close = () => host.remove();
+    // 選到的 AI 沒裝「知識庫整理」技能：黃字提醒、附去裝技能的連結；不擋儲存
+    const warn = () => {
+      const v = host.querySelector('input[name=kbai]:checked')?.value, st = set.candidates.find(c => c.participantId === v)?.kbSkill, box = host.querySelector('.kb-skill-warn');
+      box.hidden = !v || !st || st === 'installed';
+      box.innerHTML = st === 'sent' ? '⚠ 「知識庫整理」技能已發給這隻 AI，還沒裝好。請它的主人在「我的 AI › 🧩 技能」按「同步」。'
+        : '⚠ 這隻 AI 還沒有「知識庫整理」技能，整理出來的頁會少很多。' + L('', ' ') + '<button type="button" class="link" data-kb-skill>去裝技能 ›</button>';
+    };
+    warn();
+    host.addEventListener('change', () => { host.querySelectorAll('.kb-ai-opt').forEach(l => l.classList.toggle('on', l.querySelector('input').checked)); warn(); });
+    host.addEventListener('click', async e => {
+      const b = e.target.closest('[data-kbs]');
+      if (e.target.closest('[data-kb-skill]')) { close(); return openPermTab('members', { tab: 'skills', memView: 'byProject', selProj: pj, mobileDetail: true, pq: '' }); }
+      if (e.target.closest('[data-close]') || b?.dataset.kbs === '0') return close();
+      if (!b) return;
+      const v = host.querySelector('input[name=kbai]:checked')?.value || null;
+      try {
+        await api(`/api/projects/${encodeURIComponent(pj)}/kb/settings`, { method: 'PUT', body: { aiId: v } });
+        kbAiNames[pj] = v ? set.candidates.find(c => c.participantId === v)?.name : '不自動整理';
+        close();
+        toast(v ? `知識庫整理 AI：${kbAiNames[pj]}` : '已設為不自動整理');
+        if (state.page === 'files') openFiles();
+      } catch (err) { toast(err.message); }
+    });
+    host.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
+    (host.querySelector('input[name=kbai]:checked') || host.querySelector('input[name=kbai]')).focus();
+  }
+  // 讀一段原文（設計稿 04）：在頁面裡換成這一段；上一段／下一段、下載原檔；手機按鈕固定在底部
+  async function kbRead(box, pj) {
+    const { docId, idx } = kbUi.read;
+    let r;
+    try { r = await api(`/api/projects/${encodeURIComponent(pj)}/docs/${encodeURIComponent(docId)}/text?from=${idx}&limit=1`); }
+    catch (err) { toast(err.message); kbUi.read = null; return openFiles(); }
+    const c = r.items[0], total = r.totalChunks, has = i => i >= 0 && i < total;
+    const pageBtn = i => (has(i) ? (i === idx ? `<b aria-current="true">${i + 1}</b>` : `<button type="button" class="link" data-kb-nav="${i}">${i + 1}</button>`) : '');
+    box.innerHTML = `
+      <button type="button" class="link kb-back" data-kb-back>‹ ${kbUi.read.from ? `回知識頁「${esc(kbUi.read.from)}」` : kbBackLabel()}</button>
+      <div class="kb-read-head"><h3>${esc(r.name)}</h3>${c ? `<span class="kb-pill grey">第 ${idx + 1} 段／共 ${total} 段</span>` : ''}<button type="button" class="btn small kb-dl-top" data-kb-dl>⬇ 下載原檔</button></div>
+      ${c ? `<p class="muted small kb-read-sec">${esc(c.section || '（沒有標題）')}</p><div class="kb-text">${kbMark(c.content, kbUi.res?.terms)}</div>` : `<p class="muted">${esc(r.note || '沒有內容')}</p>`}
+      <div class="kb-pager">
+        <button type="button" class="btn" data-kb-nav="${idx - 1}"${has(idx - 1) ? '' : ' disabled'}>‹ 上一段</button>
+        <span class="kb-pages">${[idx - 1, idx, idx + 1].map(pageBtn).filter(Boolean).join('<span aria-hidden="true">·</span>')}</span>
+        <button type="button" class="btn" data-kb-nav="${idx + 1}"${has(idx + 1) ? '' : ' disabled'}>下一段 ›</button>
+        <button type="button" class="btn kb-dl-bottom" data-kb-dl>⬇ 原檔</button>
+      </div>
+      <p class="muted small">只顯示這一段，不載入整份文件；要看全文請下載原檔。${r.truncated ? ' ' + esc(r.note) : ''}</p>`;
+    box.onclick = e => {
+      const nav = e.target.closest('[data-kb-nav]');
+      if (nav && !nav.disabled) { kbUi.read.idx = Number(nav.dataset.kbNav); return kbRead(box, pj); }
+      if (e.target.closest('[data-kb-back]')) { kbUi.read = null; return openFiles(); }
+      if (e.target.closest('[data-kb-dl]')) { const it = filesUi.data?.items.find(x => x.docId === docId); downloadFrom(it?.downloadUrl || `/api/projects/${encodeURIComponent(pj)}/docs/${docId}`, it?.name || r.name); }
+    };
+    box.querySelector('[data-kb-back]').focus();
   }
   async function docAction(pj, act, kind, id) {
     const d = filesUi.data, base = `/api/projects/${encodeURIComponent(pj)}`;
@@ -8199,13 +8528,13 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
   }
   // 多選上傳：先在本機擋掉類型、大小不對的，勾一次聲明，一個一個送，每個檔旁邊寫成功或失敗原因
-  function uploadDocs(pj, files) {
-    const folder = filesUi.folder, d = filesUi.data;
+  function uploadDocs(pj, files, kb = false) { // kb：從知識庫分頁上傳＝放進知識庫（放最上層）
+    const folder = kb ? null : filesUi.folder, d = filesUi.data;
     const where = folder ? docFolderPath(d.folders, folder).map(f => f.name).join(' ▸ ') : '最上層';
     const extOf = f => (f.name.includes('.') ? f.name.split('.').pop() : '').toLowerCase();
     const pre = files.map(f => ({ f, problem: !FILE_EXTS.includes(extOf(f)) ? `不允許的類型「.${extOf(f)}」` : !f.size ? '檔案是空的' : f.size > d.maxFileBytes ? `${fmtBytes(f.size)} 超過 ${fmtBytes(d.maxFileBytes)} 上限` : '' }));
     const okN = pre.filter(x => !x.problem).length;
-    const body = openModal('上傳到專案文件', `
+    const body = openModal(kb ? '上傳到知識庫' : '上傳到專案文件', `${kb ? '<p class="muted small">放進知識庫的文件會抽字，交給整理 AI 寫成知識頁，大家和 AI 都搜得到。只想存檔的，放「專案文件」就好。</p>' : ''}
       <p>放到 <b>${esc(projName(pj))} ▸ ${esc(where)}</b>，共 ${files.length} 個檔${okN < files.length ? `（${files.length - okN} 個不能上傳，原因寫在旁邊）` : ''}。</p>
       <ul class="up-list">${pre.map((x, i) => `<li data-up="${i}"><span class="file-icon" aria-hidden="true">${fileIcon(extOf(x.f))}</span><span class="up-name">${esc(x.f.name)}</span><span class="muted small">${fmtBytes(x.f.size)}</span><span class="up-st${x.problem ? ' bad' : ''}">${x.problem ? '✗ ' + esc(x.problem) : '等待上傳'}</span></li>`).join('')}</ul>
       ${okN ? `<div class="warn-box">專案文件長期保存、不會自動刪除，本專案成員都能下載。</div>
@@ -8227,6 +8556,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         try {
           const q = new URLSearchParams({ name: x.f.name, declared: 'true' });
           if (folder) q.set('folderId', folder);
+          if (kb) q.set('kb', '1');
           const r = await fetch(`/api/projects/${encodeURIComponent(pj)}/docs?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: x.f });
           const data = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
@@ -8570,6 +8900,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const admin = isAdmin(), lead = leadersOf(pj).includes(meId()), it = [];
     if (admin || lead) it.push(['rename', '✏️', '改名'], ['repo', '🔗', '程式庫與分支']);
     it.push(['members', '👥', '成員與本專案角色']);
+    if (admin || lead) it.push(['kbai', '📚', '知識庫整理 AI', esc(kbAiNames[pj] || '')]); 
     return it;
   }
   function psetOpen(btn, open) {
@@ -8587,9 +8918,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     m.style.left = `${Math.round(Math.max(8, Math.min(r.left, innerWidth - w - 8)))}px`; m.style.right = 'auto';
     m.style.top = `${Math.round(r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6)}px`;
     m.querySelector('button')?.focus();
+    const kb = m.querySelector('[data-pset-act="kbai"]'); // 選單下面小字顯示目前選誰
+    if (kb && kbAiNames[pj] === undefined) api(`/api/projects/${encodeURIComponent(pj)}/kb/settings`).then(r => { kbAiNames[pj] = r.candidates.find(c => c.participantId === r.aiId)?.name || '不自動整理'; if (!m.hidden && m.dataset.pj === pj) kb.insertAdjacentHTML('beforeend', `<span class="muted small">${esc(kbAiNames[pj])}</span>`); }).catch(() => {});
   }
   async function psetAct(k, pj) {
     try {
+      if (k === 'kbai') return kbAiSetting(pj);
       if (k === 'members') return openPermTab('members', { tab: 'members', memView: 'byProject', selProj: pj, mobileDetail: true, pq: '' });
       if (k === 'repo') return openRepoEditor(pj);
       if (k === 'rename') {

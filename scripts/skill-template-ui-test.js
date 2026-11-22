@@ -69,7 +69,7 @@ try {
   await click('.sk-bar [data-sknew]');
   await until(() => js("document.querySelectorAll('.sk-new-row').length === 3"), 8000, '推薦 3 個');
   assert.match(await txt('.sk-new-rech'), /⭐ 推薦給「預設專案」.*依專案裡 AI 的角色挑/);
-  assert.equal(await txt('#sk-new-list [data-sknew-all]'), '看全部 6 個範本 ▾');
+  assert.equal(await txt('#sk-new-list [data-sknew-all]'), '看全部 7 個範本 ▾');
   assert.ok(await js("!!document.querySelector('#sk-new-q') && document.querySelectorAll('[data-sknew-cat]').length >= 4"), '有搜尋與分類');
   assert.match(await txt('.sk-new-up'), /上傳自己的 SKILL\.md/);
   await click('[data-sknew-peek="commit-convention"]');
@@ -90,7 +90,7 @@ try {
   await until(() => js("document.querySelectorAll('.sk-new-item').length === 1"), 5000, '安全分類');
   assert.match(await txt('.sk-new-pv'), /security-checklist/);
   await click('[data-sknew-cat=""]');
-  await until(() => js("document.querySelectorAll('.sk-new-item').length === 6"), 5000, '全部 6 個');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 7"), 5000, '全部 7 個（含知識庫整理）');
   await click('[data-sknew-sel="report-and-ask"]');
   assert.match(await txt('.sk-new-pv'), /report-and-ask/, '點一列換右邊預覽');
   // 按列上的「套用」→ 接套用視窗，專案已選好
@@ -130,9 +130,9 @@ try {
   assert.match(await js("document.querySelector('.sk-new-row [data-sktpl=\"commit-convention\"]').closest('.sk-new-row').textContent"), /預設專案已套用 v1/);
   await shot('PLAT-365-B4-已套用再套一次-1280.png');
   await click('#sk-new-list [data-sknew-all]');
-  await until(() => js("document.querySelectorAll('.sk-new-item').length === 6"), 5000, '看全部');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 7"), 5000, '看全部');
   await click('#sk-new-unused');
-  await until(() => js("document.querySelectorAll('.sk-new-item').length === 5"), 5000, '只看還沒套用的');
+  await until(() => js("document.querySelectorAll('.sk-new-item').length === 6"), 5000, '只看還沒套用的');
   assert.equal(await js("!!document.querySelector('[data-sknew-sel=\"commit-convention\"]')"), false);
   await click('[data-skcancel]');
 
@@ -210,7 +210,7 @@ try {
   await click('.sk-bar [data-sknew]');
   await until(() => js("document.querySelectorAll('.sk-new-row').length === 3"), 8000, '英文新增視窗');
   const enText = await js("document.querySelector('.modal').innerText");
-  assert.match(enText, /Add skill[\s\S]*Recommended for[\s\S]*See all 6 templates[\s\S]*Upload your own SKILL\.md/);
+  assert.match(enText, /Add skill[\s\S]*Recommended for[\s\S]*See all 7 templates[\s\S]*Upload your own SKILL\.md/);
   const left = enText.replace(/預設專案|程式開發/g, '').match(/[一-鿿]+/g);
   assert.ok(!left, '新增視窗沒有中文殘留：' + (left || []).join(' '));
   await shot('PLAT-365-B2-新增視窗-英文-1280.png');
