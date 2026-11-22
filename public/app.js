@@ -5983,12 +5983,16 @@
   // ---------- 聚光燈導覽：說明頁章首「▶ 帶我在畫面上走一次」、新手上路「帶我走」 ----------
   // 框架在 /tour.js（自寫、沒有外部套件；說明文字由它照介面語言翻）；這裡只寫每條路線框哪裡、說什麼。只框、只說明，不替使用者按、不送出、不動資料。
   // 不記錄走過導覽：新手上路「走一遍」照原本的規則算（讀完說明第 2 章）
-  const HELP_TOURS = { 1: '讓你的 AI 加入', 2: '跟著走一遍' }; // 章 → 說明框上的章名
+  const HELP_TOURS = { 1: '讓你的 AI 加入', 2: '跟著走一遍', 6: '知識庫' }; // 章 → 說明框上的章名
+  const HELP_TOUR_STEPS = { 1: 4, 2: 4, 6: 5 };
+  // 第 6 章導覽只給 leader／管理員（一般成員不顯示入口）。用說明頁回去的那個專案，不是 leader 就找第一個是的
+  const kbTourOk = pj => PROJECTS.includes(pj) && myProjects().includes(pj) && (isAdmin() || leadersOf(pj).includes(meId()));
+  const kbTourProj = () => { const b = state.page === 'help' ? help.back : { view: state.view }; return b && kbTourOk(b.view) ? b.view : myProjects().find(kbTourOk); };
   // 說明目錄選「不會帶 AI」時，第 1 章入口變灰、寫「不帶 AI 可跳過」（還是可以按）
   const tourEntryHtml = n => {
-    if (!HELP_TOURS[n]) return '';
+    if (!HELP_TOURS[n] || (n === 6 && !kbTourProj())) return '';
     const dim = n === 1 && helpMode() === 'work';
-    return `<div class="help-tour${dim ? ' dim' : ''}"><button type="button" class="btn primary" data-tour-start="${n}">▶ 帶我在畫面上走一次</button><span class="muted small"><span>約 1 分鐘、4 步。只框出要按的地方，不會替你按、不會動到資料；隨時按 Esc 結束。</span>${dim ? '<b class="ht-skip">不帶 AI 可跳過</b>' : ''}</span></div>`;
+    return `<div class="help-tour${dim ? ' dim' : ''}"><button type="button" class="btn primary" data-tour-start="${n}">▶ 帶我在畫面上走一次</button><span class="muted small"><span>約 1 分鐘、${HELP_TOUR_STEPS[n]} 步。只框出要按的地方，不會替你按、不會動到資料；隨時按 Esc 結束。</span>${dim ? '<b class="ht-skip">不帶 AI 可跳過</b>' : ''}</span></div>`;
   };
   const shownEl = sel => { const e = typeof sel === 'string' ? document.querySelector(sel) : sel; return !!e && e.getClientRects().length > 0; };
   // 路線 A：第 2 章「跟著走一遍」4 步：訊息框 → 最新一張卡的卡片串 → 側欄「要你處理」 → 「等你驗收」；找不到元素就改成說明（不默默跳過）
@@ -6091,6 +6095,64 @@
           text: '這隻 AI 的 Token 過期了，先按「重發 Token」，再複製接入文字貼給它。', tip: '重發要你自己按；導覽不會碰你的 Token。' } },
     ];
   }
+  // 路線 C：第 6 章「知識庫」5 步。只讀設定、技能清單來決定說法；選單、技能抽屜跟使用者自己點開一樣，不送出、不動資料
+  function kbTourSteps(proj) {
+    const enc = encodeURIComponent(proj);
+    let set = null, skill; // 整理 AI 設定（第 2 步讀）、這個專案的「知識庫整理」技能（第 3 步讀；undefined＝還沒讀）
+    const drawer = () => document.querySelector('.sk-drawer-wrap');
+    const closeDrawer = () => drawer()?.click(); // 點抽屜外的灰底＝抽屜自己的關閉（連 Esc 監聽一起拿掉）
+    const skillsOpen = () => !!$('#modal-root .sk-view');
+    const atKb = () => state.page === 'files' && projectView() === proj && filesUi.tab === 'kb' && !$('#modal-root').firstElementChild && !drawer();
+    const goKb = () => {
+      closeDrawer(); psetOpen(null, false);
+      if ($('#modal-root').firstElementChild) closeModal();
+      filesUi.tab = 'kb';
+      return state.page === 'files' && projectView() === proj ? openFiles() : setProjectView(proj, 'files');
+    };
+    const gear = () => [...document.querySelectorAll(`.ph-gear[data-pset="${CSS.escape(proj)}"]`)].find(b => shownEl(b));
+    const aiName = () => set?.candidates?.find(c => c.participantId === set.aiId)?.name || '';
+    const menuItem = () => { const m = $('#pset-menu'); return m && !m.hidden && m.dataset.pj === proj ? m.querySelector('[data-pset-act="kbai"]') : null; };
+    const notSynced = () => !!skill?.install && skill.install.installed < skill.install.target;
+    return [
+      { at: atKb, go: goKb, prep: () => psetOpen(null, false), find: () => $('[data-files-tab="kb"]'),
+        title: '知識庫在「文件」的第一個分頁', text: '只有放進這裡的文件會被 AI 整理、被搜尋，回答會附出處。一般專案文件只存檔。' },
+      { at: atKb, go: goKb,
+        prep: async () => {
+          try { set = await api(`/api/projects/${enc}/kb/settings`); } catch { set = null; }
+          if (set?.aiId) return psetOpen(null, false);
+          const g = gear();
+          if (g && !menuItem()) psetOpen(g, true); // 還沒指定：打開 ⚙ 選單＝跟使用者自己點開一樣
+        },
+        find: menuItem, ready: () => !!set?.aiId, // 已指定就不等選單，直接框 ⚙
+        pause: () => !!document.querySelector('.confirm-root'), pauseTip: '設定視窗關掉後就能繼續。', // 使用者自己點開了設定視窗
+        title: '先指定整理 AI', text: '按 ⚙，選「📚 知識庫整理 AI」，挑一隻 AI 負責把文件寫成知識頁，建議用 PO 或 BA。導覽不會替你選。',
+        alt: { find: gear,
+          get title() { return set?.aiId ? `整理 AI：${aiName()}` : '先指定整理 AI'; },
+          get text() { return set?.aiId ? '這個專案已經指定好了。要換人，再從 ⚙ ›「📚 知識庫整理 AI」改。' : '按 ⚙，選「📚 知識庫整理 AI」，挑一隻 AI 負責把文件寫成知識頁，建議用 PO 或 BA。導覽不會替你選。'; } } },
+      { at: () => skillsOpen() && (!skill || !!drawer()),
+        go: () => { psetOpen(null, false); skill = undefined; openSkillsView(proj); },
+        prep: async () => {
+          psetOpen(null, false);
+          for (let k = 0; k < 30 && !skv.data; k++) await new Promise(r => setTimeout(r, 100));
+          skill = skv.data?.items.find(s => s.project === proj && s.template?.name === 'kb-curation' && s.status === 'published') || null;
+          if (skill && !drawer()) skOpenDrawer(skill.skillId); // 打開技能抽屜＝跟使用者自己點那張卡一樣
+        },
+        find: () => drawer()?.querySelector('[data-sk-installs]'), ready: () => skill === null,
+        title: '確認它裝了「知識庫整理」技能', text: '沒裝也會整理，但頁數少很多、也不會照規則問你。看到「已裝」才算好。',
+        get tip() { return notSynced() ? '還沒裝：請 AI 的主人到「我的 AI › 🧩 技能」按「同步」。' : ''; },
+        alt: { find: () => $('#modal-root .sk-bar [data-sknew]'),
+          title: '這個專案還沒有「知識庫整理」技能', text: '按「＋ 新增技能」，套用範本「知識庫整理」。沒裝也會整理，但頁數少很多、也不會照規則問你。', tip: '導覽不會替你按。' } },
+      { at: atKb, go: goKb,
+        find: () => $('#kb-form [data-kb-up]') || $('#kb-results .kb-empty-btns'), ready: () => !!$('#kb-results > *'),
+        sides: ['right', 'bottom', 'top', 'left'], // 空知識庫兩顆鈕正下方是教學連結：說明框先放右邊，不蓋到它
+        title: '把文件放進知識庫', text: '新文件按「⬆ 上傳到知識庫」；已經在專案文件的，到「專案文件」勾選後按「📚 加入知識庫」。放進來的會自動排進整理卡。',
+        alt: { find: () => $('[data-files-tab="docs"]'), text: '已經在專案文件的，到「專案文件」勾選後按「📚 加入知識庫」。放進來的會自動排進整理卡。' } },
+      { at: () => state.page === 'inbox' && projectView() === proj, go: () => { closeDrawer(); if ($('#modal-root').firstElementChild) closeModal(); return setProjectView(proj, 'inbox'); },
+        find: () => $('.sidebar [data-nav="inbox"]'),
+        title: '整理 AI 會來問你', text: '兩份文件規定不一樣時，整理 AI 會發 [需確認] 問你以哪份為準，出現在「要你處理」。選一個，它就照你的答案寫。',
+        tip: '導覽到這裡結束。整理好的頁到 📚 知識庫看，不對就按「退回」。' },
+    ];
+  }
   // 結束後焦點回到入口。頁面會重畫（總覽載完資料可能再畫一次，舊的連結被換掉、焦點掉回頁面），
   // 所以 2 秒內持續看著：焦點掉回 body 就再放回去；使用者自己把焦點移到別處就不管
   async function focusEntry(sel) {
@@ -6106,7 +6168,9 @@
     const T = window.AigileTour;
     if (!T || !HELP_TOURS[n] || window.innerWidth < T.MIN_W) return;
     if (n === 2 && !myProjects().length) return T.notice({ text: '你還沒加入專案。先到左側「申請加入專案」，加入後再回來。' });
-    const steps = n === 2 ? walkTourSteps() : n === 1 ? aiTourSteps() : null;
+    const kbProj = n === 6 ? kbTourProj() : '';
+    if (n === 6 && !kbProj) return;
+    const steps = n === 2 ? walkTourSteps() : n === 1 ? aiTourSteps() : n === 6 ? kbTourSteps(kbProj) : null;
     if (!steps) return;
     const back = { view: state.view, page: state.page }; // 從哪開始（說明頁或總覽的新手上路），結束時回那裡
     // 從新手上路「帶我走」進來的，焦點回那個連結；其他回說明頁章首的按鈕
@@ -6114,7 +6178,9 @@
     T.start({ label: `第 ${n} 章　${HELP_TOURS[n]}`, steps, onEnd: why => {
       if (why === 'restart') return;
       if (!$('#av-menu').hidden) avOpen(false);
+      psetOpen(null, false); // 第 6 章第 2 步打開的 ⚙ 選單
       if (why === 'done' || why === 'close') { // 按完成、×、Esc：回到原頁、焦點回入口；自己點到別頁、視窗縮窄：留在那頁
+        if (n === 6) { document.querySelector('.sk-drawer-wrap')?.click(); if ($('#modal-root .sk-view')) closeModal(); } // 第 3 步打開的技能彈窗與抽屜
         if (back.page === 'help') openHelp(n);
         else if (state.view !== back.view || state.page !== back.page) setProjectView(back.view, back.page);
         focusEntry(entrySel);
@@ -6679,13 +6745,13 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const s = await api(`/api/skills/${encodeURIComponent(id)}`);
       const pj = skv.data?.projects.find(p => p.id === s.project);
       const dot = { installed: ['ok', '已裝'], waiting: ['wait', '等主人允許'], not_synced: ['', '還沒同步'] };
-      box.innerHTML = `<div class="sk-dh">${skIcon(s)}<span class="sk-tt"><b class="sk-nm">${esc(s.name)}</b><span class="muted small">${esc(pj?.name || projName(s.project))} · ${esc(skToText(s))} · v${s.version}</span></span><span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || ''}</span><button type="button" class="modal-x" data-skx aria-label="關閉">×</button></div>
+      box.innerHTML = `<div class="sk-dh">${skIcon(s)}<span class="sk-tt"><b class="sk-nm">${esc(s.name)}</b><span class="muted small"><span>${esc(pj?.name || projName(s.project))}</span> · <span>${esc(skToText(s))}</span> · v${s.version}</span></span><span class="pill-tag ${SK_ST[s.status]?.[1] || 'grey'}">${SK_ST[s.status]?.[0] || ''}</span><button type="button" class="modal-x" data-skx aria-label="關閉">×</button></div>
         <div class="sk-sec"><b class="sk-h">${s.kind === 'pack' ? '說明（plugin.json）' : '說明（SKILL.md）'}</b>${esc(s.description)}${skBody(s.files.find(f => f.path === 'SKILL.md')?.text) ? `<div class="sk-skill">${esc(skBody(s.files.find(f => f.path === 'SKILL.md').text)).slice(0, 1200)}</div>` : ''}</div>
         ${s.kind === 'pack' ? skPackFilesHtml(s) : `<div class="sk-sec"><b class="sk-h">檔案${s.previous ? `<span>（跟 v${s.previous.version} 比較）</span>` : ''}</b>${s.files.map(f => skFileHtml(f, s.previous)).join('')}
           ${s.previous ? s.previous.files.filter(o => !s.files.some(f => f.path === o.path)).map(o => `<p class="small"><code>${esc(o.path)}</code> <span class="pill-tag red">刪除</span></p>`).join('') : ''}</div>`}
-        ${['published', 'pending'].includes(s.status) ? `<div class="sk-sec" id="sk-to-sec"><b class="sk-h">發給誰</b><div class="sk-to-sum">${esc(skToText(s))}${s.ais?.length ? `：${s.ais.map(a => esc(a.name) + (a.gone ? '（已不在專案，不會再發）' : '')).join('、')}` : ''}${s.canManage && skv.data?.projects.some(p => p.id === s.project) ? ' <button type="button" class="link small" data-skto>改</button>' : ''}</div></div>` : ''}
-        ${s.status === 'published' ? `<div class="sk-sec"><b class="sk-h">裝到哪些 AI</b>${s.installs.length ? s.installs.map(a => `<div class="sk-ai"><span class="sk-dot ${dot[a.state][0]}" aria-hidden="true"></span>${esc(a.name)}（${esc(a.owner)}）· ${a.state === 'waiting' && a.mine ? '等你允許' : dot[a.state][1]}${a.state === 'installed' ? ` v${s.version}` : ''}${a.state === 'waiting' && a.mine ? `<button type="button" class="link small sk-push" data-skallow="${esc(a.aiId)}">允許並同步</button>` : ''}</div>`).join('') : '<p class="muted small">這個專案沒有符合發給誰的 AI。</p>'}</div>` : ''}
-        <div class="sk-sec"><b class="sk-h">版本</b>v${s.version} · ${esc(fmtTime(s.uploadedAt))} ${esc(s.uploadedBy.name)}上傳${s.reviewedBy ? `，${esc(s.reviewedBy.name)}核准` : s.status === 'published' ? '（直接上架）' : ''}${s.reviewNote ? ` · 審核：${esc(s.reviewNote)}` : ''}${s.template ? `<br><span class="muted small">${s.template.outdated ? `來自範本第 ${s.template.version} 版，範本已經有第 ${s.template.latest} 版` : `來自範本第 ${s.template.version} 版`}：<code>${esc(s.template.name)}</code></span>` : ''}</div>
+        ${['published', 'pending'].includes(s.status) ? `<div class="sk-sec" id="sk-to-sec"><b class="sk-h">發給誰</b><div class="sk-to-sum"><span>${esc(skToText(s))}</span>${s.ais?.length ? `：${s.ais.map(a => esc(a.name) + (a.gone ? '（已不在專案，不會再發）' : '')).join('、')}` : ''}${s.canManage && skv.data?.projects.some(p => p.id === s.project) ? ' <button type="button" class="link small" data-skto>改</button>' : ''}</div></div>` : ''}
+        ${s.status === 'published' ? `<div class="sk-sec" data-sk-installs><b class="sk-h">裝到哪些 AI</b>${s.installs.length ? s.installs.map(a => `<div class="sk-ai"><span class="sk-dot ${dot[a.state][0]}" aria-hidden="true"></span>${esc(a.name)}（${esc(a.owner)}）· <span class="sk-ai-st">${a.state === 'waiting' && a.mine ? '等你允許' : dot[a.state][1]}</span>${a.state === 'installed' ? ` v${s.version}` : ''}${a.state === 'waiting' && a.mine ? `<button type="button" class="link small sk-push" data-skallow="${esc(a.aiId)}">允許並同步</button>` : ''}</div>`).join('') : '<p class="muted small">這個專案沒有符合發給誰的 AI。</p>'}</div>` : ''}
+        <div class="sk-sec"><b class="sk-h">版本</b>v${s.version} · ${esc(fmtTime(s.uploadedAt))} ${esc(s.uploadedBy.name)}上傳${s.reviewedBy ? `，${esc(s.reviewedBy.name)}核准` : s.status === 'published' ? '（直接上架）' : ''}${s.reviewNote ? ` · 審核：${esc(s.reviewNote)}` : ''}${s.template ? `<br><span class="muted small"><span>${s.template.outdated ? `來自範本第 ${s.template.version} 版，範本已經有第 ${s.template.latest} 版` : `來自範本第 ${s.template.version} 版`}</span>：<code>${esc(s.template.name)}</code></span>` : ''}</div>
         ${s.canReview ? `<div class="sk-sec"><label class="field">審核說明（退回必填）<input id="sk-note" maxlength="300"></label><div class="row"><button type="button" class="btn danger" data-skno>退回（寫原因）</button><button type="button" class="btn primary" data-skok>看過全文與差異，核准上架</button></div></div>` : ''}
         <div class="sk-actions">${s.template?.outdated && s.canManage && ['published', 'pending'].includes(s.status) && (skv.tpls || []).some(t => t.name === s.template.name) ? '<button type="button" class="btn primary" data-sktplup>看範本新版</button>' : ''}${pj?.canUpload ? `<button type="button" class="btn" data-skup="${esc(s.project)}">上傳新版本</button>` : ''}${s.canManage && ['published', 'pending'].includes(s.status) ? `<button type="button" class="btn danger-outline" data-skrm>下架</button>` : ''}</div>`;
       // 技能包的其他檔（說明、測試資料）打開才畫，幾百個檔不一次塞進畫面

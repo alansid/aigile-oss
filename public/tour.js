@@ -12,6 +12,7 @@
 //   go()   換頁（只換頁、不動資料）；at() 現在是不是在這一步的頁面（使用者自己點到別頁就結束）
 //   find() 回要框的元素（或元素陣列，框住它們的聯集）；最多等 3 秒，找不到就用 alt 改成說明，不默默跳過
 //   altIf() 元素找得到、但要改說法（例如 0 件）；skip() 沒權限看那一頁就跳過，進度照算
+//   sides 說明框放哪邊的優先順序（預設下、上、右、左；例：框下面緊接著別的字，就先放右邊）
 //   sub：{ open(), enter(), after(), note(), label, steps } 主路線某一步底下的「小步」（平台 PLAT-316：使用者自己打開的表單裡一欄一欄帶）
 //     open() 為真就進小步、為假就離開：after() 回要接的主路線步驟（例：建好了 → 下一步），沒回就回到原本那一步
 //     note() 回 { text, find() } 時改成只放說明、不加亮塊（例：建好後跳出的視窗：先關掉它，導覽再接下一步）
@@ -186,7 +187,7 @@
       let els = await waitFind(step.find, step.wait ?? WAIT_MS, step.ready); // 元素還在載入：最多等 3 秒
       if (cur !== me) return;
       me.ui.pop.classList.remove('loading');
-      let view = { title: step.title, text: step.text, tip: step.tip, els, block: step.block?.() || '', lock: !!step.lock?.(), skipText: step.skipLink || '' };
+      let view = { title: step.title, text: step.text, tip: step.tip, els, block: step.block?.() || '', lock: !!step.lock?.(), skipText: step.skipLink || '', sides: step.sides };
       const useAlt = step.alt && (!els.length || step.altIf?.());
       if (useAlt) { // 找不到或是空的：能框別的就框別的，再把說明改成「現在是空的，之後會出現在這裡」
         const a = step.alt;
