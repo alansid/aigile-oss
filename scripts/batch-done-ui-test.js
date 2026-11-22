@@ -23,6 +23,7 @@ try {
   assert.ok(before.liuPending >= 3 && before.uxPending >= 1, '一開始的待處理：' + JSON.stringify(before));
 
   const { js, login, cdp } = await kit.browser(1280, 900);
+  await cdp('Emulation.setFocusEmulationEnabled', { enabled: true });
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const st = () => J(`(() => { const btn = document.querySelector('[data-ask-done]'), rows = [...document.querySelectorAll('.ask-row-item')];
     return { rows: rows.length, checks: document.querySelectorAll('[data-ask-check]').length, all: !!document.querySelector('[data-ask-all]'), btn: btn ? { off: btn.disabled, t: btn.textContent.trim() } : null,
@@ -32,7 +33,7 @@ try {
   for (const w of [375, 1280]) {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: w < 600 ? 812 : 900, deviceScaleFactor: 1, mobile: w < 600 });
     await login(boss.token, '/p/main/inbox');
-    await until(() => js(`document.querySelectorAll('.ask-row-item').length === 3`), 15000, `${w}：要你回覆 3 則`);
+    await until(() => js(`!document.querySelector('#app').hidden && document.querySelectorAll('.ask-row-item').length === 3`), 15000, `${w}：要你回覆 3 則`);
     await sleep(200);
     // A. 每則一個勾選框、全選、沒勾時按鈕不能按
     let s = await st();
@@ -97,7 +98,7 @@ try {
   for (const n of [1, 2]) assert.equal((await kit.call(ai.token, '/api/messages', 'POST', { requestId: 'p346q-' + n, project: '預設專案', recipientIds: [L], replyFrom: [L], text: `[需確認] 第 ${n} 題 QMARK${n}\n選項：\nA. 好\nB. 不好` })).status, 201, '[需確認] ' + n);
   const before2 = await count();
   await login(boss.token, '/p/main/inbox');
-  await until(() => js(`document.querySelectorAll('[data-conf-check]').length === 2`), 15000, '[需確認] 兩則有勾選框');
+  await until(() => js(`!document.querySelector('#app').hidden && document.querySelectorAll('[data-conf-check]').length === 2`), 15000, '[需確認] 兩則有勾選框');
   assert.ok(await js(`document.querySelector('[data-conf-done]').disabled`), '[需確認]：沒勾時按鈕不能按');
   await clickChk('[data-conf-all]');
   await until(() => js(`document.querySelector('[data-conf-done]').textContent.trim() === '標為已處理（2）'`), 5000, '[需確認] 全選');
