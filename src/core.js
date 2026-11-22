@@ -3566,9 +3566,15 @@ ${ending}`;
     return rows;
   }
 
+  // [需確認] 怎樣算結案：人類回覆，或 PO 角色的 AI 以 [決策紀錄] 回覆（另有人類按「已處理」）
+  const closesAsk = (r, people) => {
+    const a = people.get(r.author_id);
+    if (a?.kind === 'human') return true;
+    return a?.kind === 'ai' && a.role_key === 'PO' && /^\s*\[決策紀錄/.test(r.text);
+  };
   async function teamStatus(ctx) {
     // 回傳 { data, priv }，呼叫端用這份；不要事後再讀全域 teamCache（期間可能被寫入請求清掉）
-    if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return { data: teamCache.data, priv: teamCache.priv };
+    if (teamCache.data && Date.now() - teamCache.at < TEAM_CACHE_MS) return { data: teamCache.data, priv: teamCache.priv, cached: true };
     // 互不相關的查詢同時送（每次查詢都可能要跨洲來回）
     const [people, recent, cardWork, pending, aiRows] = await Promise.all([
       peopleMap(ctx), recentMessages(), loadProjects().then(() => teamCards(db, pubNo)),
@@ -3639,11 +3645,7 @@ ${ending}`;
     const replies = await repliesTo(asks);
     const resolved = new Set(asks.length
       ? (await db.all('SELECT message_id FROM decision_resolutions WHERE message_id IN (SELECT value FROM json_each(?))', askIds)).map(r => r.message_id) : []);
-    const closes = r => {
-      const a = people.get(r.author_id);
-      if (a?.kind === 'human') return true;
-      return a?.kind === 'ai' && a.role_key === 'PO' && /^\s*\[決策紀錄/.test(r.text);
-    };
+    const closes = r => closesAsk(r, people);
     const replyCount = new Map();
     for (const r of replies) {
       replyCount.set(r.reply_to, (replyCount.get(r.reply_to) || 0) + 1);
@@ -3652,6 +3654,7 @@ ${ending}`;
     const decisions = asks.filter(m => !resolved.has(m.id)).slice(0, 30).map(m => ({
       messageId: m.id, sequence: m.seq, title: headline(m.text), createdAt: m.created_at, project: m.project || null, at: m.created_at,
       author: identity(people.get(m.author_id) || { id: m.author_id, name: '?', kind: 'human' }, people), replyCount: replyCount.get(m.id) || 0,
+      _ask: [...(askOf(m) || [])].filter(id => people.get(id)?.kind === 'human'), // PLAT-399：被問的人類（不回傳，route 依看的人過濾）
     }));
 
     // 決策卡片等決策者的，一併列入「等你決定」（網頁只對指定的決策者顯示）
@@ -3753,12 +3756,34 @@ ${ending}`;
   }
   route('GET', '/api/team-status', async ({ ctx, me, url }) => {
     await loadProjectRoles();
-    const { data: d, priv } = await teamStatus(ctx);
+    const { data: d, priv, cached } = await teamStatus(ctx);
     const people = await peopleMap(ctx);
+    // 快取是每份程式各自的，別份程式剛按「已處理」或剛回覆的，這份快取還在 → 只對這 ≤30 則再查一次
+    const askIds = cached ? d.decisions.filter(x => x.messageId).map(x => x.messageId) : [];
+    const closed = new Set();
+    if (askIds.length) {
+      const ids = JSON.stringify(askIds);
+      const [res, reps] = await Promise.all([
+        db.all('SELECT message_id FROM decision_resolutions WHERE message_id IN (SELECT value FROM json_each(?))', ids),
+        db.all('SELECT reply_to, author_id, text FROM messages WHERE reply_to IN (SELECT value FROM json_each(?))', ids),
+      ]);
+      for (const r of res) closed.add(r.message_id);
+      for (const r of reps) if (closesAsk(r, people)) closed.add(r.reply_to);
+    }
+    // [需確認] 只進被問的人：有指定人類 → 那幾位；沒指定 → 專案 leader，沒有 leader 就給管理員（AI 看的是所屬人類的清單）
+    await loadLeaders();
+    const admin = adminOf(people), viewer = me.kind === 'ai' ? me.owner_id : me.id;
+    const askedMe = x => {
+      if (x._ask?.length) return x._ask.includes(viewer);
+      const leads = (leadersMap[x.project] || []).filter(id => people.get(id)?.status === 'active');
+      return leads.length ? leads.includes(viewer) : admin?.id === viewer;
+    };
     // 只屬部分專案的成員，「等你決定」只留看得到的（訊息依隔離規則、決策卡依卡片專案）
     const decisions = [];
     for (const x of d.decisions) {
-      if (x.cardId ? (!isolatedFrom(me) || projectsOf(me).includes(x.project)) : await canSeeMessage(me, { project: x.project, created_at: x.at })) decisions.push(x);
+      if (x.cardId) { if (!isolatedFrom(me) || projectsOf(me).includes(x.project)) decisions.push(x); continue; }
+      if (closed.has(x.messageId) || !askedMe(x)) continue;
+      if (await canSeeMessage(me, { project: x.project, created_at: x.at })) { const { _ask, ...rest } = x; decisions.push(rest); }
     }
     await loadCrossRoles();
     const sees = id => { const p = people.get(id); return !!p && seesPerson(me, p); };

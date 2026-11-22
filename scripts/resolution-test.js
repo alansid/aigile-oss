@@ -43,7 +43,7 @@ try {
   const plain = (await call(A.tok, '/api/messages', 'POST', { requestId: 'p1', project: '預設專案', recipientIds: [L], replyFrom: [], text: '[通知] 一般訊息' })).body;
   const unassigned = (await call(A.tok, '/api/messages', 'POST', { requestId: 'unassigned', project: '預設專案', recipientIds: [B.id, L], text: '[需確認] 誰可以確認時程？' })).body;
   const fyi = (await call(A.tok, '/api/messages', 'POST', { requestId: 'fyi', project: '預設專案', recipientIds: [B.id], replyFrom: [], text: '[需確認] 尚未指定回覆人' })).body;
-  const reviewer = (await call(null, '/api/join', 'POST', { name: '驗收人', role: 'QA' })).body.participant.participantId;
+  const reviewerJ = (await call(null, '/api/join', 'POST', { name: '驗收人', role: 'QA' })).body, reviewer = reviewerJ.participant.participantId;
   const mixed = (await call(boss.token, '/api/messages', 'POST', { requestId: 'mixed', project: 'all', recipientIds: [B.id, reviewer], replyFrom: [B.id, reviewer], text: '[需確認] 共同確認時程' })).body;
   assert.ok(mixed.messageId, JSON.stringify(mixed));
   assert.deepEqual((await call(boss.token, `/api/messages/${mixed.messageId}`)).body.replyFrom, [B.id, reviewer]);
@@ -53,7 +53,9 @@ try {
   assert.ok(team.unanswered.some(u => u.messageId === q2.messageId && u.participantId === B.id), '處理前：B 列在尚未回應');
   const decisionIds = team.decisions.map(d => d.messageId);
   assert.ok(decisionIds.includes(q1.messageId), '指定人類時列入等人決定');
-  assert.ok(decisionIds.includes(mixed.messageId), '同時指定 AI 和人類時列入等人決定');
+  assert.ok(!decisionIds.includes(mixed.messageId), '同時指定 AI 和別的人類，不進管理員的清單');
+  const reviewerTok = reviewerJ.token;
+  assert.ok((await call(reviewerTok, '/api/team-status')).body.decisions.some(d => d.messageId === mixed.messageId), '同時指定 AI 和人類時，列進被問的人類的清單');
   assert.ok(!decisionIds.includes(q2.messageId), '只指定 AI 時不列入等人決定');
   assert.ok(decisionIds.includes(unassigned.messageId) && decisionIds.includes(fyi.messageId), '未指定與空清單都照舊列入');
   const notices = (await call(B.tok, '/api/notifications?status=pending')).body.items;

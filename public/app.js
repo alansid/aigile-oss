@@ -1368,7 +1368,7 @@
   // [需確認] 被人類按「已處理」（沒有回覆）：訊息上標出來，AI 也讀得到同一個狀態
   const resolvedLabel = m => { const n = esc(m.resolution.by?.name || ''), t = esc(fmtTime(m.resolution.at)); return `<span class="tag resolved" title="AI 會當成暫緩，不再等、不重問">${L(`已處理（未回覆）· ${n} ${t}`, `Handled, no reply · ${n} ${t}`)}</span>`; };
   const resolvedPill = m => m.resolution && !m.replyFrom ? `<span class="tag resolved" title="${esc(L(`${m.resolution.by?.name || ''} ${fmtTime(m.resolution.at)} 標為已處理，沒有回覆；AI 會當成暫緩`, `${m.resolution.by?.name || ''} marked it handled at ${fmtTime(m.resolution.at)} without replying; the AI treats it as on hold`))}">已處理（未回覆）</span>` : '';
-  const markResolved = ids => { const at = new Date().toISOString(), by = { participantId: state.me?.participantId, name: state.me?.name }; for (const id of ids) { const m = state.byId.get(id); if (m && !m.resolution) m.resolution = { state: '已處理（未回覆）', by, at }; } };
+  const markResolved = ids => { const at = new Date().toISOString(), by = { participantId: state.me?.participantId, name: state.me?.name }; for (const id of ids) { work.answered?.add(id); const m = state.byId.get(id); if (m && !m.resolution) m.resolution = { state: '已處理（未回覆）', by, at }; } };
   const myAskPill = m => { if (m.resolution) return resolvedLabel(m); const a = myAsk(m); return a === undefined || isMine(m) ? '' : `<span class="apill ${a ? 'ask' : 'fyi'} me">${a ? '要你回覆' : '知會你'}</span>`; };
   // ---------- 回覆縮排接在原訊息下 ----------
   // 原訊息就在上面（中間只隔同一串的回覆）才縮排；回覆的回覆不再往右（最多一層）；卡片組內外各自算；不搬順序
@@ -5094,7 +5094,7 @@
   const posLine = st => { const n = st?.messagesCursor ? curSeq(st.messagesCursor) : null, c = st?.cardsSince; return n == null && !c ? '' : `<br><span class="muted small astate-pos">讀到：${[n != null ? `第 ${n} 則` : '', c ? `卡片到 ${fmtDate(c)}` : ''].filter(Boolean).join('・')}</span>`; };
   // ---------- 團隊狀態 ----------
   const STATE_LABEL = { working: '進行中', idle: '空閒', blocked: '受阻', waiting: '等人決定', todo: '待處理' };
-  // 「等你決定」：訊息型的所有人都看；決策卡只給指定的決策者看
+  // 「等你決定」：訊息型由伺服器依被問的人過濾；決策卡只給指定的決策者看
   work.answered = new Set(); // 已經有人類回覆的 [需確認]，不等團隊狀態快取（約 1 分鐘）就先移走
   const myDecisions = t => t.decisions.filter(d => ((!d.cardId && !cardOfConfirm(d)) || d.deciderId === meId()) && !(d.messageId && work.answered.has(d.messageId)));
   const agoText = iso => {
@@ -5629,6 +5629,7 @@
         r.disabled = true;
         try {
           await api(`/api/decisions/${encodeURIComponent(r.dataset.resolve)}/resolve`, { method: 'POST' });
+          markResolved([r.dataset.resolve]);
           toast('已從「要你處理」移出');
           openTeam();
         } catch (err) { r.disabled = false; toast(err.message); }
