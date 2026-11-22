@@ -189,7 +189,9 @@ try {
   assert.match(en, /Admin settings[\s\S]*To do[\s\S]*Group settings[\s\S]*Accounts & recovery[\s\S]*Audit & storage[\s\S]*System & backup/, '英文目錄');
   assert.match(en, /Everyone's account[\s\S]*Account actions[\s\S]*Rescue command/, '英文帳號與救援');
   assert.match(await js("document.querySelector('.adm-nav [data-adm=\"projects\"] .adm-t b').textContent"), /^Projects$/, '英文目錄寫複數 Projects');
-  assert.equal(await js("document.querySelector('.adm-main .pm-disabled [data-pm-enable]')?.textContent"), 'Restore', '已停用成員的按鈕是 Restore（跟說明 After restoring 一致）');
+  const restoreBtn = "document.querySelector('.adm-main .pm-disabled [data-pm-enable]')?.textContent";
+  await until(async () => (await js(restoreBtn)) === 'Restore', 5000, '已停用成員清單畫好').catch(() => {});
+  assert.equal(await js(restoreBtn), 'Restore','已停用成員的按鈕是 Restore（跟說明 After restoring 一致）');
   assert.ok(!/[㐀-鿿]/.test((await js("document.querySelector('.adm-nav').innerText")).replace(/林志明|王小明|陳大文/g, '')), '英文目錄沒有中文：' + await js("document.querySelector('.adm-nav').innerText"));
   await shot('12-電腦-英文-帳號與救援');
   await js("localStorage.removeItem('aigile-lang'); true");
