@@ -36,6 +36,8 @@
 //   - 本機：wait.pid 的程序還在、而且 wait.pid 最近有更新（等待腳本每分鐘碰一下）＝還在跑；PID 被別的程式（例如瀏覽器）重用時
 //     wait.pid 早就沒更新，不會誤判。--replace 停掉舊的之前先比對命令列，不是等待腳本絕不停。
 //   - 跨電腦：啟動時向平台登記（POST /api/me/online），後登記的算數；舊的下次要叫醒 AI 時平台回 superseded，印 SUPERSEDED 結束、不叫醒。
+//   - 同一個資料夾重開沿用同一個識別碼（wait.sid），不會把自己的上一輪當成別的對話；別台電腦、別的資料夾各有自己的 wait.sid。
+//     watcher 另外登記，watcher 自動重開不會讓等待腳本 SUPERSEDED。
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -57,7 +59,10 @@ const STALE_MS = Math.max(1, Number(opt('stale-min', 30))) * 60_000;  // 門鈴�
 const GRACE_MS = Math.max(0, Number(opt('wake-grace-min', 7))) * 60_000; // 睡醒後等 watcher 補心跳（它每 5 分鐘寫一次）
 const EXIT_ON_TIMEOUT = args.includes('--exit-on-timeout');
 const REPLACE = args.includes('--replace');
-let SID = randomUUID(); // 這次等待的識別碼（向平台登記用，不含任何祕密）；混合模式下共用同機 watcher 的 SID
+// 這次等待的識別碼（向平台登記用，不含任何祕密）；混合模式下共用同機 watcher 的 SID
+// 同一個資料夾沿用 wait.sid（同資料夾兩個對話由 wait.pid 的 ALREADY_RUNNING／--replace 擋）
+const WAIT_SID = path.join(DIR, 'wait.sid');
+let SID = (() => { try { const s = fs.readFileSync(WAIT_SID, 'utf8').trim(); if (/^[A-Za-z0-9-]{8,64}$/.test(s)) return s; } catch {} return randomUUID(); })();
 const FRESH_MS = 5 * 60_000; // wait.pid 超過 5 分鐘沒更新＝舊檔（程序可能早就不在、PID 被重用）
 // 測試用：AIGILE_WAIT_TEST_SKEW_FILE 指一個檔，裡面的毫秒數加到時鐘上，模擬電腦睡了一段時間（正式使用不會設）
 const SKEW_FILE = process.env.AIGILE_WAIT_TEST_SKEW_FILE || '';
@@ -119,7 +124,7 @@ async function wakeExit(line, code) {
   const lines = line.startsWith('PENDING') ? await digest() : [];
   for (const l of lines) console.log(l);
   // 回報時帶 sid；平台說後來有別的對話接上（superseded）就不叫醒這個對話
-  const w = await fetch(`${BASE}/api/me/wake`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'wait' }, body: JSON.stringify({ sid: SID }), signal: AbortSignal.timeout(5_000) })
+  const w = await fetch(`${BASE}/api/me/wake`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'wait' }, body: JSON.stringify({ sid: SID, ...(sharedWatcherSid ? { slot: 'watcher' } : {}) }), signal: AbortSignal.timeout(5_000) }) // 共用 watcher 的 sid：比對 watcher 那一筆
     .then(r => (r.ok ? r.json() : null)).catch(() => null);
   if (w?.superseded) {
     note(`同代號後來有別的對話接上（${w.since ? new Date(w.since).toISOString() : '時間不明'}${w.host ? '，' + w.host : ''}）：這個對話停止待命、不要重開。告訴所屬人類：「同代號已在別的對話接手，這個對話停止待命。」`);
@@ -168,6 +173,7 @@ if (hybridWake) {
   } catch {}
 }
 if (!sharedWatcherSid) {
+  try { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(WAIT_SID, SID); } catch {}
   await fetch(`${BASE}/api/me/online`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'wait' }, body: JSON.stringify({ sid: SID }), signal: AbortSignal.timeout(8_000) })
     .then(r => (r.ok ? r.json() : null)).then(j => { if (j?.previous) note(`這個代號先前有別的對話在待命（${j.previous.at}${j.previous.host ? '，' + j.previous.host : ''}）：改由這個對話接手，舊的下次醒來會自己停`); }).catch(() => {});
 }

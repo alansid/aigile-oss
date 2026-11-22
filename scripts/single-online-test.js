@@ -102,6 +102,31 @@ try {
   assert.equal((await call(liu.token, '/api/me/online', 'POST', { sid: 'abcdefgh' })).status, 403, '人類不能登記');
   assert.equal((await call(po.tok, '/api/me/wake', 'POST')).status, 200, '舊版沒帶 sid 照常');
 
+  // watcher 和等待腳本分開登記，互不擠掉（修正前共用 online:<AI>，watcher 自動重開會讓跑到一半的等待腳本 SUPERSEDED，反過來 watcher 自己停掉）
+  {
+    const ai = await mk('分開登記助手');
+    const post = async (src, p, body) => { const r = await app(new Request('http://localhost' + p, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ai.tok}`, 'X-Aigile-Source': src }, body: JSON.stringify(body) }), 'http://localhost'); return r.json(); };
+    const online = (src, sid, extra = {}) => post(src, '/api/me/online', { sid, ...extra });
+    const wake = async (src, sid, extra = {}) => !!(await post(src, '/api/me/wake', { sid, ...extra })).superseded;
+    assert.equal((await online('wait', 'wait-0001')).previous, null, '等待腳本第一次登記');
+    assert.equal((await online('watcher', 'watch-0001')).previous, null, 'watcher 登記不算「先前有別的對話」');
+    assert.equal(await wake('wait', 'wait-0001'), false, 'A watcher 後登記，等待腳本照樣叫醒（不 SUPERSEDED）');
+    assert.equal(await wake('watcher', 'watch-0001'), false, 'A watcher 照樣叫醒');
+    assert.ok((await online('watcher', 'watch-0002')).previous, 'watcher 自動重開：知道先前有別的 watcher');
+    assert.equal(await wake('wait', 'wait-0001'), false, 'A watcher 重開不會讓等待腳本 SUPERSEDED');
+    assert.equal(await wake('watcher', 'watch-0001'), true, '舊的 watcher 照樣被取代');
+    assert.equal((await online('wait', 'wait-0001')).previous, null, 'B 同一個 sid 重新登記不算「先前有別的對話」');
+    assert.ok((await online('wait', 'wait-0002')).previous, 'B 真的有別的對話接手：照樣告訴它');
+    assert.equal(await wake('watcher', 'watch-0002'), false, 'A 等待腳本換人不會讓 watcher 停掉');
+    assert.equal(await wake('wait', 'wait-0001'), true, 'B 被別的對話接手：照樣 SUPERSEDED');
+    assert.equal(await wake('wait', 'watch-0002', { slot: 'watcher' }), false, 'Codex 混合模式：等待腳本共用 watcher 的 sid，比對 watcher 那一筆');
+    assert.equal(await wake('wait', 'watch-0001', { slot: 'watcher' }), true, 'Codex 混合模式：舊 watcher 的 sid 照樣被取代');
+    // 改版前的舊資料（沒有 kind，可能是 watcher 寫的）不拿來判定，也不算「先前有別的對話」
+    await db.run('UPDATE app_settings SET value = ? WHERE key = ?', JSON.stringify({ sid: 'legacy-0001', at: new Date().toISOString() }), `online:${ai.id}`);
+    assert.equal(await wake('wait', 'wait-0003'), false, '舊資料不判定取代');
+    assert.equal((await online('wait', 'wait-0003')).previous, null, '舊資料不算「先前有別的對話」');
+  }
+
   // C：wait.pid 指到別的程式（PID 重用）＋檔案很舊 → 不算在跑，正常啟動；--replace 也絕不停它
   const pend = (await call(po.tok, '/api/notifications?status=pending')).body.items.map(n => n.notificationId); // 先清掉，等待腳本才不會一啟動就結束
   if (pend.length) await call(po.tok, '/api/notifications/ack', 'POST', { notificationIds: pend });
@@ -117,6 +142,25 @@ try {
   try { await until(() => /命令列對不上），不停它/.test(w6.out()), 20000, '命令列比對'); } catch (e) { console.log('w6:', w6.out(), w6.p.exitCode); throw e; }
   assert.ok(process.kill(process.pid, 0), '測試程序（假裝的瀏覽器）沒被停掉');
   w6.p.kill(); await w6.done;
+
+  // B：同一個資料夾重開等待腳本沿用 wait.sid，不再印「先前有別的對話在待命」；別的資料夾（另一台、另一個視窗）照樣印
+  {
+    const m4 = mkWork('PO', po.tok), sidF = path.join(m4.dir, 'wait.sid');
+    const a = runWait(m4.work, 'PO');
+    await until(() => fs.existsSync(sidF), 8000, '寫 wait.sid');
+    const sid1 = fs.readFileSync(sidF, 'utf8').trim();
+    await sleep(1500);
+    a.p.kill(); await a.done;
+    const b = runWait(m4.work, 'PO');
+    await sleep(2500);
+    assert.doesNotMatch(b.out(), /先前有別的對話在待命/, '同資料夾重開不印假訊息：' + b.out());
+    assert.equal(fs.readFileSync(sidF, 'utf8').trim(), sid1, '沿用同一個 sid');
+    const m5 = mkWork('PO', po.tok);
+    const c = runWait(m5.work, 'PO');
+    await until(() => /先前有別的對話在待命/.test(c.out()), 8000, '別的資料夾照樣印：' + c.out());
+    assert.notEqual(fs.readFileSync(path.join(m5.dir, 'wait.sid'), 'utf8').trim(), sid1, '別的資料夾有自己的 sid');
+    for (const w of [b, c]) { w.p.kill(); await w.done; }
+  }
   // hook：舊檔不算等待腳本在跑 → 提醒重開；新鮮的檔才算
   const hook = () => new Promise(res => {
     const p = spawn(process.execPath, [HOOK, 'stop'], { cwd: m3.work, env: { ...process.env, CLAUDE_PROJECT_DIR: m3.work, AIGILE_AGENT: '' }, stdio: 'pipe' });

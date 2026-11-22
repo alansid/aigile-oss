@@ -2879,20 +2879,27 @@ ${ending}`;
   // 同代號只留一個對話。等待腳本啟動時登記 sid（存 app_settings 的 online:<AI>），後登記的算數；
   // 舊的等待腳本要叫醒 AI 時帶自己的 sid 回報，對不上就回 superseded（不算叫醒），它印 SUPERSEDED 結束、不叫醒那個對話
   const SID_RE = /^[A-Za-z0-9-]{8,64}$/;
+  // watcher 和等待腳本分開登記（watcher 存 online-watcher:<AI>，等待腳本存 online:<AI>），各自後登記的算數，
+  // watcher 自動重開不會擠掉跑到一半的等待腳本，反過來也一樣。哪一邊看 X-Aigile-Source；Codex 混合模式的等待腳本共用 watcher 的 sid，帶 slot: 'watcher'。
+  // 值裡記 kind；改版前的舊資料沒有 kind（可能是 watcher 寫的），不拿來判定被取代，也不算「先前有別的對話」
+  const onlineSlot = (req, body) => (body?.slot === 'watcher' || req.headers.get('X-Aigile-Source') === 'watcher' ? 'watcher' : 'wait');
+  const onlineKey = (id, slot) => (slot === 'watcher' ? `online-watcher:${id}` : `online:${id}`);
+  const onlineOf = async key => { try { const v = JSON.parse((await db.get('SELECT value FROM app_settings WHERE key = ?', key))?.value || 'null'); return v?.kind ? v : null; } catch { return null; } };
   route('POST', '/api/me/online', async ({ me, req }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 的等待腳本會登記。');
-    const sid = String((await readJson(req)).sid || '');
+    const body = await readJson(req), sid = String(body.sid || '');
     if (!SID_RE.test(sid)) throw invalid('sid 需為 8～64 個英數字或 -');
-    const key = `online:${me.id}`, at = nowIso();
-    let prev = null; try { prev = JSON.parse((await db.get('SELECT value FROM app_settings WHERE key = ?', key))?.value || 'null'); } catch {}
-    await db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, JSON.stringify({ sid, at }));
+    const slot = onlineSlot(req, body), key = onlineKey(me.id, slot), at = nowIso();
+    const prev = await onlineOf(key);
+    await db.run('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, JSON.stringify({ sid, at, kind: slot }));
     return { ok: true, previous: prev?.sid && prev.sid !== sid ? { at: prev.at } : null };
   });
   route('POST', '/api/me/wake', async ({ me, req }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 的等待腳本與 watcher 會回報叫醒次數。');
-    let sid = ''; try { sid = String((await readJson(req))?.sid || ''); } catch {} // 舊版沒有 body
+    let body = null; try { body = await readJson(req); } catch {} // 舊版沒有 body
+    const sid = String(body?.sid || '');
     if (sid) {
-      let cur = null; try { cur = JSON.parse((await db.get('SELECT value FROM app_settings WHERE key = ?', `online:${me.id}`))?.value || 'null'); } catch {}
+      const cur = await onlineOf(onlineKey(me.id, onlineSlot(req, body)));
       if (cur?.sid && cur.sid !== sid) return { superseded: true, since: cur.at };
     }
     const now = Date.now(), day = wakeDay(now);
