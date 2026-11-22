@@ -131,8 +131,10 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
   await cdp('Page.reload'); // 手機寬度下重新打開（行內回覆是否收起在畫的時候決定）
   await until(() => js("!!document.querySelector('.wpanel.mine') && !!document.querySelector('.dcard')"), 20000, '手機工作總覽');
-  await sleep(300);
-  const shown = await js("[...document.querySelectorAll('.wpanel')].filter(e => e.offsetParent).map(e => e.classList[1]).join(',')");
+  // 工作總覽會隨卡片、通知陸續回來重畫好幾次，等到畫面穩定成只剩「要你處理」，逾時才算失敗
+  const shownNow = () => js("[...document.querySelectorAll('.wpanel')].filter(e => e.offsetParent).map(e => e.classList[1]).join(',')");
+  await until(async () => (await shownNow()) === 'mine', 5000, '手機工作總覽只剩「要你處理」').catch(() => {});
+  const shown = await shownNow();
   assert.equal(shown, 'mine', '手機：空的「受阻」「最近完成」不佔位，有提示的「要你處理」留著');
   await until(() => js("[...document.querySelectorAll('.dcard [data-inl-act=\"decide\"][data-result]')].filter(b => b.offsetParent).length === 2"), 5000, '手機：決策選項不用先按「回覆…」就看得到');
   assert.equal(await js("document.querySelector('.dcard [data-inl-open]')?.textContent"), '其他回覆…', '其他回覆收起來');
