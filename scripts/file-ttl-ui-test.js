@@ -63,13 +63,23 @@ try {
   // ---------- A 管理員設定（1280） ----------
   await size(1280, 900);
   await admin();
-  assert.equal(await text('.adm-ttl label[for="adm-ttl"]'), '訊息附件保存時間', 'A 標籤');
-  assert.deepEqual(await J("[...document.querySelectorAll('#adm-ttl option')].map(o => o.value + '=' + o.textContent)"),
+  const initial = await until(() => J(`(() => {
+    const select = document.querySelector('#adm-ttl');
+    const storage = document.querySelector('.adm-store');
+    if (!select || !storage) return null;
+    const read = selector => document.querySelector(selector)?.innerText.trim();
+    return {
+      label: read('.adm-ttl label[for="adm-ttl"]'), options: [...select.options].map(o => o.value + '=' + o.textContent),
+      value: select.value, hint: read('#adm-ttl-hint'), source: read('.adm-ttl-src'), storage: storage.innerText
+    };
+  })()`), 10000, '讀取同一次重畫的保存設定與儲存資訊');
+  assert.equal(initial.label, '訊息附件保存時間', 'A 標籤');
+  assert.deepEqual(initial.options,
     ['1=1 小時', '6=6 小時', '24=24 小時（預設）', '72=3 天', '168=7 天', '720=30 天'], 'A 六個選項、標預設 24 小時');
-  assert.equal(await js("document.querySelector('#adm-ttl').value"), '24', 'A 目前 24 小時');
-  assert.match(await text('#adm-ttl-hint'), /改了只影響之後上傳的檔；已經上傳的照上傳當時的設定到期，不會提早或延後刪除。存好立即生效/, 'A 說明只影響之後上傳的檔');
-  assert.match(await text('.adm-ttl-src'), /^目前是預設的 24 小時（主機沒設 FILE_TTL_HOURS）。主機設了 FILE_TTL_HOURS 會改用它當初始值；在這裡改過之後就以這裡為準。$/, 'A 說明 FILE_TTL_HOURS 與這裡誰為準：' + await text('.adm-ttl-src'));
-  assert.match(await text('.adm-store'), /上傳 24 小時後自動刪除/, 'A 儲存空間那列寫目前的 24 小時');
+  assert.equal(initial.value, '24', 'A 目前 24 小時');
+  assert.match(initial.hint, /改了只影響之後上傳的檔；已經上傳的照上傳當時的設定到期，不會提早或延後刪除。存好立即生效/, 'A 說明只影響之後上傳的檔');
+  assert.match(initial.source, /^目前是預設的 24 小時（主機沒設 FILE_TTL_HOURS）。主機設了 FILE_TTL_HOURS 會改用它當初始值；在這裡改過之後就以這裡為準。$/, 'A 說明 FILE_TTL_HOURS 與這裡誰為準：' + initial.source);
+  assert.match(initial.storage, /上傳 24 小時後自動刪除/, 'A 儲存空間那列寫目前的 24 小時');
   assert.ok(!(await hscroll()), 'E 1280 沒有橫向捲動');
   await shot('01-電腦1280-管理員設定-稽核與儲存-訊息附件保存時間-預設24小時');
 
@@ -134,7 +144,7 @@ try {
   assert.match(await text('.modal-sub'), /6 小時後自動刪除/, 'B 手機文件頁寫 6 小時');
   assert.ok(!(await hscroll()), 'E 375 文件頁沒有橫向捲動');
   await go(chen.token, '/p/main/messages');
-  await until(() => js("!!document.querySelector('#file-input')"), 15000, '手機訊息頁');
+  await until(async () => /上傳的文件 6 小時後自動刪除/.test(await text('#composer-hint')), 15000, '手機訊息頁已載入保存設定');
   await js(helpers);
   await shotDialog();
   assert.match(await text('#modal-root .warn-box'), /6 小時後自動刪除/, 'B 手機上傳視窗寫 6 小時');
