@@ -8,6 +8,35 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const descriptor = dir => path.join(dir, 'foreground-ui.json');
 
+export const approvedAigileTools = [
+  'aigile_ack', 'aigile_batch', 'aigile_card_create', 'aigile_card_get',
+  'aigile_card_handover', 'aigile_card_update', 'aigile_cards', 'aigile_dm',
+  'aigile_doc_upload', 'aigile_history', 'aigile_inbox', 'aigile_me',
+  'aigile_memory', 'aigile_post', 'aigile_read', 'aigile_team', 'aigile_use',
+];
+
+// Reconcile only ordinary TOML tables. Codex validates the result before setup succeeds.
+export function missingToolApprovals(config) {
+  const additions = [];
+  const missing = [];
+  const lines = config.split(/\r?\n/);
+  for (const tool of approvedAigileTools) {
+    const header = '[mcp_servers.aigile.tools.' + tool + ']';
+    const index = lines.findIndex(line => line.split('#')[0].trim() === header);
+    if (index >= 0) {
+      let end = index + 1;
+      while (end < lines.length && !/^\s*\[/.test(lines[end])) end++;
+      if (lines.slice(index + 1, end).some(line => /^\s*approval_mode\s*=/.test(line))) continue;
+      lines.splice(index + 1, 0, 'approval_mode = "approve"');
+    } else {
+      additions.push('', header, 'approval_mode = "approve"');
+    }
+    missing.push(header + '\napproval_mode = "approve"');
+  }
+  const newline = config.includes('\r\n') ? '\r\n' : '\n';
+  return { config: lines.concat(additions).join(newline) + (additions.length ? newline : ''), missing };
+}
+
 export function foregroundUI(dir) {
   try {
     const ui = JSON.parse(fs.readFileSync(descriptor(dir), 'utf8'));

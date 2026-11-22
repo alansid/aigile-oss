@@ -27,7 +27,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
 const opt = name => { const i = args.findIndex(a => a === `--${name}` || a.startsWith(`--${name}=`)); return i < 0 ? '' : args[i].includes('=') ? args[i].split('=').slice(1).join('=') : args[i + 1] || ''; };
@@ -327,7 +327,7 @@ if (cfg.files['aigile-mcp.mjs']) {
   } else out(`  Claude Code → claude ${addArgs.join(' ')}`);
   // Codex 預設不把環境變數傳給 MCP 子程序，要 env_vars 才帶得到 AIGILE_AGENT（喚醒腳本會設）
   const codexManual = `  Codex → ~/.codex/config.toml 加 [mcp_servers.aigile]，command = "node"，args = ["${mcpPath}"]，env_vars = ["AIGILE_AGENT"]（整台電腦一個；env_vars 那行一定要有，Codex 預設不傳環境變數給 MCP；資料夾有多隻 AI 又沒帶 AIGILE_AGENT 時先呼叫 aigile_use）`;
-  if (TOOL === 'codex') codexMcp(mcpPath, codexManual); else out(codexManual);
+  if (TOOL === 'codex') await codexMcp(mcpPath, codexManual); else out(codexManual);
   if (TOOL === 'copilot') copilotMcp(mcpPath);
   if (TOOL === 'antigravity') { antigravityMcp(mcpPath); antigravityWorkspace(); }
 }
@@ -396,29 +396,61 @@ function antigravityWorkspace() {
 // Codex 也自動裝通用 MCP：~/.codex/config.toml 附加 [mcp_servers.aigile]。
 // 已有就跳過；改之前先備份；只附加這一段、不動其他段落；改完用 codex mcp get aigile 驗證，失敗或寫不進去就還原備份、印設定請人貼。
 // 沒開網路的沙盒設定只偵測、印清楚，不幫忙改。AIGILE_CODEX_BIN 給測試用假的 codex
-function codexMcp(mcpPath, manual) {
+async function codexMcp(mcpPath, manual) {
+  const modulePath = path.resolve('.aigile', 'watcher', 'aigile-codex-ui.mjs');
+  const { missingToolApprovals } = await import(pathToFileURL(modulePath).href);
   // AIGILE_TEST_CODEX_HOME：測試的保險（CODEX_HOME 被設成空字串時也不會落到真的 ~/.codex）；一般使用不會設
   const dir = process.env.CODEX_HOME || process.env.AIGILE_TEST_CODEX_HOME || path.join(os.homedir(), '.codex');
   const file = path.join(dir, 'config.toml');
-  let had = null; try { had = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') { out(`! 讀不到 ${file}（${e.code}）：請自己加`); return out(manual); } }
+  let had = null; try { had = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') { out(`! 讀不到 ${file}（${e.code}）：請自己加`); return out(manual + '\n' + missingToolApprovals('').missing.join('\n\n')); } }
   const net = had && /^\s*network_access\s*=\s*true\b/m.test(had);
   if (!net && !process.env.AIGILE_SETUP_QUIET_NET) out(`! Codex 網路：${file.replace(/\\/g, '/')} 沒看到 network_access = true。${CODEX_FIX}`);
   // Windows 沒設 Codex 沙盒（[windows] sandbox）時連資料夾裡的指令都會被擋：只印清楚，不幫忙改
   const winSandbox = had && /^\s*\[windows\]\s*$/m.test(had) && /^\s*sandbox\s*=/m.test(had.split(/^\s*\[windows\]\s*$/m)[1].split(/^\s*\[/m)[0]);
   if ((process.platform === 'win32' || process.env.AIGILE_SETUP_FAKE_WIN) && !winSandbox) out(`! Codex 沙盒（Windows）：${file.replace(/\\/g, '/')} 沒看到 [windows] 底下的 sandbox 設定，Codex 會連資料夾裡的指令都擋。請所屬人類在那個檔加 [windows] 與 sandbox = "elevated"（照 Codex 說明設定）後重開 Codex；接入檢查不會幫你改`);
-  if (had !== null && /^\s*\[mcp_servers\.aigile\]\s*$/m.test(had)) {
-    const sec = had.split(/^\s*\[mcp_servers\.aigile\]\s*$/m)[1].split(/^\s*\[/m)[0];
-    out(/env_vars\s*=.*AIGILE_AGENT/.test(sec) ? '✓ MCP：Codex 已有 [mcp_servers.aigile]（不改）' : `! MCP：Codex 已有 [mcp_servers.aigile]，但沒有 env_vars = ["AIGILE_AGENT"]：請在那一段加上這行（沒有的話資料夾多隻 AI 時認不出你）`);
+  const section = /^[ \t]*\[mcp_servers\.aigile\][ \t]*(?:#.*)?\r?$/m;
+  const existing = section.test(had || '');
+  const serverBlock = `${had && !had.endsWith('\n') ? '\n' : ''}\n# aigile 接入檢查加的（整台電腦一個）\n[mcp_servers.aigile]\ncommand = "node"\nargs = ["${mcpPath}"]\nenv_vars = ["AIGILE_AGENT"]\n`;
+  const update = missingToolApprovals((had || '') + (existing ? '' : serverBlock));
+  if (existing && !update.missing.length) {
+    out('✓ MCP：Codex 已有 [mcp_servers.aigile]（不改）');
     return;
   }
-  const block = `${had && !had.endsWith('\n') ? '\n' : ''}\n# aigile 接入檢查加的（整台電腦一個）\n[mcp_servers.aigile]\ncommand = "node"\nargs = ["${mcpPath}"]\nenv_vars = ["AIGILE_AGENT"]\n`;
+  manual += '\n' + update.missing.join('\n\n');
+  if (existing) {
+    const sectionBody = had.split(section)[1].split(/^\s*\[/m)[0];
+    const command = /^\s*command\s*=\s*["']node["']\s*(?:#.*)?$/m;
+    const args = /^\s*args\s*=\s*\[\s*"((?:\\.|[^"\\])*)"\s*\]\s*(?:#.*)?$/m.exec(sectionBody);
+    let bridge; try { if (args) bridge = JSON.parse('"' + args[1] + '"'); } catch {}
+    if (!command.test(sectionBody) || !bridge || path.resolve(bridge) !== path.resolve(mcpPath)) {
+      out('! MCP：既有 aigile 使用自訂啟動設定，請先核對轉接程式，再補缺少的項目');
+      return out(manual);
+    }
+    if (!/env_vars\s*=.*AIGILE_AGENT/.test(sectionBody)) out('! MCP：請在既有 aigile 段落核對 env_vars 是否含 AIGILE_AGENT');
+  }
+  if (had && (had.includes('"""') || had.includes("'''") || /^(?:[ \t]*)(?:["']?mcp_servers["']?\s*[.=]|\[\s*["']mcp_servers)/m.test(had))) {
+    out('! MCP：請保留既有 TOML 自訂語法，手動比對以下缺項');
+    return out(manual);
+  }
   const bak = had !== null ? `${file}.aigile-bak-${new Date().toISOString().replace(/[:.]/g, '-')}` : '';
-  const restore = () => { try { if (had !== null) fs.writeFileSync(file, had); else fs.rmSync(file, { force: true }); } catch {} };
+  function restore() {
+    if (fs.readFileSync(file, 'utf8') !== update.config) throw Error('設定已被其他程序更新');
+    if (had !== null) fs.writeFileSync(file, had);
+    else fs.unlinkSync(file);
+  }
   try {
     fs.mkdirSync(dir, { recursive: true });
-    if (bak) fs.writeFileSync(bak, had);
-    fs.writeFileSync(file, (had || '') + block);
-  } catch (e) { restore(); out(`! MCP：寫不進 ${file}（${e.code || e.message}）：請自己加`); return out(manual); }
+    if (fs.existsSync(file) && (!fs.lstatSync(file).isFile() || fs.readFileSync(file, 'utf8') !== had)) {
+      out('! MCP：設定位置或內容已改變，請核對後重跑接入檢查');
+      return out(manual);
+    }
+    if (bak) fs.writeFileSync(bak, had, { flag: 'wx', mode: 0o600 });
+    const pending = file + '.aigile-' + crypto.randomUUID();
+    try {
+      fs.writeFileSync(pending, update.config, { flag: 'wx', mode: had === null ? 0o600 : fs.statSync(file).mode });
+      fs.renameSync(pending, file);
+    } finally { fs.rmSync(pending, { force: true }); }
+  } catch (e) { out(`! MCP：寫不進 ${file}（${e.code || e.message}）：請自己加`); return out(manual); }
   const bin = process.env.AIGILE_CODEX_BIN || process.env.CODEX_BIN || 'codex'; // 跟一行啟動、喚醒腳本同一個順序
   const binIsPath = fs.existsSync(bin);
   const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, 'mcp', 'get', 'aigile'], { encoding: 'utf8', timeout: 60_000 })
@@ -426,7 +458,10 @@ function codexMcp(mcpPath, manual) {
       ? spawnSync(`${binIsPath ? `"${bin}"` : bin} mcp get aigile`, { shell: true, encoding: 'utf8', timeout: 60_000 })
       : spawnSync(bin, ['mcp', 'get', 'aigile'], { encoding: 'utf8', timeout: 60_000 });
   if (r.status === 0) return out(`✓ MCP：已在 ${file.replace(/\\/g, '/')} 加好通用的 aigile（含 env_vars）${bak ? `，原檔備份在 ${bak.replace(/\\/g, '/')}` : ''}；重開 Codex 後生效`);
-  restore();
+  try { restore(); } catch (e) {
+    out('! MCP：驗證失敗，無法還原設定：' + e.message + (bak ? '，原檔備份在 ' + bak : ''));
+    return out(manual);
+  }
   out(`! MCP：加了之後 codex mcp get aigile 驗證失敗（${String(r.stderr || r.stdout || r.error?.message || '').trim().split('\n').pop().slice(0, 120) || '找不到 codex 指令'}），已還原 ${file.replace(/\\/g, '/')}：這版 Codex 可能不認得這些設定，請自己加`);
   out(manual);
 }

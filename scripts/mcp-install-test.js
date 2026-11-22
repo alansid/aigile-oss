@@ -70,6 +70,20 @@ try {
   r = await setup('codex');
   assert.equal(r.code, 0, r.out);
   assert.match(fs.readFileSync(path.join(CODEX_HOME, 'config.toml'), 'utf8'), /\[mcp_servers\.aigile\]\ncommand = "node"\nargs = \[".*aigile-mcp\.mjs"\]\nenv_vars = \["AIGILE_AGENT"\]/, 'config.toml 有 [mcp_servers.aigile]');
+  const target = path.join(CODEX_HOME, 'config.toml');
+  const installed = fs.readFileSync(target, 'utf8');
+  const toolHeader = '[mcp_servers.aigile.tools.aigile_read]';
+  assert.ok(installed.includes(toolHeader));
+  const oldConfig = installed.replace(toolHeader + '\napproval_mode = "approve"\n', '')
+    .replace('[mcp_servers.aigile.tools.aigile_me]\napproval_mode = "approve"', '[mcp_servers.aigile.tools.aigile_me]\napproval_mode = "prompt"');
+  fs.writeFileSync(target, oldConfig);
+  r = await setup('codex');
+  assert.equal(r.code, 0, r.out);
+  const upgraded = fs.readFileSync(target, 'utf8');
+  assert.ok(upgraded.includes(toolHeader));
+  assert.ok(upgraded.includes('[mcp_servers.aigile.tools.aigile_me]\napproval_mode = "prompt"'));
+  assert.ok(fs.readdirSync(path.dirname(target)).filter(n => n.startsWith('config.toml.aigile-bak-'))
+    .some(n => fs.readFileSync(path.join(path.dirname(target), n), 'utf8') === oldConfig));
   console.log('mcp-install-test：全部通過');
 } catch (e) {
   console.error('mcp-install-test 失敗：', e.message);
