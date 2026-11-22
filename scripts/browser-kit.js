@@ -60,7 +60,7 @@ export function openChrome(kids, profile, width, height) {
 // 本機伺服器（暫存資料夾）：回傳網址
 export async function startServer(kids, dataDir, env = {}) {
   const port = await freePort(), base = `http://127.0.0.1:${port}`;
-  const serverJs = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, '$1')), '..', 'server.js');
+  const serverJs = fileURLToPath(new URL('../server.js', import.meta.url)); // pathname 會把 ~ 編成 %7E（Windows 短路徑 RUNNER~1）
   const p = spawnLogged(kids, process.execPath, [serverJs], { PORT: String(port), DATA_DIR: dataDir, AIGILE_TEST_PROJECTS: '1', RATE_LIMIT_PER_MIN: '10000', JOIN_LIMIT_PER_HOUR: '100000', ...env });
   await untilStarted(p, () => fetch(base + '/api/health').then(r => r.ok), '本機伺服器');
   return base;

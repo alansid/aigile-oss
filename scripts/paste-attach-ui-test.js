@@ -42,6 +42,9 @@ try {
   assert.ok(ask.messageId, JSON.stringify(ask));
 
   const { js, login, cdp } = await kit.browser(1280, 900);
+  // Linux 沒有螢幕的 Chrome 可能沒有滑鼠（hover: none），網頁不當電腦、Enter 不送；這時要送出的那幾下改按 Ctrl+Enter（各裝置都送），換行的照按 Enter
+  const noPointer = !(await js("matchMedia('(hover: hover) and (pointer: fine)').matches"));
+  if (noPointer) console.log('這台的瀏覽器沒有滑鼠（hover: none），要送出的改用 Ctrl+Enter');
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const size = async (w, h, touch = false) => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: touch });
@@ -71,7 +74,7 @@ try {
     await js(helpers);
   };
   // 真的按鍵（會插入換行）：Enter／Shift+Enter
-  const press = async (shift = false) => { for (const type of ['keyDown', 'keyUp']) await cdp('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: shift ? 8 : 0, ...(type === 'keyDown' ? { text: '\r' } : {}) }); };
+  const press = async (shift = false, send = false) => { for (const type of ['keyDown', 'keyUp']) await cdp('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: shift ? 8 : (send && noPointer ? 2 : 0), ...(type === 'keyDown' ? { text: '\r' } : {}) }); };
   const box = key => J(`(() => { const g = document.querySelector('[data-att-grid="${key}"]'), d = document.querySelector('[data-att-decl="${key}"]'); const root = g?.closest('.att-box');
     return { cells: g ? [...g.querySelectorAll('.up-cell figcaption')].map(c => c.innerText.replace(/\\s+/g, ' ').replace(/ [\\d.]+ KB$/, '').trim()) : [], cols: g?.querySelector('.up-grid') ? getComputedStyle(g.querySelector('.up-grid')).gridTemplateColumns.split(' ').length : 0,
       count: g?.querySelector('.att-count')?.innerText.replace(/\\s+/g, ' ').trim() || '', add: g?.querySelector('.up-add')?.innerText.replace(/\\s+/g, ' ').trim() || '', declare: d?.querySelector('.att-declare-t')?.textContent || '', checked: !!d?.querySelector('input')?.checked,
@@ -120,7 +123,7 @@ try {
   assert.equal(await js(`document.querySelector('[data-inl-root="${kk}"] [data-inl-act=send]').disabled`), false, 'A 只有附圖也能送');
   await js(`__type('[data-inl-text="${kk}"]', '@程式開發助手 修好了，1 是修改前、2 是修改後')`);
   const before = (await msgs()).length;
-  await press();
+  await press(false, true);
   await until(() => js(`/請先勾選/.test(document.querySelector('[data-inl-err="${kk}"]').textContent)`), 5000, '沒勾聲明擋');
   assert.equal((await msgs()).length, before, 'A 沒勾聲明不送');
   await press(true);
@@ -133,7 +136,7 @@ try {
   assert.ok(await js(`(() => { const h = document.querySelector('[data-inl-root="${kk}"] .att-hint'); return h.scrollWidth <= h.clientWidth + 1 && h.getBoundingClientRect().right <= document.querySelector('[data-inl-root="${kk}"] [data-inl-act=send]').getBoundingClientRect().left; })()`), 'A 提示沒被切掉、不壓到送出鈕');
   await shot('1-電腦1280-卡片回覆貼上兩張截圖');
   await js(`document.querySelector('[data-inl-text="${kk}"]').focus(); true`);
-  await press();
+  await press(false, true);
   await until(async () => (await msgs()).some(m => m.text.startsWith(`[回覆] ${kReply.cardId}：`)), 10000, 'A Enter 送出');
   let m = (await msgs()).find(x => x.text.startsWith(`[回覆] ${kReply.cardId}：`));
   assert.match(m.text, /修改後\n請再看一次。\n\[文件\] 2 個檔案/, 'A 文字在前、[文件] 在後：' + m.text);
@@ -173,7 +176,7 @@ try {
   await js(`__type('[data-q-text="${ask.messageId}"]', '注音也要，見圖')`);
   await js(`document.querySelector('[data-q-root="${ask.messageId}"]').scrollIntoView({ block: 'center' }); true`);
   await shot('4-電腦1280-需確認回覆附一張');
-  await press();
+  await press(false, true);
   await until(async () => (await msgs()).some(x => x.replyToMessageId === ask.messageId), 10000, 'C Enter 送出');
   m = (await msgs()).filter(x => x.text.startsWith('[回覆] 選 A')).at(-1);
   assert.match(m.text, /^\[回覆\] 選 A。注音也要，見圖\n\[文件\] 1 個檔案/, 'C 內文：' + m.text);
