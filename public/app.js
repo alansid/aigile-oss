@@ -8180,10 +8180,39 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (k.status === 'none') return pill('grey', '還沒抽字') + redo('重試');
     if (k.status === 'full') return pill('grey', '知識庫已滿，沒有抽字');
     if (k.org === 'todo') return pill('blue', k.working ? `整理中 · ${k.working}` : '等整理');
+    // 自己選的「只搜原文，不整理」，跟沒指定整理 AI 的「只能搜原文」是兩種狀態
+    if (k.org === 'off') return pill('grey', k.status === 'original' ? '只存原檔，AI 讀不到內容' : '只搜原文，不整理') + (mgr ? `<button type="button" class="link small" data-kb-curate="${esc(x.docId)}">請 AI 整理</button>` : '');
     if (k.org === 'stale') return pill('yellow', '換了新版，等重新整理');
     if (k.org === 'done') return pill('green', `已整理 · ${k.pages || 1} 頁`);
     if (k.status === 'original') return pill('grey', '只存原檔，AI 讀不到內容');
     return aiName ? pill('grey', '只能搜原文') : pill('grey', '只能搜原文 · 還沒指定整理 AI') + (mgr ? '<button type="button" class="link small" data-kb-set-ai>指定整理 AI</button>' : '');
+  }
+  // 已整理（有知識頁）的文件才有 ⋯，只給 leader／管理員
+  function kbDocMore(x, mgr) {
+    if (!mgr || !['done', 'stale'].includes(x.kb.org)) return '';
+    const items = [['download', '⬇ 下載原檔'], ['stop', '改成不整理'], ['remove', '移出知識庫']];
+    return `<span class="pm-more-wrap"><button type="button" class="pm-more" data-kb-more aria-haspopup="menu" aria-expanded="false" aria-label="${esc(x.name)} 的更多動作">⋯</button>`
+      + `<div class="pm-more-menu" role="menu" aria-label="${esc(x.name)} 的動作" hidden>${items.map(([a, t]) => `<button type="button" role="menuitem" data-kb-act="${a}" data-id="${esc(x.docId)}">${t}</button>`).join('')}</div></span>`;
+  }
+  async function kbDocAct(pj, act, docId) {
+    const x = filesUi.data.items.find(d => d.docId === docId);
+    if (!x) return;
+    if (act === 'download') return docAction(pj, 'download', 'doc', docId);
+    if (act === 'remove') return kbMove(pj, false, [docId]);
+    if (!await confirmDialog({ title: '改成不整理？', confirmText: '改成不整理',
+      message: `「${esc(x.name)}」已寫好的 ${x.kb.pages || 1} 頁知識頁會留著，但之後原文換新版也不會自動更新。這份照樣搜得到原文。` })) return;
+    try {
+      await api(`/api/projects/${encodeURIComponent(pj)}/kb/docs`, { method: 'POST', body: { action: 'stop', docIds: [docId] } });
+      toast('已改成不整理，知識頁保留。');
+      openFiles();
+    } catch (err) { toast(err.message); }
+  }
+  async function kbCurate(pj, docId) {
+    try {
+      const r = await api(`/api/projects/${encodeURIComponent(pj)}/kb/organize`, { method: 'POST', body: { docIds: [docId] } });
+      toast(`已排進整理，${r.ai?.name || '整理 AI'}會接手（${(r.cards || []).join('、')}）`);
+      openFiles();
+    } catch (err) { toast(err.message); }
   }
   async function kbRedo(pj, docId) {
     try {
@@ -8204,17 +8233,28 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const list = box.querySelector('.file-list');
     if (list) list.style.paddingBottom = sel.length ? `${bar.offsetHeight + 12}px` : ''; // UX：底部那條不能蓋住最後一列（捲到底也看得到）
   }
+  // 上傳到知識庫、加入知識庫共用的勾選，預設勾
+  const kbCurateBox = () => `<label class="declare-box kb-curate-box"><input type="checkbox" data-kb-curate-box checked><span><b>讓 AI 整理成知識頁</b><span class="muted small">不勾：照樣抽字，大家和 AI 都搜得到原文，只是不寫知識頁、不花整理的 token。之後可以再按「請 AI 整理」。</span></span></label>`;
   // 加入／移出知識庫（leader／管理員）：移出要先確認；加入後提示會交給哪隻整理 AI
-  async function kbMove(pj, add) {
-    const sel = filesUi.data.items.filter(x => filesUi.pick.has(x.docId) && !!x.kb?.inKb !== add);
+  async function kbMove(pj, add, ids = null) { // ids：知識庫清單 ⋯ 的單份移出，不動專案文件的勾選
+    const pick = ids ? new Set(ids) : filesUi.pick;
+    const sel = filesUi.data.items.filter(x => pick.has(x.docId) && !!x.kb?.inKb !== add);
     if (!sel.length) return;
     if (!add && !await confirmDialog({ title: '移出知識庫？', confirmText: '移出', danger: true,
       message: `這 ${sel.length} 份會停止被搜尋，抽出來的文字會刪掉；原檔還在專案文件。用到它的知識頁會標「來源已移出知識庫」，要不要刪那頁由你決定。` })) return;
+    let box = null; // 加入前先跳視窗選要不要讓 AI 整理
+    if (add) {
+      const ask = confirmDialog({ title: `加入知識庫（${sel.length} 份）`, confirmText: '加入知識庫', message: `<p class="muted small">${esc(sel.map(x => x.name).join('、'))}</p>${kbCurateBox()}` });
+      box = document.querySelector('.confirm-root [data-kb-curate-box]');
+      if (!await ask) return;
+    }
+    const curate = !box || box.checked;
     const base = `/api/projects/${encodeURIComponent(pj)}/kb`;
     try {
-      await api(`${base}/docs`, { method: 'POST', body: { action: add ? 'add' : 'remove', docIds: sel.map(x => x.docId) } });
-      filesUi.pick.clear();
-      if (add) {
+      await api(`${base}/docs`, { method: 'POST', body: { action: add ? 'add' : 'remove', docIds: sel.map(x => x.docId), ...(add ? { curate } : {}) } });
+      if (!ids) filesUi.pick.clear();
+      if (add && !curate) toast('已加入知識庫，只抽字、不整理。');
+      else if (add) {
         const set = await api(`${base}/settings`).catch(() => null), ai = set?.candidates.find(c => c.participantId === set.aiId)?.name;
         toast(ai ? `已加入知識庫，開始抽字，會排進整理卡給 ${ai}。` : '已加入知識庫，開始抽字。還沒指定整理 AI，先只能搜原文。');
       } else toast(`已移出知識庫（${sel.length} 份）`);
@@ -8284,7 +8324,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         const topics = idx.items.filter(p => p.kind === 'topic'), srcs = idx.items.filter(p => p.kind !== 'topic');
         const todo = idx.todo.length ? `<p class="muted small"><span>整理中：${idx.todo.length} 份文件</span>（${[...new Set(idx.todo.map(t => t.cardId).filter(Boolean))].map(c => `<button type="button" class="link small" data-kb-card="${esc(c)}">${esc(c)}</button>`).join('、')}）</p>` : '';
         const docList = kdocs.length ? `<h3 class="kb-h">知識庫文件（${kdocs.length} 份） <span class="muted small">只有這裡的文件會被整理、被搜尋。</span></h3>
-          <div class="kb-docs">${kdocs.map(x => `<div class="kb-doc-row"><span class="file-icon" aria-hidden="true">${fileIcon(x.ext)}</span><b class="file-name">${esc(x.name)}</b><span class="kb-badges">${kbDocState(x, mgr, aiName)}</span></div>`).join('')}</div>` : '';
+          <div class="kb-docs">${kdocs.map(x => `<div class="kb-doc-row"><span class="file-icon" aria-hidden="true">${fileIcon(x.ext)}</span><b class="file-name">${esc(x.name)}</b><span class="kb-badges">${kbDocState(x, mgr, aiName)}</span>${kbDocMore(x, mgr)}</div>`).join('')}</div>
+          ${kdocs.some(x => x.kb.org === 'off') ? '<p class="muted small">「只搜原文，不整理」：AI 搜得到原文、回答附出處，但沒有知識頁。</p>' : ''}` : '';
         el.innerHTML = !empty ? `${docList}
           ${topics.length ? `<h3 class="kb-h">主題頁 <span class="muted small">${topics.length} 頁 · 把多份文件講同一件事的規定整理在一起</span></h3><div class="kb-list">${topics.map(p => pageRow(p)).join('')}</div>` : ''}
           ${srcs.length ? `<h3 class="kb-h">文件摘要頁 <span class="muted small">${srcs.length} 頁 · 一份文件一頁</span></h3><div class="kb-list">${srcs.map(p => pageRow(p)).join('')}</div>` : ''}
@@ -8331,6 +8372,14 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (e.target.closest('[data-kb-go-docs]')) { filesUi.tab = 'docs'; openFiles(); }
       const redo = e.target.closest('[data-kb-redo]');
       if (redo) return kbRedo(pj, redo.dataset.kbRedo);
+      // 已整理文件的 ⋯（下載原檔／改成不整理／移出知識庫）、「只搜原文，不整理」後面的「請 AI 整理」
+      const more = e.target.closest('[data-kb-more]'), menu = more?.nextElementSibling;
+      box.querySelectorAll('.kb-doc-row .pm-more-menu').forEach(m => { if (m !== menu) { m.hidden = true; m.previousElementSibling.setAttribute('aria-expanded', 'false'); } });
+      if (more) { menu.hidden = !menu.hidden; more.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('[role="menuitem"]')?.focus(); return; }
+      const ka = e.target.closest('[data-kb-act]');
+      if (ka) return kbDocAct(pj, ka.dataset.kbAct, ka.dataset.id);
+      const cur = e.target.closest('[data-kb-curate]');
+      if (cur) return kbCurate(pj, cur.dataset.kbCurate);
       if (e.target.closest('[data-kb-up]')) box.querySelector('#kb-input').click();
     };
     box.querySelector('#kb-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files, true); });
@@ -8537,6 +8586,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const body = openModal(kb ? '上傳到知識庫' : '上傳到專案文件', `${kb ? '<p class="muted small">放進知識庫的文件會抽字，交給整理 AI 寫成知識頁，大家和 AI 都搜得到。只想存檔的，放「專案文件」就好。</p>' : ''}
       <p>放到 <b>${esc(projName(pj))} ▸ ${esc(where)}</b>，共 ${files.length} 個檔${okN < files.length ? `（${files.length - okN} 個不能上傳，原因寫在旁邊）` : ''}。</p>
       <ul class="up-list">${pre.map((x, i) => `<li data-up="${i}"><span class="file-icon" aria-hidden="true">${fileIcon(extOf(x.f))}</span><span class="up-name">${esc(x.f.name)}</span><span class="muted small">${fmtBytes(x.f.size)}</span><span class="up-st${x.problem ? ' bad' : ''}">${x.problem ? '✗ ' + esc(x.problem) : '等待上傳'}</span></li>`).join('')}</ul>
+      ${okN && kb ? kbCurateBox() : ''}
       ${okN ? `<div class="warn-box">專案文件長期保存、不會自動刪除，本專案成員都能下載。</div>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認這些檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>` : ''}
       <p class="small" id="up-sum" role="status"></p>`, {
@@ -8548,6 +8598,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     declare.addEventListener('change', () => { go.disabled = !declare.checked; });
     go.addEventListener('click', async () => {
       go.disabled = true; declare.disabled = true; go.textContent = '上傳中…';
+      const cb = body.querySelector('[data-kb-curate-box]'); if (cb) cb.disabled = true;
       let good = 0, bad = 0;
       for (const [i, x] of pre.entries()) {
         if (x.problem) { bad++; continue; }
@@ -8557,6 +8608,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           const q = new URLSearchParams({ name: x.f.name, declared: 'true' });
           if (folder) q.set('folderId', folder);
           if (kb) q.set('kb', '1');
+          if (kb && !body.querySelector('[data-kb-curate-box]').checked) q.set('curate', '0'); // 不勾＝只抽字不整理
           const r = await fetch(`/api/projects/${encodeURIComponent(pj)}/docs?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: x.f });
           const data = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);

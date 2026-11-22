@@ -3674,6 +3674,9 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .kb-doc-row:first-child { border-top: 0; }
 .kb-doc-row .file-name { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
 .kb-doc-row .kb-badges { margin-top: 0; }
+.kb-doc-row .pm-more-wrap { margin-left: auto; } /* 手機換行時 ⋯ 靠右，選單才不會開到畫面外 */
+.kb-curate-box { margin: 8px 0; }
+.kb-curate-box > span { display: grid; gap: 2px; }
 .kb-tag { font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; margin-left: 4px; }
 .kb-selbar-note { font-size: 13px; color: #cbd5e1; }
 .kb-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 14px; font-size: 13px; color: var(--muted); }

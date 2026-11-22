@@ -100,7 +100,7 @@ async function uploadDoc(agent, a) {
   const file = path.resolve(WORK || process.cwd(), String(a.path));
   let bytes; try { bytes = fs.readFileSync(file); } catch (e) { throw new Error(`讀不到 ${file}（${e.code || e.message}）`); }
   const token = fs.readFileSync(path.join(dirOf(agent), '.token'), 'utf8').trim(), base = baseOf(agent);
-  const q = new URLSearchParams({ name: a.name, declared: 'true', ...(a.folderId ? { folderId: a.folderId } : {}), ...(a.kb ? { kb: '1' } : {}) }); // kb＝放進知識庫
+  const q = new URLSearchParams({ name: a.name, declared: 'true', ...(a.folderId ? { folderId: a.folderId } : {}), ...(a.kb ? { kb: '1' } : {}), ...(a.kb && a.curate === false ? { curate: '0' } : {}) }); // kb＝放進知識庫；curate=false＝只抽字不整理
   const r = await fetch(`${base}/api/projects/${encodeURIComponent(a.project)}/docs?${q}`, { method: 'POST', body: bytes, signal: AbortSignal.timeout(120_000), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream', 'X-Aigile-Source': 'mcp' } });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`${j.error?.code || 'HTTP_' + r.status}：${j.error?.message || ''}`);

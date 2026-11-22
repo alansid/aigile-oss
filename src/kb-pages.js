@@ -132,7 +132,7 @@ export function registerKbPages({ route, db, ApiError, invalid, readJson, randId
     // 抽完字（或只有原檔）：leader／管理員放進知識庫的才自動排進整理卡（by＝誰放進知識庫）
     async afterIndex(docId, by) {
       const d = await db.get('SELECT * FROM docs WHERE id = ? AND deleted_at IS NULL AND in_kb = 1', docId);
-      if (!d || !ORGANIZABLE.includes(d.kb_status) || d.kb_org === 'todo') return;
+      if (!d || !ORGANIZABLE.includes(d.kb_status) || ['todo', 'off'].includes(d.kb_org)) return; // off＝只抽字不整理
       const up = by || (await peopleMap({})).get(d.uploader_id), aiId = await kbAiOf(d.project);
       if (!up || !aiId || !(await kbManager({}, up, d.project))) return;
       if (await db.get('SELECT id FROM kb_pages WHERE project = ? AND deleted_at IS NULL AND sources LIKE ? LIMIT 1', d.project, `%"${d.id}"%`)) return; // 已整理的不重整
@@ -151,7 +151,7 @@ export function registerKbPages({ route, db, ApiError, invalid, readJson, randId
     async afterRemove(d, me) {
       await staleBy(d.project, d.id, `來源已移出知識庫：${d.name}（${me.name}）`);
     },
-    // 文件清單的整理狀態：todo（在整理卡裡）／done（有知識頁）／stale（引用它的頁可能過時）／none
+    // 文件清單的整理狀態：todo（在整理卡裡）／off（只搜原文不整理）／done（有知識頁）／stale（引用它的頁可能過時）／none
     async docMarks(pj, docs) {
       const pages = await db.all('SELECT status, sources FROM kb_pages WHERE project = ? AND deleted_at IS NULL', pj);
       const st = new Map();
@@ -161,7 +161,7 @@ export function registerKbPages({ route, db, ApiError, invalid, readJson, randId
       const people = cs.size ? await peopleMap({}) : new Map();
       // 整理卡進行中（AI 接單了）帶 AI 名字；有知識頁帶頁數（知識庫文件清單「整理中 · AI」「已整理 · n 頁」）
       const todo = c => (c ? { cardId: cardKey(c), ...(c.status === '進行中' ? { working: people.get(c.owner_id)?.name || '?' } : {}) } : { cardId: null });
-      return new Map(docs.map(d => { const x = st.get(d.id) || {}; return [d.id, d.kb_org === 'todo' ? { org: 'todo', ...todo(cs.get(d.kb_card)) } : { org: x.stale ? 'stale' : x.done ? 'done' : 'none', ...(x.pages ? { pages: x.pages } : {}) }]; }));
+      return new Map(docs.map(d => { const x = st.get(d.id) || {}; return [d.id, d.kb_org === 'todo' ? { org: 'todo', ...todo(cs.get(d.kb_card)) } : { org: d.kb_org === 'off' ? 'off' : x.stale ? 'stale' : x.done ? 'done' : 'none', ...(x.pages ? { pages: x.pages } : {}) }]; }));
     },
     searchPages,
   };
@@ -264,7 +264,7 @@ export function registerKbPages({ route, db, ApiError, invalid, readJson, randId
     const c = await cardsApi.createCardBy(me, { project: pj, title: `更新知識頁「${p.title}」`.slice(0, 100), ownerId: ai.id, reason: note.slice(0, 500),
       next: `用 aigile_kb_read（project=${pj}, pageId=${p.id}）讀原頁、aigile_doc_read 重讀來源，再用 aigile_kb_write 帶 pageId 改寫，寫完發 [完成]。`,
       criteria: `照${SKILL}重寫；改寫後頁面恢復成已發布。`, requestId: `kbupd_${randId('r', 10)}` });
-    const live = (await docsOf(pj, js(p.sources, []).map(s => s.docId))).filter(d => d.in_kb); // 移出知識庫的不再排整理
+    const live = (await docsOf(pj, js(p.sources, []).map(s => s.docId))).filter(d => d.in_kb && d.kb_org !== 'off'); // 移出知識庫、改成不整理的不再排整理
     if (live.length) await db.run("UPDATE docs SET kb_org = 'todo', kb_card = ? WHERE id IN (SELECT value FROM json_each(?))", c.seq, JSON.stringify(live.map(d => d.id)));
     await db.run('UPDATE kb_pages SET update_card = ? WHERE id = ?', c.seq, p.id);
     const r = await createMessage(ctx, me, { text: `[交接] ${c.key} 請更新知識頁「${p.title}」（${why}）。\n\n${note}`.slice(0, 1900), recipientIds: [ai.id], replyFrom: [ai.id], project: pj, requestId: `kbupd_${c.seq}` }, { systemNotice: true });

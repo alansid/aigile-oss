@@ -119,6 +119,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
 
   // 上傳一個檔（原始位元組）：?name=檔名&folderId=&declared=true&kb=1。多選上傳＝前端一個一個送，各自回成功或失敗原因
   // kb=1＝上傳到知識庫（leader／管理員才能），會抽字、自動排整理卡；沒帶＝一般專案文件，只存原檔
+  // kb=1&curate=0＝照樣抽字、搜得到原文，但不排整理卡（kb_org＝off）
   route('POST', '/api/projects/:id/docs', async ({ ctx, me, req, url, params }) => {
     const pj = params.id;
     await writable(me, pj);
@@ -126,6 +127,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const q = url.searchParams;
     const toKb = ['true', '1', 'yes'].includes(String(q.get('kb')).toLowerCase());
     if (toKb) await kbOnly(ctx, me, pj, '把文件放進知識庫（不帶 kb 會上傳成一般專案文件，再請 leader 加入）');
+    const noCurate = toKb && ['false', '0', 'no'].includes(String(q.get('curate')).toLowerCase());
     const name = cleanFileName(q.get('name'));
     const declared = ['true', '1', 'yes'].includes(String(q.get('declared')).toLowerCase());
     let bytes = new Uint8Array(0);
@@ -147,13 +149,13 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const id = randId('doc'), at = nowIso();
     const hash = await sha256(bytes);
     await docStorage.put(`docs/${id}`, bytes, { mime: info.mime, name });
-    await db.run('INSERT INTO docs (id, project, folder_id, name, ext, mime, size, sha256, uploader_id, created_at, updated_at, in_kb) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-      id, pj, folderId, name, info.ext, info.mime, bytes.length, hash, me.id, at, at, toKb ? 1 : 0);
+    await db.run('INSERT INTO docs (id, project, folder_id, name, ext, mime, size, sha256, uploader_id, created_at, updated_at, in_kb, kb_org) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      id, pj, folderId, name, info.ext, info.mime, bytes.length, hash, me.id, at, at, toKb ? 1 : 0, noCurate ? 'off' : null);
     if (toKb) await startIndex({ id, project: pj, ext: info.ext, sha256: hash }, bytes, me); // 背景抽字，不擋上傳
     const d = await db.get('SELECT * FROM docs WHERE id = ?', id);
     await audit('upload', me, { ...d, declared: 1 }, {});
     await kbHooks.afterUpload?.(d, me); // 同名新文件取代舊的 → 引用舊文件的知識頁標可能過時
-    await event(pj, me, `${me.name} 上傳文件「${name}」到 ${await pathOf(pj, folderId)}（${formatBytes(bytes.length)}${toKb ? '，放進知識庫' : ''}）`);
+    await event(pj, me, `${me.name} 上傳文件「${name}」到 ${await pathOf(pj, folderId)}（${formatBytes(bytes.length)}${toKb ? (noCurate ? '，放進知識庫、不整理' : '，放進知識庫') : ''}）`);
     return { __status: 201, doc: docView(d, await peopleMap(ctx)) };
   });
 
@@ -344,23 +346,28 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     return { started: batch.length, remaining: all.length - batch.length };
   });
 
-  // 加入／移出知識庫（leader／管理員）：{ docIds（1～20 份）, action: 'add' | 'remove' }
+  // 加入／移出知識庫（leader／管理員）：{ docIds（1～20 份）, action: 'add' | 'remove' | 'stop', curate }
+  // add 帶 curate:false＝只抽字不整理；stop＝已在知識庫的改成不整理（已寫的頁留著，不再自動排整理）
   // 加入：背景抽字，抽完排進整理卡；移出：刪抽出的段落、清整理排程，引用它的知識頁標「來源已移出知識庫」（原檔留著）
   route('POST', '/api/projects/:id/kb/docs', async ({ ctx, me, req, params }) => {
     const pj = params.id;
     await writable(me, pj);
     requireStore();
     const body = await readJson(req);
-    if (!['add', 'remove'].includes(body.action)) throw invalid('action 只能是 add（加入知識庫）或 remove（移出知識庫）');
-    await kbOnly(ctx, me, pj, body.action === 'add' ? '把文件加入知識庫' : '把文件移出知識庫');
+    if (!['add', 'remove', 'stop'].includes(body.action)) throw invalid('action 只能是 add（加入知識庫）、remove（移出知識庫）或 stop（改成不整理）');
+    if (body.curate !== undefined && typeof body.curate !== 'boolean') throw invalid('curate 要是 true（讓 AI 整理，預設）或 false（只抽字不整理）');
+    await kbOnly(ctx, me, pj, { add: '把文件加入知識庫', remove: '把文件移出知識庫', stop: '把文件改成不整理' }[body.action]);
     const ids = [...new Set(Array.isArray(body.docIds) ? body.docIds.map(String) : [])];
     if (!ids.length || ids.length > 20) throw invalid('docIds 要 1～20 份文件');
-    const add = body.action === 'add';
-    const docs = (await db.all('SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?)) ORDER BY created_at', pj, JSON.stringify(ids))).filter(d => !!d.in_kb !== add); // 照上傳順序排整理卡
+    const add = body.action === 'add', stop = body.action === 'stop';
+    const docs = (await db.all('SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?)) ORDER BY created_at', pj, JSON.stringify(ids)))
+      .filter(d => (stop ? d.in_kb && d.kb_org !== 'off' : !!d.in_kb !== add)); // 照上傳順序排整理卡
     const done = docs.map(d => d.id), skipped = ids.filter(id => !done.includes(id));
     if (!docs.length) return { action: body.action, done, skipped };
-    if (add) {
-      await db.run('UPDATE docs SET in_kb = 1 WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(done));
+    if (stop) {
+      await db.run("UPDATE docs SET kb_org = 'off', kb_card = NULL WHERE id IN (SELECT value FROM json_each(?))", JSON.stringify(done));
+    } else if (add) {
+      await db.run('UPDATE docs SET in_kb = 1, kb_org = ? WHERE id IN (SELECT value FROM json_each(?))', body.curate === false ? 'off' : null, JSON.stringify(done));
       for (const d of docs) await setKb(d.id, KB_TEXT_EXTS.includes(d.ext) ? 'pending' : 'original');
       background((async () => {
         for (const d of docs) {
@@ -377,7 +384,8 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
       for (const d of docs) await kbHooks.afterRemove?.(d, me);
     }
     const names = docs.map(d => `「${d.name}」`).join('');
-    await event(pj, me, `${me.name} 把 ${docs.length} 份文件${add ? '加入' : '移出'}知識庫：${names}`.slice(0, 500));
+    const what = stop ? '改成不整理' : add ? `加入知識庫${body.curate === false ? '（不整理）' : ''}` : '移出知識庫';
+    await event(pj, me, `${me.name} 把 ${docs.length} 份文件${what}：${names}`.slice(0, 500));
     return { action: body.action, done, skipped };
   });
 }

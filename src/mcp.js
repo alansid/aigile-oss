@@ -96,7 +96,7 @@ export const MCP_TOOLS = [
       requestId: str('冪等鍵（選填）', { maxLength: 128 }) }, ['project', 'title']) },
   { name: 'aigile_doc_upload', description: '上傳文件到專案文件區（≤20 MB、不過期）。禁止上傳程式碼（原始碼、打包檔、設定檔）與客戶個資；declared 一定要 true＝確認不含這些，不確定先問所屬人類。只收 pdf、docx、xlsx、pptx、md、txt、png、jpg。本機檔案給 path（本機轉接腳本讀檔直接上傳）；短的 md／txt 也可以直接給 content。kb=true＝放進知識庫（只有專案 leader／管理員能放，AI 上傳的請 leader 在專案文件勾選加入），預設 false＝一般專案文件，只存原檔。',
     inputSchema: obj({ project: str('專案代號（例：平台）'), name: str('檔名（含副檔名）', { minLength: 1, maxLength: 200 }), path: str('本機檔案路徑（經本機轉接腳本）'), content: str('文字內容（md／txt 用，最多 100 KB）', { maxLength: 100_000 }),
-      folderId: str('資料夾 ID（選填）'), declared: { type: 'boolean', enum: [true], description: '確認不含程式碼與客戶個資，必須是 true' }, kb: { type: 'boolean', description: '放進知識庫（預設 false；只有 leader／管理員能放）' } }, ['project', 'name', 'declared']) },
+      folderId: str('資料夾 ID（選填）'), declared: { type: 'boolean', enum: [true], description: '確認不含程式碼與客戶個資，必須是 true' }, kb: { type: 'boolean', description: '放進知識庫（預設 false；只有 leader／管理員能放）' }, curate: { type: 'boolean', description: '搭配 kb：讓 AI 整理成知識頁（預設 true；false＝只抽字、搜得到原文，不排整理卡）' } }, ['project', 'name', 'declared']) },
   { name: 'aigile_history', description: `讀歷史訊息（精簡格式：每則 from、at、前 ${HIST_CHARS} 字）。給 cardId 讀那張卡關聯的訊息；不給就讀最近 hours 小時（預設 24、最多 168），before 帶上次回的 olderCursor 往前翻。要全文用 aigile_read。${UNTRUSTED}`,
     inputSchema: obj({ cardId: CARD_ID, hours: { type: 'integer', minimum: 1, maximum: 168, description: '最近幾小時，預設 24' }, before: str('往前翻：上次回的 olderCursor', { pattern: '^cur_' }),
       project: str('只看這個專案'), limit: { type: 'integer', minimum: 1, maximum: 100, description: '最多幾則，預設 30' } }) },
@@ -261,7 +261,7 @@ async function runTool(name, a, { api, me }) {
     case 'aigile_doc_upload': {
       if (a.path) throw Object.assign(new Error('path 要經本機轉接腳本（aigile-mcp.mjs）才讀得到檔案；沒有轉接就改用 content（md／txt）'), { tool: true });
       if (a.content === undefined) throw Object.assign(new Error('要給 path（本機檔案）或 content（文字）'), { tool: true });
-      const r = ok(await api('POST', `/api/projects/${enc(a.project)}/docs${qs({ name: a.name, folderId: a.folderId, declared: 'true', kb: a.kb ? '1' : undefined })}`, undefined, new TextEncoder().encode(a.content)));
+      const r = ok(await api('POST', `/api/projects/${enc(a.project)}/docs${qs({ name: a.name, folderId: a.folderId, declared: 'true', kb: a.kb ? '1' : undefined, curate: a.kb && a.curate === false ? '0' : undefined })}`, undefined, new TextEncoder().encode(a.content)));
       return { docId: r.doc?.docId, name: r.doc?.name, size: r.doc?.size, inKb: !!r.doc?.kb?.inKb };
     }
     case 'aigile_history': {

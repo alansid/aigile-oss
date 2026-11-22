@@ -147,6 +147,9 @@ try {
     await until(() => js("!document.querySelector('.confirm-root')"), 5000, '關掉移出確認');
     if (fresh) {
       await click('[data-kb-add]');
+      await until(() => js("!!document.querySelector('.confirm-root [data-kb-curate-box]:checked')"), 5000, '加入視窗（預設勾讓 AI 整理）');
+      await check(`${tag} 加入視窗`);
+      await click('.confirm-root [data-ok]');
       await until(() => js("/Added to the knowledge base/.test(document.querySelector('#toast')?.textContent || '')"), 8000, '加入提示');
       await check(`${tag} 加入提示`);
       // 一般成員：知識庫分頁一行說明、勾選列一行說明

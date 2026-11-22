@@ -166,6 +166,8 @@ try {
     if (w < 900) { await click('[data-kb-pick-clear]'); continue; }
     // 加入：只送不在知識庫的那份
     await click('[data-kb-add]');
+    await until(() => js("!!document.querySelector('.confirm-root [data-kb-curate-box]:checked')"), 5000, 'E 加入視窗（預設勾讓 AI 整理）');
+    await click('.confirm-root [data-ok]');
     await until(async () => /已加入知識庫，開始抽字，會排進整理卡給 整理助手。/.test(await text('#toast')), 8000, 'E 加入提示');
     await until(async () => (await docsNow()).find(x => x.name === '報帳流程.md').kb.inKb, 5000, 'E 報帳流程放進知識庫');
     assert.equal((await docsNow()).find(x => x.name === '部署筆記.txt').kb.inKb, true, 'E 已在知識庫的不受影響');
