@@ -147,7 +147,11 @@ try {
   const ck = 'c:' + dCard.cardId;
   await go('/p/main/inbox');
   await until(() => js(`!!document.querySelector('[data-inl-text="${ck}"]')`), 15000, '決策回覆框');
-  assert.equal((await box(ck)).hint, 'Enter 換行 · Ctrl+Enter 只留言 · 可直接貼上截圖', 'B 決策提示');
+  // 收件匣會隨通知陸續回來重畫，等提示畫好再比（macOS CI 曾讀到別的值）
+  const hintB = 'Enter 換行 · Ctrl+Enter 只留言 · 可直接貼上截圖';
+  await until(async () => (await box(ck)).hint === hintB, 5000, 'B 決策提示畫好').catch(() => {});
+  const gotB = (await box(ck)).hint;
+  assert.equal(gotB, hintB, 'B 決策提示：' + gotB);
   await js(`__type('[data-inl-text="${ck}"]', '照這張圖放')`);
   const nB = (await msgs()).length;
   await js(`document.querySelector('[data-inl-text="${ck}"]').focus(); true`);
