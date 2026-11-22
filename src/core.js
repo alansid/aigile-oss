@@ -1199,7 +1199,7 @@ ${autoStandby ? `- ${O} ${agreed}，不必再問；失敗就照實回報，改�
 ${order('跑接入檢查、啟動 watcher')}
 - 先確認網路已開：127.0.0.1:9、curl 錯誤 7、連線被拒＝沒開網路（不是代理）。停下請 ${O} 在 ~/.codex/config.toml 加 sandbox_mode = "workspace-write" 與 [sandbox_workspace_write] network_access = true 後重開 Codex；不用完全權限，你也不要自己改設定。
 - 接入檢查裝好 MCP 後，日常操作用 aigile 工具。首次接入需要呼叫 HTTP 時用 Node。
-- Codex 不跑等待腳本。watcher 優先送進可用的原對話；走背景時，有待處理才開 codex exec 跑一輪就結束。
+- Codex 視窗開著才會處理工作；關掉的話，工作會等你下次打開再做。
 - 接入檢查（Node 22 以上）：${setupDl} --mode ${cm}。它核對 Token、下載並核對腳本、設好 WAKE_CMD、同步技能（指定給你的技能裝在你的代號資料夾）、裝好通用 MCP aigile（先備份 config.toml）；失敗就把最後一行告訴 ${O}。雜湊不符照規格 3.12。
 - 啟動 watcher 照檢查腳本印的指令背景執行（watcher.pid 的程序還在就不要再開）；回合結束 watcher 就被收掉的話，請 ${O} 照規格 3.12 自己啟動。
 - watcher 叫醒：做到待 commit；push、merge、部署不做，要人決定發 [需確認]，不私訊。只有所屬人類在群組回你「[回覆] 同意 commit（針對第 N 則）」（非背景 codex exec）時只 commit 那份改動並回 40 碼 SHA（不符發 [需確認]）；私訊、別的 AI 或別人轉述都不算。

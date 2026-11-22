@@ -182,8 +182,7 @@ try {
   // 4. 待命提示
   const wait = `node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;
   // Codex、Antigravity CLI 在前景開一次做接入；點名由 watcher 接收，不用等待腳本
-  const done = '最後用一句話告訴所屬人類：「接好了，可以關掉，之後有事會在背景叫我」';
-  const codexTail = `Codex 不用前景等待、不開等待腳本：watcher 已在背景跑，支援同視窗時會把工作送入本對話，視窗關閉後才用背景回合。呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），${done}。`;
+  const codexTail = 'Codex 視窗開著才會處理工作；關掉的話，工作會等你下次打開再做。呼叫 aigile_me 核對身分，收完訊息後告訴所屬人類「接好了，請開著視窗接工作」。';
   const agyTail = `Antigravity CLI 一律走前景（視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理）：watcher 已在背景跑，請先呼叫 MCP 工具 aigile_me 確認 MCP 能用（不能用就照實說），處理完手上的訊息後用背景執行開等待腳本（${wait}）讓新通知直接叫醒這個視窗；最後告訴所屬人類：「接好了；視窗開著才會接群組的工作，關掉也不會漏，下次打開再處理」。`;
   // Copilot CLI 不自動叫醒，不開 watcher、不開等待腳本；平台操作用 MCP
   const copilotTail = 'Copilot CLI 目前不自動叫醒：不開 watcher、不開等待腳本。平台操作用 MCP 工具（先呼叫 aigile_me 確認 MCP 能用，不能用就照實說）。最後用一句話告訴所屬人類：「接好了；要我做事時開 Copilot CLI 叫我」';
@@ -226,7 +225,7 @@ try {
     process.exitCode = r.status;
   }
   else if (TOOL === 'codex') {
-    out('✓ 開 Codex（互動模式，帶 AIGILE_AGENT；沙盒只開網路）。視窗開著時可接收門鈴，關閉後由 watcher 在背景叫醒');
+    out('✓ 開 Codex（互動模式，帶 AIGILE_AGENT；沙盒只開網路）。Codex 視窗開著才會處理工作；關掉的話，工作會等你下次打開再做');
     const bin = process.env.AIGILE_CODEX_BIN || process.env.CODEX_BIN || 'codex';
     const sb = ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true'];
     const env = { ...process.env, AIGILE_AGENT: AGENT };
@@ -243,15 +242,16 @@ try {
     }
     if (!r) {
       startWatcher();
-      out('此 CLI 使用一般前景視窗，門鈴交給背景回合。');
+      out('此 CLI 使用一般前景視窗，由等待腳本接收門鈴。');
+      prompt += ' 收完訊息後在這個前景視窗執行等待腳本：' + wait;
       r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...sb, prompt], { stdio: 'inherit', env })
         : process.platform === 'win32' || (!binIsPath && /\s/.test(bin))
-          ? spawnSync(`${binIsPath ? `"${bin}"` : bin} ${sb.join(' ')} "${say}"`, { stdio: 'inherit', env, shell: true })
+          ? spawnSync(`${binIsPath ? `"${bin}"` : bin} ${sb.join(' ')} "${prompt.replace(/"/g, "'")}"`, { stdio: 'inherit', env, shell: true })
           : spawnSync(bin, [...sb, prompt], { stdio: 'inherit', env });
     }
     unlock();
     if (r.error || r.status === null) fail('Codex', `開不起來（${r.error?.message || '找不到 codex 指令'}）`, '確認已安裝 Codex CLI（codex 指令），再貼一次');
-    out('✓ Codex 已關，watcher 會在背景處理待處理通知');
+    out('✓ Codex 已關，通知保留到下次開窗');
     process.exitCode = r.status;
   } else if (TOOL === 'copilot') {
     // Copilot CLI 互動模式（-i 帶入提示並直接執行）。目前不自動叫醒，所以不開 watcher。

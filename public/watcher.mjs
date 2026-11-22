@@ -189,7 +189,7 @@ async function check(why) {
   ids = ids.map(n => n.notificationId);
   if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理${fyi ? `（${fyi} 則只是知會）` : ''}，沒有新的要處理，不叫醒`); }
   if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
-  if (uiKind === 'antigravity') {
+  if (uiKind === 'antigravity' || (uiKind === 'codex' && waitAlive())) {
     if (BELL_FILE && waitAlive()) {
       fresh.forEach(id => woken.add(id));
       for (const id of woken) if (!ids.includes(id)) woken.delete(id);
@@ -207,7 +207,7 @@ async function check(why) {
     }
     // Concurrent checks may already have delivered the same notification.
     if (fresh.every(id => woken.has(id))) return;
-    backgroundOnly = status === 'unavailable';
+    if (uiKind === 'codex' && status !== 'idle') return log('視窗沒開，等開視窗再處理');
   }
   if (running) { queued = true; return log(`[${why}] 有 ${fresh.length} 則新的待處理，但 AI 正在執行，排隊補跑`); }
   const cap = capped();

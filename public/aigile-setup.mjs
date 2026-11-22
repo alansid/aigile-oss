@@ -261,7 +261,7 @@ if (running && changed) {
 if (TOOL === 'copilot') out('Copilot CLI 目前不自動叫醒：不用開 watcher 或等待腳本；要它做事時，所屬人類開 Copilot CLI 叫它跑一輪');
 else {
   out(`啟動 watcher：node ${envArg} .aigile/watcher/watcher.mjs >> ${DIR.replace(/\\/g, '/')}/watcher.log 2>&1`);
-  if (TOOL === 'codex') out(`Codex 不用前景等待：watcher 有待處理才執行 WAKE_CMD=${merged.get('WAKE_CMD')}（開 codex exec 跑一輪就結束，輸出在 ${DIR.replace(/\\/g, '/')}/wake.log）`);
+  if (TOOL === 'codex') out('Codex 視窗開著才會處理工作；關掉的話，工作會等你下次打開再做。');
 else if (TOOL === 'antigravity') out(`Antigravity CLI 一律走前景（開著視窗才會處理，關掉就等下次打開）：等待腳本 node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`);
   else out(`等待腳本：node ${envArg} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}（沒事不會結束，結束就是有事）`);
 }
