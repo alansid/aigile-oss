@@ -420,6 +420,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     mustConfirm: p.must_confirm, handoff: p.handoff,
   });
 
+  const askOf = m => { try { return m.reply_from ? new Set(JSON.parse(m.reply_from)) : null; } catch { return null; } };
   async function serializeMessages(ctx, rows) {
     if (!rows.length) return [];
     const recRows = await db.all(
@@ -446,7 +447,6 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       if (!byMsg.has(r.message_id)) byMsg.set(r.message_id, []);
       byMsg.get(r.message_id).push(people.get(r.participant_id));
     }
-    const askOf = m => { try { return m.reply_from ? new Set(JSON.parse(m.reply_from)) : null; } catch { return null; } };
     return rows.map(m => { const ask = askOf(m); return {
       messageId: m.id,
       sequence: m.seq,
@@ -3513,7 +3513,7 @@ ${ending}`;
   // 團隊狀態用的最近 200 則訊息與 [需確認] 的回覆：保留在記憶體，之後只補讀新訊息
   let recentCache = { rows: null, maxSeq: 0, replies: new Map() }; // replies: [需確認] id → 回覆列
   async function recentMessages() {
-    const cols = 'SELECT id, seq, author_id, text, reply_to, created_at, project FROM messages';
+    const cols = 'SELECT id, seq, author_id, text, reply_to, reply_from, created_at, project FROM messages';
     if (!recentCache.rows) {
       const rows = await db.all(`${cols} ORDER BY seq DESC LIMIT 200`);
       recentCache = { rows, maxSeq: rows[0]?.seq || 0, replies: null };
@@ -3629,8 +3629,12 @@ ${ending}`;
     const unanswered = late.filter(n => !lateResolved.has(n.message_id))
       .map(n => ({ messageId: n.message_id, participantId: n.recipient_id, name: people.get(n.recipient_id).name, since: n.created_at, _project: n.msg_project, _at: n.msg_at }));
 
-    // 等人決定：[需確認] 訊息，直到  人類直接回覆、 人類按「已處理」、 PO 角色的 AI 以 [決策紀錄] 回覆
-    const asks = recent.filter(m => inferState(m.text) === 'waiting');
+    // 等人決定：[需確認] 訊息，直到 (1) 人類直接回覆、(2) 人類按「已處理」、(3) PO 角色的 AI 以 [決策紀錄] 回覆
+    const asks = recent.filter(m => {
+      if (inferState(m.text) !== 'waiting') return false;
+      const replyFrom = askOf(m);
+      return !replyFrom?.size || [...replyFrom].some(id => people.get(id)?.kind !== 'ai');
+    });
     const askIds = JSON.stringify(asks.map(m => m.id));
     const replies = await repliesTo(asks);
     const resolved = new Set(asks.length

@@ -41,11 +41,23 @@ try {
   const q1 = (await call(A.tok, '/api/messages', 'POST', { requestId: 'q1', project: '預設專案', recipientIds: [L], replyFrom: [L], text: '[需確認] 要不要先上線 MARK-Q1？\n選項：\nA. 上線\nB. 再等等' })).body;
   const q2 = (await call(A.tok, '/api/messages', 'POST', { requestId: 'q2', project: '預設專案', recipientIds: [B.id], replyFrom: [B.id], text: '[需確認] B 你那邊測完了嗎 MARK-Q2' })).body;
   const plain = (await call(A.tok, '/api/messages', 'POST', { requestId: 'p1', project: '預設專案', recipientIds: [L], replyFrom: [], text: '[通知] 一般訊息' })).body;
-  assert.ok(q1.messageId && q2.messageId && plain.messageId, '發文成功');
+  const unassigned = (await call(A.tok, '/api/messages', 'POST', { requestId: 'unassigned', project: '預設專案', recipientIds: [B.id, L], text: '[需確認] 誰可以確認時程？' })).body;
+  const fyi = (await call(A.tok, '/api/messages', 'POST', { requestId: 'fyi', project: '預設專案', recipientIds: [B.id], replyFrom: [], text: '[需確認] 尚未指定回覆人' })).body;
+  const reviewer = (await call(null, '/api/join', 'POST', { name: '驗收人', role: 'QA' })).body.participant.participantId;
+  const mixed = (await call(boss.token, '/api/messages', 'POST', { requestId: 'mixed', project: 'all', recipientIds: [B.id, reviewer], replyFrom: [B.id, reviewer], text: '[需確認] 共同確認時程' })).body;
+  assert.ok(mixed.messageId, JSON.stringify(mixed));
+  assert.deepEqual((await call(boss.token, `/api/messages/${mixed.messageId}`)).body.replyFrom, [B.id, reviewer]);
+  assert.ok(q1.messageId && q2.messageId && plain.messageId && unassigned.messageId && fyi.messageId, '發文成功');
   await new Promise(r => setTimeout(r, 30));
   let team = (await call(boss.token, '/api/team-status')).body;
   assert.ok(team.unanswered.some(u => u.messageId === q2.messageId && u.participantId === B.id), '處理前：B 列在尚未回應');
-  assert.ok(team.decisions.some(d => d.messageId === q1.messageId) && team.decisions.some(d => d.messageId === q2.messageId), '處理前：兩則都在等人決定');
+  const decisionIds = team.decisions.map(d => d.messageId);
+  assert.ok(decisionIds.includes(q1.messageId), '指定人類時列入等人決定');
+  assert.ok(decisionIds.includes(mixed.messageId), '同時指定 AI 和人類時列入等人決定');
+  assert.ok(!decisionIds.includes(q2.messageId), '只指定 AI 時不列入等人決定');
+  assert.ok(decisionIds.includes(unassigned.messageId) && decisionIds.includes(fyi.messageId), '未指定與空清單都照舊列入');
+  const notices = (await call(B.tok, '/api/notifications?status=pending')).body.items;
+  assert.ok(notices.some(n => n.messageId === q2.messageId && n.wake), '只問 AI 的這則通知仍會叫醒 B');
   assert.equal((await call(A.tok, `/api/messages/${q1.messageId}`)).body.resolution, undefined, '還沒處理：沒有 resolution');
 
   // 人類標已處理（網頁批次就是逐則呼叫同一個端點）
