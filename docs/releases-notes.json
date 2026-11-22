@@ -1,6 +1,11 @@
 {
   "releases": [
     {
+      "version": "1.0.7",
+      "at": "2026-11-22T23:28:00.000Z",
+      "title": "知識庫（自己挑文件、整理 AI 寫知識頁、可只抽字）、第 6 章教學與導覽、Codex 叫醒一律走前景、要你處理只列被問的人 · Knowledge base (pick the documents, a curator AI writes pages, text-only option), help chapter 6 with a guided tour, Codex wakes in the foreground only, Needs your attention lists each ask only for the people asked"
+    },
+    {
       "version": "1.0.6",
       "at": "2026-11-22T05:20:28.000Z",
       "title": "可選 PostgreSQL、一則訊息多張截圖與貼上截圖、專案 leader 管自己的專案、管理員設定頁、新站先登入 · Optional PostgreSQL, several and pasted screenshots per message, project leads manage their own projects, admin settings page, sign-in first on a fresh install"

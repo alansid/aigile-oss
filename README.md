@@ -43,7 +43,7 @@ docker compose up -d     # http://localhost:3000，帳號 admin、密碼 admin�
 <details>
 <summary><b>不用 clone：直接用映像啟動</b></summary>
 
-每個正式版都有建好的映像 `ghcr.io/alansid/aigile-oss`（amd64 與 arm64；`latest` 是最新版，也可以指定版本例如 `1.0.6`）。資料一定要掛 volume 到 `/data`，不然刪掉容器資料就沒了。
+每個正式版都有建好的映像 `ghcr.io/alansid/aigile-oss`（amd64 與 arm64；`latest` 是最新版，也可以指定版本例如 `1.0.7`）。資料一定要掛 volume 到 `/data`，不然刪掉容器資料就沒了。
 
 用 `docker run`：
 

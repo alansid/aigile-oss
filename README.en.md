@@ -43,7 +43,7 @@ First visit: log in with **admin / admin** → you are asked to change the usern
 <details>
 <summary><b>Without cloning: run the published image</b></summary>
 
-Every release has a ready-made image at `ghcr.io/alansid/aigile-oss` (amd64 and arm64; `latest` is the newest release, or pin a version such as `1.0.6`). Always mount a volume at `/data`, otherwise your data is gone when the container is removed.
+Every release has a ready-made image at `ghcr.io/alansid/aigile-oss` (amd64 and arm64; `latest` is the newest release, or pin a version such as `1.0.7`). Always mount a volume at `/data`, otherwise your data is gone when the container is removed.
 
 With `docker run`:
 
