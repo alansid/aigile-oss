@@ -2863,7 +2863,7 @@
   const VIEW_KEY = 'aigile-switch-work-view';
   const work = {
     cards: new Map(), since: null, loaded: false, lastSync: 0,
-    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), askSel: new Set(), confSel: new Set(), q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
+    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), askSel: new Set(), confSel: new Set(), verSel: new Set(), doneSel: new Set(), q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
     showArchived: false, openId: null, detail: null, editing: false, dragId: null,
   };
   const isMeRef = r => r && r.participantId === meId();
@@ -2879,6 +2879,10 @@
   const waitText = c => (c.waitFor ? `${isMeRef(c.waitFor) ? '等你' : '等 ' + c.waitFor.name}${c.blocker ? '：' + c.blocker : ''}` : c.blocker || ''); // 「等你」不空格，人名前留空格
   const staleTag = c => (c.staleHint ? `<span class="cmark stale" title="最後更新 ${esc(shortTime(c.staleHint.lastUpdatedAt))} · 最新相關訊息 ${esc(shortTime(c.staleHint.latestMessageAt))}">可能過時</span>` : '');
   const doneTitle = c => [c.done ? `完成：${c.done.by?.name || ''} ${shortTime(c.done.at)}` : '', c.verified ? `驗收：${c.verified.by?.name || ''} ${shortTime(c.verified.at)}` : ''].filter(Boolean).join(' · ');
+  // 已完成・待驗收：人可以驗別人完成的（自己完成的伺服器擋 SELF_VERIFY）
+  const doneWaiting = c => c.status === '已完成' && !c.verified && !!c.done;
+  const canVerifyDone = c => doneWaiting(c) && state.me?.memberType === 'human' && c.done?.by?.participantId !== meId();
+  const selfDoneNote = c => (doneWaiting(c) && state.me?.memberType === 'human' && c.done?.by?.participantId === meId() ? '<span class="muted small done-self">你完成的，要別人驗</span>' : '');
   const markHtml = c => (c.verified ? `<span class="cmark ok" title="${esc(doneTitle(c))}">✓ 已驗收</span>` : c.done ? `<span class="cmark wait" title="${esc(doneTitle(c))}">待驗收</span>` : '') + staleTag(c);
   // 卡片瘦身：已完成＋已驗證滿 7 天由伺服器自動封存；未驗證不封存，超過 7 天標紅
   const ARCHIVE_DAYS = 7, DAY_MS = 86400_000;
@@ -3270,10 +3274,22 @@
     updateTodoBadge();
   }
   // 增量同步：只讀上次之後有變動的卡片
+  // 增量同步讀完所有頁：伺服器新到舊排、每頁最多 200，一次改很多張（例如資料遷移補驗收）時只讀第一頁會漏；同一個 since 用 offset 讀到底，游標取這批最新的時間
+  async function cardsChangedSince(since) {
+    const items = [];
+    let next = since || null, more = true;
+    for (let off = 0; more && off <= 100_000; off += 200) {
+      const d = await api(`/api/cards?since=${encodeURIComponent(since)}&limit=200&offset=${off}`);
+      items.push(...d.items);
+      more = !!d.hasMore && d.items.length > 0;
+      if (d.nextSince && (!next || d.nextSince > next)) next = d.nextSince;
+    }
+    return { items, nextSince: next };
+  }
   async function syncCards() {
     if (!work.loaded) return;
     work.lastSync = Date.now();
-    const [d, sg] = await Promise.all([api('/api/cards?since=' + encodeURIComponent(work.since || '')), api('/api/suggestions?state=pending')]);
+    const [d, sg] = await Promise.all([cardsChangedSince(work.since || ''), api('/api/suggestions?state=pending')]);
     const suggChanged = JSON.stringify(sg.items.map(x => x.suggestionId)) !== JSON.stringify((work.sugg || []).map(x => x.suggestionId));
     work.sugg = sg.items;
     updateTodoBadge();
@@ -3702,15 +3718,16 @@
         ${chips.map(([v, label, n]) => `<button type="button" data-filter="${esc(v)}" aria-pressed="${work.filter === v}"${v === '已封存' ? ' class="dashed"' : ''}>${label}<span>${n}</span></button>`).join('')}
       </div>
       ${work.q.trim() ? '<p class="muted small">搜尋時一併找已封存</p>' : ''}
-      <div class="crows">
-        ${listed.length ? listed.map(c => `
-          <button type="button" class="crow${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" data-card="${esc(c.cardId)}">
+      ${doneBar(listed)}
+      <div class="crows${work.filter === '已完成' ? ' crows-done' : ''}">
+        ${listed.length ? listed.map(c => `${work.filter === '已完成' ? doneLineStart(c) : ''}
+          <button type="button" class="crow${isMeRef(c.waitFor) && !(c.status === '已完成' && c.verified) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" data-card="${esc(c.cardId)}">
             ${cidHtml(c)}
             <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}${c.claim ? ' · 正在做：' + esc(c.claim.by?.name || '') : ''}</span></span>
             <span class="crow-st">${c.type === NOTE ? noteStPill(c) : c.status === '待確認' ? confirmPill(c) : stPill(c.status)}${ownerHtml(c)}</span>
-            <span class="crow-wait small ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c) || '—')}</span>
+            <span class="crow-wait small ${isMeRef(c.waitFor) && !(c.status === '已完成' && c.verified) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc((c.status === '已完成' && c.verified ? '' : waitText(c)) || '—')}</span>
             <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
-          </button>`).join('') : `<p class="muted">${work.filter === '已封存' && work.archived.loading ? '載入中…' : '沒有符合條件的卡片。'}</p>`}
+          </button>${work.filter === '已完成' ? doneLineEnd(c) : ''}`).join('') : `<p class="muted">${work.filter === '已封存' && work.archived.loading ? '載入中…' : '沒有符合條件的卡片。'}</p>`}
         ${archMore}
       </div>
       ${archGroup}`;
@@ -4236,9 +4253,13 @@
           <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">到訊息回覆</button>
             <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">不用回</button></div>
         </div>`).join('')}</section>` : '';
+    for (const id of [...work.verSel]) if (!verifyMe.some(c => c.cardId === id)) work.verSel.delete(id); // 清單變了就丟掉不在的勾選
+    const verN = work.verSel.size, verAll = verifyMe.length > 0 && verN === verifyMe.length;
     const verSection = verifyMe.length ? `
       <section class="wsugg wverify"><div class="wsugg-head"><span class="wdot ok"></span><h3>等你驗收</h3><span class="wcount ok">${verifyMe.length}</span><span class="muted small">AI 做完交給你的卡：看過沒問題按「驗收通過」，要改按「退回」</span></div>
+        <div class="batch-bar ver-batch" role="group" aria-label="批次驗收通過"><label class="sugg-check ask-all"><input type="checkbox" data-ver-all ${verAll ? 'checked' : ''} aria-label="全選等你驗收"> <span class="small">全選</span></label><span class="small">${`已選 ${verN} 張`}</span><button type="button" class="btn small primary batch-go" data-ver-batch ${verN ? '' : 'disabled'}>驗收通過（${verN}）</button></div>
         ${verifyMe.map(c => `<div class="sugg-row ver-row" data-ver-row="${esc(c.cardId)}">
+          <label class="sugg-check"><input type="checkbox" data-ver-check="${esc(c.cardId)}" ${work.verSel.has(c.cardId) ? 'checked' : ''} aria-label="${esc(`勾選 ${c.key || c.cardId} ${cardTitle(c)}`)}"></label>
           <div class="sugg-main"><b>${cidHtml(c)} ${cardPTag(c)} ${esc(cardTitle(c))}</b><span class="muted small">${c.next ? '下一步：' + esc(c.next) + ' · ' : ''}<span>${agoText(c.updatedAt)}交來</span></span></div>
           <div class="sugg-actions">${reportBtn(c)}<button type="button" class="btn small primary" data-ver-ok="${esc(c.cardId)}">驗收通過</button><button type="button" class="btn small" data-ver-no="${esc(c.cardId)}">退回…</button><button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
         </div>`).join('')}</section>` : '';
@@ -4276,6 +4297,17 @@
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
+  // 「已完成」列表上方：全選、已選 N 張、驗收通過（N）（照 PLAT-346）；每列：勾選框、原本那列、驗收通過
+  function doneBar(listed) {
+    if (work.filter !== '已完成') return '';
+    const can = listed.filter(canVerifyDone);
+    for (const id of [...work.doneSel]) if (!can.some(c => c.cardId === id)) work.doneSel.delete(id);
+    if (!can.length) return '';
+    const n = work.doneSel.size, all = n === can.length;
+    return `<div class="batch-bar done-batch" role="group" aria-label="批次驗收通過"><label class="sugg-check ask-all"><input type="checkbox" data-done-all ${all ? 'checked' : ''} aria-label="全選已完成・待驗收"> <span class="small">全選</span></label><span class="small">${`已選 ${n} 張`}</span><button type="button" class="btn small primary batch-go" data-done-batch ${n ? '' : 'disabled'}>驗收通過（${n}）</button></div>`;
+  }
+  const doneLineStart = c => `<div class="crow-line">${canVerifyDone(c) ? `<label class="sugg-check"><input type="checkbox" data-done-check="${esc(c.cardId)}" ${work.doneSel.has(c.cardId) ? 'checked' : ''} aria-label="${esc(`勾選 ${c.key || c.cardId} ${cardTitle(c)}`)}"></label>` : '<span class="sugg-check"></span>'}`;
+  const doneLineEnd = c => `<span class="crow-act">${canVerifyDone(c) ? `<button type="button" class="btn small primary" data-done-ok="${esc(c.cardId)}">驗收通過</button>` : selfDoneNote(c)}</span></div>`;
   function boardHtml(all) {
     const BOARD_ORDER = ['待整理', '待處理', '進行中', '受阻', '待確認', '已完成', '已封存']; // 受阻提前到第三欄（待整理有卡才顯示）
     const colName = st => (st === '待確認' ? '待驗收／決定' : st); // 欄裡混著驗收與決定；只改欄名，狀態值不變
@@ -4286,7 +4318,7 @@
         <b class="ctile-title">${cardPTag(c)} ${esc(cardTitle(c))}</b>
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
-        <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>
+        <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>${canVerifyDone(c) ? `<div class="ctile-act"><button type="button" class="btn small primary ctile-ok" data-done-ok="${esc(c.cardId)}" aria-label="${esc(`驗收通過 ${c.key || c.cardId}`)}">通過</button></div>` : selfDoneNote(c)}
         ${mergedHtml(c)}
       </div>`;
     const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}">${cidHtml(c)}<span class="cmini-t">${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
@@ -4354,6 +4386,18 @@
     if (t.closest('[data-note-ackall]')) return ackNotesNow(noteList().map(n => n.notificationId), '已全部標為已讀');
     const tj = t.closest('[data-todo-jump]');
     if (tj) { showPage('messages'); return jumpTo(tj.dataset.todoJump); }
+    if (t.closest('[data-ver-batch]') && work.verSel.size) { // 批次驗收通過
+      const ids = [...work.verSel];
+      const ok = await confirmDialog({ title: `把 ${ids.length} 張標為驗收通過？`, confirmText: `驗收通過（${ids.length}）`,
+        message: `這 ${ids.length} 張會改成「已完成」並記你驗收，跟一張一張按「驗收通過」一樣。要退回的請取消勾選，再一張一張按「退回…」寫原因。` });
+      if (!ok) return;
+      const bad = [];
+      for (const id of ids) if (!(await patchCard(id, { status: '已完成' }, { render: false }))) bad.push(id); // 一張一張送，版本衝突時才不會互相蓋掉
+      work.verSel.clear();
+      toast(bad.length ? `${ids.length - bad.length} 張驗收通過，${bad.length} 張沒成功：${bad.join('、')}` : `已驗收通過 ${ids.length} 張`);
+      await loadTeam().catch(() => {}); updateTodoBadge(); renderWork();
+      return;
+    }
     if (t.closest('[data-ask-done]') && work.askSel.size) { // 只清自己的清單＝ack 自己的通知；不發文、不叫醒任何人
       const ids = [...work.askSel];
       const ok = await confirmDialog({ title: L(`這 ${ids.length} 則都不用回？`, `No reply needed for these ${ids.length}?`), confirmText: '不用回',
@@ -4425,12 +4469,32 @@
       inp.dispatchEvent(new Event('input', { bubbles: true }));
       return toast('選一隻 AI，確認內容後送出');
     }
+    const dok = t.closest('[data-done-ok]');
+    if (dok) { e.stopPropagation(); return verifyDone([dok.dataset.doneOk]); } // 只驗這張，不打開卡片
+    if (t.closest('[data-done-batch]') && work.doneSel.size) {
+      const ids = [...work.doneSel];
+      const ok = await confirmDialog({ title: `把 ${ids.length} 張標為驗收通過？`, confirmText: `驗收通過（${ids.length}）`,
+        message: `這 ${ids.length} 張已完成的卡會記你驗收，跟一張一張按「驗收通過」一樣。要退回的請取消勾選，打開卡片按「重新打開」。` });
+      if (!ok) return;
+      return verifyDone(ids);
+    }
     const c = t.closest('[data-card]');
     if (c) openCard(c.dataset.card);
   });
+  // 已完成的卡標為已驗收（一張一張送，跟卡片裡「驗收通過」同一個 API）；失敗的照實說
+  async function verifyDone(ids) {
+    const bad = [];
+    for (const id of ids) {
+      try { putCard(await api(`/api/cards/${encodeURIComponent(id)}/verify`, { method: 'POST' })); work.doneSel.delete(id); }
+      catch (err) { bad.push(`${id}（${err.message}）`); }
+    }
+    toast(bad.length ? `${ids.length - bad.length} 張驗收通過，${bad.length} 張沒成功：${bad.join('、')}` : ids.length === 1 ? `${ids[0]} 驗收通過` : `已驗收通過 ${ids.length} 張`);
+    renderWork();
+    loadTeam().then(() => updateTodoBadge()).catch(() => {});
+  }
   workBox.addEventListener('keydown', e => {
     const c = e.target.closest?.('.ctile');
-    if (c && e.key === 'Enter') openCard(c.dataset.card);
+    if (c && e.key === 'Enter' && !e.target.closest('[data-done-ok]')) openCard(c.dataset.card);
   });
   workBox.addEventListener('input', e => { if (e.target.id === 'card-q') { work.q = e.target.value; searchArchived(); renderWork(); } });
   workBox.addEventListener('change', e => {
@@ -4444,6 +4508,22 @@
       else if (ca.checked) work.confSel.add(ca.dataset.confCheck); else work.confSel.delete(ca.dataset.confCheck);
       renderWork();
       workBox.querySelector(call ? '[data-conf-all]' : `[data-conf-check="${CSS.escape(ca.dataset.confCheck)}"]`)?.focus();
+      return;
+    }
+    const da = e.target.closest?.('[data-done-check]'), dall = e.target.closest?.('[data-done-all]');
+    if (da || dall) { // 已完成・待驗收的勾選、全選
+      if (dall) { work.doneSel.clear(); if (dall.checked) for (const el of workBox.querySelectorAll('[data-done-check]')) work.doneSel.add(el.dataset.doneCheck); }
+      else if (da.checked) work.doneSel.add(da.dataset.doneCheck); else work.doneSel.delete(da.dataset.doneCheck);
+      renderWork();
+      workBox.querySelector(dall ? '[data-done-all]' : `[data-done-check="${CSS.escape(da.dataset.doneCheck)}"]`)?.focus();
+      return;
+    }
+    const va = e.target.closest?.('[data-ver-check]'), vall = e.target.closest?.('[data-ver-all]');
+    if (va || vall) { // 等你驗收的勾選、全選
+      if (vall) { work.verSel.clear(); if (vall.checked) for (const c of [...work.cards.values()].filter(verifyingMe).filter(c => inView(c.project))) work.verSel.add(c.cardId); }
+      else if (va.checked) work.verSel.add(va.dataset.verCheck); else work.verSel.delete(va.dataset.verCheck);
+      renderWork();
+      workBox.querySelector(vall ? '[data-ver-all]' : `[data-ver-check="${CSS.escape(va.dataset.verCheck)}"]`)?.focus();
       return;
     }
     const a = e.target.closest?.('[data-ask-check]'), all = e.target.closest?.('[data-ask-all]');

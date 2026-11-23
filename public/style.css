@@ -793,6 +793,27 @@ hr { border: 0; border-top: 1px solid var(--border); width: 100%; margin: 4px 0;
 .wchips button[aria-pressed="true"] span { color: #d1d5db; }
 .crows { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .crows > p { padding: 16px; margin: 0; }
+/* 「已完成」列表：勾選框＋原本那列＋驗收通過；看板「待驗證」的「通過」 */
+.crow-line { display: flex; align-items: center; gap: 0 8px; padding-left: 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.crow-line > .crow { flex: 1 1 auto; min-width: 0; border-bottom: 0; padding-left: 4px; }
+.crow-line > .sugg-check { flex: none; width: 20px; }
+.crow-act { flex: none; width: 132px; padding-right: 12px; text-align: right; } /* 右側固定寬：按鈕或說明自己一行，不擠標題、不蓋日期 */
+.crow-act .done-self { white-space: normal; line-height: 1.35; }
+.ctile-act { margin-top: 6px; }
+@media (min-width: 900px) { /* 電腦版：日期和狀態同一行；按鈕或說明放第二行靠右 */
+  .crows-done .crow-line { flex-wrap: wrap; }
+  .crows-done .crow-line > .crow { flex: 1 1 0; }
+  .crows-done .crow { grid-template-columns: 70px minmax(0, 1fr) minmax(0, 190px) minmax(0, 150px) 232px; }
+  .crows-done .crow-time { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; justify-content: flex-end; }
+  .crows-done .crow-act { flex: 1 1 100%; width: auto; margin-top: -6px; padding: 0 14px 10px 0; }
+  .crows-done .crow-act:empty { display: none; }
+}
+.crow-line:has(> .crow.me) { background: #fffaf3; } /* 等你的列整列同一個底色 */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .crow-line:has(> .crow.me) { background: var(--mine-bg); } }
+:root[data-theme="dark"] .crow-line:has(> .crow.me) { background: var(--mine-bg); }
+.done-batch { margin-bottom: 8px; }
+.ctile-ok { padding: 2px 12px; min-height: 0; line-height: 1.6; }
+.done-self { display: block; }
 .crow { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 190px) minmax(0, 170px) 96px; gap: 4px 12px; align-items: center; width: 100%; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .crow:last-child { border-bottom: 0; }
 .crow.me { background: #fffaf3; }
@@ -1054,6 +1075,16 @@ body.drawer-docked #app { padding-right: 400px; }
 .ask-row-item { align-items: flex-start; }
 .ask-head { display: flex; align-items: center; min-height: 44px; cursor: pointer; } /* 標題列也能勾 */
 .batch-go:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+/* 驗收通過（N）：藍色實心白字、放右側（UX）；手機上勾選框跟標題同一行 */
+.batch-go.primary:not(:disabled) { color: var(--primary-text); }
+.ver-batch .batch-go, .done-batch .batch-go { margin-left: auto; }
+.ver-batch .ask-all, .done-batch .ask-all { gap: 6px; min-width: 0; padding-right: 4px; }
+@media (max-width: 600px) {
+  .ver-row { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 4px; }
+  .ver-row > .sugg-check { grid-column: 1; grid-row: 1; align-self: start; }
+  .ver-row > .sugg-main { grid-column: 2; grid-row: 1; }
+  .ver-row > .sugg-actions { grid-column: 1 / -1; }
+}
 @media (max-width: 600px) {
   .ask-row-item { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 4px; }
   .ask-row-item > .sugg-check { grid-column: 1; grid-row: 1; align-self: start; }
