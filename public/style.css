@@ -3806,3 +3806,25 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .project-filters [data-hub-newproj] { margin-inline-start:auto; }
 .project-summary > small { color:var(--muted); }
 .team-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.5rem; }
+
+/* 卡片詳情：編輯在右上、鎖頭一行、欄位精簡 */
+.drawer-acts { display: flex; gap: 4px; margin-left: auto; flex: none; }
+.drawer-edit { width: 36px; height: 36px; border-radius: 8px; padding: 0; font-size: 16px; flex: none; }
+.drawer-edit:hover { background: var(--surface-2); color: var(--text); }
+.lock-line { margin-top: 4px; font-size: 12.5px; color: #7c3aed; flex-basis: 100%; width: 100%; }
+.lock-line summary { cursor: pointer; list-style: none; }
+.lock-line summary::-webkit-details-marker { display: none; }
+.lock-line .lock-more { margin-left: 6px; color: var(--primary); white-space: nowrap; }
+.lock-line p { margin: 4px 0 0; color: var(--muted); line-height: 1.5; }
+.dmeta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13.5px; }
+.dmeta-i .muted { margin-right: 2px; }
+.dstack { margin: 0; display: grid; gap: 2px; }
+.dstack dt { color: var(--muted); font-size: 12.5px; font-weight: 600; margin-top: 8px; }
+.dstack dt:first-child { margin-top: 0; }
+.dstack dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.dblank { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; color: var(--muted); font-size: 13px; }
+.dblank-k + .dblank-k::before { content: '、'; }
+:root:lang(en) .dblank-k + .dblank-k::before { content: ', '; }
+:root:lang(en) .dblank-l { margin-right: 4px; }
+.dlog-box > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.dlog-box[open] > summary { margin-bottom: 8px; }
