@@ -36,7 +36,7 @@ try {
   await js(`(() => { const b = document.createElement('button'); b.id = 't388'; b.dataset.dmOpen = ${JSON.stringify(pg1.id)}; b.dataset.dmPj = '預設專案'; document.body.append(b); b.click(); return true; })()`);
   await until(() => js("!!document.querySelector('#dm-panel:not([hidden]) #dm-input')"), 10000, '總覽按打開私訊 → 開到對話');
   assert.ok(await js("location.pathname.startsWith('/p/')"), '切進專案：' + await js('location.pathname'));
-  assert.ok(await js("(document.querySelector('#dm-panel').textContent || '').includes('21:04 開始')"), '對話裡看得到私訊');
+  await until(() => js("(document.querySelector('#dm-panel').textContent || '').includes('21:04 開始')"), 10000, '對話裡看得到私訊（輸入框先畫好，私訊內容稍後才載入）');
   await until(async () => (await pending()) === 1, 10000, '打開對話後 PG一號 的 3 則標為已讀');
   await js("document.querySelector('#dm-panel [data-dm-close]')?.click() ?? document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); document.getElementById('t388')?.remove(); true");
 
