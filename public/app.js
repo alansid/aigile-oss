@@ -1693,6 +1693,7 @@
     for (const n of askNoteRaw()) items.push({ p: n.project ?? null, kind: '回覆', title: `${n.sender?.name || ''}：${oneLine(String(n.preview || ''), 60)}`, key: 'n:' + n.notificationId, mid: n.messageId });
     for (const { list, last: n } of dmGroups((work.notes || []).filter(x => x.dm))) items.push({ p: n.project ?? null, kind: n.sender?.system ? '通知' : '私訊', title: (n.sender?.system ? `平台通知：${oneLine(dmGist(n.preview, true), 60)}` : `${n.sender?.name || ''} 回你了`) + (list.length > 1 ? `（${list.length} 則）` : ''), key: 'n:' + n.notificationId }); // PLAT-388 E：連發的合併成一項
     for (const j of (work.joins || []).filter(j => dueForMe(j.project, j.createdAt))) items.push({ p: myProjects().includes(j.project) ? j.project : null, kind: '申請', title: `${j.name} 申請加入${j.projectName}`, key: 'j:' + j.id }); // PLAT-381 先給 leader
+    for (const x of work.reviews || []) items.push({ p: x.project || null, kind: '審查', title: `請你審查：${x.cardId} ${x.title}`, key: 'r:' + x.cardId });
     for (const k of (work.skillRev || []).filter(k => dueForMe(k.project, k.uploadedAt))) items.push({ p: myProjects().includes(k.project) ? k.project : null, kind: '核准', title: `技能待核准：${k.name} v${k.version}`, key: 'k:' + k.skillId }); // PLAT-381
     return items.filter(x => !x.p || myProjects().includes(x.p));
   }
@@ -3885,7 +3886,7 @@
     const inV = pj => projectView() === 'hub' || pj === projectView();
     const joins = (work.joins || []).filter(j => inV(j.project) && dueForMe(j.project, j.createdAt)); // PLAT-381 leader 先處理
     const skRev = (work.skillRev || []).filter(k => inV(k.project) && dueForMe(k.project, k.uploadedAt));
-    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length && !skRev.length) return '<section class="wpanel"><p class="muted">目前沒有要你處理的事。</p></section>';
+    if (!decideMe.length && !confirms.length && !sg.length && !verifyMe.length && !asks.length && !dms.length && !joins.length && !skRev.length && !reviewSectionHtml()) return '<section class="wpanel"><p class="muted">目前沒有要你處理的事。</p></section>';
     for (const id of [...work.askSel]) if (!asks.some(n => n.notificationId === id)) work.askSel.delete(id); // 清單變了就丟掉不在的勾選
     const askN = work.askSel.size, askAll = asks.length > 0 && askN === asks.length;
     const askSection = asks.length ? `
@@ -3932,7 +3933,7 @@
           <div class="sugg-actions"><button type="button" class="btn small" data-lead-jno="${esc(j.id)}">${L('拒絕', 'Reject')}</button><button type="button" class="btn small primary" data-join-review="${esc(j.project)}">${L('核准', 'Approve')}</button></div></div>`).join('')}
         ${skRev.map(k => `<div class="sugg-row lead-row" data-skrev-row="${esc(k.skillId)}"><span class="lead-ic" aria-hidden="true">🧩</span><div class="sugg-main"><b>技能待核准：${esc(k.name)}</b><span class="muted small">${late(k.project)}<span>${esc(projName(k.project))}</span> · ${k.scripts ? `${esc(L(`含腳本 ${k.scripts} 個`, `${k.scripts} script${k.scripts > 1 ? 's' : ''}`))} · ` : ''}${esc(L(`${k.uploadedBy?.name || ''}上傳`, `uploaded by ${k.uploadedBy?.name || ''}`))} · <span>${agoText(k.uploadedAt)}</span></span></div>
           <div class="sugg-actions"><button type="button" class="btn small" data-lead-skview="${esc(k.skillId)}">${L('看內容', 'View')}</button><button type="button" class="btn small primary" data-lead-skok="${esc(k.skillId)}">${L('核准', 'Approve')}</button></div></div>`).join('')}</section>` : '';
-    return joinSection + dmSection + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
+    return joinSection + dmSection + reviewSectionHtml() + askSection + decisionSectionHtml(decideMe) + verSection + confSection + suggHtml(true);
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
@@ -4475,6 +4476,7 @@
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
           </form>` : `
           ${handHtml(d.handover)}
+          ${reviewHtml(d)}
           <dl class="dfields">
             <dt>專案</dt><dd>${esc(projName(d.project) || '')}</dd>
             <dt>${d.type === NOTE ? '內容' : '背景／緣由'}</dt><dd class="${d.reason ? '' : 'muted'}">${esc(d.reason || '未填寫')}</dd>
@@ -4552,6 +4554,7 @@
     }
     if (a.dataset.act === 'edit') { work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); }
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
+    else if (a.dataset.act === 'rv-request') openReviewRequest(work.detail);
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
     else if (a.dataset.act === 'ver-ok') acceptCard(id);
     else if (a.dataset.act === 'ver-no') rejectCard(id);
@@ -4931,7 +4934,7 @@
       if (sent) rows.push(answeredHtml(m, sent));
       else if (pend && pend.key === 'need') rows.push(authConfirm(m, pend));
       else if (!answered) rows.push(hasCommit
-        ? `<div class="auth-row"><span class="auth-title">授權 Commit</span>${authBtn(m, 'commit', '同意 Commit')}</div>`
+        ? ((rv = rvCommitBox(m)) => (rv ? rv.html : '') + (rv?.mismatch ? `<div class="auth-row rv-mm"><button type="button" class="btn auth-btn" data-rv-back="${esc(m.messageId)}">退回重新送審</button>${authBtn(m, 'commit', '仍要同意', '', true)}</div>` : `<div class="auth-row"><span class="auth-title">授權 commit</span>${authBtn(m, 'commit', '同意 commit')}</div>`))() // 審查欄
         : quickHtml(m));
     }
     return rows.length ? `<div class="auth-box">${rows.join('')}</div>` : '';
@@ -8525,6 +8528,232 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     host.querySelector('#kb-reason').addEventListener('input', e => { if (e.target.value.trim()) host.querySelector('#kb-reason-err').hidden = true; });
     host.querySelector('#kb-reason').focus();
   }
+  // ---------- 審查者（UX 文字 v2）：專案 ⚙ › 審查、卡片審查欄＋送審視窗、要你處理「請你審查」、同意 commit 旁的審查欄 ----------
+  const RV_TOOL = { claude: 'Claude', codex: 'Codex', copilot: 'Copilot', antigravity: 'Antigravity' };
+  const rvTag = p => (p.kind === 'ai' ? (p.tool ? `<span class="rv-tag ai">AI · ${esc(RV_TOOL[p.tool] || p.tool)}</span>` : '<span class="rv-tag unk">AI · 工具不明</span>') : '<span class="rv-tag human">人</span>');
+  const rvWho = p => (p ? `${esc(p.name)} ${rvTag(p)}` : '');
+  const rvShort = v => (/^[0-9a-f]{40}$/.test(v || '') ? v.slice(0, 7) : v || '');
+  const rvVer = v => `<code class="rv-ver">${esc(rvShort(v))}</code>`;
+  const rvTime = t => esc(shortTime(t));
+  const rvLinks = (r, pj) => [r.diffDocId ? `<a class="link small" href="/api/projects/${encodeURIComponent(pj)}/docs/${encodeURIComponent(r.diffDocId)}" target="_blank" rel="noopener">📎 看 diff</a>` : '',
+    r.compareUrl ? `<a class="link small" href="${esc(r.compareUrl)}" target="_blank" rel="noopener noreferrer">在 GitHub 比較 ↗</a>` : ''].filter(Boolean).join(' ');
+  const rvCodeTag = r => (r.isCode ? `程式卡${r.diffDocId ? '（附 diff）' : r.branch ? '（有分支）' : ''}` : '');
+  const RV_EV = { request: '送審', changes: '要改', pass: '通過', void: '版本變了，通過作廢' };
+  // 卡片上的審查欄
+  function reviewHtml(d) {
+    const r = d.review;
+    if (!r || d.type === '決策' || d.type === NOTE) return '';
+    const st = r.state, waitNames = (r.reviewers || []).filter(x => !x.result).map(x => x.name).join('、');
+    const pill = { none: ['還沒送審', ''], waiting: [`等 ${waitNames} 審查`, 'wait'], changes: ['要改', 'bad'], passed: ['✅ 已審查', 'ok'], void: ['通過已作廢', 'warn'] }[st];
+    const mine = myProjects().includes(d.project);
+    const firstReq = [...(r.history || [])].reverse().findIndex(h => h.ev === 'request');
+    const hist = (r.history || []).map((h, i, a) => `<li>${rvTime(h.at)} · ${h.ev === 'request' && a.slice(i + 1).some(x => x.ev === 'request') ? '重新送審' : RV_EV[h.ev]} · ${esc(h.by?.name || '')} · ${rvVer(h.version)}</li>`).join('');
+    let body = '';
+    if (st === 'none') body = `<p class="small">這個專案的${r.rule.cards === 'all' ? '卡' : '程式卡'}要 ${r.rule.need} 位審查通過，才能找人同意 commit。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">送審</button>' : ''}`;
+    else if (st === 'waiting') body = `<p class="small">送審 ${rvVer(r.version)} · ${rvTime(r.requestedAt)} · ${esc(r.requestedBy?.name || '')}${r.branch ? ` · 分支 ${esc(r.branch)}` : ''}</p>
+      <ul class="rv-revs">${r.reviewers.map(x => `<li>${rvWho(x)}${x.result === 'pass' ? ' · 通過' : ' · 還沒審'}</li>`).join('')}</ul>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
+    else if (st === 'changes') body = `<p class="small">${rvWho(r.changes.by)} 審 ${rvVer(r.changes.version)} · ${rvTime(r.changes.at)}</p><p class="rv-comment bad">${esc(r.changes.comment)}</p>
+      <p class="muted small">已退回作者。改好重新送審，預設還是由 ${esc(r.changes.by.name)} 審。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">重新送審</button>' : ''}`;
+    else if (st === 'passed') body = `<p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}
+      <p class="small">下一步：找人同意 commit。</p>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
+    else body = `<p class="small">${esc(`${r.passed?.by?.name || ''} 通過的是 ${rvShort(r.passed?.version || r.version)}，現在的版本是 ${rvShort(r.voided.version)}。`)}</p><p class="muted small">程式改過，原本的通過就不算。請重新送審。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">重新送審</button>' : ''}`;
+    return `<div class="rv-box rv-${st}" data-rv-card="${esc(d.cardId)}"><div class="rv-head"><b>審查</b> <span class="rv-pill ${pill[1]}">${esc(pill[0])}</span>${st !== 'none' && rvCodeTag(r) ? ` <span class="muted small rv-kind">${esc(rvCodeTag(r))}</span>` : ''}</div>${body}
+      ${hist && firstReq >= 0 ? `<div class="rv-hist"><b class="small">歷次紀錄</b><ul>${hist}</ul></div>` : ''}</div>`;
+  }
+  // 送審視窗（人在網頁送審；AI 用 aigile_review_request）
+  async function openReviewRequest(d) {
+    let set;
+    try { set = await api(`/api/projects/${encodeURIComponent(d.project)}/review-settings`); } catch (err) { return toast(err.message); }
+    const r = d.review || {}, prev = (r.reviewers || [])[0];
+    const pool = set.eligible.filter(p => p.participantId !== meId());
+    const auto = pool[0];
+    const up = set.settings.diffUpload;
+    const body = openModal('送審', `<form id="rv-form" class="rv-form">
+      <label>要審的版本<input name="version" required maxlength="80" autocomplete="off" placeholder="40 碼 SHA 或 diff 指紋" value="${esc(r.state === 'changes' || r.state === 'void' ? '' : r.version || '')}"></label>
+      <label>分支<input name="branch" maxlength="100" autocomplete="off" placeholder="例如 feat/currency" value="${esc(r.branch || '')}"></label>
+      ${up ? `<div class="rv-diff"><label>diff 檔（選填）<input type="file" name="diff" accept=".diff,.patch,.txt,text/plain"></label>
+        <label class="rv-check"><input type="checkbox" name="declared"> ${esc(set.declaration)}</label><p class="muted small">存在專案文件、不會自動刪除，不在同一台電腦的人也看得到。</p></div>`
+        : `<div class="rv-nodiff"><p class="small">這個專案不上傳 diff：審查者會到 git 看這個版本。</p>${set.github ? '<a class="link small" data-rv-gh target="_blank" rel="noopener noreferrer">在 GitHub 比較 ↗</a>' : ''}</div>`}
+      <label>改了什麼、怎麼驗證<textarea name="note" rows="3" required maxlength="500"></textarea></label>
+      <fieldset class="rv-code"><legend>程式卡</legend><label class="rv-check"><input type="checkbox" name="isCode" checked> 這是程式卡 <span class="muted small" data-rv-auto></span></label>
+        <p class="muted small">平台看到 commit、分支、diff，或有人對這張卡請同意 commit，就當程式卡；判斷錯了作者可以改。</p></fieldset>
+      <label>審查者（選填）<select name="reviewerId">
+        <option value="">${auto ? `平台自動挑：${esc(auto.name)}（${auto.kind === 'ai' ? `AI · ${esc(RV_TOOL[auto.tool] || '工具不明')}` : '人'}，手上 ${auto.load} 件）` : '平台自動挑'}</option>
+        ${pool.map(p => `<option value="${esc(p.participantId)}"${prev && prev.participantId === p.participantId && r.state === 'changes' ? ' selected' : ''}>${esc(p.name)}（${p.kind === 'ai' ? `AI · ${esc(RV_TOOL[p.tool] || '工具不明')}` : '人'}，手上 ${p.load} 件）</option>`).join('')}</select></label>
+      <p class="muted small">只能選符合專案規則的；不能選作者。</p>
+      <p class="error" role="alert" hidden></p></form>`,
+      { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="rv-form">送審</button>' });
+    const form = body.querySelector('#rv-form'), err = form.querySelector('.error');
+    // 程式卡的自動判斷括號、「在 GitHub 比較」連結跟著分支／版本／diff 檔變
+    const sync = () => {
+      const br = form.branch.value.trim(), ver = form.version.value.trim(), file = form.querySelector('input[name=diff]')?.files?.[0];
+      form.querySelector('[data-rv-auto]').textContent = file ? '（自動判斷：有附 diff）' : br ? '（自動判斷：有附分支）' : '';
+      const gh = form.querySelector('[data-rv-gh]'), g = set.github;
+      if (gh && g) gh.href = br ? `${g.url}/compare/${encodeURIComponent(g.branch)}...${encodeURIComponent(br)}` : /^[0-9a-f]{7,40}$/.test(ver) ? `${g.url}/commit/${ver}` : g.url;
+    };
+    form.addEventListener('input', sync); form.addEventListener('change', sync); sync();
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const fd = new FormData(form), file = form.querySelector('input[name=diff]')?.files?.[0];
+      const go = body.modal.querySelector('[type=submit]');
+      try {
+        if (file && !form.querySelector('input[name=declared]').checked) throw new Error(`附 diff 前要勾選聲明：${set.declaration}`);
+        go.disabled = true;
+        let diffDocId;
+        if (file) {
+          const res = await fetch(`/api/cards/${encodeURIComponent(d.cardId)}/review-diff?declared=review-diff&version=${encodeURIComponent(fd.get('version'))}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: file });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(j.error?.message || `上傳失敗（${res.status}）`);
+          diffDocId = j.docId;
+        }
+        const out = await api(`/api/cards/${encodeURIComponent(d.cardId)}/review-request`, { method: 'POST', body: { version: String(fd.get('version')).trim(), note: String(fd.get('note')).trim(), branch: String(fd.get('branch') || '').trim() || undefined, reviewerId: fd.get('reviewerId') || undefined, isCode: !!fd.get('isCode'), diffDocId } });
+        closeModal();
+        toast(`已送審，等 ${out.reviewers.map(p => p.name).join('、')} 審查`);
+        openCard(d.cardId);
+      } catch (e2) { err.hidden = false; err.textContent = e2.message; go.disabled = false; }
+    });
+  }
+  // 專案 ⚙ › 審查（leader、管理員能改；其他人只看）
+  const RV_SEG = {
+    cards: [['off', '不審'], ['code', '只有程式卡'], ['all', '全部的卡']],
+    who: [['any', '人或 AI 都可以'], ['ai', '只有 AI'], ['human', '只有人'], ['roles', '指定角色'], ['members', '指定幾位']],
+    need: [[1, '1 位'], [2, '2 位']],
+    humanPass: [['separate', '分開按：通過後同一則直接出「同意 commit」'], ['combined', '通過就算同意 commit']],
+    needHuman: [[false, '不要'], [true, '要']], diffTool: [[false, '不要'], [true, '要']], notOwner: [[false, '不要'], [true, '要']], diffUpload: [[false, '不可以：只附版本、分支'], [true, '可以：送審時附 diff 檔']],
+  };
+  async function openReviewSettings(pj) {
+    let set;
+    try { set = await api(`/api/projects/${encodeURIComponent(pj)}/review-settings`); } catch (err) { return toast(err.message); }
+    const draft = { ...set.settings };
+    const seg = (k, dis = false) => `<div class="seg-scope rv-seg" role="radiogroup" aria-label="${esc(k)}">${RV_SEG[k].map(([v, t]) => `<button type="button" role="radio" data-rv-set="${k}" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft[k] === v}"${dis || !set.canEdit ? ' disabled' : ''}>${esc(t)}</button>`).join('')}</div>`;
+    const row = (label, sub, ctl, hint = '') => `<div class="rv-row"><div class="rv-row-l"><b>${label}</b>${sub ? `<span class="muted small">${sub}</span>` : ''}</div><div class="rv-row-r">${ctl}${hint ? `<p class="muted small">${hint}</p>` : ''}</div></div>`;
+    const members = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && memberIn(p, pj));
+    const draw = () => {
+      const on = draft.cards !== 'off';
+      body.querySelector('.rv-set').innerHTML = `
+        ${row('哪些卡要審', '', seg('cards'), on ? '程式卡＝有附 commit、分支、diff，或有人請同意 commit 的卡。' : '預設不審，不會多花 token。')}
+        ${on ? `${row('誰可以審', '', seg('who') + (draft.who === 'roles' ? `<input class="rv-roles" data-rv-roles maxlength="200" placeholder="角色，用頓號分開，例如 程式開發、使用體驗" value="${esc(draft.roles.join('、'))}"${set.canEdit ? '' : ' disabled'}>` : '')
+            + (draft.who === 'members' ? `<div class="rv-members">${members().map(p => `<label class="rv-check"><input type="checkbox" data-rv-member="${esc(p.participantId)}"${draft.members.includes(p.participantId) ? ' checked' : ''}${set.canEdit ? '' : ' disabled'}> ${esc(p.name)}</label>`).join('')}</div>` : ''))}
+          ${row('要幾位通過', '', seg('need'))}
+          ${row('送審可以上傳 diff', '只有 leader、管理員能改', seg('diffUpload'), `${set.diffUploadDefault ? '不可以' : '不可以（預設）'}：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。<br>${set.diffUploadDefault ? '可以（預設）' : '可以'}：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。<br>改這項會記在審查紀錄。`)}
+          ${row('人審查通過時', '審查者剛好也是同意 commit 的人', seg('humanPass'), '預設分開按，人會多看一眼要 commit 的版本。')}
+          ${row('至少要有一位是人', '「要幾位」選 2 才能設', seg('needHuman', draft.need !== 2))}
+          ${row('要不同家的 AI', '只管 AI；人一律算不同家', seg('diffTool'), '例：Claude 寫的，要 Codex、Antigravity 或人審。')}
+          ${row('不能是作者的主人', '多人團隊用', seg('notOwner'), '開了以後，小明的 AI 寫的，要小華或小華的 AI 審。')}
+          ${row('固定規則', '', '<p class="rv-lock">🔒 審查者不能是作者。在這張卡上提交過程式的都算作者，這條每個專案都一樣，不能關。</p>')}
+          ${row('現在符合的審查者', '', `<div class="rv-chips">${set.eligible.map(p => `<span class="rv-chip">${rvWho(p)}</span>`).join('') || '<span class="muted small">沒有符合的人或 AI</span>'}</div>${set.eligible.some(p => p.kind === 'ai' && !p.tool) ? '<p class="muted small">「工具不明」的 AI 當作跟誰都不同家。</p>' : ''}`)}` : ''}
+        ${set.log?.length ? `<details class="rv-log"><summary>審查紀錄 · ${set.log.length}</summary><ul>${set.log.map(l => `<li>${rvTime(l.at)} · ${esc(l.byName || '')}${/^把/.test(l.text) ? ' ' : '：'}${esc(l.text)}</li>`).join('')}</ul></details>` : ''}`;
+    };
+    const body = openModal('審查：程式交出去前，先給不是作者的人或 AI 看過', '<div class="rv-set"></div><p class="error" role="alert" hidden></p>', {
+      sub: `${esc(projName(pj))} · 只有 leader、管理員能改。AI 審一次約 3～10 萬 token，人審不花 token 但比較慢；建議只開「程式卡」。`,
+      foot: set.canEdit ? '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-rv-save>儲存</button>' : '<button class="btn" type="button" data-close>關閉</button>' });
+    draw();
+    body.modal.addEventListener('click', async e => {
+      const b = e.target.closest('[data-rv-set]');
+      if (b && !b.disabled) { draft[b.dataset.rvSet] = JSON.parse(b.dataset.v); if (draft.need !== 2) draft.needHuman = false; return draw(); }
+      if (!e.target.closest('[data-rv-save]')) return;
+      const rolesIn = body.querySelector('[data-rv-roles]');
+      if (rolesIn) draft.roles = rolesIn.value.split(/[、,，\s]+/).map(s => s.trim()).filter(Boolean);
+      if (draft.who === 'members') draft.members = [...body.querySelectorAll('[data-rv-member]:checked')].map(x => x.dataset.rvMember);
+      try {
+        const { log, ...send } = draft;
+        await api(`/api/projects/${encodeURIComponent(pj)}/review-settings`, { method: 'PUT', body: send });
+        closeModal();
+        toast(draft.cards === 'off' ? '已存：不審' : `已存：${{ code: '只有程式卡', all: '全部的卡' }[draft.cards]}要 ${draft.need} 位審查通過`);
+      } catch (err) { const el = body.parentElement.querySelector('.error') || body.querySelector('.error'); el.hidden = false; el.textContent = err.message; }
+    });
+  }
+  // 要你處理：人類審查者還沒回的審查
+  work.reviews = []; work.rvDone = new Map();
+  async function loadMyReviews() {
+    if (state.me?.memberType !== 'human') { work.reviews = []; return; }
+    work.reviews = (await api('/api/reviews/mine').catch(() => null))?.items || [];
+  }
+  function reviewSectionHtml() {
+    const inV = pj => projectView() === 'hub' || pj === projectView();
+    const list = work.reviews.filter(x => inV(x.project)), done = [...work.rvDone.values()].filter(x => inV(x.project));
+    if (!list.length && !done.length) return '';
+    return `<section class="wsugg wreview"><div class="wsugg-head"><span class="wdot"></span><h3>請你審查</h3><span class="wcount">${list.length}</span><span class="muted small">按「要改…」要寫一句意見才送得出去。</span></div>
+      ${list.map(x => `<div class="sugg-row rv-ask" data-rv-row="${esc(x.cardId)}">
+        <div class="sugg-main"><b>🔍 請你審查：<button type="button" class="link" data-rv-open="${esc(x.cardId)}">${esc(x.cardId)}</button> ${esc(x.title)}</b>
+          <span class="muted small">作者 ${rvWho(x.author)} · 版本 ${rvVer(x.version)} · 「${esc(oneLine(x.note, 80))}」</span>${x.branch || x.diffDocId || x.compareUrl ? `<span class="small rv-mine-links">${[x.branch ? `分支 ${esc(x.branch)}` : '', rvLinks(x, x.project)].filter(Boolean).join(' · ')}</span>` : ''}</div>
+        <div class="sugg-actions"><button type="button" class="btn small" data-rv-changes="${esc(x.cardId)}">要改…</button><button type="button" class="btn small primary" data-rv-pass="${esc(x.cardId)}">通過</button></div></div>`).join('')}
+      ${done.map(x => `<div class="sugg-row rv-ask done" data-rv-done="${esc(x.cardId)}"><div class="sugg-main"><b>${x.result === 'pass' ? '✅ 已通過' : '↩ 已退回'}：${esc(x.cardId)} ${esc(x.title)}</b><span class="muted small">版本 ${rvVer(x.version)}${x.approved ? ' · 已同意 commit' : ''}</span></div>
+        <div class="sugg-actions">${x.result === 'pass' && x.canCommit && !x.approved ? `<button type="button" class="btn small primary" data-rv-commit="${esc(x.cardId)}">同意 commit</button>` : ''}</div></div>`).join('')}</section>`;
+  }
+  async function rvAnswer(cardId, result) {
+    const x = work.reviews.find(r => r.cardId === cardId);
+    if (!x) return;
+    let comment = '';
+    if (result === 'changes') {
+      comment = await new Promise(resolve => {
+        const body = openModal(`要改：${x.cardId}`, `<form id="rv-cmt"><label>意見<textarea name="c" rows="3" maxlength="1000" required placeholder="哪裡要改、為什麼"></textarea></label><p class="muted small">要寫一句意見才送得出去。意見寫在卡片紀錄，群組只發一句短通知。</p></form>`,
+          { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="rv-cmt">送出</button>' });
+        body.modal.closest('.overlay').addEventListener('click', e => { if (e.target.closest('[data-close]')) resolve(''); });
+        body.querySelector('#rv-cmt').addEventListener('submit', e => { e.preventDefault(); const v = e.target.c.value.trim(); if (!v) return; closeModal(); resolve(v); });
+      });
+      if (!comment) return;
+    }
+    const combined = result === 'pass' && x.humanPass === 'combined' && x.canApproveCommit;
+    try {
+      const out = await api(`/api/cards/${encodeURIComponent(cardId)}/review`, { method: 'POST', body: { version: x.version, roundId: x.roundId || x.messageId, result, comment: comment || undefined, ...(combined ? { approveCommit: true } : {}) } });
+      work.reviews = work.reviews.filter(r => r.cardId !== cardId);
+      work.rvDone.set(cardId, { ...x, result, canCommit: out.state === 'passed' && x.canApproveCommit, approved: !!out.approvedCommit });
+      toast(result === 'pass' ? (out.approvedCommit ? '已通過，同時同意 commit' : out.state === 'passed' ? '已通過' : '已通過，還要再 1 位') : '已退回作者');
+      updateTodoBadge(); renderWork();
+    } catch (err) { toast(err.message); }
+  }
+  async function rvApproveCommit(cardId) {
+    const x = work.rvDone.get(cardId);
+    if (!x?.messageId || !x.sequence) return;
+    try {
+      await api('/api/messages', { method: 'POST', body: { project: x.project, replyToMessageId: x.messageId, text: `[回覆] 同意 commit（針對第 ${x.sequence} 則），請附完整 40 碼 SHA`, requestId: `rvcommit:${cardId}:${x.version}` } });
+      x.approved = true; toast('已同意 commit'); renderWork();
+    } catch (err) { toast(err.message); }
+  }
+  document.addEventListener('click', e => {
+    const t = e.target.closest?.('[data-rv-pass], [data-rv-changes], [data-rv-commit], [data-rv-open], [data-rv-back]');
+    if (!t) return;
+    if (t.dataset.rvPass) return rvAnswer(t.dataset.rvPass, 'pass');
+    if (t.dataset.rvChanges) return rvAnswer(t.dataset.rvChanges, 'changes');
+    if (t.dataset.rvCommit) return rvApproveCommit(t.dataset.rvCommit);
+    if (t.dataset.rvOpen) return openCard(t.dataset.rvOpen, t);
+    if (t.dataset.rvBack) return rvSendBack(t.dataset.rvBack);
+  });
+  // 同意 commit 旁的審查欄：讀那張卡的審查（快取 1 分鐘）；commit 寫的版本跟審過的對不上就標紅
+  work.rvCache = new Map();
+  const rvKeyOf = m => (m.text.match(/\b[A-Z]{2,5}-\d+\b/) || [])[0] || null;
+  function rvRerender() { if (state.page === 'messages') renderMessages(false); else renderWork(); }
+  function rvCommitBox(m) {
+    const k = rvKeyOf(m);
+    if (!k) return null;
+    const c = work.rvCache.get(k);
+    if ((!c || Date.now() - c.at > 60_000) && !c?.loading) {
+      work.rvCache.set(k, { ...(c || { at: 0 }), loading: true });
+      api(`/api/cards/${encodeURIComponent(k)}`).then(d => { const shown = rv => !!(rv?.required && ['passed', 'void'].includes(rv.state) && rv.passed); work.rvCache.set(k, { at: Date.now(), review: d.review || null, project: d.project }); if (shown(c?.review) || shown(d.review)) rvRerender(); }) // 之前畫了框或現在要畫框才重畫（舊框要消失也重畫；沒開審查的專案不多重畫）
+        .catch(() => work.rvCache.set(k, { at: Date.now(), review: null }));
+    }
+    const r = c?.review;
+    if (!r || !r.required || !['passed', 'void'].includes(r.state) || !r.passed) return null;
+    const hexes = [...new Set(m.text.match(/\b(?=[0-9]*[a-f])[0-9a-f]{7,80}\b/g) || [])];
+    const same = (a, b) => a === b || a.startsWith(b) || b.startsWith(a);
+    // 訊息有寫版本就比訊息的（舊的那則請同意審過的版本仍是綠框）；沒寫版本才看卡片是不是已作廢
+    const target = hexes.length ? (hexes.some(h => same(h, r.passed.version)) ? null : hexes[0]) : r.state === 'void' ? r.voided.version : null;
+    const head = `<div class="rv-head"><b>審查</b> <span class="rv-pill ${target ? 'warn' : 'ok'}">${target ? '⚠ 版本對不上' : '✅ 已審查'}</span></div>
+      <p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}`;
+    if (!target) return { html: `<div class="rv-box rv-passed in-auth">${head}${rvLinks(r, c.project) ? `<p class="small">${rvLinks(r, c.project)}</p>` : ''}</div>`, mismatch: false };
+    m.rvMismatch = { a: r.passed.version, b: target };
+    return { html: `<div class="rv-box rv-void in-auth">${head}<p class="rv-comment bad">審過的是 ${rvVer(r.passed.version)}，要 commit 的是 ${rvVer(target)}。中間改過的程式沒人看過，建議先退回重新送審。</p></div>`, mismatch: true };
+  }
+  async function rvSendBack(messageId) {
+    const m = state.byId.get(messageId);
+    if (!m?.rvMismatch) return;
+    const short = v => (/^[0-9a-f]{40}$/.test(v) ? v.slice(0, 7) : v);
+    try {
+      await api('/api/messages', { method: 'POST', body: { project: m.project, replyToMessageId: m.messageId, replyFrom: [m.author.participantId], text: `[回覆] 版本對不上：審過的是 ${short(m.rvMismatch.a)}，要 commit 的是 ${short(m.rvMismatch.b)}。中間改過的程式沒人看過，請重新送審（aigile_review_request），通過後再請同意 commit。`, requestId: `rvback:${m.messageId}` } });
+      toast('已退回，請它重新送審');
+    } catch (err) { toast(err.message); }
+  }
   // 知識庫整理 AI 設定（設計稿 10、11）：專案 ⚙ 選單；leader／管理員
   const kbAiNames = {};
   async function kbAiSetting(pj) {
@@ -9022,6 +9251,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (admin || lead) it.push(['rename', '✏️', '改名'], ['repo', '🔗', '程式庫與分支']);
     it.push(['members', '👥', '成員與本專案角色']);
     if (admin || lead) it.push(['kbai', '📚', '知識庫整理 AI', esc(kbAiNames[pj] || '')]); 
+    if (admin || lead) it.push(['review', '🔍', '審查']);
     return it;
   }
   function psetOpen(btn, open) {
@@ -9045,6 +9275,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   async function psetAct(k, pj) {
     try {
       if (k === 'kbai') return kbAiSetting(pj);
+      if (k === 'review') return openReviewSettings(pj);
       if (k === 'members') return openPermTab('members', { tab: 'members', memView: 'byProject', selProj: pj, mobileDetail: true, pq: '' });
       if (k === 'repo') return openRepoEditor(pj);
       if (k === 'rename') {
@@ -9508,8 +9739,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   work.joins = [];
   const joinReviewer = () => isAdmin() || myLeadProjects().length > 0;
   async function loadJoins() {
-    if (!joinReviewer()) { work.joins = []; return; }
-    const [j, k] = await Promise.all([api('/api/join-requests').catch(() => null), api('/api/skills').catch(() => null)]); // PLAT-381：申請、技能一起到，畫面不會先少一件
+    const reviews = loadMyReviews(); // 請你審查：跟申請、技能一起抓，不多等一輪
+    if (!joinReviewer()) { work.joins = []; await reviews; return; }
+    const [j, k] = await Promise.all([api('/api/join-requests').catch(() => null), api('/api/skills').catch(() => null), reviews]); // PLAT-381：申請、技能一起到，畫面不會先少一件
     work.joins = j?.items || []; work.skillRev = (k?.items || []).filter(x => x.canReview);
   }
   // PLAT-381：「要你處理」裡直接拒絕加入申請、看技能、核准技能

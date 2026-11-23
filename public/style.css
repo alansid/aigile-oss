@@ -3714,3 +3714,56 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .kb-skill-warn .link { color: inherit; font-weight: 600; text-decoration: underline; }
 /* 英文介面：手機文件頁三個分頁字比較長，允許換行，不被裁掉 */
 @media (max-width: 899px) { #files-pane .modal-actions .seg-scope button { white-space: normal; height: auto; min-height: 30px; line-height: 1.2; padding: 4px 6px; } }
+/* 審查者 */
+.wreview .sugg-row.rv-ask { flex-wrap: wrap; align-items: flex-start; }
+.wreview .rv-ask .sugg-main { flex: 1 1 100%; min-width: 0; }
+.wreview .rv-ask .sugg-actions { margin-left: auto; justify-content: flex-end; }
+.rv-box { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 10px 0; background: var(--surface); display: grid; gap: 6px; }
+.rv-box p { margin: 0; }
+.rv-box.rv-passed.in-auth { background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.rv-box.rv-void.in-auth { background: #fef2f2; border-color: #fecaca; }
+.rv-head { display: flex; align-items: center; gap: 8px; }
+.rv-pill { font-size: 12px; border-radius: 999px; padding: 1px 8px; background: var(--surface-2); color: var(--muted); }
+.rv-pill.ok { background: var(--ok-bg); color: var(--ok-text); }
+.rv-pill.bad, .rv-pill.warn { background: #fee2e2; color: #991b1b; }
+.rv-pill.wait { background: var(--human-bg); color: var(--human-text); }
+.rv-tag { font-size: 11px; border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+.rv-tag.ai { background: var(--human-bg); color: var(--human-text); }
+.rv-tag.human { background: var(--ai-bg); color: var(--ai-text); }
+.rv-tag.unk { background: #fef3c7; color: #92400e; }
+.rv-ver { font-size: 12px; background: var(--surface-2); border-radius: 4px; padding: 0 4px; }
+.rv-comment.bad { background: #fef2f2; color: #991b1b; border-radius: 8px; padding: 6px 10px; font-size: 13.5px; }
+.rv-revs, .rv-hist ul, .rv-log ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.rv-hist { border-top: 1px solid var(--border); padding-top: 6px; }
+.rv-box > .btn { justify-self: start; }
+.rv-set { display: grid; }
+.rv-row { display: grid; grid-template-columns: 160px 1fr; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
+.rv-row:first-child { border-top: 0; }
+.rv-row-l { display: grid; gap: 2px; align-content: start; }
+.rv-row-r { display: grid; gap: 4px; min-width: 0; }
+.rv-row-r p { margin: 0; }
+.rv-seg { flex-wrap: wrap; max-width: 100%; justify-self: start; }
+.rv-seg button[aria-checked="true"] { background: var(--primary); color: var(--primary-text); font-weight: 600; }
+.rv-seg button:disabled { opacity: .5; cursor: not-allowed; }
+.rv-seg button { white-space: normal; text-align: left; max-width: 100%; height: auto; min-height: 30px; padding: 5px 12px; line-height: 1.35; }
+.rv-lock { background: #fffbeb; border: 1px solid #f5d27a; color: #92400e; border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.rv-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rv-chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 13px; }
+.rv-members { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.rv-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; }
+.rv-roles { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; }
+.rv-form { display: grid; gap: 8px; }
+.rv-form p { margin: 0; }
+.rv-nodiff, .rv-diff { display: grid; gap: 4px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2, #f1f4f9); border: 1px solid var(--border); }
+.rv-check input { width: auto; flex: none; margin: 0; }
+.rv-form .rv-check { display: flex; font-weight: 400; }
+.rv-diff .rv-check { align-items: flex-start; }
+.rv-diff .rv-check input { margin-top: 3px; }
+.rv-kind { margin-left: 4px; }
+.rv-code { border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0; }
+.rv-ask.done { opacity: .85; }
+.auth-row.rv-mm { justify-content: flex-end; }
+@media (max-width: 700px) {
+  .rv-row { grid-template-columns: 1fr; gap: 6px; }
+  .rv-seg button { white-space: normal; text-align: left; }
+}

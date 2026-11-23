@@ -16,4 +16,5 @@ for (const name of approvedAigileTools) {
   assert.ok(update.config.includes('[mcp_servers.aigile.tools.' + name + ']'));
 }
 assert.deepEqual(missingToolApprovals(update.config), { config: update.config, missing: [] });
+assert.ok(!approvedAigileTools.includes('aigile_review_diff') && !update.config.includes('tools.aigile_review_diff]'), '上傳程式差異（aigile_review_diff）不自動核准');
 console.log('Codex approvals: missing entries, explicit policies, CRLF and repeat setup passed');

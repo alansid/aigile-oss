@@ -107,6 +107,49 @@ async function uploadDoc(agent, a) {
   return { docId: j.doc?.docId, name: j.doc?.name, size: j.doc?.size, inKb: !!j.doc?.kb?.inKb };
 }
 
+// 送審附的本機 diff 檔：先確認 AI 明確聲明、專案開了「送審可以上傳 diff」，才讀檔；
+// 只收工作區內（解析捷徑後）的 .diff／.patch／.txt 一般檔，不碰 .aigile（Token）與 .git，最多讀 2 MB
+const DIFF_MAX = 2 * 1048576;
+async function readReviewDiff(agent, a, diffPath) {
+  if (a.declared !== true) throw new Error('附 diff 要帶 declared: true（這是本專案自己的程式差異，不含密鑰與客戶個資）');
+  const token = fs.readFileSync(path.join(dirOf(agent), '.token'), 'utf8').trim();
+  const r = await fetch(`${baseOf(agent)}/api/cards/${encodeURIComponent(String(a.cardId || ''))}`, { signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${token}`, 'X-Aigile-Source': 'mcp' } });
+  const card = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`${card.error?.code || 'HTTP_' + r.status}：${card.error?.message || '讀不到這張卡'}`);
+  if (card.review?.rule?.diffUpload !== true) throw new Error('這個專案沒有開「送審可以上傳 diff」；請只附版本與分支，審查者自己到 git 看。');
+  return readDiffFile(WORK || process.cwd(), diffPath);
+}
+// 讀工作區內的 diff 檔（測試會直接呼叫；io 可換成假的 fs 模擬短讀、檔案變大）
+// 型別與大小用實際開啟的 fd 判斷；迴圈讀到 EOF，超過上限就停；Windows 的 .aigile／.git 不分大小寫
+export function readDiffFile(root, diffPath, { max = DIFF_MAX, io = fs, win = process.platform === 'win32' } = {}) {
+  const real = target => (io.realpathSync.native || io.realpathSync)(target);
+  const base = real(root);
+  let file;
+  try { file = real(path.resolve(base, String(diffPath))); } catch (e) { throw new Error(`讀不到 diff 檔（${e.code || e.message}）`); }
+  const rel = path.relative(base, file);
+  if (!rel || rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) throw new Error('diff 檔要在工作區資料夾裡');
+  if (rel.split(/[\\/]/).some(x => ['.aigile', '.git'].includes(win ? x.toLowerCase() : x))) throw new Error('不能讀 .aigile 或 .git 裡的檔案');
+  if (!/\.(diff|patch|txt)$/i.test(file)) throw new Error('diff 檔只收 .diff、.patch、.txt');
+  const fd = io.openSync(file, 'r');
+  try {
+    const st = io.fstatSync(fd);
+    if (!st.isFile()) throw new Error('diff 檔要是一般檔案');
+    if (st.size > max) throw new Error('diff 超過 2 MB 上限');
+    const chunks = [], buf = Buffer.alloc(65536);
+    let total = 0;
+    for (;;) {
+      const n = io.readSync(fd, buf, 0, buf.length, null);
+      if (!n) break;
+      total += n;
+      if (total > max) throw new Error('diff 超過 2 MB 上限'); // 開檔後還在變大
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
+    const all = Buffer.concat(chunks, total);
+    if (all.includes(0)) throw new Error('diff 檔不是文字檔');
+    return all.toString('utf8');
+  } finally { io.closeSync(fd); }
+}
+
 // aigile_doc_read 回「只有原檔」（PDF、圖片）時，把原檔下載到 .aigile/<代號>/kb-files/，回傳加 localPath 讓 AI 用自己的讀檔工具打開
 async function fetchOriginal(agent, out) {
   try {
@@ -174,6 +217,19 @@ async function forward(line) {
     try { return reply(text(JSON.stringify(await uploadDoc(AGENT, msg.params.arguments)))); }
     catch (e) { return reply({ ...text(`失敗：${e.message}`), isError: true }); }
   }
+  // 送審（自動核准）只送版本與說明：帶了 diff／diffPath 在這裡就擋，內容不送出
+  if (method === 'tools/call' && msg.params?.name === 'aigile_review_request' && (msg.params?.arguments?.diff !== undefined || msg.params?.arguments?.diffPath !== undefined))
+    return reply({ ...text('失敗：aigile_review_request 只送版本與說明；要附 diff 改用 aigile_review_diff（要人核准）'), isError: true });
+  // 附 diff：watcher 叫醒的回合一律不上傳程式差異（讀檔、送出前就擋）；平常要人核准，diffPath 在這裡讀檔換成文字
+  if (method === 'tools/call' && msg.params?.name === 'aigile_review_diff') {
+    if (wakeAgent !== undefined) return reply({ ...text('失敗：watcher 叫醒的回合不上傳程式差異；送審只帶版本與說明（aigile_review_request），要附 diff 請在有人看著的對話做'), isError: true });
+    if (msg.params?.arguments?.diffPath !== undefined) {
+      try {
+        const { diffPath, ...rest } = msg.params.arguments;
+        line = JSON.stringify({ ...msg, params: { ...msg.params, arguments: { ...rest, diff: await readReviewDiff(AGENT, rest, diffPath) } } });
+      } catch (e) { return reply({ ...text(`失敗：${e.message}`), isError: true }); }
+    }
+  }
   let out;
   try { out = await post(AGENT, line); } catch (e) { return fail(e.message); }
   if (out === null) return;
@@ -206,7 +262,7 @@ function syncState(name, out) {
 }
 
 const pending = new Set();
-const rl = readline.createInterface({ input: process.stdin });
-rl.on('line', line => { if (!line.trim()) return; const p = forward(line).catch(e => log(`轉送失敗：${e.message}`)).finally(() => pending.delete(p)); pending.add(p); });
+const rl = process.env.AIGILE_MCP_NO_MAIN ? null : readline.createInterface({ input: process.stdin }); // 測試只 import readDiffFile 時不接 stdin
+rl?.on('line', line => { if (!line.trim()) return; const p = forward(line).catch(e => log(`轉送失敗：${e.message}`)).finally(() => pending.delete(p)); pending.add(p); });
 // 對方關掉後不馬上 process.exit（Windows 上剛用完連線就 exit 會觸發 libuv 斷言）：設 exitCode 自然結束；5 秒後還有連線掛著才強制結束
-rl.on('close', async () => { await Promise.allSettled([...pending]); process.exitCode = 0; setTimeout(() => process.exit(0), 5000).unref?.(); });
+rl?.on('close', async () => { await Promise.allSettled([...pending]); process.exitCode = 0; setTimeout(() => process.exit(0), 5000).unref?.(); });

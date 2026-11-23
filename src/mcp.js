@@ -63,6 +63,16 @@ export const MCP_TOOLS = [
       replyToMessageId: str('回覆哪則訊息', { pattern: '^msg_' }), requestId: str('冪等鍵（選填）', { maxLength: 128 }), full: { type: 'boolean', description: '回完整欄位（舊格式），預設 false＝精簡' } }, ['project', 'text']) },
   { name: 'aigile_card_get', description: `讀一張卡：最前面是 claim（誰在做）與 handover（上一棒交接四欄），另有紀錄與關聯訊息。${UNTRUSTED}`,
     inputSchema: obj({ cardId: CARD_ID }, ['cardId']) },
+  // 審查者：專案開了審查時，做完先送審，通過了才找人同意 commit；被退回照意見改、改完重新送審
+  { name: 'aigile_review_request', description: '送審：專案開了審查時，做完先送審，通過了才請人同意 commit。只送版本、說明這類資料：version 帶要審的 40 碼 SHA 或 diff 指紋；note 寫改了什麼、怎麼驗證；branch 選填（有設 GitHub 程式庫時審查者拿到比較連結）；reviewerId 選填（不符合專案規則會回錯誤，不帶平台自動挑；審查者不能是作者）；diffDocId 選填（先用 aigile_review_diff 上傳拿到的）。被退回改完重新送審，預設還是同一位審。',
+    inputSchema: obj({ cardId: CARD_ID, version: str('要審的版本：40 碼 SHA 或 diff 指紋', { minLength: 7, maxLength: 80 }), note: str('改了什麼、怎麼驗證', { maxLength: 500 }),
+      branch: str('分支名（選填）', { maxLength: 100 }), reviewerId: str('指定審查者 participantId（選填）', { pattern: '^p_' }), isCode: { type: 'boolean', description: '是不是程式卡（預設 true；判斷錯了作者可以改）' },
+      diffDocId: str('aigile_review_diff 回的 diffDocId（選填）', { pattern: '^doc_' }) }, ['cardId', 'version', 'note']) },
+  { name: 'aigile_review_diff', description: '送審附 diff：上傳程式差異給審查者看，回 diffDocId，再帶進 aigile_review_request。專案要開「送審可以上傳 diff」；declared 必填 true（這是本專案自己的程式差異，不含密鑰與客戶個資）。每次都要人核准；watcher 叫醒的回合不能用（只送版本與說明）。diff 帶文字，或 diffPath 帶工作區內的 .diff／.patch／.txt（經轉接腳本讀，≤2 MB）。',
+    inputSchema: obj({ cardId: CARD_ID, version: str('要審的版本：40 碼 SHA 或 diff 指紋', { minLength: 7, maxLength: 80 }), diff: str('diff 內容（≤2 MB）'), diffPath: str('本機 diff 檔路徑（經轉接腳本讀；限工作區內的 .diff／.patch／.txt）'),
+      declared: { type: 'boolean', description: '必填 true：這是本專案自己的程式差異，不含密鑰與客戶個資' } }, ['cardId', 'version', 'declared']) },
+  { name: 'aigile_review', description: '回覆審查：你被指定審這張卡時用。version 照送審的版本；roundId 帶送審訊息的 messageId（或 aigile_card_get 的 review.roundId），作者重新送審過會擋下舊的一輪；result：pass＝通過、changes＝要改（一定要寫意見）。意見寫進卡片紀錄，群組只發一句短通知；審查者不能是作者。',
+    inputSchema: obj({ cardId: CARD_ID, version: str('送審的版本', { minLength: 7, maxLength: 80 }), result: { type: 'string', enum: ['pass', 'changes'] }, comment: str('意見（要改時必填）', { maxLength: 1000 }), roundId: str('這一輪的送審訊息 messageId', { pattern: '^msg_' }) }, ['cardId', 'version', 'result']) },
   { name: 'aigile_cards', description: `查卡。預設只查自己負責、未結案的（owner=me、status=open）；輪詢用 since（上次的 nextSince）。${UNTRUSTED}`,
     inputSchema: obj({ owner: str('me（預設）、any，或 participantId'), status: str('open（預設）、all，或單一狀態：待整理、待處理、進行中、待確認、受阻、已完成、已封存'),
       q: str('關鍵字（至少 2 字）'), project: str('專案代號'), since: str('增量：上次回傳的 nextSince'), limit: { type: 'integer', minimum: 1, maximum: 100 } }) },
@@ -163,7 +173,7 @@ export function slimPost(body, status) {
 }
 // 工具由伺服器依 Token 的角色給（通用 MCP 不分 AI 裝，換角色不用重裝）。試用者不常駐、不改卡片、不交辦 → 不給改卡與交接
 const TRIAL_ROLES = new Set(ROLES.filter(r => r.resident === false).map(r => r.key));
-const TRIAL_HIDE = new Set(['aigile_card_update', 'aigile_card_handover', 'aigile_card_create', 'aigile_doc_upload', 'aigile_batch']); // 新的寫入工具試用者也不給
+const TRIAL_HIDE = new Set(['aigile_card_update', 'aigile_card_handover', 'aigile_card_create', 'aigile_doc_upload', 'aigile_review_request', 'aigile_review_diff', 'aigile_review', 'aigile_batch']); // 新的寫入工具試用者也不給
 export const toolsFor = me => (TRIAL_ROLES.has(me?.role_key) ? MCP_TOOLS.filter(t => !TRIAL_HIDE.has(t.name)) : MCP_TOOLS);
 
 // 依 inputSchema 檢查參數（只用到的子集：type、required、additionalProperties、enum、pattern、長度、陣列項目）；錯了當場擋，不打 API
@@ -228,6 +238,18 @@ async function runTool(name, a, { api, me }) {
       return a.full ? ok(r) : slimPost(ok(r), r.status);
     }
     case 'aigile_card_get': return ok(await api('GET', `/api/cards/${enc(a.cardId)}`));
+    case 'aigile_review_request': {
+      const r = ok(await api('POST', `/api/cards/${enc(a.cardId)}/review-request`, { version: a.version, note: a.note, branch: a.branch, reviewerId: a.reviewerId, isCode: a.isCode, diffDocId: a.diffDocId }));
+      return { cardId: r.cardId, version: r.version, reviewers: r.reviewers.map(p => `${p.name}（${p.kind === 'ai' ? 'AI' : '人'}）`), messageId: r.messageId, ...(a.diffDocId ? { diffDocId: a.diffDocId } : {}) };
+    }
+    case 'aigile_review_diff': { // 上傳程式差異：不自動核准；watcher 回合由轉接腳本擋
+      if (a.declared !== true) throw Object.assign(new Error('附 diff 要帶 declared: true（這是本專案自己的程式差異，不含密鑰與客戶個資）'), { tool: true });
+      if (a.diffPath) throw Object.assign(new Error('diffPath 要經本機轉接腳本（aigile-mcp.mjs）才讀得到檔案；沒有轉接就改用 diff（文字）'), { tool: true });
+      if (typeof a.diff !== 'string' || !a.diff) throw Object.assign(new Error('要帶 diff（文字）或 diffPath（本機檔）'), { tool: true });
+      const d = ok(await api('POST', `/api/cards/${enc(a.cardId)}/review-diff${qs({ declared: 'review-diff', version: a.version })}`, undefined, new TextEncoder().encode(a.diff)));
+      return { diffDocId: d.docId, name: d.name, size: d.size };
+    }
+    case 'aigile_review': return ok(await api('POST', `/api/cards/${enc(a.cardId)}/review`, { version: a.version, result: a.result, comment: a.comment, roundId: a.roundId }));
     case 'aigile_cards': {
       const owner = a.owner === undefined || a.owner === 'me' ? me.id : a.owner === 'any' ? undefined : a.owner;
       const status = a.status === undefined ? 'open' : a.status === 'all' ? undefined : a.status;

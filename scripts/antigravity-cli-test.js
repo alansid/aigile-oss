@@ -239,7 +239,9 @@ try {
   assert.equal(stJson.toolPermission, 'proceed-in-sandbox');
   assert.equal(stJson.allowNonWorkspaceAccess, false);
   const catalog = await mcpDispatch({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { me: { role_key: 'PG' } });
-  const expectedAllows = [...catalog.result.tools.map(({ name }) => `mcp(aigile/${name})`), 'mcp(aigile/aigile_use)'].sort();
+  const NEEDS_HUMAN = ['aigile_review_diff']; // 上傳程式差異：每次要人核准，watcher 回合不放行
+  const expectedAllows = [...catalog.result.tools.filter(({ name }) => !NEEDS_HUMAN.includes(name)).map(({ name }) => `mcp(aigile/${name})`), 'mcp(aigile/aigile_use)'].sort();
+  assert.ok(!stJson.permissions.allow.includes('mcp(aigile/aigile_review_diff)'), 'aigile_review_diff 不自動核准');
   assert.deepEqual([...stJson.permissions.allow].sort(), expectedAllows, 'allow 清單與平台 MCP 工具一致');
   assert.ok(stJson.permissions.deny.includes('command(git push)') && stJson.permissions.deny.includes('command(git commit)'), 'deny 擋 git commit/push');
 

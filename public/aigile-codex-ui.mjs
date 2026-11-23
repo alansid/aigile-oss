@@ -13,6 +13,7 @@ export const approvedAigileTools = [
   'aigile_card_handover', 'aigile_card_update', 'aigile_cards', 'aigile_dm',
   'aigile_doc_read', 'aigile_doc_upload', 'aigile_history', 'aigile_inbox', 'aigile_kb_read', 'aigile_kb_search', 'aigile_kb_write', 'aigile_me', // 知識庫工具（kb_write 只寫知識頁，跟發文、改卡同級）
   'aigile_memory', 'aigile_post', 'aigile_read', 'aigile_team', 'aigile_use',
+  'aigile_review', 'aigile_review_request', // 審查（送審只帶版本與說明；附 diff 要專案開了上傳、AI 明確聲明，轉接腳本只讀工作區內的 diff 檔）
 ];
 
 // Reconcile only ordinary TOML tables. Codex validates the result before setup succeeds.
