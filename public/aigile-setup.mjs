@@ -14,7 +14,8 @@
 //   9. 先比對自己跟平台的 SHA-256，不同就下載、核對後用新版重跑；同步開始、結束、失敗都回報平台（主人的同步清單看得到）
 // 不會啟動 watcher、不會發文、不會改平台上的任何資料。
 //
-// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|antigravity|copilot|other] [--mode auto|fresh|keep] [--skills-only]
+// 用法：node aigile-setup.mjs --agent PG_XXXX --base https://平台網址 [--tool claude|codex|antigravity|copilot|other] [--model 完整模型代號] [--mode auto|fresh|keep] [--skills-only]
+//   --model：回報你目前用的完整模型代號（例 claude-opus-5-5），審查比對「不同模型」用；沒帶就不回報
 //   --tool 決定沒勾角色的技能裝哪裡：claude → .claude/skills、codex 與 copilot → .agents/skills（Copilot CLI 也讀這裡）、其他工具 other → .aigile/<代號>/skills（opencode 先不支援）
 //   有指定（角色或 AI）的技能一律裝 .aigile/<代號>/skills（同資料夾別的 AI 不會載入）
 //   --mode（codex、antigravity 用）：對話接續方式；設 WAKE_CMD 指向對應喚醒腳本（有事才在背景跑一輪）
@@ -108,6 +109,12 @@ if (cfg.setup && SELF_SHA !== cfg.setup) {
   const again = spawnSync(process.execPath, [SELF, ...args], { stdio: 'inherit', env: { ...process.env, AIGILE_SETUP_UPDATED: '1' } });
   process.exitCode = again.status ?? 1;
   throw new Done();
+}
+
+// 接上時回報模型；失敗只提醒，不影響接入
+if (opt('model')) {
+  const r = await fetch(BASE + '/api/me/model', { method: 'PUT', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'setup' }, body: JSON.stringify({ model: opt('model') }), signal: AbortSignal.timeout(20_000) }).catch(() => null);
+  out(r?.ok ? `✓ 模型：${opt('model')}` : `! 模型沒回報成功（${r ? 'HTTP ' + r.status : '連不上平台'}），不影響接入；送審、審查時會再帶`);
 }
 
 // ---------- 技能同步 ----------

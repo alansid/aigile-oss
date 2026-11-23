@@ -1,10 +1,26 @@
 // 審查者：程式交出去前，先給「不是作者」的人或 AI 看過。規則由各專案 leader 自訂，只有「審查者不能是作者」寫死。
 // 設定存 app_settings 的 review＝{ [專案]: 設定 }；紀錄存 card_reviews（一列一個事件：送審、通過、要改、作廢）。
 // 平台擋得了：審查者是作者或不符合規則、卡片沒通過就請人同意 commit、版本改了還拿舊的通過。擋不了：AI 在自己電腦直接 git commit。
-export const REVIEW_DEFAULTS = { cards: 'off', who: 'any', roles: [], members: [], need: 1, needHuman: false, diffTool: false, notOwner: false, humanPass: 'separate', diffUpload: true }; // 開源版預設可以上傳 diff（架在自己的伺服器，diff 不會離開公司；leader 可以關）
+// differ＝審查者要多不一樣（只管 AI）：any 不限（不是作者就好）／model 不同模型／vendor 不同家（不同家一定也是不同模型）
+export const REVIEW_DEFAULTS = { cards: 'off', who: 'any', roles: [], members: [], need: 1, needHuman: false, differ: 'any', notOwner: false, humanPass: 'separate', diffUpload: true }; // 開源版預設可以上傳 diff（架在自己的伺服器，diff 不會離開公司；leader 可以關）
 export const DIFF_DECLARATION = '這是本專案自己的程式差異，不含密鑰與客戶個資';
 const DIFF_MAX = 2 * 1048576;
-const CARDS = ['off', 'code', 'all'], WHO = ['any', 'ai', 'human', 'roles', 'members'], PASS = ['separate', 'combined'];
+const CARDS = ['off', 'code', 'all'], WHO = ['any', 'ai', 'human', 'roles', 'members'], PASS = ['separate', 'combined'], DIFFER = ['any', 'model', 'vendor'];
+// 舊設定 diffTool（要／不要不同家）：true → 不同家、false → 不限
+export function normReviewCfg(cfg = {}) {
+  const { diffTool, log, ...c } = cfg;
+  if (!DIFFER.includes(c.differ)) c.differ = diffTool === true ? 'vendor' : 'any';
+  return { ...REVIEW_DEFAULTS, ...c };
+}
+// AI 回報的完整模型代號（例：claude-opus-5-5、gpt-5.1-codex）；比對不分大小寫，代號不一樣就算不同（新舊版本也算）
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9 ._:/@()[\]+-]{0,79}$/;
+export const sameModel = (a, b) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+export function readModel(v, invalid) {
+  if (v === undefined || v === null || v === '') return null;
+  const m = typeof v === 'string' ? v.trim() : '';
+  if (!MODEL_RE.test(m)) throw invalid('model 是你目前用的完整模型代號（例：claude-opus-5-5），1～80 個英數字');
+  return m;
+}
 const KNOWN_TOOLS = ['claude', 'codex', 'copilot', 'antigravity'];
 export const TOOL_NAME = { claude: 'Claude', codex: 'Codex', copilot: 'Copilot', antigravity: 'Antigravity' };
 export const REVIEW_LOG = '審查'; // card_log.via
@@ -16,11 +32,15 @@ const short = v => (/^[0-9a-f]{40}$/.test(v) ? v.slice(0, 7) : v);
 export const sameVersion = (a, b) => !!a && !!b && (a === b || (/^[0-9a-f]{7,40}$/.test(a) && /^[0-9a-f]{7,40}$/.test(b) && (a.startsWith(b) || b.startsWith(a))));
 
 export function readReviewCfg(body, cur = REVIEW_DEFAULTS, invalid) {
-  const out = { ...REVIEW_DEFAULTS, ...cur };
+  const out = normReviewCfg(cur);
   const pick = (k, list) => { if (body[k] === undefined) return; if (!list.includes(body[k])) throw invalid(`${k} 只能是 ${list.join('、')}`); out[k] = body[k]; };
-  pick('cards', CARDS); pick('who', WHO); pick('humanPass', PASS);
+  pick('cards', CARDS); pick('who', WHO); pick('humanPass', PASS); pick('differ', DIFFER);
+  if (body.differ === undefined && body.diffTool !== undefined) { // 舊的呼叫方式照樣能用
+    if (typeof body.diffTool !== 'boolean') throw invalid('diffTool 需為 true／false（新的設定請用 differ：any、model、vendor）');
+    out.differ = body.diffTool ? 'vendor' : 'any';
+  }
   if (body.need !== undefined) { if (![1, 2].includes(body.need)) throw invalid('need 只能是 1 或 2'); out.need = body.need; }
-  for (const k of ['needHuman', 'diffTool', 'notOwner', 'diffUpload']) if (body[k] !== undefined) { if (typeof body[k] !== 'boolean') throw invalid(`${k} 需為 true／false`); out[k] = body[k]; }
+  for (const k of ['needHuman', 'notOwner', 'diffUpload']) if (body[k] !== undefined) { if (typeof body[k] !== 'boolean') throw invalid(`${k} 需為 true／false`); out[k] = body[k]; }
   for (const k of ['roles', 'members']) if (body[k] !== undefined) {
     if (!Array.isArray(body[k]) || body[k].length > 30 || body[k].some(x => typeof x !== 'string' || !x.trim() || x.length > 40)) throw invalid(`${k} 需為 0～30 個字串的陣列`);
     out[k] = [...new Set(body[k].map(x => x.trim()))];
@@ -32,7 +52,7 @@ export function readReviewCfg(body, cur = REVIEW_DEFAULTS, invalid) {
 
 export function registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, roleNamesIn, loadRoles = async () => {}, isolatedFrom, repoOf = async () => null, docStorage = null, audit = async () => {} }) {
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
-  async function cfgOf(pj) { const { log, ...cfg } = ((await getJson('review')) || {})[pj] || {}; return { ...REVIEW_DEFAULTS, ...cfg }; }
+  async function cfgOf(pj) { return normReviewCfg(((await getJson('review')) || {})[pj] || {}); }
   async function logOf(pj) { return (((await getJson('review')) || {})[pj]?.log || []); }
   // 有設程式庫（GitHub）就給比較連結：有分支＝compare 預設分支...分支；只有 SHA＝那個 commit
   async function githubOf(pj) {
@@ -48,20 +68,33 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   }
   // 送審說明後面接「分支：x」存在同一欄；畫面要分開顯示
   const splitNote = (comment = '') => { const m = /\n分支：(\S+)$/.exec(comment || ''); return m ? { note: comment.slice(0, m.index), branch: m[1] } : { note: comment || '', branch: null }; };
-  const SET_LABEL = { cards: { off: '不審', code: '只有程式卡', all: '全部的卡' }, who: { any: '人或 AI 都可以', ai: '只有 AI', human: '只有人', roles: '指定角色', members: '指定幾位' }, humanPass: { separate: '分開按', combined: '通過就算同意 commit' } };
+  const SET_LABEL = { cards: { off: '不審', code: '只有程式卡', all: '全部的卡' }, who: { any: '人或 AI 都可以', ai: '只有 AI', human: '只有人', roles: '指定角色', members: '指定幾位' }, humanPass: { separate: '分開按', combined: '通過就算同意 commit' }, differ: { any: '不限', model: '不同模型', vendor: '不同家' } };
   function changesText(a, b) {
     const out = [];
-    for (const k of ['cards', 'who', 'humanPass']) if (a[k] !== b[k]) out.push(`${{ cards: '哪些卡要審', who: '誰可以審', humanPass: '人審查通過時' }[k]}：${SET_LABEL[k][a[k]]} → ${SET_LABEL[k][b[k]]}`);
+    for (const k of ['cards', 'who', 'differ', 'humanPass']) if (a[k] !== b[k]) out.push(`${{ cards: '哪些卡要審', who: '誰可以審', differ: '審查者要多不一樣', humanPass: '人審查通過時' }[k]}：${SET_LABEL[k][a[k]]} → ${SET_LABEL[k][b[k]]}`);
     if (a.need !== b.need) out.push(`要幾位通過：${a.need} → ${b.need}`);
-    for (const [k, l] of [['needHuman', '至少要有一位是人'], ['diffTool', '要不同家的 AI'], ['notOwner', '不能是作者的主人']]) if (!!a[k] !== !!b[k]) out.push(`${l}：${b[k] ? '要' : '不要'}`);
+    for (const [k, l] of [['needHuman', '至少要有一位是人'], ['notOwner', '不能是作者的主人']]) if (!!a[k] !== !!b[k]) out.push(`${l}：${b[k] ? '要' : '不要'}`);
     if (!!a.diffUpload !== !!b.diffUpload) out.push(`把「送審可以上傳 diff」改成${b.diffUpload ? '可以' : '不可以'}`);
     if (JSON.stringify(a.roles) !== JSON.stringify(b.roles) && b.who === 'roles') out.push(`指定角色：${b.roles.join('、') || '（沒有）'}`);
     if (JSON.stringify(a.members) !== JSON.stringify(b.members) && b.who === 'members') out.push('指定幾位：改了名單');
     return out;
   }
-  async function toolsOf() {
-    const rows = await db.all('SELECT ai_id, tool FROM skill_syncs').catch(() => []);
-    return new Map(rows.map(r => [r.ai_id, KNOWN_TOOLS.includes(r.tool) ? r.tool : null]));
+  // 每隻 AI 現在的工具（接入檢查回報的）與最近一次回報的模型
+  async function aiInfo() {
+    const [tools, rows] = await Promise.all([db.all('SELECT ai_id, tool FROM skill_syncs').catch(() => []), db.all('SELECT ai_id, model, via, at FROM ai_models').catch(() => [])]);
+    return { tools: new Map(tools.map(r => [r.ai_id, KNOWN_TOOLS.includes(r.tool) ? r.tool : null])), models: new Map(rows.map(r => [r.ai_id, r.model])), reported: new Map(rows.map(r => [r.ai_id, r])) };
+  }
+  // 比對時作者用送審那一刻的工具與模型（之後換模型不影響已送的審查）；其他人用現在的
+  function withAuthors(info, evs, me = null, model = null) {
+    const tools = new Map(info.tools), models = new Map(info.models);
+    for (const e of evs) if (e.ev === 'request') { tools.set(e.actor_id, e.tool || null); models.set(e.actor_id, e.model || null); } // 送審那一刻不明就固定為不明（之後才回報的不算）
+    if (me) { if (info.tools.get(me)) tools.set(me, info.tools.get(me)); if (model) models.set(me, model); } // 正在送審的作者：用現在的
+    return { tools, models };
+  }
+  // AI 回報模型：接上（checkin）、送審（request）、回覆審查（review）；被叫醒不回報
+  async function reportModel(me, model, via) {
+    if (me.kind !== 'ai' || !model) return;
+    await db.run('INSERT INTO ai_models (ai_id, model, via, at) VALUES (?,?,?,?) ON CONFLICT(ai_id) DO UPDATE SET model = excluded.model, via = excluded.via, at = excluded.at', me.id, model, via, nowIso());
   }
   async function cardOf(id, me) {
     const m = /^C-(\d+)$/i.exec(String(id || '').trim());
@@ -75,8 +108,9 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   const ownerOf = p => (p.kind === 'ai' ? p.owner_id : p.id);
   const kindOf = p => (p.kind === 'ai' ? 'ai' : 'human');
 
-  // 為什麼 p 不能審：作者／同一家／不在可審名單；可以審回 ''
-  function whyNot(p, { pj, cfg, authors, tools }) {
+  // 為什麼 p 不能審：作者／同一家／同一個模型／不在可審名單；可以審回 ''
+  // 人一律算不一樣；工具或模型不明的 AI 也算不一樣（畫面標「模型不明」）
+  function whyNot(p, { pj, cfg, authors, tools, models }) {
     if (!p || p.status !== 'active' || !['ai', 'human'].includes(p.kind) || !projectsOf(p).includes(pj) || roIn(p, pj)) return '不在可審名單';
     if (authors.some(a => a.id === p.id)) return '是作者';
     if (cfg.who === 'ai' && p.kind !== 'ai') return '不在可審名單';
@@ -84,9 +118,10 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     if (cfg.who === 'roles' && !roleNamesIn(p, pj).some(r => cfg.roles.includes(r))) return '不在可審名單';
     if (cfg.who === 'members' && !cfg.members.includes(p.id)) return '不在可審名單';
     if (cfg.notOwner && authors.some(a => ownerOf(a) && ownerOf(a) === ownerOf(p))) return '是作者的主人或同一位主人的 AI';
-    if (cfg.diffTool && p.kind === 'ai') {
-      const t = tools.get(p.id);
-      if (t && authors.some(a => a.kind === 'ai' && tools.get(a.id) === t)) return '同一家';
+    if (cfg.differ !== 'any' && p.kind === 'ai') {
+      const ais = authors.filter(a => a.kind === 'ai'), t = tools.get(p.id), m = models.get(p.id);
+      if (cfg.differ === 'vendor' && t && ais.some(a => tools.get(a.id) === t)) return '同一家';
+      if (m && ais.some(a => sameModel(models.get(a.id), m))) return '同一個模型'; // 不同家一定也是不同模型
     }
     return '';
   }
@@ -127,16 +162,17 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   // 這張卡要不要審：全部的卡都要；只審程式卡時，作者送審標了「不是程式卡」就不用（沒送審過的卡，請同意 commit 就算程式卡）
   const needsReview = (cfg, round) => cfg.cards === 'all' || (cfg.cards === 'code' && !(round.req && round.req.is_code === 0));
   const authorsOf = (evs, people, extra = null) => [...new Set([...evs.filter(e => e.ev === 'request').map(e => e.actor_id), ...(extra ? [extra] : [])])].map(id => people.get(id)).filter(Boolean);
-  const person = (people, id, tools) => {
+  // AI 帶工具與模型：ev 有給＝那一刻記下的（送審、通過、要改），沒給＝現在的
+  const person = (people, id, maps, ev = null) => {
     const p = people.get(id);
     if (!p) return id ? { participantId: id, name: '?', kind: 'ai' } : null;
-    return { participantId: p.id, name: p.name, kind: kindOf(p), ...(p.kind === 'ai' ? { tool: tools.get(p.id) || null } : {}) };
+    return { participantId: p.id, name: p.name, kind: kindOf(p), ...(p.kind === 'ai' ? ev ? { tool: ev.tool || null, model: ev.model || null } : { tool: maps.tools.get(p.id) || null, model: maps.models.get(p.id) || null } : {}) };
   };
-  async function eligibleList(pj, cfg, people, authors, tools, load) {
+  const byLoad = (a, b) => (a.kind === b.kind ? 0 : a.kind === 'ai' ? -1 : 1) || a.load - b.load || a.name.localeCompare(b.name);
+  async function eligibleList(pj, cfg, people, authors, maps, load) {
     await loadRoles();
-    return [...people.values()].filter(p => !whyNot(p, { pj, cfg, authors, tools }))
-      .map(p => ({ ...person(people, p.id, tools), load: load.get(p.id) || 0 }))
-      .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'ai' ? -1 : 1) || a.load - b.load || a.name.localeCompare(b.name));
+    return [...people.values()].filter(p => !whyNot(p, { pj, cfg, authors, ...maps }))
+      .map(p => ({ ...person(people, p.id, maps), load: load.get(p.id) || 0 })).sort(byLoad);
   }
 
   // 卡片的審查欄（GET /api/cards/:id 與 aigile_card_get 會帶）
@@ -144,27 +180,35 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const cfg = await cfgOf(c.project);
     const evs = await eventsOf(c.seq);
     if (cfg.cards === 'off' && !evs.length) return null;
-    const people = await peopleMap(ctx), tools = await toolsOf();
+    const people = await peopleMap(ctx), maps = await aiInfo();
     const { state, round } = stateOf(evs, cfg, people);
     const passed = [...evs].reverse().find(e => e.ev === 'pass');
+    const replyOf = id => round.passes.find(e => e.actor_id === id) || (round.changes?.actor_id === id ? round.changes : null);
     return {
-      required: needsReview(cfg, round), rule: { cards: cfg.cards, need: cfg.need, needHuman: cfg.needHuman, diffTool: cfg.diffTool, notOwner: cfg.notOwner, humanPass: cfg.humanPass, diffUpload: cfg.diffUpload },
+      required: needsReview(cfg, round), rule: { cards: cfg.cards, need: cfg.need, needHuman: cfg.needHuman, differ: cfg.differ, notOwner: cfg.notOwner, humanPass: cfg.humanPass, diffUpload: cfg.diffUpload },
       state, isCode: round.req ? round.req.is_code !== 0 : null, roundId: round.id || null,
-      ...(round.req ? { version: round.req.version, requestedBy: person(people, round.req.actor_id, tools), requestedAt: round.req.at, ...splitNote(round.req.comment), messageId: round.req.message_id, diffDocId: round.req.diff_file || null,
+      ...(round.req ? { version: round.req.version, requestedBy: person(people, round.req.actor_id, maps, round.req), requestedAt: round.req.at, ...splitNote(round.req.comment), messageId: round.req.message_id, diffDocId: round.req.diff_file || null,
         compareUrl: await compareUrl(c.project, round.req.version, splitNote(round.req.comment).branch),
-        reviewers: round.reviewers.map(id => ({ ...person(people, id, tools), result: round.passes.some(e => e.actor_id === id) ? 'pass' : round.changes?.actor_id === id ? 'changes' : null })) } : {}),
-      ...(round.changes ? { changes: { by: person(people, round.changes.actor_id, tools), at: round.changes.at, comment: round.changes.comment, version: round.changes.version } } : {}),
+        reviewers: round.reviewers.map(id => { const r = replyOf(id); return { ...person(people, id, maps, r), result: r ? r.ev : null }; }) } : {}),
+      ...(round.changes ? { changes: { by: person(people, round.changes.actor_id, maps, round.changes), at: round.changes.at, comment: round.changes.comment, version: round.changes.version } } : {}),
       ...(round.voided ? { voided: { at: round.voided.at, version: round.voided.version } } : {}),
-      ...(passed ? { passed: { by: person(people, passed.actor_id, tools), at: passed.at, comment: passed.comment, version: passed.version } } : {}),
-      history: evs.map(e => ({ at: e.at, ev: e.ev, by: person(people, e.actor_id, tools), version: e.version, ...(e.comment && e.ev !== 'request' ? { comment: e.comment } : {}) })).reverse(),
+      ...(passed ? { passed: { by: person(people, passed.actor_id, maps, passed), at: passed.at, comment: passed.comment, version: passed.version } } : {}),
+      // 歷次紀錄：送審、通過、要改帶當時的工具與模型（之後換模型不影響）
+      history: evs.map(e => ({ at: e.at, ev: e.ev, by: person(people, e.actor_id, maps, e.ev === 'void' ? { tool: null, model: null } : e), version: e.version, ...(e.comment && e.ev !== 'request' ? { comment: e.comment } : {}) })).reverse(),
     };
   }
 
+  // ais：專案裡的 AI 和它們現在的工具、模型；審查設定用來試算「某位 AI 寫的，誰可以審」
+  async function settingsView(ctx, pj, cfg, canEdit, log) {
+    const people = await peopleMap(ctx), maps = await aiInfo();
+    const ais = [...people.values()].filter(p => p.kind === 'ai' && p.status === 'active' && projectsOf(p).includes(pj)).map(p => person(people, p.id, maps)).sort((a, b) => a.name.localeCompare(b.name));
+    return { project: pj, settings: cfg, canEdit, eligible: await eligibleList(pj, cfg, people, [], maps, await loads()), ais,
+      log, declaration: DIFF_DECLARATION, diffUploadDefault: REVIEW_DEFAULTS.diffUpload, github: await githubOf(pj) };
+  }
   route('GET', '/api/projects/:id/review-settings', async ({ ctx, me, params }) => {
     const pj = params.id;
     if (!projectsOf(me).includes(pj)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案。');
-    const cfg = await cfgOf(pj), people = await peopleMap(ctx), tools = await toolsOf();
-    return { project: pj, settings: cfg, canEdit: await isManager(ctx, me, pj), eligible: await eligibleList(pj, cfg, people, [], tools, await loads()), log: await logOf(pj), declaration: DIFF_DECLARATION, diffUploadDefault: REVIEW_DEFAULTS.diffUpload, github: await githubOf(pj) };
+    return settingsView(ctx, pj, await cfgOf(pj), await isManager(ctx, me, pj), await logOf(pj));
   });
   route('PUT', '/api/projects/:id/review-settings', async ({ ctx, me, req, params }) => {
     const pj = params.id;
@@ -172,7 +216,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const body = await readJson(req);
     const all = (await getJson('review')) || {};
     const { log = [], ...cur } = all[pj] || {};
-    const prev = { ...REVIEW_DEFAULTS, ...cur };
+    const prev = normReviewCfg(cur);
     const next = readReviewCfg(body, prev, invalid);
     if (next.who === 'members') { const people = await peopleMap(ctx); next.members = next.members.filter(id => people.has(id)); }
     const changed = changesText(prev, next);
@@ -180,8 +224,15 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const nextLog = changed.length ? [{ at: nowIso(), by: me.id, byName: me.name, text: changed.join('；') }, ...log].slice(0, 30) : log;
     all[pj] = { ...next, log: nextLog };
     await setJson('review', all);
-    const people = await peopleMap(ctx), tools = await toolsOf();
-    return { project: pj, settings: next, canEdit: true, eligible: await eligibleList(pj, next, people, [], tools, await loads()), log: nextLog, declaration: DIFF_DECLARATION, diffUploadDefault: REVIEW_DEFAULTS.diffUpload, github: await githubOf(pj) };
+    return settingsView(ctx, pj, next, true, nextLog);
+  });
+  // AI 回報目前的模型（接上時：aigile_use、aigile_me 帶 model、接入檢查 --model）；送審、回覆審查另外帶
+  route('PUT', '/api/me/model', async ({ me, req }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 回報模型');
+    const model = readModel((await readJson(req)).model, invalid);
+    if (!model) throw invalid('要帶 model（你目前用的完整模型代號，例：claude-opus-5-5）');
+    await reportModel(me, model, 'checkin');
+    return { model, via: 'checkin' };
   });
 
   // 送審：作者做完呼叫，附版本、說明；審查者可指定（不符合規則直接回錯誤），不指定平台自動挑
@@ -197,8 +248,9 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const branch = body.branch === undefined || body.branch === null ? '' : String(body.branch).trim();
     if (branch.length > 100 || /\s/.test(branch)) throw invalid('branch 最多 100 字、不能有空白');
     const diffDocId = body.diffDocId === undefined || body.diffDocId === null || body.diffDocId === '' ? null : String(body.diffDocId);
+    const model = readModel(body.model, invalid);
     if (!projectsOf(me).includes(c.project) || roIn(me, c.project)) throw new ApiError(403, 'FORBIDDEN', '你不在這個專案或是唯讀，不能送審。');
-    const cfg = await cfgOf(c.project), people = await peopleMap(ctx), tools = await toolsOf();
+    const cfg = await cfgOf(c.project), people = await peopleMap(ctx);
     if (diffDocId) {
       if (!cfg.diffUpload) throw new ApiError(403, 'DIFF_UPLOAD_OFF', '這個專案沒有開「送審可以上傳 diff」；請只附版本與分支，審查者自己到 git 看。');
       const d = await db.get('SELECT id, project, deleted_at FROM docs WHERE id = ?', diffDocId).catch(() => null);
@@ -207,18 +259,21 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const evs = await eventsOf(c.seq);
     const authors = authorsOf(evs, people, me.id);
     const { round } = stateOf(evs, cfg, people);
+    // 送審時帶的模型記成作者這一刻的模型（沒帶就用最近一次回報的）
+    await reportModel(me, model, 'request');
+    const info = await aiInfo(), maps = withAuthors(info, evs, me.id, me.kind === 'ai' ? model || info.models.get(me.id) : null);
     let reviewers = [];
     await loadRoles();
     if (body.reviewerId) {
       const p = people.get(body.reviewerId);
-      const why = whyNot(p, { pj: c.project, cfg, authors, tools });
+      const why = whyNot(p, { pj: c.project, cfg, authors, ...maps });
       if (why) throw new ApiError(400, 'REVIEWER_NOT_ALLOWED', `${p?.name || body.reviewerId} 不能審這張卡：${why}。`);
       reviewers.push(p.id);
     } else if (round.req && (round.changes || round.voided || round.reviewers.length)) { // 改完重新送審：預設還是同一位
-      reviewers = round.reviewers.filter(id => !whyNot(people.get(id), { pj: c.project, cfg, authors, tools }));
+      reviewers = round.reviewers.filter(id => !whyNot(people.get(id), { pj: c.project, cfg, authors, ...maps }));
     }
     const load = await loads();
-    const pool = await eligibleList(c.project, cfg, people, authors, tools, load);
+    const pool = await eligibleList(c.project, cfg, people, authors, maps, load);
     for (const cand of [...(cfg.needHuman && !reviewers.some(id => people.get(id)?.kind === 'human') ? pool.filter(x => x.kind === 'human') : []), ...pool]) {
       if (reviewers.length >= cfg.need) break;
       if (!reviewers.includes(cand.participantId)) reviewers.push(cand.participantId);
@@ -237,15 +292,16 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const firstAi = reviewers.find(id => people.get(id).kind === 'ai');
     const msg = await createMessage(ctx, me, { project: c.project, text: text.slice(0, 4000), recipientIds: reviewers, ...(firstAi ? { replyFrom: [firstAi] } : {}), requestId: `review:${c.seq}:${version}:${at}` });
     const mid = msg.message.messageId;
+    const myTool = me.kind === 'ai' ? maps.tools.get(me.id) || null : null, myModel = me.kind === 'ai' ? maps.models.get(me.id) || null : null; // 作者這一刻的工具與模型
     for (const id of reviewers) {
       const p = people.get(id);
-      stmts.push(['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, reviewer_id, reviewer_kind, tool, comment, diff_file, is_code, message_id, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-        [randId('rv'), c.seq, c.project, 'request', version, me.id, id, kindOf(p), p.kind === 'ai' ? tools.get(id) || null : null, note + (branch ? `\n分支：${branch}` : ''), diffDocId, isCode ? 1 : 0, mid, at]]);
+      stmts.push(['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, reviewer_id, reviewer_kind, tool, model, comment, diff_file, is_code, message_id, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [randId('rv'), c.seq, c.project, 'request', version, me.id, id, kindOf(p), myTool, myModel, note + (branch ? `\n分支：${branch}` : ''), diffDocId, isCode ? 1 : 0, mid, at]]);
     }
     stmts.push(['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, REVIEW_LOG, `${me.name} ${round.req ? '重新送審' : '送審'} ${short(version)}，審查者 ${names.join('、')}：${note}`.slice(0, 1000)]]);
     stmts.push(['INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', [c.seq, mid]]);
     await db.batch(stmts);
-    return { cardId: key, version, reviewers: reviewers.map(id => person(people, id, tools)), messageId: mid, sequence: msg.message.sequence };
+    return { cardId: key, version, reviewers: reviewers.map(id => person(people, id, maps)), messageId: mid, sequence: msg.message.sequence };
   });
 
   // 送審附 diff（專案開了「送審可以上傳 diff」才行）：存專案文件、不過期。只有這個入口用「本專案自己的程式差異」聲明，其他上傳照舊不收程式碼
@@ -278,14 +334,17 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const comment = String(body.comment ?? '').trim();
     if (comment.length > 1000) throw invalid('comment 最多 1000 字');
     if (body.result === 'changes' && !comment) throw invalid('要改要寫一句意見（comment）');
-    const cfg = await cfgOf(c.project), people = await peopleMap(ctx), tools = await toolsOf();
+    const model = readModel(body.model, invalid);
+    const cfg = await cfgOf(c.project), people = await peopleMap(ctx);
     const evs = await eventsOf(c.seq);
     const { round } = stateOf(evs, cfg, people);
     if (!round.req) throw new ApiError(409, 'NOT_REQUESTED', '這張卡還沒送審。');
     if (!round.reviewers.includes(me.id)) throw new ApiError(403, 'NOT_REVIEWER', '你不是這一輪的審查者。');
     if (authorsOf(evs, people).some(a => a.id === me.id)) throw new ApiError(403, 'REVIEWER_IS_AUTHOR', '審查者不能是作者。');
+    await reportModel(me, model, 'review'); // 審查者這一刻的模型（中途換了模型，這裡就會擋「同一個模型」）
+    const maps = withAuthors(await aiInfo(), evs);
     await loadRoles();
-    const whyNow = whyNot(people.get(me.id), { pj: c.project, cfg, authors: authorsOf(evs, people), tools });
+    const whyNow = whyNot(people.get(me.id), { pj: c.project, cfg, authors: authorsOf(evs, people), ...maps });
     if (whyNow) throw new ApiError(403, 'REVIEWER_NOT_ALLOWED', `${me.name} 現在不能審這張卡：${whyNow}。`);
     if (round.voided || round.changes) throw new ApiError(409, 'REVIEW_CLOSED', '這一輪已經結束（要改或作廢），等作者重新送審。');
     if (!round.waiting.includes(me.id)) throw new ApiError(409, 'ALREADY_REVIEWED', '你已經回覆過這一輪了。');
@@ -297,8 +356,8 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const at = nowIso(), key = cardKey(c) || `C-${c.seq + 100}`, pass = body.result === 'pass';
     const combined = pass && body.approveCommit === true && me.kind === 'human' && cfg.humanPass === 'combined' && people.get(round.req.actor_id)?.owner_id === me.id;
     await db.batch([
-      ['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, reviewer_id, reviewer_kind, tool, comment, message_id, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-        [randId('rv'), c.seq, c.project, body.result, round.req.version, me.id, me.id, kindOf(me), me.kind === 'ai' ? tools.get(me.id) || null : null, comment, round.req.message_id, at]],
+      ['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, reviewer_id, reviewer_kind, tool, model, comment, message_id, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        [randId('rv'), c.seq, c.project, body.result, round.req.version, me.id, me.id, kindOf(me), me.kind === 'ai' ? maps.tools.get(me.id) || null : null, me.kind === 'ai' ? maps.models.get(me.id) || null : null, comment, round.req.message_id, at]],
       ['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, REVIEW_LOG, `${me.name} 審 ${short(round.req.version)}：${pass ? '通過' : '要改'}${comment ? '。意見：' + comment : ''}`.slice(0, 1000)]],
     ]).catch(e => { if (/UNIQUE|duplicate key|constraint/i.test(e.message)) throw new ApiError(409, 'ALREADY_REVIEWED', '你已經回覆過這一輪了。'); throw e; });
     // 群組只發一句短通知（意見寫在卡片紀錄）；叫醒作者（AI）接著做
@@ -319,7 +378,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   // 「要你處理」：人類審查者還沒回的審查
   route('GET', '/api/reviews/mine', async ({ ctx, me }) => {
     const rows = await db.all("SELECT DISTINCT card_seq FROM card_reviews WHERE reviewer_id = ? AND ev = 'request'", me.id);
-    const people = await peopleMap(ctx), tools = await toolsOf(), items = [];
+    const people = await peopleMap(ctx), maps = await aiInfo(), items = [];
     for (const { card_seq } of rows.slice(-50)) {
       const c = await db.get('SELECT * FROM cards WHERE seq = ?', card_seq);
       if (!c || (isolatedFrom(me) && !projectsOf(me).includes(c.project))) continue;
@@ -329,7 +388,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       if (!round.waiting.includes(me.id)) continue;
       const msg = round.req.message_id ? await db.get('SELECT seq FROM messages WHERE id = ?', round.req.message_id).catch(() => null) : null;
       items.push({ cardId: cardKey(c) || `C-${c.seq + 100}`, title: c.title, project: c.project, version: round.req.version, ...splitNote(round.req.comment), at: round.req.at, diffDocId: round.req.diff_file || null, compareUrl: await compareUrl(c.project, round.req.version, splitNote(round.req.comment).branch),
-        author: person(people, round.req.actor_id, tools), messageId: round.req.message_id, roundId: round.id, sequence: msg?.seq ?? null, humanPass: cfg.humanPass,
+        author: person(people, round.req.actor_id, maps, round.req), messageId: round.req.message_id, roundId: round.id, sequence: msg?.seq ?? null, humanPass: cfg.humanPass,
         canApproveCommit: people.get(round.req.actor_id)?.owner_id === me.id });
     }
     return { items };
@@ -358,5 +417,5 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     }
     return { cardSeq: c.seq };
   }
-  return { reviewOf, checkCommitAsk, cfgOf, logOf };
+  return { reviewOf, checkCommitAsk, cfgOf, logOf, aiInfo };
 }

@@ -72,8 +72,8 @@ if (FIXED && !baseOf(FIXED)) { log(`找不到平台網址（--base 或 ${path.jo
 const NONE = '這裡沒有接入平台（這個資料夾和上層都沒有 .aigile/<代號>/.token）。這個專案用不到 aigile 工具，照常工作即可';
 
 const send = obj => process.stdout.write((typeof obj === 'string' ? obj.trim() : JSON.stringify(obj)) + '\n');
-const USE_TOOL = { name: 'aigile_use', description: '選定你在這個資料夾的 AI 代號（例如 PG_XXXX），一個對話只能選一次，選了就鎖定；已選定時回傳目前身分。一行啟動或資料夾只有一隻 AI 時不用呼叫。',
-  inputSchema: { type: 'object', properties: { agent: { type: 'string', description: '你的 AI 代號（角色_短代碼），看接入設定或 .aigile 底下的資料夾名' } }, required: ['agent'], additionalProperties: false } };
+const USE_TOOL = { name: 'aigile_use', description: '選定你在這個資料夾的 AI 代號（例如 PG_XXXX），一個對話只能選一次，選了就鎖定；已選定時回傳目前身分。一行啟動或資料夾只有一隻 AI 時不用呼叫。model 帶你目前用的完整模型代號（審查比對「不同模型」用）。',
+  inputSchema: { type: 'object', properties: { agent: { type: 'string', description: '你的 AI 代號（角色_短代碼），看接入設定或 .aigile 底下的資料夾名' }, model: { type: 'string', maxLength: 80, description: '你目前用的完整模型代號，例：claude-opus-5-5' } }, required: ['agent'], additionalProperties: false } };
 const multi = () => !FIXED && candidates().length > 1;
 
 async function post(agent, line) {
@@ -92,6 +92,17 @@ async function post(agent, line) {
   let w = text.slice(0, 200);
   try { const j = JSON.parse(text); if (j.jsonrpc) return text; w = `${j.error?.code}：${j.error?.message}`; } catch {}
   throw new Error(`平台回 HTTP ${r.status}：${w}${r.status === 401 ? '（Token 失效：請所屬人類在網頁重發，換掉 .token 即可，不用改設定）' : ''}`);
+}
+
+// 接上時回報模型（失敗不影響選身分，回傳裡照實說）
+async function reportModel(agent, model) {
+  if (model === undefined || model === null || model === '') return '';
+  try {
+    const token = fs.readFileSync(path.join(dirOf(agent), '.token'), 'utf8').trim();
+    const r = await fetch(`${baseOf(agent)}/api/me/model`, { method: 'PUT', body: JSON.stringify({ model: String(model) }), signal: AbortSignal.timeout(20_000), headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Aigile-Source': 'mcp' } });
+    const j = await r.json().catch(() => ({}));
+    return r.ok ? `已回報模型 ${j.model}。` : `回報模型失敗：${j.error?.message || 'HTTP ' + r.status}。`;
+  } catch (e) { return `回報模型失敗：${e.message}。`; }
 }
 
 async function uploadDoc(agent, a) {
@@ -191,14 +202,14 @@ async function forward(line) {
   }
   // 通用版：本機處理 aigile_use（一個程序只定一次身分）
   if ((!FIXED || wakeAgent) && method === 'tools/call' && msg.params?.name === 'aigile_use') {
-    const want = String(msg.params?.arguments?.agent || '').trim();
+    const want = String(msg.params?.arguments?.agent || '').trim(), model = msg.params?.arguments?.model;
     if (AGENT) {
-      if (want === AGENT) return reply(text(`目前身分：${AGENT}（${dirOf(AGENT)}）。`));
+      if (want === AGENT) return reply(text(`目前身分：${AGENT}（${dirOf(AGENT)}）。${await reportModel(AGENT, model)}`));
       return reply({ ...text(`已鎖定為 ${AGENT}，這個對話不能換成 ${want || '別的代號'}。要換身分請重開對話（或用一行啟動帶 AIGILE_AGENT）。`), isError: true });
     }
     if (!CODE_RE.test(want) || !hasToken(want)) return reply({ ...text(`找不到 ${path.join(WORK, '.aigile', want || '<代號>', '.token')}。這個資料夾有 Token 的代號：${candidates().join('、') || '（沒有）'}`), isError: true });
     AGENT = want; why = '';
-    reply(text(`已選定並鎖定 ${want}（${path.join(WORK, '.aigile', want)}）。工具清單已更新；之後每輪照接入設定用 aigile_ 工具，這個對話不能再換身分。`));
+    reply(text(`已選定並鎖定 ${want}（${path.join(WORK, '.aigile', want)}）。工具清單已更新；之後每輪照接入設定用 aigile_ 工具，這個對話不能再換身分。${await reportModel(want, model)}`));
     return send({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
   }
   if (!AGENT) {

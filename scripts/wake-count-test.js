@@ -27,7 +27,7 @@ const SCHEMA = fs.readFileSync(path.join(ROOT, 'src/schema.sql'), 'utf8');
 const OLD = SCHEMA.split('\n').filter(l => !/^\s+wake_(day|count|at) /.test(l) && !/^CREATE INDEX IF NOT EXISTS idx_files_message /.test(l)).join('\n') // 003 加的索引也去掉
   .replace(/\nCREATE TABLE IF NOT EXISTS project_descriptions \([\s\S]*?\n\);\nCREATE TABLE IF NOT EXISTS project_preferences \([\s\S]*?\n\);\n/, '') // 008 的兩張新表
   .replace(/,\n\s*kb_status TEXT[\s\S]*?kb_card INTEGER[^\n]*(\n\s+in_kb [^\n]*)?/, '').replace(/-- 知識庫底層：[\s\S]*?CREATE INDEX IF NOT EXISTS idx_kb_pages [^\n]*\n/, '') // 004、005、006 知識庫加的欄位與表也去掉
-  .replace(/-- 審查者（migrations\/007_card_reviews\.sql）[\s\S]*?idx_card_reviews_vote [^\n]*\n/, ''); // 007 審查者的表也去掉
+  .replace(/-- 審查者（migrations\/007_card_reviews\.sql）[\s\S]*?CREATE TABLE IF NOT EXISTS ai_models \([\s\S]*?\n\);\n/, ''); // 007 審查者的表（含 ai_models）也去掉
 assert.notEqual(OLD, SCHEMA, '測試用的舊結構真的少了叫醒欄位');
 for (const tag of ['v1.0.0', 'v1.0.2']) {
   const g = spawnSync('git', ['show', `${tag}:src/schema.sql`], { cwd: ROOT, encoding: 'utf8' });

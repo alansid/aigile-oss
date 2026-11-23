@@ -3853,8 +3853,11 @@ ${ending}`;
     const disabled = project ? [...people.values()].filter(p => p.status === 'disabled' && p.kind !== 'system' && inTeam(p.id) && sees(p.id)).map(p => ({
       ...identity(p, people), disabled: true, createdAt: p.created_at, lastSeenAt: iso(p.last_seen_at), projectRoles: projectRolesOf(p)
     })) : [];
+    // AI 詳情的「工具・模型」（模型是 AI 接上、送審、審查時自己回報的；列表不顯示）
+    const aiTm = await reviewsApi.aiInfo();
+    const toolModel = m => (m.memberType !== 'ai' ? m : { ...m, aiTool: aiTm.tools.get(m.participantId) || null, aiModel: (r => (r ? { model: r.model, via: r.via, at: r.at } : null))(aiTm.reported.get(m.participantId)) });
     return { ...d, decisions: project ? decisions.filter(x => x.project === project) : decisions, unanswered,
-      members: roleForProject((await scopeTeamMembers(me, d.members, priv, project)).concat(disabled).filter(m => inTeam(m.participantId) && sees(m.participantId)).map(scopeMemory).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url, adminOf(people)?.id) }; // 工作記憶依專案可見；C-xxx 角色依專案
+      members: roleForProject((await scopeTeamMembers(me, d.members, priv, project)).concat(disabled).map(toolModel).filter(m => inTeam(m.participantId) && sees(m.participantId)).map(scopeMemory).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url, adminOf(people)?.id) }; // 工作記憶依專案可見；C-xxx 角色依專案
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);

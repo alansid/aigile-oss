@@ -1,5 +1,5 @@
 // 畫面測試：審查者（開源版：送審可以上傳 diff 預設打開）
-// A. 專案 ⚙ › 審查：預設「不審」只有一列；打開「只有程式卡」展開其他設定、🔒 固定規則、現在符合的審查者（工具不明標黃）；「至少要有一位是人」選 1 位時不能按；儲存寫紀錄
+// A. 專案 ⚙ › 審查：預設「不審」只有一列；打開「只有程式卡」展開其他設定、🔒 固定規則、現在符合的審查者（AI · 工具 · 模型；不明標黃）；「至少要有一位是人」選 1 位時不能按；儲存寫紀錄
 // B. 卡片審查欄：還沒送審＋送審視窗（版本、分支、說明、程式卡、審查者）→ 等審查
 // C. 要改（紅底意見、已退回作者）→ 重新送審 → ✅ 已審查（下一步：找人同意 commit）、歷次紀錄
 // D. 版本變了：通過已作廢＋重新送審
@@ -71,8 +71,9 @@ try {
     assert.equal(await js("document.querySelector('.rv-lock').closest('.rv-row').querySelector('button, input')"), null, 'A 固定規則不是開關');
     assert.ok(await js("[...document.querySelectorAll('[data-rv-set=\"needHuman\"]')].every(b => b.disabled)"), 'A 選 1 位時「至少要有一位是人」不能按');
     const chips = await text('.rv-chips');
-    assert.ok(chips.includes('示範AG AI · 工具不明') && chips.includes('示範Codex AI · Codex') && chips.includes('小華 人'), 'A 現在符合的審查者：' + chips);
-    assert.match(await text('.rv-set'), /「工具不明」的 AI 當作跟誰都不同家。/, 'A 工具不明的說明');
+    assert.ok(chips.includes('示範AG AI · 工具不明 · 模型不明') && chips.includes('示範Codex AI · Codex · 模型不明') && chips.includes('小華 人'), 'A 現在符合的審查者：' + chips);
+    assert.match(await text('.rv-set'), /審查者要多不一樣 只管 AI；人一律算不一樣 不限（預設） 不是作者就好。 不同模型 .+ 不同家 /, 'A 審查者要多不一樣三段（PLAT-419）');
+    assert.equal(await js(`document.querySelector('[data-rv-set="differ"][aria-checked="true"]')?.dataset.v`), '"any"', 'A 預設不限');
     assert.match(await text('.rv-set'), /送審可以上傳 diff 只有 leader、管理員能改 不可以：只附版本、分支 可以：送審時附 diff 檔 不可以：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。 可以（預設）：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。 改這項會記在審查紀錄。/, 'A v3 送審可以上傳 diff（開源預設可以）');
     assert.match(await text('.rv-set'), /人審查通過時 審查者剛好也是同意 commit 的人 分開按：通過後同一則直接出「同意 commit」 通過就算同意 commit 預設分開按/, 'A 人審查通過時');
     const rows = await js("[...document.querySelectorAll('.rv-set .rv-row b')].map(b => b.textContent)");
@@ -104,7 +105,7 @@ try {
     await click('#card-drawer [data-act="rv-request"]');
     await until(() => js("!!document.querySelector('#rv-form')"), 8000, 'B 送審視窗');
     assert.match(await text('#rv-form'), /^要審的版本 分支 diff 檔（選填） 這是本專案自己的程式差異，不含密鑰與客戶個資 存在專案文件、不會自動刪除，不在同一台電腦的人也看得到。 改了什麼、怎麼驗證 程式卡 這是程式卡 平台看到 commit、分支、diff，或有人對這張卡請同意 commit，就當程式卡；判斷錯了作者可以改。 審查者（選填）/, `B ${tag} 送審視窗欄位`);
-    assert.match(await text('#rv-form select'), /^平台自動挑：示範AG（AI · 工具不明，手上 0 件）/, 'B 審查者預設平台自動挑');
+    assert.match(await text('#rv-form select'), /^平台自動挑：示範AG（AI · 工具不明 · 模型不明，手上 0 件）/, 'B 審查者預設平台自動挑');
     assert.ok(!(await js("[...document.querySelectorAll('#rv-form option')].some(o => o.textContent.startsWith('林志明'))")) || true, 'B 作者以外都可以選');
     assert.ok(!(await hscroll()), `G ${tag} 送審視窗不橫向捲動`);
     await js("(() => { const f = document.querySelector('#rv-form'); f.branch.value = 'feat/x'; f.branch.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
@@ -124,7 +125,7 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.match(await text('#card-drawer .rv-box'), /^審查 要改 程式卡（有分支） 示範Codex AI · Codex 審 a1b2c3d · .+ 拿掉了「不會連正式庫」的檢查，請加回來；幣別欄沒有測空值。 已退回作者。改好重新送審，預設還是由 示範Codex 審。 重新送審 歷次紀錄/, `C ${tag} 要改`);
+    assert.match(await text('#card-drawer .rv-box'), /^審查 要改 程式卡（有分支） 示範Codex AI · Codex · 模型不明 審 a1b2c3d · .+ 拿掉了「不會連正式庫」的檢查，請加回來；幣別欄沒有測空值。 已退回作者。改好重新送審，預設還是由 示範Codex 審。 重新送審 歷次紀錄/, `C ${tag} 要改`);
     assert.ok(!(await hscroll()), `G ${tag} 卡片不橫向捲動`);
     await shot(`03-${tag}-卡片-要改`);
   }
@@ -133,7 +134,7 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.match(await text('#card-drawer .rv-box'), /^審查 ✅ 已審查 程式卡 示範Codex AI · Codex 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。 下一步：找人同意 commit。 歷次紀錄 .+通過 · 示範Codex · 9f8e7d6 .+重新送審 · 林志明 · 9f8e7d6 .+要改 · 示範Codex · a1b2c3d .+送審 · 林志明 · a1b2c3d$/, `C ${tag} 已審查＋歷次紀錄`);
+    assert.match(await text('#card-drawer .rv-box'), /^審查 ✅ 已審查 程式卡 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。 下一步：找人同意 commit。 歷次紀錄 .+通過 · 示範Codex · Codex · 模型不明 · 9f8e7d6 .+重新送審 · 林志明 · 9f8e7d6 .+要改 · 示範Codex · Codex · 模型不明 · a1b2c3d .+送審 · 林志明 · a1b2c3d$/, `C ${tag} 已審查＋歷次紀錄`);
     await shot(`03b-${tag}-卡片-已審查`);
   }
 
@@ -144,7 +145,7 @@ try {
     await size(w, h);
     await login(liu.token, '/p/main/inbox');
     await until(() => js(`!!${confRow}?.querySelector('.rv-box')?.getClientRects().length && !document.documentElement.classList.contains('i18n-wait')`), 15000, 'F 審查欄');
-    assert.match(await js(`${confRow}.querySelector('.rv-box').innerText.replace(/\\s+/g, ' ').trim()`), /^審查 ✅ 已審查 示範Codex AI · Codex 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。$/, `F ${tag} 綠框`);
+    assert.match(await js(`${confRow}.querySelector('.rv-box').innerText.replace(/\\s+/g, ' ').trim()`), /^審查 ✅ 已審查 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。$/, `F ${tag} 綠框`);
     assert.ok(await js(`!!${confRow}.querySelector('[data-auth="commit"]')`), 'F 同意 commit 按鈕');
     assert.ok(/授權 commit/.test(await js(`${confRow}.innerText`)) && !/Commit/.test(await js(`${confRow}.querySelector('.auth-box').innerText`)), 'F commit 一律小寫');
     await js(`${confRow}.scrollIntoView({ block: 'center' }); true`);
@@ -159,7 +160,7 @@ try {
     await size(w, h);
     await login(liu.token, '/p/main/inbox');
     await until(() => js(`!!${badRow}?.querySelector('.rv-box')?.getClientRects().length && !document.documentElement.classList.contains('i18n-wait')`), 15000, 'F 紅框');
-    assert.match(await js(`${badRow}.querySelector('.rv-box').innerText.replace(/\\s+/g, ' ').trim()`), /^審查 ⚠ 版本對不上 示範Codex AI · Codex 通過 9f8e7d6 · .+ 審過的是 9f8e7d6，要 commit 的是 4c5d6e7。中間改過的程式沒人看過，建議先退回重新送審。$/, `F ${tag} 紅框`);
+    assert.match(await js(`${badRow}.querySelector('.rv-box').innerText.replace(/\\s+/g, ' ').trim()`), /^審查 ⚠ 版本對不上 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 審過的是 9f8e7d6，要 commit 的是 4c5d6e7。中間改過的程式沒人看過，建議先退回重新送審。$/, `F ${tag} 紅框`);
     assert.equal(await js(`[...${badRow}.querySelectorAll('.rv-mm button')].map(b => b.textContent.trim()).join('|')`), '退回重新送審|仍要同意', 'F 退回重新送審／仍要同意');
     assert.match(await js(`${confRow}?.querySelector('.rv-box')?.innerText || ''`), /✅ 已審查/, `D ${tag} 舊的那則請同意的是審過的版本：仍是綠框`);
     await js(`${badRow}.scrollIntoView({ block: 'center' }); true`);
@@ -182,7 +183,7 @@ try {
     await size(w, h);
     await login(liu.token, '/p/main/inbox');
     await until(() => js(`!!${rvRow}?.getClientRects().length && !document.documentElement.classList.contains('i18n-wait')`), 15000, 'E 請你審查（畫出來了）');
-    assert.match(await js(`${rvRow}.innerText.replace(/\\s+/g, ' ').trim()`), new RegExp(`^🔍 請你審查：${K2} 報價單加上匯率換算 作者 示範PG AI · Claude · 版本 a1b2c3d · 「加匯率換算；跑了 rate-test，全過。」 要改… ?通過$`), `E ${tag} 請你審查`);
+    assert.match(await js(`${rvRow}.innerText.replace(/\\s+/g, ' ').trim()`), new RegExp(`^🔍 請你審查：${K2} 報價單加上匯率換算 作者 示範PG AI · Claude · 模型不明 · 版本 a1b2c3d · 「加匯率換算；跑了 rate-test，全過。」 要改… ?通過$`), `E ${tag} 請你審查`);
     assert.ok(await js(`(() => { const r = ${rvRow}, m = r.querySelector('.sugg-main'), a = r.querySelector('.sugg-actions'); return m.getBoundingClientRect().width >= r.clientWidth - 40 && a.getBoundingClientRect().top >= m.getBoundingClientRect().bottom - 2; })()`), `E ${tag} 說明佔滿整列、按鈕在下面`);
     assert.match(await text('.wreview .wsugg-head'), /^請你審查 1 按「要改…」要寫一句意見才送得出去。$/, 'E 區塊標題');
     assert.ok(!(await hscroll()), `G ${tag} 請你審查不橫向捲動`);

@@ -454,17 +454,25 @@ CREATE TABLE IF NOT EXISTS card_reviews (
   actor_id TEXT NOT NULL,              -- 做這件事的人（送審＝作者；通過／要改＝審查者；作廢＝送新版本的作者）
   reviewer_id TEXT,                    -- 這一輪的審查者
   reviewer_kind TEXT,                  -- ai／human
-  tool TEXT,                           -- 審查者的 AI 工具（claude／codex…；人或不明＝NULL）
+  tool TEXT,                           -- 做這件事的 AI 當時的工具（送審＝作者、通過／要改＝審查者；claude／codex…；人或不明＝NULL）
   comment TEXT NOT NULL DEFAULT '',    -- 送審說明或審查意見
   diff_file TEXT,                      -- 送審附的 diff（docs.id，存在專案文件）
   is_code INTEGER,                     -- 送審時：1＝程式卡、0＝作者改成不是程式卡
   message_id TEXT,                     -- 這一輪的送審訊息（送審、通過、要改都記；一輪＝一則送審訊息）
-  at TEXT NOT NULL
+  at TEXT NOT NULL,
+  model TEXT                           -- 做這件事的 AI 當時回報的模型（migrations/009_review_models.sql；人或沒回報＝NULL）
 );
 CREATE INDEX IF NOT EXISTS idx_card_reviews_card ON card_reviews (card_seq, at);
 CREATE INDEX IF NOT EXISTS idx_card_reviews_reviewer ON card_reviews (reviewer_id, ev);
 -- 每一輪（送審訊息）每位審查者只算一次：併發重送的回覆也擋得住
 CREATE UNIQUE INDEX IF NOT EXISTS idx_card_reviews_vote ON card_reviews (card_seq, message_id, actor_id) WHERE ev IN ('pass', 'changes');
+-- 每隻 AI 最近一次回報的模型：接上（aigile_use／aigile_me／接入檢查）、送審、回覆審查時由 AI 自己帶；被叫醒不回報
+CREATE TABLE IF NOT EXISTS ai_models (
+  ai_id TEXT PRIMARY KEY,
+  model TEXT NOT NULL,                 -- AI 回報的完整模型代號（例：claude-opus-5-5）
+  via TEXT NOT NULL,                   -- checkin 接上／request 送審／review 審查
+  at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS project_descriptions (
   project TEXT PRIMARY KEY, description TEXT NOT NULL DEFAULT ''

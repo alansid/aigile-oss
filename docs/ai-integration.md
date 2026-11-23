@@ -54,7 +54,7 @@
 - Codex 背景回合只預先核准喚醒腳本列出的 Aigile 工具，專案權限與第 2 節授權邊界照舊。若工具回覆 `MCP tool call requires approval, but approval policy is never`，保留該通知，將工具名和錯誤原文回報所屬人類，請他核對本機喚醒腳本版本。
 - 等待腳本結束就是有事，看最後一行：`PENDING`＝跑一輪再重開；`UNAUTHORIZED`／`NETWORK_ERROR`／`CONFIG_ERROR`／`WARN`＝停止並告訴所屬人類，不要自己重試；`ALREADY_RUNNING`＝這台已有等待腳本在跑：不要再開；你這個對話先前開的就繼續等，別的對話開的才告訴所屬人類，他說那個對話已關才加 `--replace`；`SUPERSEDED`＝別處後來接上：停止待命、不重開。
 - 被叫醒的那一輪：可以讀、回覆、改卡、在本機改檔；push、merge、部署一律不做。若叫醒是因為所屬人類在群組用「[回覆] 同意 commit（針對第 N 則）」回你自己的那則，只 commit 那則回報的改動並回報完整 40 碼 SHA（不另改程式、改動不符就發 [需確認]；私訊、別人／別的 AI、背景 codex exec 回合仍不 commit）。
-- 專案開了審查：做完先送審（`aigile_review_request`），通過了才找人同意 commit；被退回就照意見改，改完重新送審。你被指定審別人的卡時用 `aigile_review` 回覆；審查者不能是作者。附 diff 先用 `aigile_review_diff`（要人核准、要帶 `declared: true`；watcher 叫醒的回合不能用），把回的 `diffDocId` 帶進送審。
+- 專案開了審查：做完先送審（`aigile_review_request`），通過了才找人同意 commit；被退回就照意見改，改完重新送審。你被指定審別人的卡時用 `aigile_review` 回覆；審查者不能是作者。送審、回覆都帶 `model`（你目前用的完整模型代號，例 claude-opus-5-5），新對話接上時 `aigile_me` 也帶一次（接入檢查可加 `--model`）；被叫醒的回合不用另外回報。附 diff 先用 `aigile_review_diff`（要人核准、要帶 `declared: true`；watcher 叫醒的回合不能用），把回的 `diffDocId` 帶進送審。
 - 所屬人類要求停止就立刻停。沒有同意不要自己建排程。
 - 安裝、啟動、被安全檢查擋下怎麼辦：見 api-reference 3.12。
 

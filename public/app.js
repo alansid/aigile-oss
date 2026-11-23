@@ -3397,12 +3397,19 @@
     const last = m.lastWakeAt ? pageText('，最近一次 ', ', last at ') + shortTime(m.lastWakeAt).split(' ').pop() : '';
     const expiry = m.tokenExpiresAt && shortTime(m.tokenExpiresAt).split(' ')[0];
     const owner = [m.ownerName, m.environment].filter(Boolean).map(esc).join(' · ');
+    // 工具・模型：模型是 AI 接上、送審、審查時自己回報的；只放在詳情，列表不顯示
+    const via = { checkin: ['簽到', 'when signing in'], request: ['送審', 'when sending for review'], review: ['審查', 'when reviewing'] }[m.aiModel?.via] || ['回報', 'when reporting'];
+    const tool = esc(m.aiTool ? RV_TOOL[m.aiTool] || m.aiTool : pageText('工具不明', 'Unknown tool'));
+    const toolModel = m.aiModel
+      ? `${tool} · ${esc(m.aiModel.model)}<span class="muted small">${pageText(`（${shortTime(m.aiModel.at)} ${via[0]}時回報）`, ` (reported at ${shortTime(m.aiModel.at)} ${via[1]})`)}</span>`
+      : `${tool} · <span class="rv-tag unk">${pageText('模型不明', 'Model unknown')}</span> <span class="muted small">${pageText('這隻 AI 還沒回報模型，更新接入後會自動帶上。', "This AI hasn't reported a model yet. It will once its setup is updated.")}</span>`;
     return [
       info?.currentTask ? `<p>${[info.currentTask.title, info.currentTask.stage].filter(Boolean).map(esc).join(' · ')}</p>` : '',
       todo.length ? `<p>${pageText(`手上的待辦（AI 自己回報，${todo.length} 件）`, `Its to-do list (reported by the AI, ${todo.length})`)}</p>` +
         todo.map(b => `<div>${[b.cardId, b.title, b.trigger].filter(Boolean).map(esc).join(' · ')}</div>`).join('') +
         (info.updatedAt ? `<small>${pageText(agoText(info.updatedAt) + '更新', 'Updated ' + agoText(info.updatedAt))}</small>` : '')
         : field('手上的待辦', 'Its to-do list', none),
+      field('工具・模型', 'Tool · model', toolModel),
       field('連線', 'Connection', connection),
       wakes ? `<small>${pageText(`今天醒來 ${wakes} 次`, `Woke up ${wakes} times today`)}${last}${wakes > 15 ? pageText(' ⚠ 今天醒來次數偏多', ' ⚠ Woke up more than usual today') : ''}</small>` : '',
       field('還沒看的訊息', 'Unread messages', pending ? pageText(`${pending} 則`, String(pending)) + oldest : none),
@@ -8842,8 +8849,28 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   }
   // ---------- 審查者（UX 文字 v2）：專案 ⚙ › 審查、卡片審查欄＋送審視窗、要你處理「請你審查」、同意 commit 旁的審查欄 ----------
   const RV_TOOL = { claude: 'Claude', codex: 'Codex', copilot: 'Copilot', antigravity: 'Antigravity' };
-  const rvTag = p => (p.kind === 'ai' ? (p.tool ? `<span class="rv-tag ai">AI · ${esc(RV_TOOL[p.tool] || p.tool)}</span>` : '<span class="rv-tag unk">AI · 工具不明</span>') : '<span class="rv-tag human">人</span>');
+  // AI 標「AI · 工具 · 模型」；工具或模型不明標黃色（當作跟誰都不一樣）
+  const rvToolName = p => (p.tool ? RV_TOOL[p.tool] || p.tool : '工具不明');
+  const rvTagText = p => (p.kind === 'ai' ? `AI · ${rvToolName(p)} · ${p.model || '模型不明'}` : '人');
+  const rvTag = p => `<span class="rv-tag ${p.kind !== 'ai' ? 'human' : p.tool && p.model ? 'ai' : 'unk'}">${esc(rvTagText(p))}</span>`;
   const rvWho = p => (p ? `${esc(p.name)} ${rvTag(p)}` : '');
+  const RV_DIFFER = { any: '不限', model: '不同模型', vendor: '不同家' };
+  // 規則有沒有符合（只管 AI 寫、AI 審）：卡片審查欄通過那行下面的灰字
+  function rvRuleLine(rule, author, rev) {
+    if (!rule || rule.differ === 'any' || !author || !rev || author.kind !== 'ai' || rev.kind !== 'ai') return '';
+    if (rule.differ === 'vendor' && !rev.tool) return '這隻 AI 的工具不明，當作跟作者不一樣。';
+    if (!rev.model) return '這隻 AI 沒回報模型，當作跟作者不一樣。';
+    if (rule.differ === 'vendor' && author.tool) return `專案規則：不同家。寫的是 ${rvToolName(author)}、審的是 ${rvToolName(rev)}，符合。`;
+    if (!author.model) return `專案規則：${RV_DIFFER[rule.differ]}。作者沒回報模型，當作不一樣。`;
+    return `專案規則：${RV_DIFFER[rule.differ]}。寫的是 ${author.model}、審的是 ${rev.model}，符合。`;
+  }
+  // 「某位 AI 寫的，誰可以審」：跟平台 whyNot 同一套（人一律可以；不明的當作不一樣）
+  function rvWhyNot(differ, author, p) {
+    if (differ === 'any' || p.kind !== 'ai' || author.kind !== 'ai') return '';
+    if (differ === 'vendor' && p.tool && p.tool === author.tool) return '同一家';
+    if (p.model && author.model && p.model.trim().toLowerCase() === author.model.trim().toLowerCase()) return '同一個模型';
+    return '';
+  }
   const rvShort = v => (/^[0-9a-f]{40}$/.test(v || '') ? v.slice(0, 7) : v || '');
   const rvVer = v => `<code class="rv-ver">${esc(rvShort(v))}</code>`;
   const rvTime = t => esc(shortTime(t));
@@ -8859,14 +8886,16 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const pill = { none: ['還沒送審', ''], waiting: [`等 ${waitNames} 審查`, 'wait'], changes: ['要改', 'bad'], passed: ['✅ 已審查', 'ok'], void: ['通過已作廢', 'warn'] }[st];
     const mine = myProjects().includes(d.project);
     const firstReq = [...(r.history || [])].reverse().findIndex(h => h.ev === 'request');
-    const hist = (r.history || []).map((h, i, a) => `<li>${rvTime(h.at)} · ${h.ev === 'request' && a.slice(i + 1).some(x => x.ev === 'request') ? '重新送審' : RV_EV[h.ev]} · ${esc(h.by?.name || '')} · ${rvVer(h.version)}</li>`).join('');
+    const histTm = h => (h.ev !== 'void' && h.by?.kind === 'ai' ? ` · ${esc(rvToolName(h.by))} · ${esc(h.by.model || '模型不明')}` : ''); // 當時的工具與模型
+    const hist = (r.history || []).map((h, i, a) => `<li>${rvTime(h.at)} · ${h.ev === 'request' && a.slice(i + 1).some(x => x.ev === 'request') ? '重新送審' : RV_EV[h.ev]} · ${esc(h.by?.name || '')}${histTm(h)} · ${rvVer(h.version)}</li>`).join('');
+    const ruleLine = rev => { const t = rvRuleLine(r.rule, r.requestedBy, rev); return t ? `<p class="muted small rv-rule">${esc(t)}</p>` : ''; };
     let body = '';
     if (st === 'none') body = `<p class="small">這個專案的${r.rule.cards === 'all' ? '卡' : '程式卡'}要 ${r.rule.need} 位審查通過，才能找人同意 commit。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">送審</button>' : ''}`;
     else if (st === 'waiting') body = `<p class="small">送審 ${rvVer(r.version)} · ${rvTime(r.requestedAt)} · ${esc(r.requestedBy?.name || '')}${r.branch ? ` · 分支 ${esc(r.branch)}` : ''}</p>
       <ul class="rv-revs">${r.reviewers.map(x => `<li>${rvWho(x)}${x.result === 'pass' ? ' · 通過' : ' · 還沒審'}</li>`).join('')}</ul>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
     else if (st === 'changes') body = `<p class="small">${rvWho(r.changes.by)} 審 ${rvVer(r.changes.version)} · ${rvTime(r.changes.at)}</p><p class="rv-comment bad">${esc(r.changes.comment)}</p>
       <p class="muted small">已退回作者。改好重新送審，預設還是由 ${esc(r.changes.by.name)} 審。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">重新送審</button>' : ''}`;
-    else if (st === 'passed') body = `<p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}
+    else if (st === 'passed') body = `<p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${ruleLine(r.passed.by)}${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}
       <p class="small">下一步：找人同意 commit。</p>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
     else body = `<p class="small">${esc(`${r.passed?.by?.name || ''} 通過的是 ${rvShort(r.passed?.version || r.version)}，現在的版本是 ${rvShort(r.voided.version)}。`)}</p><p class="muted small">程式改過，原本的通過就不算。請重新送審。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">重新送審</button>' : ''}`;
     return `<div class="rv-box rv-${st}" data-rv-card="${esc(d.cardId)}"><div class="rv-head"><b>審查</b> <span class="rv-pill ${pill[1]}">${esc(pill[0])}</span>${st !== 'none' && rvCodeTag(r) ? ` <span class="muted small rv-kind">${esc(rvCodeTag(r))}</span>` : ''}</div>${body}
@@ -8890,8 +8919,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <fieldset class="rv-code"><legend>程式卡</legend><label class="rv-check"><input type="checkbox" name="isCode" checked> 這是程式卡 <span class="muted small" data-rv-auto></span></label>
         <p class="muted small">平台看到 commit、分支、diff，或有人對這張卡請同意 commit，就當程式卡；判斷錯了作者可以改。</p></fieldset>
       <label>審查者（選填）<select name="reviewerId">
-        <option value="">${auto ? `平台自動挑：${esc(auto.name)}（${auto.kind === 'ai' ? `AI · ${esc(RV_TOOL[auto.tool] || '工具不明')}` : '人'}，手上 ${auto.load} 件）` : '平台自動挑'}</option>
-        ${pool.map(p => `<option value="${esc(p.participantId)}"${prev && prev.participantId === p.participantId && r.state === 'changes' ? ' selected' : ''}>${esc(p.name)}（${p.kind === 'ai' ? `AI · ${esc(RV_TOOL[p.tool] || '工具不明')}` : '人'}，手上 ${p.load} 件）</option>`).join('')}</select></label>
+        <option value="">${auto ? `平台自動挑：${esc(auto.name)}（${esc(rvTagText(auto))}，手上 ${auto.load} 件）` : '平台自動挑'}</option>
+        ${pool.map(p => `<option value="${esc(p.participantId)}"${prev && prev.participantId === p.participantId && r.state === 'changes' ? ' selected' : ''}>${esc(p.name)}（${esc(rvTagText(p))}，手上 ${p.load} 件）</option>`).join('')}</select></label>
       <p class="muted small">只能選符合專案規則的；不能選作者。</p>
       <p class="error" role="alert" hidden></p></form>`,
       { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="rv-form">送審</button>' });
@@ -8926,20 +8955,36 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
   }
   // 專案 ⚙ › 審查（leader、管理員能改；其他人只看）
-  const RV_SEG = {
+  const RV_SEG = { // 「不要／要」的英文是 Off／On（字典的「不要」是 No thanks），用 L() 在畫的時候決定
     cards: [['off', '不審'], ['code', '只有程式卡'], ['all', '全部的卡']],
     who: [['any', '人或 AI 都可以'], ['ai', '只有 AI'], ['human', '只有人'], ['roles', '指定角色'], ['members', '指定幾位']],
     need: [[1, '1 位'], [2, '2 位']],
     humanPass: [['separate', '分開按：通過後同一則直接出「同意 commit」'], ['combined', '通過就算同意 commit']],
-    needHuman: [[false, '不要'], [true, '要']], diffTool: [[false, '不要'], [true, '要']], notOwner: [[false, '不要'], [true, '要']], diffUpload: [[false, '不可以：只附版本、分支'], [true, '可以：送審時附 diff 檔']],
+    needHuman: [[false, () => L('不要', 'Off')], [true, () => L('要', 'On')]], notOwner: [[false, () => L('不要', 'Off')], [true, () => L('要', 'On')]], diffUpload: [[false, '不可以：只附版本、分支'], [true, '可以：送審時附 diff 檔']],
   };
+  // 審查者要多不一樣：單選卡片，每個附一句說明
+  const RV_DIFFER_OPTS = [['any', '不限（預設）', '不是作者就好。'], ['model', '不同模型', '寫和審用不同的模型，例如甲模型寫、乙模型審。同一家也可以，同一個模型的新舊版本也算不同。'], ['vendor', '不同家', '寫和審用不同家的工具，例如 Claude 寫、Codex 審。']];
   async function openReviewSettings(pj) {
     let set;
     try { set = await api(`/api/projects/${encodeURIComponent(pj)}/review-settings`); } catch (err) { return toast(err.message); }
     const draft = { ...set.settings };
-    const seg = (k, dis = false) => `<div class="seg-scope rv-seg" role="radiogroup" aria-label="${esc(k)}">${RV_SEG[k].map(([v, t]) => `<button type="button" role="radio" data-rv-set="${k}" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft[k] === v}"${dis || !set.canEdit ? ' disabled' : ''}>${esc(t)}</button>`).join('')}</div>`;
+    const seg = (k, dis = false) => `<div class="seg-scope rv-seg" role="radiogroup" aria-label="${esc(k)}">${RV_SEG[k].map(([v, t]) => `<button type="button" role="radio" data-rv-set="${k}" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft[k] === v}"${dis || !set.canEdit ? ' disabled' : ''}>${esc(typeof t === 'function' ? t() : t)}</button>`).join('')}</div>`;
     const row = (label, sub, ctl, hint = '') => `<div class="rv-row"><div class="rv-row-l"><b>${label}</b>${sub ? `<span class="muted small">${sub}</span>` : ''}</div><div class="rv-row-r">${ctl}${hint ? `<p class="muted small">${hint}</p>` : ''}</div></div>`;
     const members = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && memberIn(p, pj));
+    const differ = () => `<div class="rv-differ" role="radiogroup" aria-label="審查者要多不一樣">${RV_DIFFER_OPTS.map(([v, t, d]) => `<button type="button" role="radio" class="rv-opt" data-rv-set="differ" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft.differ === v}"${set.canEdit ? '' : ' disabled'}><b>${esc(t)}</b><span class="muted small">${esc(d)}</span></button>`).join('')}</div>`;
+    // 現在符合的審查者：不限時照舊列；不同模型／不同家時，選一位 AI 當作者，看誰可以審、誰被劃掉（原因：同一個模型／同一家）
+    let authorId = ((set.ais || []).find(a => a.model) || (set.ais || [])[0])?.participantId || ''; // 預設挑第一位回報過模型的 AI
+    const whoCan = () => {
+      const chips = `<div class="rv-chips">${set.eligible.map(p => `<span class="rv-chip">${rvWho(p)}</span>`).join('') || '<span class="muted small">沒有符合的人或 AI</span>'}</div>`;
+      const author = (set.ais || []).find(a => a.participantId === authorId);
+      if (draft.differ === 'any' || !author) return chips + (set.eligible.some(p => p.kind === 'ai' && (!p.tool || !p.model)) && draft.differ !== 'any' ? '<p class="muted small">「模型不明」的 AI 當作跟誰都不一樣。</p>' : '');
+      const list = set.eligible.filter(p => p.participantId !== author.participantId).map(p => {
+        const why = rvWhyNot(draft.differ, author, p), unk = p.kind === 'ai' && (!p.model || (draft.differ === 'vendor' && !p.tool));
+        return `<li class="${why ? 'rv-no' : 'rv-yes'}"><span aria-hidden="true">${why ? '⛔' : '✅'}</span> ${why ? `<s>${rvWho(p)}</s>` : rvWho(p)} <span class="muted small">${why ? esc(why) : p.kind !== 'ai' ? '人一律可以' : unk ? '模型不明，當作不一樣' : '可以'}</span></li>`;
+      }).join('');
+      return `<label class="rv-author">作者<select data-rv-author>${set.ais.map(a => `<option value="${esc(a.participantId)}"${a.participantId === authorId ? ' selected' : ''}>${esc(a.name)} · ${esc(rvTagText(a))}</option>`).join('')}</select></label>
+        <ul class="rv-cands">${list || '<li class="muted small">沒有符合的人或 AI</li>'}</ul>`;
+    };
     const draw = () => {
       const on = draft.cards !== 'off';
       body.querySelector('.rv-set').innerHTML = `
@@ -8950,16 +8995,17 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           ${row('送審可以上傳 diff', '只有 leader、管理員能改', seg('diffUpload'), `${set.diffUploadDefault ? '不可以' : '不可以（預設）'}：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。<br>${set.diffUploadDefault ? '可以（預設）' : '可以'}：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。<br>改這項會記在審查紀錄。`)}
           ${row('人審查通過時', '審查者剛好也是同意 commit 的人', seg('humanPass'), '預設分開按，人會多看一眼要 commit 的版本。')}
           ${row('至少要有一位是人', '「要幾位」選 2 才能設', seg('needHuman', draft.need !== 2))}
-          ${row('要不同家的 AI', '只管 AI；人一律算不同家', seg('diffTool'), '例：Claude 寫的，要 Codex、Antigravity 或人審。')}
+          ${row('審查者要多不一樣', '只管 AI；人一律算不一樣', differ(), '模型是 AI 在簽到和送審、審查時自己回報的；中途換了模型，下次送審或審查就會更新。不知道模型或工具的 AI，當作跟誰都不一樣。')}
           ${row('不能是作者的主人', '多人團隊用', seg('notOwner'), '開了以後，小明的 AI 寫的，要小華或小華的 AI 審。')}
           ${row('固定規則', '', '<p class="rv-lock">🔒 審查者不能是作者。在這張卡上提交過程式的都算作者，這條每個專案都一樣，不能關。</p>')}
-          ${row('現在符合的審查者', '', `<div class="rv-chips">${set.eligible.map(p => `<span class="rv-chip">${rvWho(p)}</span>`).join('') || '<span class="muted small">沒有符合的人或 AI</span>'}</div>${set.eligible.some(p => p.kind === 'ai' && !p.tool) ? '<p class="muted small">「工具不明」的 AI 當作跟誰都不同家。</p>' : ''}`)}` : ''}
+          ${row('現在符合的審查者', draft.differ !== 'any' && set.ais?.length ? '選一位 AI 當作者，看誰可以審' : '', whoCan())}` : ''}
         ${set.log?.length ? `<details class="rv-log"><summary>審查紀錄 · ${set.log.length}</summary><ul>${set.log.map(l => `<li>${rvTime(l.at)} · ${esc(l.byName || '')}${/^把/.test(l.text) ? ' ' : '：'}${esc(l.text)}</li>`).join('')}</ul></details>` : ''}`;
     };
     const body = openModal('審查：程式交出去前，先給不是作者的人或 AI 看過', '<div class="rv-set"></div><p class="error" role="alert" hidden></p>', {
       sub: `${esc(projName(pj))} · 只有 leader、管理員能改。AI 審一次約 3～10 萬 token，人審不花 token 但比較慢；建議只開「程式卡」。`,
       foot: set.canEdit ? '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-rv-save>儲存</button>' : '<button class="btn" type="button" data-close>關閉</button>' });
     draw();
+    body.modal.addEventListener('change', e => { const s = e.target.closest('[data-rv-author]'); if (s) { authorId = s.value; draw(); body.querySelector('[data-rv-author]')?.focus(); } });
     body.modal.addEventListener('click', async e => {
       const b = e.target.closest('[data-rv-set]');
       if (b && !b.disabled) { draft[b.dataset.rvSet] = JSON.parse(b.dataset.v); if (draft.need !== 2) draft.needHuman = false; return draw(); }
