@@ -153,7 +153,7 @@ try {
   await until(noTour, 5000, 'Esc 結束');
 
   // 5. 新手上路「帶我走」：第 1、2 項有，按了直接開始那章；結束回總覽、焦點回「帶我走」；寬不到 1000 不顯示；走完不算完成
-  const hub = async () => { await login(chen.token, '/'); await until(() => js("!!document.querySelector('.ob .ob-list')"), 15000, '新手上路'); await sleep(300); };
+  const hub = async () => { await login(chen.token, '/'); await until(() => js("!!document.querySelector('.ob-toggle')"), 15000, '新手上路入口'); await js("document.querySelector('.ob.collapsed .ob-toggle')?.click()"); await until(() => js("!!document.querySelector('.ob .ob-list')"), 15000, '新手上路'); await sleep(300); };
   await hub();
   const ob = await J("[...document.querySelectorAll('.ob-item')].map(li => [li.dataset.obStep, [...li.querySelectorAll('.btn, .ob-tour')].map(b => b.textContent), li.querySelector('.ob-tour')?.getClientRects().length > 0])");
   assert.deepEqual(ob, [['ai', ['到我的 AI ›', '帶我走'], true], ['walk', ['開始 ›', '帶我走'], true], ['todo', [], false]], '第 1、2 項加「帶我走」，原本的按鈕不變');

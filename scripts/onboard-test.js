@@ -31,7 +31,7 @@ try {
   const lin = await join('林志明', 'PO'), L = lin.participant.participantId;
   // 1. 一開始 3 項都還沒打勾；老成員也看得到
   let ob = (await me(lin.token)).onboard;
-  assert.deepEqual(ob, { show: true, collapsed: false, steps: { ai: false, walk: false, todo: false } }, '新成員：' + JSON.stringify(ob));
+  assert.deepEqual(ob, { show: true, collapsed: true, steps: { ai: false, walk: false, todo: false } }, '新成員：' + JSON.stringify(ob));
   const old = await join('老成員');
   await raw.run('UPDATE participants SET created_at = ? WHERE id = ?', '2025-01-01T00:00:00.000Z', old.participant.participantId);
   assert.equal((await me(old.token)).onboard.show, true, '老成員也看得到');

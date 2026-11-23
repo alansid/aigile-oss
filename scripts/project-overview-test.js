@@ -127,6 +127,8 @@ try {
         await ui.js('document.querySelector(".ob-toggle").click()');
         await waitFor('.ob.collapsed');
       }
+      assert.equal(await ui.js('getComputedStyle(document.querySelector(".project-grid")).gridTemplateColumns.split(" ").length'), width === 375 ? 1 : 3);
+      assert.equal(await ui.js('document.querySelectorAll(".hub-metrics strong").length'), 3);
       await take('projects', width);
       const starredBefore = await ui.js('document.querySelector(".project-star").getAttribute("aria-pressed")');
       await ui.js('document.querySelector(".project-star").click()');
@@ -154,7 +156,10 @@ try {
             await until(() => ui.js('Array.from(document.querySelectorAll(".hub-needs h3")).some(h=>h.textContent===' + JSON.stringify(label) + ')'), 8000, label);
         }
         if (tab === 'mine') assert.ok(await ui.js('document.querySelector(".project-page").textContent.includes("整理專案說明")'));
-        if (tab !== 'projects') await take(tab, width);
+        if (tab !== 'projects') {
+          assert.ok(await ui.js('!!document.querySelector(".hub-side")'));
+          await take(tab, width);
+        }
         assert.equal(
           await ui.js('document.querySelector(\'[data-hub-choice="tab"][aria-pressed="true"]\').dataset.value'),
           tab
@@ -201,6 +206,17 @@ try {
         await take('en-' + page, width);
       }
       await ui.js('localStorage.setItem("aigile-lang","zh")');
+    }
+    await ui.login(other.token, '/');
+    for (const width of [1280,375]) {
+      await ui.cdp('Emulation.setDeviceMetricsOverride', { width, height:800, deviceScaleFactor:1, mobile:false });
+      await waitFor('.hub-metrics');
+      await ui.js('document.querySelector(".hub-metrics [data-value=needs]").click()');
+      await waitFor('.hub-empty');
+      assert.equal(await ui.js('document.querySelector(".hub-metrics [data-value=needs] strong").textContent'), '0');
+      await take('empty', width);
+      await ui.js('document.querySelector(".hub-empty [data-value=mine]").click()');
+      await waitFor('.hub-metrics [data-value=mine][aria-pressed=true]');
     }
     console.log('project-overview: passed API and desktop/mobile browser checks');
   }

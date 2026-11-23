@@ -86,6 +86,12 @@ window.AIGILE_EN = {
       "異動紀錄": "change log"
   },
   dict: {
+    '去驗收': 'Verify',
+    '去決定': 'Decide',
+    '有新的決定、回覆或驗收時會出現在這裡。': 'New decisions, replies and reviews will appear here.',
+    '看我負責的卡': 'View my cards',
+    '個加星號': 'starred',
+    '都處理完了': 'All clear',
     "，最早一則": ", oldest",
     "，最近一次": ", last at",
     "手上的待辦（AI 自己回報，{0} 件）": "Its to-do list (reported by the AI, {0})",

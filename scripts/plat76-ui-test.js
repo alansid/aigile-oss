@@ -31,8 +31,8 @@ try {
       todo: n('.hub-side [data-hub-todo-open]'),
       main: n('.hub-side [data-proj="預設專案"]'),
       sec: n('.hub-side [data-proj="第二專案"]'),
-      head: document.querySelector('[data-hub-choice=tab][data-value=needs]')?.textContent.trim().split(' ').pop(),
-      rows: [...document.querySelectorAll('.hub-needs .ht-row')].map(r => ({ proj: r.dataset.hubProj, tag: r.querySelector('.ht-tag')?.textContent })),
+      head: document.querySelector('[data-hub-choice=tab][data-value=needs] strong')?.textContent.trim(),
+      rows: [...document.querySelectorAll('.hub-needs .ht-row')].map(r => ({ key: r.dataset.hubTodo, action: r.querySelector('.row-action')?.textContent })),
     };
   })())`));
   assert.equal(hub.todo, '2', '總覽側欄要你處理 2 件');
@@ -40,7 +40,7 @@ try {
   assert.equal(hub.sec, '1', '第二專案側欄 1 件');
   assert.equal(hub.head, '2', '總覽右側標題 2 件');
   assert.equal(hub.rows.length, 2, '總覽右側列出 2 張決策卡');
-  assert.ok(hub.rows.every(r => r.tag === '決策'), '兩項都是決策卡');
+  assert.ok(hub.rows.every(r => r.key?.startsWith('c:') && r.action === '去決定'), '兩項都是決策卡');
 
   await login(boss.token, '/p/main/inbox');
   await until(() => js(`!!document.querySelector('[data-dcard="${decMain.cardId}"]')`), 15000, '預設專案要你處理列出決策卡');

@@ -1664,7 +1664,7 @@ ${ending}`;
     if (me.kind !== 'human') return { show: false };
     const all = await rawPrefs(me), o = all.onboard || {};
     if (o.dismissed) return { show: false, collapsed: !!o.collapsed };
-    if (o.doneAt) return { show: false, collapsed: !!o.collapsed, steps: { ai: true, walk: true, todo: true } };
+    if (o.doneAt) return { show: false, collapsed: o.collapsed ?? true, steps: { ai: true, walk: true, todo: true } };
     const steps = {
       ai: !!(await db.get("SELECT 1 AS x FROM participants WHERE owner_id = ? AND kind = 'ai' AND last_seen_at > 0 LIMIT 1", me.id)), // 名下 AI 簽到過
       walk: !!o.walkedAt, // 說明頁第 2 章（跟著走一遍）讀到最後時記
@@ -1673,7 +1673,7 @@ ${ending}`;
     };
     const done = Object.values(steps).every(Boolean);
     if (done) await setJson('prefs:' + me.id, { ...all, onboard: { ...o, doneAt: nowIso() } }); // 記下來，之後不用再查
-    return { show: !done, collapsed: !!o.collapsed, steps };
+    return { show: !done, collapsed: o.collapsed ?? true, steps };
   }
   async function getJson(key) {
     const r = await db.get('SELECT value FROM app_settings WHERE key = ?', key).catch(() => null);

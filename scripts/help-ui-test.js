@@ -33,11 +33,15 @@ try {
   await size(1280, 900); await setLang('zh');
   await hub(wang.token);
   // 1. 新手上路：最上面、3 項、0 件寫法、底下一行（1280／375）
-  const card = () => J(`(() => { const o = document.querySelector('.ob'); if (!o) return null; const r = o.getBoundingClientRect(), g = document.querySelector('.project-page nav.project-filters').getBoundingClientRect();
+  const card = () => J(`(() => { const o = document.querySelector('.ob'); if (!o) return null; const r = o.getBoundingClientRect(), g = document.querySelector('.project-page nav.hub-metrics').getBoundingClientRect();
     return { prog: o.querySelector('.ob-prog').textContent, foot: o.querySelector('.ob-foot')?.innerText.trim() || '', collapsed: o.classList.contains('collapsed'), above: r.bottom <= g.top, hscroll: document.documentElement.scrollWidth > innerWidth + 1,
       items: [...o.querySelectorAll('.ob-item')].map(li => [li.dataset.obStep, li.classList.contains('done'), li.querySelector('.ob-txt .small').textContent, li.querySelector('.btn')?.textContent || '', li.querySelector('a.btn')?.getAttribute('href') || '']) }; })()`);
   for (const w of [1280, 375]) {
     await size(w, w < 600 ? 812 : 900); await hub(wang.token);
+    if (await js("!!document.querySelector('.ob.collapsed')")) {
+      await go('.ob-toggle');
+      await until(() => js("!!document.querySelector('.ob-list')"), 5000, '展開新手上路');
+    }
     const c = await card();
     assert.ok(c && c.above && !c.collapsed && !c.hscroll, `${w}：總覽最上面、展開、不橫向捲動：` + JSON.stringify(c));
     assert.equal(c.prog, '0/3 完成');
@@ -166,6 +170,8 @@ try {
   await call(lin.token, `/api/participants/${S}/projects`, 'PUT', { projects: ['預設專案'] });
   await size(1280, 900); await setLang('en');
   await hub(sam.token);
+  await go('.ob-toggle');
+  await until(() => js("!!document.querySelector('.ob-list')"), 5000, 'Expand onboarding');
   const e = await card();
   assert.equal(e.prog, '0/3 done', '英文進度');
   assert.deepEqual(e.items.map(x => [x[0], x[3]]), [['ai', 'Go to My AIs ›'], ['walk', 'Start ›'], ['todo', '']], '英文按鈕');

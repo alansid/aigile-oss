@@ -3890,19 +3890,21 @@
       [pageText('等驗收', 'Awaiting acceptance'), cards.filter((c) => c.status === '已完成' && !c.verified).length],
       [pageText('卡住', 'Stuck'), cards.filter((c) => c.status === '受阻').length]
     ];
+    const oldest = cards.filter(c => c.status === '已完成' && !c.verified).map(c => c.done?.at).filter(Boolean).sort()[0];
+    const notes = ['', '', oldest ? pageText('最早','Oldest') + ' ' + agoText(oldest) : '', cards.filter(c => c.status === '受阻').map(c => ckeyOf(c)).join(' · ')];
     const values = dates.map(
       (d) => completed.filter((c) => new Date(c.done.at).toDateString() === d.toDateString()).length
     );
     return `<section class="project-page"><h2>${esc(projName(pj))} · ${pageText('概觀', 'Overview')}</h2><p>${pageText('最近 7 天', 'Last 7 days')} · ${dates[0].toLocaleDateString()} – ${dates[6].toLocaleDateString()}</p>
-      <div class="overview-stats">${counts.map(([label, n]) => `<div>${label}<strong>${n}</strong></div>`).join('')}</div>
-      <h3>${pageText('每天完成幾張', 'Cards done per day')}</h3><div class="overview-chart">${dates.map((d, i) => `<div><b>${values[i]}</b><i style="height:${Math.max(2, (72 * values[i]) / Math.max(1, ...values))}px"></i><small>${d.getMonth() + 1}/${d.getDate()}</small></div>`).join('')}</div>
-      <h3>${pageText('團隊', 'Team')}</h3><div class="project-summary">${team.totals}<button data-nav="team" class="link">${pageText('看團隊', 'Open team')} ›</button></div>${team.alerts[0] || ''}
-      <h3>${pageText('最近完成', 'Recently done')}</h3>${
+      <div class="overview-stats">${counts.map(([label, n], i) => `<div>${label}<strong>${n}</strong><small>${esc(notes[i])}</small></div>`).join('')}</div>
+      <div class="overview-columns"><section class="hub-panel"><h3>${pageText('每天完成幾張', 'Cards done per day')}</h3><div class="overview-chart">${dates.map((d, i) => `<div><b>${values[i]}</b><i class="${values[i] ? '' : 'zero'}" style="height:${Math.max(2, (72 * values[i]) / Math.max(1, ...values))}px"></i><small>${d.getMonth() + 1}/${d.getDate()}</small></div>`).join('')}</div>
+      </section><section class="hub-panel"><h3>${pageText('團隊', 'Team')}</h3><div class="project-summary">${team.totals}<button data-nav="team" class="link">${pageText('看團隊', 'Open team')} ›</button></div>${team.alerts[0] || ''}
+      </section></div><section class="hub-panel"><h3>${pageText('最近完成', 'Recently done')}</h3>${
         completed
           .slice(0, 5)
           .map((c) => `<p>${projectCardLink(c)} · ${esc(c.done.by?.name || '')} · ${agoText(c.done.at)}</p>`)
           .join('') || pageText('最近 7 天沒有完成的卡。', 'No cards completed in the last 7 days.')
-      }</section>`;
+      }</section></section>`;
   }
   async function recordProjectVisit(pj) {
     const project = state.projectList.find((p) => p.id === pj);
@@ -3915,6 +3917,9 @@
     } catch {
       if (project.visitedAt === visitedAt) project.visitedAt = previous;
     }
+  }
+  function hubPanelHeader(title, choices, action = '') {
+    return `<header class="hub-panel-head"><h2>${title}</h2><div class="hub-segments">${choices}</div>${action}</header>`;
   }
   function hubProjects(counts) {
     if (!myProjects().length) return hubJoinHtml();
@@ -3938,22 +3943,23 @@
         activity = lastMsgOf(p.id);
       return `<article class="project-tile"><button type="button" class="project-star" data-project-star="${esc(p.id)}" aria-label="${pageText('加星號', 'Star')} ${esc(p.name)}" aria-pressed="${!!p.starred}">${p.starred ? '★' : '☆'}</button>
       <button type="button" class="project-entry" data-proj="${esc(p.id)}">${projIcon(p.id, 32)}<span><b>${esc(p.name)}</b><small>${esc(p.description || '')}</small></span>
-      <span class="project-people">${people
+      <span class="project-footer"><span class="project-people">${people
         .slice(0, 3)
         .map((m) => avatar(m))
         .join(
           ''
         )}${people.length > 3 ? '+' + (people.length - 3) : ''}</span><small>${pageText('最後動態', 'Last activity')} ${activity ? agoText(activity.createdAt) : '—'}</small>
-      ${counts[p.id] ? `<span>${pageText('要你處理', 'Needs you')} ${counts[p.id]}</span>` : ''}</button></article>`;
+      ${counts[p.id] ? `<span class="hub-pill">${pageText('要你處理', 'Needs you')} ${counts[p.id]}</span>` : ''}</span></button></article>`;
     };
-    const grid = (label, list, total = list.length) =>
-      `<h3>${label} (${total})</h3><div class="project-grid">${list.map(tile).join('')}</div>`;
-    return `<div class="project-filters"><input type="search" id="hub-search" value="${esc(hubView.search)}" placeholder="${pageText('篩選專案', 'Filter projects')}">
-      ${hubChoice('filter', 'all', pageText('全部', 'All'))}${hubChoice('filter', 'star', pageText('★ 加星號', '★ Starred'))}${hubChoice('filter', 'lead', pageText('我是 leader', 'I lead'))}
-      ${isAdmin() ? '<button class="btn small" data-hub-newproj>＋ ' + pageText('新增專案', 'New project') + '</button>' : ''}</div>
-      ${ordered.length <= 6 ? grid(pageText('專案', 'Projects'), ordered) : grid(pageText('加星號和最近去過', 'Starred and recent'), recent) + grid(pageText('其他專案', 'Other projects'), rest.slice(0, hubView.showAll ? rest.length : 6), rest.length)}
+    const joinTile = `<div class="join-tile">${isAdmin() ? `<button class="link" data-hub-newproj>＋ ${pageText('新增專案','New project')}</button> · ` : '＋ '}<button class="link" data-join-open>${pageText('申請加入專案','Request to join a project')}</button></div>`;
+    const grid = (label, list, total = list.length, last = true) =>
+      `${label ? `<h3>${label} (${total})</h3>` : ''}<div class="project-grid">${list.map(tile).join('')}${last ? joinTile : ''}</div>`;
+    const filters = hubChoice('filter','all',pageText('全部','All')) + hubChoice('filter','star',pageText('★ 加星號','★ Starred')) + hubChoice('filter','lead',pageText('我是 leader','I lead'));
+    const action = isAdmin() ? `<button class="btn small" data-hub-newproj>＋ ${pageText('新增專案','New project')}</button>` : `<button class="btn small" data-join-open>${pageText('申請加入專案','Request to join a project')}</button>`;
+    return `${hubPanelHeader(pageText('專案','Projects'), filters, action)}<input type="search" id="hub-search" value="${esc(hubView.search)}" placeholder="${pageText('篩選專案', 'Filter projects')}">
+      ${ordered.length <= 6 ? grid('', ordered) : grid(pageText('加星號和最近去過', 'Starred and recent'), recent, recent.length, false) + grid(pageText('其他專案', 'Other projects'), rest.slice(0, hubView.showAll ? rest.length : 6), rest.length)}
       ${rest.length > 6 && !hubView.showAll ? '<button class="link" data-project-more>' + pageText('再顯示', 'Show more') + ' ' + (rest.length - 6) + ' ▾</button>' : ''}
-      <p><button class="btn" data-proj="cross">${pageText('跨專案頻道 · 規則公告、跨團隊協調', 'Cross-project channel · Announcements and coordination')} ›</button></p><button class="link" data-join-open>＋ ${pageText('申請加入專案', 'Request to join a project')}</button>`;
+      <p><button class="btn" data-proj="cross">${pageText('跨專案頻道 · 規則公告、跨團隊協調', 'Cross-project channel · Announcements and coordination')} ›</button></p>`;
   }
   function hubNeeds() {
     const stamp = (x) => {
@@ -3985,20 +3991,23 @@
       hubView.group === 'project'
         ? [...group.keys()]
         : ['要你決定', '要你回覆', '等你驗收', '其他'].filter((k) => group.has(k));
-    const row = (x) =>
-      Array.isArray(x)
-        ? `<button class="ht-row" data-accept-project="${esc(x[0].p || 'cross')}">${esc(projName(x[0].p))} · ${x.length} ${pageText('張做完等你驗收', 'done cards to accept')} · ${pageText('最早', 'Oldest')} ${agoText(x.map(stamp).filter(Boolean).sort()[0])} ›</button>`
-        : `<button class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(x.p || 'cross')}"><span class="ht-tag">${esc(x.kind)}</span><span class="ht-title">${esc(x.title)}</span> · ${esc(x.p ? projName(x.p) : '—')} · ${stamp(x) ? agoText(stamp(x)) : ''} ›</button>`;
+    const row = x=> {
+      const batch = Array.isArray(x), item = batch ? x[0] : x, pj = item.p || 'cross';
+      const decide = ['需確認','決策'].includes(item.kind), card = work.cards.get(item.key.slice(2));
+      const action = batch ? pageText('去驗收','Verify') : decide ? pageText('去決定','Decide') : item.kind==='回覆' ? pageText('回覆','Reply') : pageText('查看','Open');
+      const at = batch ? x.map(stamp).filter(Boolean).sort()[0] : stamp(item);
+      return `<button class="ht-row hub-row" ${batch ? `data-accept-project="${esc(pj)}"` : `data-hub-todo="${esc(item.key)}" data-hub-proj="${esc(pj)}"`}><span class="row-title">${card && !batch ? `<code>${esc(ckeyOf(card))}</code> ` : ''}${batch ? x.length+' '+pageText('張做完等你驗收','done cards to accept') : esc(item.title)}</span><span class="hub-tag">${esc(projName(pj))}</span><small>${batch?pageText('最早','Oldest')+' ':''}${at?agoText(at):''}</small><b class="row-action ${decide?'primary':''}">${action}</b></button>`;
+    };
     return (
-      '<div class="project-filters">' + hubChoice('group', 'type', pageText('照類別', 'By type')) +
-      hubChoice('group', 'project', pageText('照專案', 'By project')) + '</div>' +
+      hubPanelHeader(pageText('要你處理','Needs you'), hubChoice('group', 'type', pageText('照類別', 'By type')) +
+      hubChoice('group', 'project', pageText('照專案', 'By project'))) +
       labels
         .map(
           (k) =>
-            `<h3>${esc(hubView.group === 'type' ? pageText(k, { 要你決定: 'Decide', 要你回覆: 'Reply', 等你驗收: 'Accept', 其他: 'Other' }[k]) : k)}</h3>${group.get(k).map(row).join('')}`
+            `<div class="group-title ${hubView.group === 'type' ? ({要你決定:'decide',要你回覆:'reply',等你驗收:'verify'}[k] || '') : ''}"><h3>${esc(hubView.group === 'type' ? pageText(k, { 要你決定: 'Decide', 要你回覆: 'Reply', 等你驗收: 'Accept', 其他: 'Other' }[k]) : k)}</h3><small>${group.get(k).flat().length}</small></div>${group.get(k).map(row).join('')}`
         )
         .join('') +
-      (!labels.length ? `<p>${pageText('目前沒有要你處理的事。', 'Nothing needs you right now.')}</p>` : '')
+      (!labels.length ? `<div class="hub-empty"><strong>✓</strong><h3>${pageText('目前沒有要你處理的事。','Nothing needs you right now.')}</h3><p>${pageText('有新的決定、回覆或驗收時會出現在這裡。','New decisions, replies and reviews will appear here.')}</p>${hubChoice('tab','mine',pageText('看我負責的卡','View my cards'))}</div>` : '')
     );
   }
   function hubMyCards(mine) {
@@ -4016,11 +4025,10 @@
           ['進行中', list.filter((c) => c.status === '進行中')],
           ['還沒開始', list.filter((c) => ['待整理', '待處理'].includes(c.status))]
         ];
-    const row = (c) =>
-      `<p>${projectCardLink(c)} · ${esc(projName(c.project))} · ${esc(c.status)} · ${agoText(c.updatedAt)}</p>`;
+    const row = c=> `<button class="hub-row" data-project-card="${esc(c.cardId)}"><span class="row-title"><span class="hub-status" data-status="${esc(c.status)}">${esc(pageText(c.status, {'受阻':'Blocked','進行中':'In progress','待確認':'In review','已完成':'Done','待整理':'Backlog','待處理':'To do','取消':'Cancelled','已取消':'Cancelled'}[c.status] || c.status))}</span> <code>${esc(ckeyOf(c))}</code> ${esc(c.title)}</span><span class="hub-tag">${esc(projName(c.project))}</span><small>${agoText(c.updatedAt)}</small> ›</button>`;
     return (
-      hubChoice('cards', 'open', pageText('還沒完成', 'Open')) +
-      hubChoice('cards', 'done', pageText('最近完成', 'Recently done')) +
+      hubPanelHeader(pageText('我負責的卡','My cards'), hubChoice('cards', 'open', pageText('還沒完成', 'Open')) +
+      hubChoice('cards', 'done', pageText('最近完成', 'Recently done'))) +
       groups
         .filter(([, l]) => l.length)
         .map(
@@ -4032,10 +4040,28 @@
     );
   }
   function hubHtml() {
-    const counts=todoByView(), mine=[...work.cards.values()].filter(c=>c.owner?.participantId===meId()),tab=hubView.tab;
-    return `<div class="project-page"><header class="work-title"><h2>${esc(greeting())}，<span data-nt>${esc(shownName(state.me?.name || ''))}</span></h2> ${new Date().toLocaleDateString()}</header>${onboardHtml()}${hubNewAiHtml()}${nextStepsHtml()}
-      <nav class="project-filters">${hubChoice('tab','projects',pageText('專案','Projects')+' '+myProjects().length)}${hubChoice('tab','needs',pageText('要你處理','Needs you')+' '+(counts.hub||0))}${hubChoice('tab','mine',pageText('我負責的卡','My cards')+' '+mine.length)}</nav>
-      ${tab==='projects'?hubProjects(counts):tab==='needs'?'<section class="hub-needs">'+hubNeeds()+'</section>':hubMyCards(mine)}</div>`;
+    const counts = todoByView(), projects = state.projectList.filter(p => myProjects().includes(p.id));
+    const mine = [...work.cards.values()].filter(c => c.owner?.participantId === meId());
+    const items = hubTodoItems(), tab = hubView.tab;
+    const summary = pairs => pairs.filter(([n]) => n).map(([n, label]) => `${n} ${label}`).join(' · ');
+    const needs = summary([
+      [items.filter(x => ['決策','需確認'].includes(x.kind)).length, pageText('要你決定','decide')],
+      [items.filter(x => x.kind === '回覆').length, pageText('要你回覆','reply')],
+      [items.filter(x => x.kind === '驗收').length, pageText('等你驗收','verify')],
+      [items.filter(x => !['決策','需確認','回覆','驗收'].includes(x.kind)).length, pageText('其他','other')]
+    ]);
+    const metrics = [
+      ['projects', projects.length, pageText('專案','Projects'), `${projects.filter(p=>p.starred).length} ${pageText('個加星號','starred')}`],
+      ['needs', counts.hub || 0, pageText('要你處理','Needs you'), items.length ? needs : pageText('都處理完了','All clear')],
+      ['mine', mine.length, pageText('我負責的卡','My cards'), summary([
+        [mine.filter(c=>c.status==='受阻').length,pageText('卡住','blocked')],
+        [mine.filter(c=>c.status==='進行中').length,pageText('進行中','in progress')]
+      ])]
+    ];
+    const nav = metrics.map(([value,n,label,detail]) => `<button type="button" data-hub-choice="tab" data-value="${value}" aria-pressed="${value === tab}"><strong class="${value === 'needs' && n ? 'needs-count' : ''}">${n}</strong><b>${label}</b><small>${detail}</small></button>`).join('');
+    const aside = `<aside class="hub-panel hub-side"><header><b>${pageText('我的專案','My projects')}</b><button class="link" data-hub-choice="tab" data-value="projects">${pageText('全部','All')} ›</button></header>${projects.sort((a,b)=>Number(!!b.starred)-Number(!!a.starred)||a.name.localeCompare(b.name)).map(p=>`<button class="hub-side-row" data-proj="${esc(p.id)}">${projIcon(p.id,24)}<span>${p.starred?'★ ':''}${esc(p.name)}</span>${counts[p.id]?`<b class="hub-pill">${counts[p.id]}</b>`:''}</button>`).join('')}</aside>`;
+    return `<div class="project-page hub-v2"><header class="work-title"><h2>${esc(greeting())}，<span data-nt>${esc(shownName(state.me?.name || ''))}</span></h2><small>${new Date().toLocaleDateString()}</small></header>${onboardHtml()}${hubNewAiHtml()}${nextStepsHtml()}
+      <nav class="hub-metrics">${nav}</nav><div class="${tab==='projects'?'':'hub-columns'}"><section class="hub-panel ${tab==='needs'?'hub-needs':''}">${tab==='projects'?hubProjects(counts):tab==='needs'?hubNeeds():hubMyCards(mine)}</section>${tab==='projects'?'':aside}</div></div>`;
   }
   document.addEventListener('click',async e=>{
     const b=e.target.closest('[data-hub-choice],[data-project-star],[data-project-more],[data-accept-project]');
