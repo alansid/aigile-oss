@@ -80,10 +80,11 @@ try {
           summary: summary.textContent, text: body.innerText, width: document.documentElement.scrollWidth };
       })()`);
       assert.ok(details.opened && details.closedBeforeClick);
-      assert.doesNotMatch(details.summary, /還沒看的訊息|Token|次醒來/);
-      assert.match(details.text, new RegExp('還沒看的訊息\\s*' + unread + '\\b'));
+      assert.doesNotMatch(details.summary, /還沒看的訊息|Token|今天醒來/);
+      if (unread) assert.ok(details.text.includes('還沒看的訊息：' + unread + ' 則，最早一則 '));
+      else assert.match(details.text, /還沒看的訊息：沒有/);
       assert.match(details.text, /Token/);
-      if (idx === 1) assert.match(details.text, /6\s*次醒來/);
+      if (idx === 1) assert.match(details.text, /今天醒來 6 次，最近一次 \d{2}:\d{2}/);
       assert.ok(details.width <= width + 1, '展開詳情後不橫向捲動');
     }
   }

@@ -38,16 +38,18 @@ try {
   const takeSeq = await seqOf(take.messageId);
   assert.ok(takeSeq > 1, '拿得到接單那則的序號');
 
-  const { js, login, cdp } = await kit.browser(1280, 1000);
+  const { js, goto, cdp } = await kit.browser(1280, 1000);
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const open = async (view, { w = 1280, seen = takeSeq - 1, theme = 'light', lang = 'zh' } = {}) => {
     await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: w < 700 ? 1100 : 1000, deviceScaleFactor: 1, mobile: w < 700 });
     await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
-    await login(lin.token, '/p/main/messages');
-    await until(() => js("document.querySelectorAll('#messages .msg, #messages .flow-line').length > 0"), 20000, '第一次載入'); // 等第一次載完再設「上次看到」，不然它會蓋掉
-    await js(`localStorage.setItem('aigile-lang', '${lang}'); localStorage.setItem('aigile-switch-view', '${view}'); ${seen ? `localStorage.setItem('aigile-seen:${PJ}', '${seen}')` : `localStorage.removeItem('aigile-seen:${PJ}')`}; window.__staleReload = 1; location.reload(); true`);
-    await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
-    await sleep(400);
+    // 在同源的靜態 JSON 頁設定上次讀到的位置，避免上一個訊息頁捲動時又把它推到最新。
+    await goto('/api/health');
+    await js(`localStorage.setItem('aigile-switch-token', ${JSON.stringify(lin.token)});
+      localStorage.setItem('aigile-lang', '${lang}');
+      localStorage.setItem('aigile-switch-view', '${view}');
+      ${seen ? `localStorage.setItem('aigile-seen:${PJ}', '${seen}')` : `localStorage.removeItem('aigile-seen:${PJ}')`}; true`);
+    await goto('/p/main/messages');
     await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg, #messages .flow-line').length > 3"), 20000, `訊息（${view}、${lang}）`);
     await sleep(300);
   };
