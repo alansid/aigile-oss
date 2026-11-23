@@ -649,7 +649,7 @@ window.AIGILE_EN = {
     "上傳圖片": "Upload image",
     "上線": "Released",
     "上線版本：": "Released version:",
-    "下一步": "Next step",
+    "下一步": "Next",
     "下一步：": "Next step: ",
     "下一步：{0}": "Next step: {0}",
     "下架": "Unpublish",

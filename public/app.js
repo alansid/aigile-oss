@@ -4704,7 +4704,7 @@
     const note = d.type === NOTE, wait = waitText(d);
     const meta = [['專案', esc(projName(d.project) || '')], ...(note ? [['負責', esc(d.owner?.name || '未指派')]] : []), // 一般卡的負責人已經在狀態那行
       ...(d.claim ? [['正在做', `${esc(d.claim.by?.name || '')} · ${esc(shortTime(d.claim.at))} 起`]] : []), ['阻塞', esc(wait || '沒有')]];
-    const fields = [[note ? '內容' : '背景／緣由', d.reason], ['下一步', d.next], ['完成條件', d.criteria]];
+    const fields = [[note ? '內容' : '背景／緣由', d.reason], [L('下一步', 'Next step'), d.next], ['完成條件', d.criteria]];
     const filled = fields.filter(([, v]) => v), blank = fields.filter(([, v]) => !v).map(([k]) => k);
     return `<div class="dmeta">${meta.map(([k, v]) => `<span class="dmeta-i"><span class="muted">${k}</span> <span>${v}</span></span>`).join('')}</div>
           ${filled.length ? `<dl class="dstack">${filled.map(([k, v]) => `<dt>${k}</dt><dd data-nt>${esc(v)}</dd>`).join('')}</dl>` : ''}
