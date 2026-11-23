@@ -178,7 +178,7 @@ The knowledge base holds only the docs you put in it. People use "Docs › 📚 
 
 ## Run locally (without Docker)
 
-Requires Node.js 22.13+ (24 recommended); no `npm install` (only needed for Postgres, see "Using Postgres"):
+Requires Node.js 22.13+ (24 recommended); no `npm install` for local startup. To extract PDF text or use Postgres, run `npm install`:
 
 ```bash
 npm start            # http://localhost:3000, data in ./data

@@ -123,7 +123,7 @@ try {
   r = await req(chen.token, `/api/projects/${pj}/docs/${ids['員工手冊.docx']}/text?from=1`);
   assert.deepEqual([r.body.items.map(x => x.idx), r.body.nextFrom], [[1], undefined], '讀到最後沒有 nextFrom');
   r = await req(chen.token, `/api/projects/${pj}/docs/${ids['流程圖.pdf']}/text`);
-  assert.ok(r.body.original && r.body.downloadUrl && /只有原檔/.test(r.body.note) && !r.body.items.length, '只有原檔：回原因與下載網址');
+  assert.ok(r.body.original && r.body.downloadUrl && r.body.note === '這份 PDF 抽不到字，要讓 AI 整理才搜得到' && !r.body.items.length, '只有原檔：回原因與下載網址');
   assert.equal((await req(bank.token, `/api/projects/${pj}/docs/${ids['員工手冊.docx']}/text`)).status, 404, '別專案讀不到');
   assert.equal((await req(chen.token, `/api/projects/${bankPj}/docs/${ids['員工手冊.docx']}/text`)).status, 404, '換專案路徑也讀不到');
 
@@ -183,7 +183,7 @@ try {
   t = await tool(ai.token, 'aigile_doc_read', { project: '預設專案', docId: t.items[0].docId, limit: 1 });
   assert.ok(t.items[0].content && t.nextFrom === 1 && t.untrusted_content.includes('content'), 'MCP 分段讀標 untrusted_content');
   t = await tool(ai.token, 'aigile_doc_read', { project: '預設專案', docId: ids['流程圖.pdf'] });
-  assert.ok(t.original && t.downloadUrl, 'MCP 讀只有原檔：回下載網址（本機轉接腳本會下載）');
+  assert.ok(t.original && t.downloadUrl && t.note === '這份 PDF 抽不到字，要讓 AI 整理才搜得到', 'MCP 讀只有原檔：回下載網址（本機轉接腳本會下載）');
   t = await tool(ai.token, 'aigile_doc_read', { project: '預設專案', docId: 'msg_x' });
   assert.ok(t.isError && /doc_/.test(t.text), 'docId 格式錯當場擋');
 

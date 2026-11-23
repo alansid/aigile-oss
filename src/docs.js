@@ -65,8 +65,9 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
   // kb_status：pending 抽字中／indexed 已抽字／original 只有原檔（PDF、圖片）／secret 含疑似密鑰未建索引／failed 抽字失敗／full 全站字數已滿；空＝舊文件還沒建
   // 抽字中超過 10 分鐘還沒結束（背景工作被停掉）就當失敗，可以補建索引重試
   const KB_STUCK_MS = 10 * 60_000;
-  const kbState = d => (!d.in_kb ? 'off' : d.kb_status === 'pending' && Date.now() - Date.parse(d.kb_at || 0) > KB_STUCK_MS ? 'failed' : d.kb_status || 'none');
-  const kbView = d => ({ inKb: !!d.in_kb, status: kbState(d), chunks: d.kb_chunks || 0, chars: d.kb_chars || 0, truncated: !!d.kb_truncated });
+  const pdfPackageNote = '這台伺服器沒有裝 PDF 抽字套件，請執行 npm install；或讓 AI 整理';
+  const kbState = d => (!d.in_kb ? 'off' : d.kb_status === 'pending' && Date.now() - Date.parse(d.kb_at || 0) > KB_STUCK_MS ? 'failed' : d.kb_status === 'pdf_package_missing' ? 'original' : d.kb_status || 'none');
+  const kbView = d => ({ inKb: !!d.in_kb, status: kbState(d), ...(d.in_kb && d.kb_status === 'pdf_package_missing' ? { note: pdfPackageNote } : {}), chunks: d.kb_chunks || 0, chars: d.kb_chars || 0, truncated: !!d.kb_truncated });
   const setKb = (id, status, n = 0, chars = 0, truncated = 0) => db.run('UPDATE docs SET kb_status = ?, kb_chunks = ?, kb_chars = ?, kb_truncated = ?, kb_at = ? WHERE id = ?', status, n, chars, truncated ? 1 : 0, nowIso(), id);
   // 抽字並寫入 kb_chunks（舊的先刪）。一次 INSERT 多段（json_each），D1 每次請求的查詢數有上限
   // by：誰放進知識庫（leader／管理員放的才自動排整理卡）
@@ -75,6 +76,11 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
       await db.run('DELETE FROM kb_chunks WHERE doc_id = ?', d.id);
       if (!KB_TEXT_EXTS.includes(d.ext)) return await setKb(d.id, 'original');
       const r = await extractChunks(d.ext, bytes, KB_MAX_CHARS_PER_DOC);
+      if (!r || r.originalReason) {
+        await setKb(d.id, r?.originalReason || 'original');
+        await kbHooks.afterIndex?.(d.id, by);
+        return;
+      }
       const used = (await db.get('SELECT COALESCE(SUM(kb_chars), 0) AS s FROM docs WHERE deleted_at IS NULL AND in_kb = 1 AND id != ?', d.id)).s;
       if (used + r.chars > kbMaxTotalChars) return await setKb(d.id, 'full');
       if (await findSecret(r.chunks.map(c => `${c.section}\n${c.content}`).join('\n'))) return await setKb(d.id, 'secret');
@@ -94,7 +100,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
   }
   async function startIndex(d, bytes, by) {
     await setKb(d.id, KB_TEXT_EXTS.includes(d.ext) ? 'pending' : 'original');
-    background(KB_TEXT_EXTS.includes(d.ext) ? indexDoc(d, bytes, by) : kbHooks.afterIndex?.(d.id, by)); // PDF、圖片不抽字，也可以整理（AI 讀原檔）
+    background(KB_TEXT_EXTS.includes(d.ext) ? indexDoc(d, bytes, by) : kbHooks.afterIndex?.(d.id, by)); // 例如圖片，也可以整理（AI 讀原檔）
   }
   const kbOnly = async (ctx, me, pj, what) => { if (!(await kbManager(ctx, me, pj))) throw new ApiError(403, 'FORBIDDEN', `只有專案 leader 或群組管理員能${what}`); };
   const folderView = f => ({ folderId: f.id, name: f.name, parentId: f.parent_id || null, createdAt: f.created_at, createdBy: f.created_by });
@@ -305,7 +311,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
 
   // 分段讀抽出的文字：from（段落序號，預設 0）、limit（預設 5，最多 20）。沒抽字的回原因（只有原檔＝給下載網址，AI 自己讀原檔）
   const KB_NOTE = {
-    pending: '還在抽字，請稍後再讀', original: '這份只有原檔（PDF、圖片不抽字）：請下載原檔用你自己的讀檔工具打開；讀不了就照實寫「無法讀取」',
+    pending: '還在抽字，請稍後再讀', original: '這份只有原檔（例如圖片）：請下載原檔用你自己的讀檔工具打開；讀不了就照實寫「無法讀取」',
     secret: '含疑似密鑰，未建立索引：不提供文字', failed: '抽字失敗：請專案 leader／管理員按「補建索引」重試', full: '全站知識庫字數已滿，這份沒有抽字',
     none: '舊文件還沒建索引：請專案 leader／管理員按「補建索引」',
     off: '這份是一般專案文件，不在知識庫、沒有抽字：本機轉接腳本會把原檔下載下來（localPath），請用你自己的讀檔工具讀全文；讀不了就照實寫「無法讀取」',
@@ -315,7 +321,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     memberOf(me, pj);
     const d = await docOf(pj, params.docId);
     const st = kbState(d), base = { docId: d.id, name: d.name, ext: d.ext, status: st, totalChunks: d.kb_chunks || 0 };
-    if (st !== 'indexed') return { ...base, items: [], note: KB_NOTE[st] || KB_NOTE.none, ...(['original', 'off'].includes(st) ? { original: true, downloadUrl: docView(d, new Map()).downloadUrl } : {}) };
+    if (st !== 'indexed') return { ...base, items: [], note: st === 'original' && d.kb_status === 'pdf_package_missing' ? pdfPackageNote : st === 'original' && d.ext === 'pdf' ? '這份 PDF 抽不到字，要讓 AI 整理才搜得到' : KB_NOTE[st] || KB_NOTE.none, ...(['original', 'off'].includes(st) ? { original: true, downloadUrl: docView(d, new Map()).downloadUrl } : {}) };
     const from = Math.max(Number.parseInt(url.searchParams.get('from'), 10) || 0, 0);
     const limit = Math.min(Math.max(Number.parseInt(url.searchParams.get('limit'), 10) || 5, 1), 20);
     const items = await db.all('SELECT idx, section, content FROM kb_chunks WHERE project = ? AND doc_id = ? AND idx >= ? ORDER BY idx LIMIT ?', pj, d.id, from, limit);

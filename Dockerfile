@@ -4,7 +4,7 @@
 FROM node:22-alpine
 
 WORKDIR /app
-# 唯一的套件是 Postgres 連線（pg，選用；只有設 DATABASE_URL 才載入），版本固定在 package-lock.json
+# 照 package-lock 安裝 PDF 抽字套件與選用的 Postgres 驅動程式
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY . .

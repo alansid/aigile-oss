@@ -1,8 +1,8 @@
 // 知識庫底層：上傳的文件抽成純文字、分段存進 kb_chunks，可搜尋、可分段讀。
 // Office 檔（docx／pptx／xlsx）是 zip：只用內建的 DecompressionStream('deflate-raw') 解壓，不裝套件；Node 與 Workers 共用。
-// PDF、圖片不抽字（標「只有原檔」），整理時由 AI 讀原檔。
+// 無法抽字的 PDF 與圖片（標「只有原檔」），整理時由 AI 讀原檔。
 
-export const KB_TEXT_EXTS = ['md', 'txt', 'docx', 'pptx', 'xlsx'];
+export const KB_TEXT_EXTS = ['md', 'txt', 'docx', 'pptx', 'xlsx', 'pdf'];
 export const KB_MAX_CHARS_PER_DOC = 200_000;      // 單檔最多抽 20 萬字，超過截斷
 export const KB_MAX_TOTAL_CHARS = 50_000_000;     // 全站最多 5,000 萬字，超過新文件只存原檔
 export const KB_MAX_PROJECT_CHUNKS = 20_000;      // 單一專案超過就不搜（LIKE 掃描的成本；KB_MAX_PROJECT_CHUNKS 可調）
@@ -254,7 +254,39 @@ async function xlsxChunks(bytes) {
 // 抽字＋分段：回傳 { chunks: [{ section, content }], chars, truncated }；不支援的格式回 null（只有原檔）
 export async function extractChunks(ext, bytes, maxChars = KB_MAX_CHARS_PER_DOC) {
   let chunks;
-  if (ext === 'md' || ext === 'txt') chunks = chunkBlocks(textBlocks(new TextDecoder().decode(bytes), ext === 'md'));
+  if (ext === 'pdf') {
+    let getDocumentProxy;
+    try {
+      ({ getDocumentProxy } = await import('unpdf'));
+    } catch (error) {
+      if (error.code === 'ERR_MODULE_NOT_FOUND' && error.message.includes("package 'unpdf'")) {
+        return { originalReason: 'pdf_package_missing' };
+      }
+      throw error;
+    }
+    let pdf;
+    try {
+      pdf = await getDocumentProxy(new Uint8Array(bytes), { isEvalSupported: false, useSystemFonts: false });
+      chunks = [];
+      let chars = 0;
+      for (let n = 1; n <= pdf.numPages && chars <= maxChars; n++) {
+        const page = await pdf.getPage(n);
+        const { items } = await page.getTextContent();
+        const text = items.map(item => (item.str || '') + (item.hasEOL ? '\n' : '')).join('');
+        const parts = chunkLines('第 ' + n + ' 頁', text.split('\n'));
+        chunks.push(...parts);
+        chars += parts.reduce((sum, part) => sum + part.content.length, 0);
+        page.cleanup();
+      }
+      if (!chunks.length) return null;
+    } catch (error) {
+      if (['InvalidPDFException', 'PasswordException', 'UnknownErrorException', 'FormatError'].includes(error.name)) return null;
+      throw error;
+    } finally {
+      if (pdf) await pdf.loadingTask.destroy();
+    }
+  }
+  else if (ext === 'md' || ext === 'txt') chunks = chunkBlocks(textBlocks(new TextDecoder().decode(bytes), ext === 'md'));
   else if (ext === 'docx') chunks = await docxChunks(bytes);
   else if (ext === 'pptx') chunks = await pptxChunks(bytes);
   else if (ext === 'xlsx') chunks = await xlsxChunks(bytes);

@@ -123,6 +123,50 @@ try {
   // AI 不能放進知識庫（只有人類 leader／管理員），帶 curate 也一樣擋下
   assert.match((await tool(kbAi.token, 'aigile_doc_upload', { project: '預設專案', name: 'AI想放.md', content: '# x', declared: true, kb: true, curate: false })).text, /FORBIDDEN/, 'AI 帶 kb+curate：照樣擋下');
 
+  // 用同一份單頁 PDF 驗證可選文字和純圖。測試資料全部在本機產生。
+  for (const scanned of [false, true]) {
+    const name = scanned ? 'scan.pdf' : 'selectable.pdf';
+    const content = scanned ? 'q BI /W 1 /H 1 /BPC 8 /CS /G ID X EI Q' : 'BT /F1 14 Tf 10 20 Td (needle406) Tj ET';
+    const objects = [
+      '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+      '<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream',
+    ];
+    let pdf = '%PDF-1.4\n';
+    const offsets = ['0000000000 65535 f '];
+    for (const [i, obj] of objects.entries()) {
+      offsets.push(String(pdf.length).padStart(10, '0') + ' 00000 n ');
+      pdf += (i + 1) + ' 0 obj\n' + obj + '\nendobj\n';
+    }
+    const start = pdf.length;
+    pdf += 'xref\n0 6\n' + offsets.join('\n') + '\ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + start + '\n%%EOF';
+    const uploaded = await up(lead.token, name, pdf, '&curate=0');
+    assert.equal(uploaded.status, 201);
+    await flush();
+    const doc = (await docs()).get(name);
+    assert.equal(doc.kb.org, 'off');
+    const missing = process.argv.includes('--without-unpdf');
+    assert.equal(doc.kb.status, scanned || missing ? 'original' : 'indexed');
+    const read = await tool(kbAi.token, 'aigile_doc_read', { project: decodeURIComponent(pj), docId: doc.docId });
+    if (missing) {
+      assert.equal(doc.kb.note, '這台伺服器沒有裝 PDF 抽字套件，請執行 npm install；或讓 AI 整理');
+      assert.equal(read.note, doc.kb.note);
+      assert.ok(read.original && read.downloadUrl);
+    } else if (scanned) assert.equal(read.note, '這份 PDF 抽不到字，要讓 AI 整理才搜得到');
+    else {
+      assert.match(read.items[0].content, /needle406/);
+      assert.deepEqual(await hits('needle406'), [name]);
+      // 模擬 Worker 在抽字途中終止，資料庫只留下過期的 pending 狀態。
+      await db.run("UPDATE docs SET kb_status = 'pending', kb_at = ? WHERE id = ?", new Date(Date.now() - 11 * 60000).toISOString(), doc.docId);
+      assert.equal((await docs()).get(name).kb.status, 'failed');
+      const retry = await req(lead.token, KB + '/reindex', 'POST', { docId: doc.docId });
+      assert.equal(retry.body.started, 1);
+      await flush();
+      assert.equal((await docs()).get(name).kb.status, 'indexed');
+    }
+  }
+
   console.log('kb-no-curate-test：全部通過');
 } catch (e) {
   console.error('kb-no-curate-test 失敗：', e);

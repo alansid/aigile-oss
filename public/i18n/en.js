@@ -3373,6 +3373,8 @@ window.AIGILE_EN = {
     "還沒抽字": "Text not read yet",
     "知識庫已滿，沒有抽字": "Knowledge base full, text not read",
     "含密碼或金鑰，不抽字也不整理": "Contains passwords or keys — not read or organized",
+    "這台伺服器沒有裝 PDF 抽字套件，請執行 npm install；或讓 AI 整理": "The PDF text extraction package is missing. Run npm install on the server or ask AI to organize this PDF.",
+    "這份 PDF 抽不到字，要讓 AI 整理才搜得到": "No text could be extracted from this PDF. Ask AI to organize it so its knowledge page can be searched.",
     "只存原檔，AI 讀不到內容": "Stored as a file only — AI can't read its content",
     "知識庫還是空的": "The knowledge base is empty",
     "把想讓 AI 讀懂的文件放進來，例如規章、手冊、流程。放進來的會抽字、整理成知識頁，大家和 AI 都搜得到；一般專案文件不會。": "Add documents you want AI to understand, like policies, handbooks and procedures. Documents here are read and turned into knowledge pages that everyone—and every AI—can search. Regular project files are not.",

@@ -8246,12 +8246,13 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (k.status === 'failed') return pill('red', '抽字失敗') + redo('重試');
     if (k.status === 'none') return pill('grey', '還沒抽字') + redo('重試');
     if (k.status === 'full') return pill('grey', '知識庫已滿，沒有抽字');
-    if (k.org === 'todo') return pill('blue', k.working ? `整理中 · ${k.working}` : '等整理');
+    const pdfNote = k.status === 'original' && x.ext === 'pdf' ? pill('grey', k.note || '這份 PDF 抽不到字，要讓 AI 整理才搜得到') : '';
+    if (k.org === 'todo') return pdfNote + pill('blue', k.working ? `整理中 · ${k.working}` : '等整理');
     // 自己選的「只搜原文，不整理」，跟沒指定整理 AI 的「只能搜原文」是兩種狀態
-    if (k.org === 'off') return pill('grey', k.status === 'original' ? '只存原檔，AI 讀不到內容' : '只搜原文，不整理') + (mgr ? `<button type="button" class="link small" data-kb-curate="${esc(x.docId)}">請 AI 整理</button>` : '');
-    if (k.org === 'stale') return pill('yellow', '換了新版，等重新整理');
-    if (k.org === 'done') return pill('green', `已整理 · ${k.pages || 1} 頁`);
-    if (k.status === 'original') return pill('grey', '只存原檔，AI 讀不到內容');
+    if (k.org === 'off') return (pdfNote || pill('grey', k.status === 'original' ? '只存原檔，AI 讀不到內容' : '只搜原文，不整理')) + (mgr ? `<button type="button" class="link small" data-kb-curate="${esc(x.docId)}">請 AI 整理</button>` : '');
+    if (k.org === 'stale') return pdfNote + pill('yellow', '換了新版，等重新整理');
+    if (k.org === 'done') return pdfNote + pill('green', `已整理 · ${k.pages || 1} 頁`);
+    if (k.status === 'original') return pdfNote || pill('grey', '只存原檔，AI 讀不到內容');
     return aiName ? pill('grey', '只能搜原文') : pill('grey', '只能搜原文 · 還沒指定整理 AI') + (mgr ? '<button type="button" class="link small" data-kb-set-ai>指定整理 AI</button>' : '');
   }
   // 已整理（有知識頁）的文件才有 ⋯，只給 leader／管理員

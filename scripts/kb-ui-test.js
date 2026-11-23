@@ -58,7 +58,7 @@ try {
     assert.equal(await text('#files-list > p.muted.small'), '要把文件放進知識庫，請 leader 上傳，或請 leader 從專案文件加入。', 'A 一般成員：沒有上傳按鈕，改一行說明');
     assert.equal(await text('.kb-h'), '知識庫文件（4 份） 只有這裡的文件會被整理、被搜尋。', 'A 知識庫文件清單標題');
     const kbRows = await J("Object.fromEntries([...document.querySelectorAll('.kb-doc-row')].map(r => [r.querySelector('.file-name').textContent, r.querySelector('.kb-badges').textContent.trim()]))");
-    assert.deepEqual(kbRows, { '雲杉員工手冊（測試假資料）.docx': '只能搜原文 · 還沒指定整理 AI', '組織圖.pdf': '只存原檔，AI 讀不到內容', '部署筆記.txt': '含密碼或金鑰，不抽字也不整理', '壞掉的簡報.pptx': '抽字失敗' }, 'A 狀態字（一般成員沒有重試、指定整理 AI）：' + JSON.stringify(kbRows));
+    assert.deepEqual(kbRows, { '雲杉員工手冊（測試假資料）.docx': '只能搜原文 · 還沒指定整理 AI', '組織圖.pdf': '這份 PDF 抽不到字，要讓 AI 整理才搜得到', '部署筆記.txt': '含密碼或金鑰，不抽字也不整理', '壞掉的簡報.pptx': '抽字失敗' }, 'A 狀態字（一般成員沒有重試、指定整理 AI）：' + JSON.stringify(kbRows));
     assert.ok(!(await hscroll()), `E ${tag} 知識庫分頁不橫向捲動`);
     await shot(`01-${tag}-知識庫分頁-知識庫文件`);
 

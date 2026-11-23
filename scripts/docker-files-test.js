@@ -27,8 +27,9 @@ try {
   assert.match(installs[0], /npm ci --omit=dev/, '用 npm ci 照 package-lock 裝，不裝開發用的');
   assert.ok(df.indexOf('COPY package.json package-lock.json') < df.indexOf('npm ci'), '先複製 package*.json 再安裝');
   const pkg = JSON.parse(read('package.json'));
-  assert.deepEqual(Object.keys(pkg.dependencies || {}), [], '沒有必裝的套件（SQLite 版零相依）');
-  assert.deepEqual(Object.keys(pkg.optionalDependencies || {}), ['pg'], '選用套件只有 pg');
+  assert.deepEqual(Object.keys(pkg.dependencies || {}), [], '免裝套件也能啟動');
+  assert.equal(pkg.optionalDependencies.unpdf, '1.9.1', 'PDF 抽字套件版本固定');
+  assert.deepEqual(Object.keys(pkg.optionalDependencies || {}), ['pg', 'unpdf'], '選用套件是 pg 與 unpdf');
   assert.match(pkg.optionalDependencies.pg, /^\d+\.\d+\.\d+$/, 'pg 版本固定');
   assert.ok(JSON.parse(read('package-lock.json')).packages['node_modules/pg'], 'package-lock 有 pg');
 
@@ -81,7 +82,7 @@ try {
   assert.match(ci, /npm test/);
   assert.match(ci, /test-postgres:[\s\S]*image: postgres:[\s\S]*npm ci[\s\S]*AIGILE_TEST_PG_URL: postgres:\/\/postgres:test@localhost:5432\//, 'CI：另外在 Postgres 服務跑全套（只連 CI 本機的服務）');
   assert.match(ci, /docker compose -f docker-compose\.yml -f docker-compose\.postgres\.yml up -d --build/, 'CI：compose 連 Postgres 一起起來並檢查');
-  assert.ok(!/^\s+run: npm (ci|install)\s*$/m.test(ci.split('test-postgres:')[0]), 'CI：SQLite 那組不裝套件（零相依照樣能跑）');
+  assert.match(ci.split('test-postgres:')[0], /run: npm ci --include=optional/, 'SQLite 測試安裝抽字套件');
   console.log('docker-files-test：全部通過');
 } catch (e) {
   console.error('docker-files-test 失敗：', e.message);

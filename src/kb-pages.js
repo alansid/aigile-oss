@@ -8,7 +8,7 @@ export const KB_PAGE_LIMITS = { title: 100, summary: 120, body: 20_000, sources:
 export const plainMd = md => String(md).replace(/^#{1,6}\s*/gm, '').replace(/^>\s?/gm, '').replace(/^\s*[-*]\s+/gm, '')
   .replace(/\*\*(.+?)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1').replace(/〔[^〕]*〕/g, '');
 export const KB_CARD_DOCS = 10; // 一張整理卡最多 10 份文件（一輪做太久會被 watcher 停掉）
-const ORGANIZABLE = ['indexed', 'original']; // 含密鑰、抽字失敗、還沒抽完的不整理（AI 讀原檔一樣會讀到密鑰）
+const ORGANIZABLE = ['indexed', 'original', 'pdf_package_missing']; // 含密鑰、抽字失敗、還沒抽完的不整理（AI 讀原檔一樣會讀到密鑰）
 const SKILL = '技能範本「知識庫整理」';
 
 export function registerKbPages({ route, db, ApiError, invalid, readJson, randId, nowIso, peopleMap, identity, projectsOf, PROJECTS, assertWritable, roIn,
@@ -193,7 +193,7 @@ export function registerKbPages({ route, db, ApiError, invalid, readJson, randId
     const sorted = [...pages.filter(p => p.kind === 'topic'), ...pages.filter(p => p.kind !== 'topic')];
     return {
       project: pj, items: sorted.map(p => pageView(p, people)), canManage: await kbManager(ctx, me, pj),
-      todo: todo.map(d => ({ docId: d.id, name: d.name, onlyOriginal: d.kb_status === 'original', cardId: cards.get(d.kb_card) || null })),
+      todo: todo.map(d => ({ docId: d.id, name: d.name, onlyOriginal: ['original', 'pdf_package_missing'].includes(d.kb_status), cardId: cards.get(d.kb_card) || null })),
     };
   });
   route('GET', '/api/projects/:id/kb/pages/:pageId', async ({ ctx, me, params }) => {

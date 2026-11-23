@@ -178,7 +178,7 @@ volumes:
 
 ## 本機啟動（不用 Docker）
 
-需要 Node.js 22.13 以上（建議 24），不用 `npm install`（改用 Postgres 才要，見「用 Postgres」）：
+需要 Node.js 22.13 以上（建議 24），不用 `npm install` 即可啟動。要抽 PDF 文字或使用 Postgres，請先 `npm install`。
 
 ```bash
 npm start            # http://localhost:3000，資料放 ./data

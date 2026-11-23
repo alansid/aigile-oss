@@ -1,6 +1,6 @@
 # CI: run the full test suite (including the real-browser UI tests) on Linux, Windows and macOS,
 # and build the Docker image, on every push and pull request.
-# The SQLite jobs have no install step on purpose: the default (SQLite) setup must keep working with zero dependencies.
+# SQLite uses unpdf for PDF extraction and does not need the optional Postgres driver.
 # The Postgres job installs the one optional dependency (pg) and runs the same full suite against a Postgres service.
 # Publishing the image to ghcr.io on a version tag is in release.yml.
 name: CI
@@ -42,6 +42,9 @@ jobs:
           node --version
           node --input-type=module -e "const { findBrowser } = await import('./scripts/browser-kit.js'); const b = findBrowser(); console.log('browser:', b); if (!b) process.exit(1);"
           node --input-type=module -e "const { findBrowser } = await import('./scripts/browser-kit.js'); const { execFileSync } = await import('node:child_process'); try { console.log(execFileSync(findBrowser(), ['--version'], { encoding: 'utf8', timeout: 20000 }).trim()); } catch (e) { console.log('browser version: ' + e.message); }"
+      - name: Verify SQLite without optional packages
+        run: node scripts/kb-no-curate-test.js --without-unpdf
+      - run: npm ci --include=optional
       - name: Run tests
         run: npm test
         env:

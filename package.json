@@ -36,6 +36,7 @@
     }
   },
   "optionalDependencies": {
-    "pg": "8.23.1"
+    "pg": "8.23.1",
+    "unpdf": "1.9.1"
   }
 }
