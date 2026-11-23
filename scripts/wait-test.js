@@ -1,5 +1,6 @@
 // 驗收測試：aigile-wait.mjs（有事才醒）＋ watcher 門鈴檔。
 // 用法：node scripts/wait-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -117,8 +118,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     console.error('wait-test 失敗：', e.message);
     process.exitCode = 1;
   } finally {
-    watcher?.kill();
-    server.kill();
-    setTimeout(() => { try { fs.rmSync(dataDir, { recursive: true, force: true }); fs.rmSync(work, { recursive: true, force: true }); } catch {} process.exit(); }, 300);
+    await Promise.all([stopChild(watcher), stopChild(server)]);
+    for (const dir of [dataDir, work]) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 })();

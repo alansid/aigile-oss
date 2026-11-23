@@ -7,6 +7,7 @@ import { migrateNode } from './migrations.js';
 
 export function openNodeDb(file, { legacyProjects = true } = {}) { // legacyProjects：測試用，先建「預設專案」「第二專案」（代號固定）
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  let closed = false;
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL;');
   const schema = fs.readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
@@ -28,7 +29,11 @@ export function openNodeDb(file, { legacyProjects = true } = {}) { // legacyProj
         db.exec('COMMIT');
       } catch (e) { db.exec('ROLLBACK'); throw e; }
     },
-    close() { db.close(); },
+    close() {
+      if (closed) return;
+      db.close();
+      closed = true;
+    },
   };
 }
 

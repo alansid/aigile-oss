@@ -104,5 +104,6 @@ try {
 } catch (e) {
   console.error('onboard-test 失敗：', e.message); process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await raw.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

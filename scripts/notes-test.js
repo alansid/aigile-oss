@@ -1,5 +1,6 @@
 // 人類紀錄卡：人類記內容；AI 平常看不到、主動查才讀得到（只能讀）；整理完可標已完成＋註明已整理到哪張；不發群組訊息。
 // 用法：node scripts/notes-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -124,6 +125,6 @@ const call = async (token, p, method = 'GET', body) => {
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

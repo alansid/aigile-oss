@@ -101,5 +101,6 @@ try {
   console.error('resolution-test 失敗：', e.message, (e.stack || '').split('\n').slice(1, 4).join(' | '));
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

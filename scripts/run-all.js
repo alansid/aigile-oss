@@ -1,3 +1,4 @@
+import { killTree } from './test-process.js';
 // npm test 一次跑完全部測試（scripts/*-test.js 與冒煙測試 smoke.js），最後列出沒過的。
 // 依序跑（各測試自己開暫存資料夾與隨機埠，但有幾個會起 watcher 子程序，並行容易互相拖慢逾時）。
 // 用法：
@@ -29,7 +30,7 @@ const run = f => new Promise(resolve => {
   let out = '', timedOut = false;
   const p = spawn(process.execPath, [f], { cwd: fileURLToPath(new URL('..', import.meta.url)), env: { ...process.env, FORCE_COLOR: '0', AIGILE_HOME: process.env.AIGILE_HOME || HOME_TMP, AIGILE_TEST_CODEX_HOME: CODEX_TMP, CODEX_HOME: CODEX_TMP, COPILOT_HOME: COPILOT_TMP, AIGILE_TEST_COPILOT_HOME: COPILOT_TMP, AIGILE_TEST_GEMINI_HOME: GEMINI_TMP, AIGILE_GEMINI_HOME: GEMINI_TMP, AIGILE_CODEX_BIN: fileURLToPath(new URL('./fake-codex.mjs', import.meta.url)), AIGILE_ANTIGRAVITY_BIN: fileURLToPath(new URL('./fake-antigravity.mjs', import.meta.url)) } });
   p.stdout.on('data', d => { out += d; }); p.stderr.on('data', d => { out += d; });
-  const timer = setTimeout(() => { timedOut = true; p.kill(); }, TIMEOUT_MS);
+  const timer = setTimeout(() => { timedOut = true; killTree(p); }, TIMEOUT_MS);
   p.on('close', code => { clearTimeout(timer); resolve({ f, ok: code === 0 && !timedOut, code, timedOut, sec: ((Date.now() - started) / 1000).toFixed(1), out }); });
 });
 

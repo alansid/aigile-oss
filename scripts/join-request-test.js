@@ -105,6 +105,6 @@ try {
   console.error('join-request-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  db.close?.();
+  await db.close?.();
   fs.rmSync(dataDir, { recursive: true, force: true });
 }

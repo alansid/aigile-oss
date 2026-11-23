@@ -1,6 +1,7 @@
 // 驗收測試：poll.mjs 冷啟動（本機沒有 state.json，例如換了電腦）先從工作記憶還原游標
 // 修正前：本機沒有游標就直接用 limit=1 跳到最新，雲端工作記憶裡還沒處理的訊息整批漏掉
 // 用法：node scripts/poll-test.js
+import { stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,6 +69,7 @@ try {
   console.error('poll-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  server.close();
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

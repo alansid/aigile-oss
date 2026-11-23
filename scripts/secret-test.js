@@ -58,6 +58,6 @@ try {
   console.error('secret-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  try { db.close?.(); } catch {}
+  try { await db.close?.(); } catch {}
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
 }

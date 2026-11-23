@@ -3,6 +3,7 @@
 //   A 不分接法一律每小時 3 次，Claude Code（只寫門鈴）工作中半小時就被擋，PG2 卡 7 則待處理一小時
 //   B 只是知會（[接單]／[完成]、標了不用回）也按門鈴、watcher 巡檢也叫醒，一半的叫醒是白跑
 // 用法：node scripts/wake-fyi-test.js
+import { stopChild, stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -132,8 +133,8 @@ try {
   console.error('wake-fyi-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  for (const w of procs) try { w.p.kill(); } catch {}
-  server.close();
-  await sleep(200);
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await Promise.all(procs.map(w => stopChild(w.p)));
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

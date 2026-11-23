@@ -1,3 +1,4 @@
+import { removeBrowserFixture, stopBrowsers, trackChild } from './test-process.js';
 // 畫面測試共用：開本機伺服器（暫存資料夾）＋無頭 Chrome／Edge（DevTools 協定，不裝套件）
 // 用法見 inbox-verify-test.js、settings-tabs-test.js；找不到瀏覽器時 findBrowser 回 null，測試自行略過
 import fs from 'node:fs';
@@ -36,7 +37,7 @@ export function spawnLogged(kids, cmd, args, env = {}) {
   p.tail = '';
   const keep = d => { p.tail = (p.tail + d).slice(-1500); };
   p.stdout.on('data', keep); p.stderr.on('data', keep);
-  kids.push(p);
+  trackChild(kids, p);
   return p;
 }
 // 等子程序啟動好；子程序先結束或等太久，就連同它最後的輸出一起報錯
@@ -62,7 +63,10 @@ export async function startServer(kids, dataDir, env = {}) {
   const port = await freePort(), base = `http://127.0.0.1:${port}`;
   const serverJs = fileURLToPath(new URL('../server.js', import.meta.url)); // pathname 會把 ~ 編成 %7E（Windows 短路徑 RUNNER~1）
   const p = spawnLogged(kids, process.execPath, [serverJs], { PORT: String(port), DATA_DIR: dataDir, AIGILE_TEST_PROJECTS: '1', RATE_LIMIT_PER_MIN: '10000', JOIN_LIMIT_PER_HOUR: '100000', ...env });
-  await untilStarted(p, () => fetch(base + '/api/health').then(r => r.ok), '本機伺服器');
+  await untilStarted(p, () => p.tail.includes(':' + port), '本機伺服器開始監聽');
+  const health = await fetch(base + '/api/health', { signal: AbortSignal.timeout(START_MS) });
+  await health.arrayBuffer();
+  if (!health.ok) throw new Error('本機伺服器健康檢查 HTTP ' + health.status);
   return base;
 }
 export function findBrowser() {
@@ -70,7 +74,6 @@ export function findBrowser() {
     '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].filter(Boolean).find(p => fs.existsSync(p)) || null;
 }
 
-let exitGuard = null;
 // 測試直接查／改伺服器的暫存庫（同步）：SQLite 直接開檔；Postgres 模式（AIGILE_TEST_PG_URL）在子程序跑同一句，schema 跟伺服器一樣由資料夾決定
 const PG = !!process.env.AIGILE_TEST_PG_URL;
 const sqliteDo = (dir, fn) => { const d = new DatabaseSync(path.join(dir, 'data', 'switch.db')); try { return fn(d); } finally { d.close(); } };
@@ -81,10 +84,16 @@ function pgSync(dir, op, q, args) {
 }
 
 export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服器環境變數（例如 AIGILE_TEST_PROJECTS: '0' ＝一般模式，有預設管理員）
-  clearTimeout(exitGuard); // 同一支測試再開一組（例如 backup-ui-test）就不用結束
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `aigile-${name}-`));
   const kids = [];
-  const BASE = await startServer(kids, path.join(dir, 'data'), env);
+  let ws = null;
+  let BASE;
+  try {
+    BASE = await startServer(kids, path.join(dir, 'data'), env);
+  } catch (err) {
+    await stop();
+    throw err;
+  }
   const call = async (t, p, m = 'GET', b) => { const r = await fetch(BASE + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
   const get = (q, ...v) => (PG ? pgSync(dir, 'get', q, v) : sqliteDo(dir, d => d.prepare(q).get(...v))); // 測試唯讀查暫存庫
   const sql = (q, ...v) => (PG ? pgSync(dir, 'run', q, v) : sqliteDo(dir, d => d.prepare(q).run(...v))); // 測試直接改本機暫存庫（例如讓 Token 過期）
@@ -92,7 +101,6 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
   const toks = new Map();
   const aiToken = id => { if (toks.has(id)) return toks.get(id); const t = 'tt_' + randomBytes(24).toString('base64url'); sql('UPDATE participants SET token = ? WHERE id = ?', 'h:' + createHash('sha256').update(t).digest('hex'), id); toks.set(id, t); return t; };
 
-  let ws = null;
   async function browser(width = 1400, height = 700) {
     const target = await openChrome(kids, path.join(dir, 'chrome'), width, height);
     ws = new WebSocket(target.webSocketDebuggerUrl);
@@ -132,27 +140,15 @@ export async function startKit(name, { env = {} } = {}) { // env：覆寫伺服�
       await goto('/', '首頁');
       await js(`localStorage.setItem('aigile-switch-token', ${JSON.stringify(token)}); true`);
       await goto(page, '登入後的頁面');
-      await until(() => js("!!document.querySelector('.av-btn') && document.querySelector('#join')?.hidden !== false"), 20000, '登入完成');
+      await until(() => js("document.querySelector('#boot')?.hidden === true && document.querySelector('#app')?.hidden === false"), 20000, '登入完成');
     };
     const key = async (k, code = k) => { for (const type of ['keyDown', 'keyUp']) await cdp('Input.dispatchKeyEvent', { type, key: k, code, windowsVirtualKeyCode: { ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, Tab: 9, Enter: 13 }[k] || 0 }); };
     const on = fn => listeners.add(fn);
     return { cdp, js, goto, login, key, on };
   }
   async function stop() {
-    try { ws?.close(); } catch {}
-    for (const k of kids) { try { k.kill(); } catch {} }
-    // Windows：只砍得到 Chrome 主程序，子程序還接著輸出管線，Node 會一直等它而不結束（CI 曾整支卡到 300 秒）
-    for (const k of kids) { try { k.stdout?.destroy(); k.stderr?.destroy(); k.stdin?.destroy(); } catch {} }
-    await sleep(500);
-    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
-    // CI 的 Windows 曾印完「全部通過」卻卡到 300 秒才被砍：stop 後 5 秒程序還沒結束，就印出還開著什麼再結束（exitCode 照舊）
-    clearTimeout(exitGuard);
-    exitGuard = setTimeout(() => {
-      const open = (process._getActiveHandles?.() || []).map(h => h.constructor?.name || typeof h).join('、');
-      console.error(`（stop 後 5 秒程序還沒結束，強制結束；還開著：${open || '不明'}）`);
-      process.exit();
-    }, 5000);
-    exitGuard.unref();
+    await stopBrowsers(ws, kids);
+    await removeBrowserFixture(dir);
   }
   return { BASE, call, aiToken, sql, get, browser, stop };
 }

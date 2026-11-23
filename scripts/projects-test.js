@@ -1,5 +1,6 @@
 // 專案欄位（平台／第二專案）驗收測試：成員專案設定、訊息預設與繼承、過濾與游標、卡片必填專案、交接限同專案。
 // 用法：node scripts/projects-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -384,6 +385,6 @@ const msg = (tok, text, extra = {}) => call(tok, '/api/messages', 'POST', { requ
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

@@ -7,6 +7,7 @@
 //   C 到上限由平台私訊所屬人類（平台通知），一天一次，不貼專案群組
 //   D 測試：連續 3 則門鈴只叫醒 1 次；到上限不產生群組訊息
 // 用法：node scripts/wake-merge-test.js
+import { stopChild, stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -141,9 +142,10 @@ try {
   console.error('wake-merge-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  for (const w of procs) try { w.p.kill(); } catch {}
+  await Promise.all(procs.map(w => stopChild(w.p)));
   for (const s of sockets) s.destroy();
-  server.close(); rt.close();
+  await Promise.all([stopServer(server), stopServer(rt)]);
   await sleep(300);
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

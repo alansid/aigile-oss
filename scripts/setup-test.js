@@ -1,5 +1,6 @@
 // 接入設定補齊驗收測試：程式庫連結、長期授權、/api/me 的 grants／repos、接入設定（重新接上、watcher.pid、API 代號、章節編號）。
 // 用法：node scripts/setup-test.js（加 --print 印出一份接入設定）
+import { stopChild } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -151,6 +152,6 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

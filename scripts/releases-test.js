@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { createApp } from '../src/core.js';
 import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
+let db;
 
 const root = new URL('../', import.meta.url);
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-rel-'));
@@ -47,7 +48,7 @@ try {
   // 不放 public（外人讀不到）；要登入才讀得到
   assert.ok(!fs.existsSync(new URL('public/releases.json', root)) && !fs.existsSync(new URL('public/flows.md', root)), 'public 沒有版本紀錄與流程圖');
   const flowsText = fs.readFileSync(new URL('docs/flows.md', root), 'utf8');
-  const db = await openTestDb(path.join(dataDir, 'switch.db'));
+  db = await openTestDb(path.join(dataDir, 'switch.db'));
   const app = createApp({ db, storage: dbStorage(db), docText: '', flowsText, releases: j, config: { openJoin: '1', rateLimitPerMin: '10000' } });
   const get = async (p, token) => { const r = await app(new Request('http://localhost' + p, { headers: token ? { Authorization: `Bearer ${token}` } : {} }), 'http://localhost'); return { status: r.status, text: await r.text() }; };
   assert.equal((await get('/api/releases')).status, 401, '不登入讀不到版本紀錄');
@@ -62,5 +63,6 @@ try {
   console.error('releases-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db?.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

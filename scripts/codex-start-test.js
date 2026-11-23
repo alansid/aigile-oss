@@ -1,4 +1,5 @@
 // Codex 一行啟動、前景接入、關窗與重接
+import { stopServer } from './test-process.js';
 import './test-home.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -166,8 +167,8 @@ try {
   process.exitCode = 1;
 } finally {
   for (const pid of testPids) { try { if (pid > 0 && alive(pid)) process.kill(pid); } catch {} }
-  server.close();
-  db.close?.();
+  await stopServer(server);
+  await db.close?.();
   await new Promise(ok => setTimeout(ok, 500));
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
 }

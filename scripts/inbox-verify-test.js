@@ -2,6 +2,7 @@
 // 修正前：按下去整頁直接重畫，該列沒有淡出（畫面跳到最上面，要重找下一張）
 // 需要本機有 Chrome 或 Edge（用無頭模式＋DevTools 協定，不裝套件）；找不到就略過
 // 用法：node scripts/inbox-verify-test.js
+import { removeBrowserFixture, stopBrowsers } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +20,7 @@ let BASE = '';
 const until = async (fn, ms = 15000, label = '') => { const end = Date.now() + ms; for (;;) { try { const v = await fn(); if (v) return v; } catch {} if (Date.now() > end) throw new Error('等太久：' + label); await sleep(150); } };
 const call = async (t, p, m = 'GET', b) => { const r = await fetch(BASE + p, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
 
+let ws;
 try {
   BASE = await startServer(kids, path.join(dir, 'data'));
 
@@ -37,7 +39,7 @@ try {
 
   // 無頭瀏覽器
   const target = await openChrome(kids, path.join(dir, 'chrome'), 1400, 700);
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = bad; });
   let seq = 0; const wait = new Map();
   ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && wait.has(m.id)) { wait.get(m.id)(m); wait.delete(m.id); } };
@@ -119,13 +121,12 @@ try {
   assert.equal(returned.status, '進行中');
   assert.equal(returned.owner.participantId, ai.participantId);
 
-  ws.close();
+
   console.log('inbox-verify-test：全部通過');
 } catch (e) {
   console.error('inbox-verify-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  for (const k of kids) { try { k.kill(); } catch {} }
-  await sleep(500);
-  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  await stopBrowsers(ws, kids);
+  await removeBrowserFixture(dir);
 }

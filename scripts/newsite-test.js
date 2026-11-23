@@ -8,9 +8,14 @@ import assert from 'node:assert';
 import { createApp } from '../src/core.js';
 import { openNodeDb } from '../src/db-node.js';
 import { dbStorage } from '../src/storage-db.js';
+const databases = [];
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-new-'));
-const mk = (file, opts) => { const db = openNodeDb(path.join(dataDir, file), opts); return { db, app: createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000' } }) }; };
+const mk = (file, opts) => {
+  const db = openNodeDb(path.join(dataDir, file), opts);
+  databases.push(db);
+  return { db, app: createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '10000' } }) };
+};
 const caller = app => async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   return { status: r.status, body: await r.json().catch(() => ({})) };
@@ -49,5 +54,6 @@ try {
   console.error('newsite-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  for (const db of databases) await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

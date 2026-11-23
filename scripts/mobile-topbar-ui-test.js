@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startKit, findBrowser, until, sleep } from './browser-kit.js';
+import { startKit, findBrowser, until } from './browser-kit.js';
 
 if (!findBrowser()) { console.log('mobile-topbar-ui-test：略過（找不到 Chrome／Edge）'); process.exit(0); }
 const SHOT = process.env.SHOT_DIR || '';
@@ -29,16 +29,16 @@ try {
   })()`);
   const go = async (url, ready) => {
     await js(`history.pushState(null, '', ${JSON.stringify(url)}); dispatchEvent(new PopStateEvent('popstate')); true`);
-    if (ready) await until(() => js(ready), 10000, url);
-    await sleep(700);
+    await until(() => js(ready), 15000, url);
+    await js('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   };
   const pages = [
-    ['總覽', '/', null],
-    ['訊息', '/p/main/messages', null],
-    ['要你處理', '/p/main/inbox', null],
-    ['工作', '/p/main/work', null],
-    ['成員管理', '/members', null],
-    ['我的 AI', '/my-ai', null],
+    ['總覽', '/', "!!document.querySelector('body.at-hub #page-work .hub-card')"],
+    ['訊息', '/p/main/messages', "document.querySelector('#page-messages')?.hidden === false"],
+    ['要你處理', '/p/main/inbox', "document.querySelector('#page-work .work-title h2')?.textContent === '要你處理'"],
+    ['工作', '/p/main/work', "!!document.querySelector('#page-work #card-q')"],
+    ['成員管理', '/members', "!!document.querySelector('#page-work .pm-panel')"],
+    ['我的 AI', '/my-ai', "!!document.querySelector('#myai-pane > *')"],
   ];
   const seen = [];
   for (const [name, url, ready] of pages) {
@@ -58,11 +58,11 @@ try {
   for (const [name, keys] of seen) assert.equal(keys, want, `${name}：上方列要是同一組同順序（${keys}）`);
 
   // 不在專案時私訊淡色，點了說明；專案裡可以開
-  await go('/');
+  await go(pages[0][1], pages[0][2]);
   assert.equal(await js("document.querySelector('.dm-top-btn').classList.contains('off')"), true, '總覽的私訊淡色');
   await js("document.querySelector('.dm-top-btn').click(); true");
   await until(() => js("/先進入一個專案/.test(document.querySelector('#toast')?.textContent || '')"), 5000, '總覽點私訊有說明');
-  await go('/p/main/messages');
+  await go(pages[1][1], pages[1][2]);
   assert.equal(await js("document.querySelector('.dm-top-btn').classList.contains('off')"), false, '專案裡私訊可用');
 
   // 各專案要你處理、本專案要你處理（原收件匣）都在選單裡；開源版沒有回報

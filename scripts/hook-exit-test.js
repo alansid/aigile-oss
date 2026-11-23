@@ -4,6 +4,7 @@
 // 2. 實跑：hook session（/clear）連跑 N 次（預設 20，HOOK_RUNS 可改），每次結束碼都是 0、輸出完整（含整份重新接上設定）
 // 3. 實跑：hook stop 與 compact 也是 0；等待腳本 Token 失效時結束碼是 20（UNAUTHORIZED），不是 127
 // 用法：node scripts/hook-exit-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -106,7 +107,7 @@ try {
   console.error('hook-exit-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('hook-exit-test.js')) || '');
   process.exitCode = 1;
 } finally {
-  server.close();
-  db.close?.();
+  await stopServer(server);
+  await db.close?.();
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
 }

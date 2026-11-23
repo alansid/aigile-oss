@@ -3,6 +3,7 @@
 // 修正後：POST /api/mcp 提供 12 個 aigile_ 工具，參數錯當場擋；轉接腳本每次讀 .token，換 Token 不用改設定；原 API 不動
 // 驗收：1 用工具完成一輪（收件→接單→發文→ACK） 2 換 Token 檔不用改設定 3 欄位帶錯當場擋 4 原 API 與 watcher 不變（npm test 全跑） 5 附測試
 // 用法：node scripts/mcp-test.js
+import { stopChild, stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -117,7 +118,7 @@ try {
   assert.equal((await tool(T, 'aigile_nope', {})).rpcError.code, -32602, '沒有這個工具');
 
   // 2) 轉接腳本：每次讀 .token，換 Token 不用改設定、不用重開
-  const wd = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-bridge-'));
+  const wd = fs.mkdtempSync(path.join(dataDir, 'bridge-'));
   const AG = 'PG_TEST';
   fs.mkdirSync(path.join(wd, '.aigile', 'watcher'), { recursive: true }); fs.mkdirSync(path.join(wd, '.aigile', AG));
   fs.copyFileSync(new URL('../public/aigile-mcp.mjs', import.meta.url), path.join(wd, '.aigile', 'watcher', 'aigile-mcp.mjs'));
@@ -126,7 +127,16 @@ try {
   bridge = spawn(process.execPath, [path.join(wd, '.aigile', 'watcher', 'aigile-mcp.mjs'), '--agent', AG], { cwd: os.tmpdir() }); // 從別的資料夾啟動也找得到 .token
   let out = '', err = '';
   bridge.stdout.on('data', d => { out += d; }); bridge.stderr.on('data', d => { err += d; });
-  const waitLine = async n => { for (let i = 0; i < 100 && out.trim().split('\n').filter(Boolean).length < n; i++) await new Promise(r => setTimeout(r, 30)); return out.trim().split('\n').filter(Boolean).map(l => JSON.parse(l)); };
+  const waitLine = async count => {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const lines = out.split('\n').slice(0, -1).filter(Boolean);
+      if (lines.length >= count) return lines.map(line => JSON.parse(line));
+      if (bridge.exitCode !== null || bridge.signalCode !== null) throw new Error('MCP 轉接已結束：' + err);
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    throw new Error(`等待 MCP 第 ${count} 則完整回應逾時：${err}`);
+  };
   const sendLine = o => bridge.stdin.write(JSON.stringify(o) + '\n');
   sendLine({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
   sendLine({ jsonrpc: '2.0', method: 'notifications/initialized' });
@@ -161,7 +171,8 @@ try {
   console.error('mcp-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('mcp-test.js')));
   process.exitCode = 1;
 } finally {
-  try { bridge?.kill(); } catch {}
-  server.close();
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  try { await stopChild(bridge); } catch {}
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

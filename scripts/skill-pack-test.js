@@ -4,6 +4,7 @@
 //     超過 2 MB 的包拆存（skills.files 只存小清單，本體在分塊儲存）、腳本分「會執行的」與測試資料、
 //     同步裝到 .aigile/<代號>/plugins/<名稱>/ 並印絕對路徑的啟動參數、Codex 不裝、下架移除、只發給指定的 AI、規格 3.16
 // 用法：node scripts/skill-pack-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -148,7 +149,7 @@ try {
   console.error('skill-pack-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
 } finally {
-  server.close();
-  db.close?.();
+  await stopServer(server);
+  await db.close?.();
   fs.rmSync(dataDir, { recursive: true, force: true });
 }

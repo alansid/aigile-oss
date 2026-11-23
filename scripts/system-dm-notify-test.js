@@ -64,6 +64,6 @@ try {
   console.error('system-dm-notify-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  try { raw.close?.(); } catch {}
+  try { await raw.close?.(); } catch {}
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
 }

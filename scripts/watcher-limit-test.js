@@ -1,6 +1,7 @@
 // 驗收測試：watcher 叫醒上限（每小時／每天次數、單次執行時間）
 // 修正前：watcher 有新通知就叫醒，沒有次數上限；喚醒指令跑多久都不管（一次叫醒跑 7～8 分鐘、整天用量爆掉）
 // 用法：node scripts/watcher-limit-test.js
+import { stopChild, stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -107,8 +108,8 @@ try {
   console.error('watcher-limit-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  for (const w of procs) try { w.p.kill(); } catch {}
-  server.close();
-  await sleep(300);
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await Promise.all(procs.map(w => stopChild(w.p)));
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

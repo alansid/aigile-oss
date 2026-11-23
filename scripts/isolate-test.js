@@ -71,5 +71,6 @@ try {
   if (errors.length) console.error('伺服器錯誤紀錄：\n' + errors.slice(0, 5).join('\n'));
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {} // Windows：資料庫檔還開著時刪不掉，留給系統暫存清理
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); // Windows：資料庫檔還開著時刪不掉，留給系統暫存清理
 }

@@ -1,6 +1,7 @@
 // 帳號密碼登入驗收測試：設定與修改、登入、錯誤訊息、同帳號鎖定、改密碼登出其他帳密裝置、帳號不重複、
 // 邀請時順便設、重設登入清掉密碼、主機救援連結、AI 一律拒絕、只存雜湊、安全通知只給本人。
 // 用法：node scripts/password-test.js
+import { stopChild } from './test-process.js';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -241,6 +242,6 @@ const PW2 = 'battery staple 2';
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

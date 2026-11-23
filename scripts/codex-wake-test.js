@@ -1,3 +1,4 @@
+import { stopChild, stopServer } from './test-process.js';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -125,10 +126,7 @@ try {
   assert.equal(wakes, 2, 'the fallback listener handles delivery without spawning Codex');
   console.log('codex-wake: foreground delivery, retained notification, and closed window passed');
 } finally {
-  if (child?.exitCode === null) {
-    child.kill();
-    await new Promise(resolve => child.once('close', resolve));
-  }
-  server?.close();
+  await stopChild(child);
+  await stopServer(server);
   fs.rmSync(tmp, { recursive: true, force: true });
 }

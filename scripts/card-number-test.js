@@ -82,6 +82,9 @@ try {
 } catch (e) {
   console.error('card-number-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('card-number-test.js')) || '').trim());
   process.exitCode = 1;
+} finally {
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 
 // 網頁：舊訊息內文的 C-xxx 顯示成 PLAT 膠囊（原文不改）；卡片抽屜不再並列 C-xxx

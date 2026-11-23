@@ -9,6 +9,7 @@ import assert from 'node:assert';
 import { createApp } from '../src/core.js';
 import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
+let db;
 
 const js = fs.readFileSync(process.argv[2] || new URL('../public/app.js', import.meta.url), 'utf8');
 const i0 = js.indexOf('  function shortOnboardingText'), i1 = js.indexOf('\n  }\n', i0) + 4;
@@ -26,7 +27,7 @@ try {
   assert.match(text, /開 network_access 後重開 Codex/, '告訴主人的那句話寫好');
 
   // 完整接入設定（Codex 版）：第二節第 1 步提醒、第五節寫做法（不靠規格，AI 這時還下載不到規格）
-  const db = await openTestDb(path.join(dataDir, 'switch.db'));
+  db = await openTestDb(path.join(dataDir, 'switch.db'));
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000' } });
   const call = async (token, p, method = 'GET', body) => { const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost'); return r.json(); };
   const boss = await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' });
@@ -43,5 +44,6 @@ try {
   console.error('codex-network-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db?.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

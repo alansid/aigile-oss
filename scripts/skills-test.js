@@ -1,6 +1,7 @@
 // 驗收測試：角色技能庫——上傳、驗證、上架規則、主人允許、手動同步、依工具裝對資料夾、角色、已裝、下架移除
 // 上架規則：純文字直接上架；含腳本的，leader／管理員上傳直接上架、其他成員上傳要 leader／管理員核准
 // 用法：node scripts/skills-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -191,6 +192,7 @@ try {
   console.error('skills-test 失敗：', e.message, (e.stack || '').split('\n').filter(l => /skills|core/.test(l)).slice(0, 4).join(' | '));
   process.exitCode = 1;
 } finally {
-  server.close();
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

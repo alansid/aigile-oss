@@ -1,5 +1,6 @@
 // AI 工作記憶驗收測試：寫入驗證、16KB、非法欄位、相同內容不重寫、依專案可見。
 // 用法：node scripts/state-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -125,6 +126,6 @@ const call = async (token, p, method = 'GET', body, raw) => {
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

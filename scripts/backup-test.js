@@ -17,10 +17,12 @@ import { memStorage } from '../src/storage-r2.js';
 import { EXPORT_TABLES, SKIP_TABLES } from '../src/backup.js';
 import { APP_VERSION } from '../src/version.js';
 import { testToken } from './test-token.js';
+const databases = [];
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-backup-'));
 const site = async name => {
   const db = await openTestDb(path.join(dataDir, name + '.db'), { legacyProjects: false });
+  databases.push(db);
   const docs = memStorage();
   const app = createApp({ db, storage: dbStorage(db), docStorage: docs, docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0', peopleCheckMs: '1' } });
   const call = async (token, p, method = 'GET', body, raw) => {
@@ -198,4 +200,7 @@ try {
 } catch (e) {
   console.error('backup-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
+} finally {
+  for (const db of databases) await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

@@ -100,5 +100,5 @@ try {
   console.error('reply-report-audit-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  db.close?.();
+  await db.close?.();
 }

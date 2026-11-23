@@ -10,10 +10,12 @@ import { createApp } from '../src/core.js';
 import { openTestDb, TEST_PG_URL } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { testToken } from './test-token.js';
+const databases = [];
 
 const mkApp = async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-t1-'));
   const db = await openTestDb(path.join(dir, 'switch.db'));
+  databases.push(db);
   return { dir, db, app: createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0' } }) };
 };
 const caller = app => async (token, p, method = 'GET', body, extra = {}) => {
@@ -116,5 +118,6 @@ try {
   console.error(e);
   process.exitCode = 1;
 } finally {
-  for (const d of dirs) try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+  for (const db of databases) await db.close();
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

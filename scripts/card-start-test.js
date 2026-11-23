@@ -75,5 +75,6 @@ try {
   console.error('card-start-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('card-start-test.js')) || '').trim());
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

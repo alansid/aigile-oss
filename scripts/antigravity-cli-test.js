@@ -13,6 +13,7 @@
 //    - --hook busy／idle 更新 foreground-state.json；watcher 前景忙碌時等空閒，空閒後背景跑
 // 6. 技能同步狀態認得 antigravity；中英文介面與文件已同步；全部用暫存資料夾與假的 agy（隔離 ~/.gemini 與 ~/.aigile）
 // 用法：node scripts/antigravity-cli-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -81,7 +82,10 @@ const stopWatcher = async () => {
   await done;
   watcherChild = null;
 };
-const stopMock = () => { mockServer?.closeAllConnections?.(); mockServer?.close(); mockServer = null; };
+const stopMock = async () => {
+  await stopServer(mockServer);
+  mockServer = null;
+};
 
 try {
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
@@ -311,7 +315,7 @@ try {
   assert.equal(fakeCalls().length, wLogBefore, '視窗關著時不 spawn 背景 agy');
   assert.equal(fs.existsSync(path.join(WKD2, 'watcher.sid')), false, 'Antigravity 不寫 watcher.sid');
   await stopWatcher();
-  stopMock();
+  await stopMock();
 
   // 5b. 前景開著跑 aigile-wait.mjs 時只響門鈴叫前景（0 次背景 agy）；關窗期間來訊保留，再開視窗時照樣拿到
   const HYB = fs.mkdtempSync(path.join(dataDir, 'hyb-'));
@@ -378,7 +382,7 @@ try {
   assert.equal(waitExit2, 0, '重開視窗後 wait 立即拿到保留的通知：' + waitOut2);
   assert.match(waitOut2, /PENDING 1/, '重開視窗拿到 PENDING 1');
   await stopWatcher();
-  stopMock();
+  await stopMock();
 
   // 5c. onboarding-link 不帶 --foreground，setup 清掉舊 --foreground／WAKE_FOREGROUND，Codex 維持原樣
   const fgLinkAgy = await (await fetch(`${BASE}/api/my-ais/${ai.participantId}/onboarding-link`, { method: 'POST', headers: { Authorization: `Bearer ${boss.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ tool: 'antigravity', foreground: 'off', autoStandby: true, start: true }) })).json();
@@ -481,7 +485,7 @@ try {
   assert.equal(w2Code, 0, '新 wait 正常接手（0）：' + w2Out);
   assert.match(w2Out, /PENDING 1/, '新 wait 拿到 PENDING 1');
   await stopWatcher();
-  stopMock();
+  await stopMock();
   console.log('✓ 5 背景喚醒、前景忙碌等待、混合模式、G（auto／off 雙模式含 Codex）與 Claude Code superseded 保護：全過');
 
   // 6. 技能同步狀態認得 antigravity；中英文文件與介面同步
@@ -493,10 +497,9 @@ try {
   console.log('antigravity-cli-test：全部通過');
 } finally {
   await stopWatcher();
-  stopMock();
+  await stopMock();
   for (const f of pidFiles) { try { killPid(Number(fs.readFileSync(f, 'utf8'))); } catch {} }
-  server.closeAllConnections?.();
-  server.close();
+  await stopServer(server);
   db.close?.();
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
 }

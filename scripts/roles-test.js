@@ -1,5 +1,6 @@
 // 每個專案各自的人類角色：上線帶入、新成員未設定、誰能改、?project=、成員與權限一起存、移出清掉、邀請、隔離。
 // 用法：node scripts/roles-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -170,6 +171,6 @@ const call = async (token, p, method = 'GET', body) => {
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

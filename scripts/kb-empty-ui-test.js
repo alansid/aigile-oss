@@ -27,7 +27,7 @@ try {
     await login(tok, '/p/main/files');
     await until(() => js("!!document.querySelector('[data-files-tab=\"kb\"]')"), 15000, '文件頁');
     await js("document.querySelector('[data-files-tab=\"kb\"]').click(); true");
-    await until(() => js("!!document.querySelector('.kb-empty')"), 8000, '空的知識庫');
+    await until(() => js("document.querySelector('[data-files-tab=kb]')?.getAttribute('aria-selected') === 'true' && !!document.querySelector('.kb-empty')?.getClientRects().length"), 8000, '空的知識庫');
   };
   const intro = '知識庫還是空的 把想讓 AI 讀懂的文件放進來，例如規章、手冊、流程。放進來的會抽字、整理成知識頁，大家和 AI 都搜得到；一般專案文件不會。';
 

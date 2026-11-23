@@ -125,5 +125,6 @@ try {
   console.error('read-cost-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('read-cost-test.js')) || '').trim());
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await raw.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

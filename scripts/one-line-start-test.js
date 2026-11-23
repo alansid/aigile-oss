@@ -8,6 +8,7 @@
 // 7. 等待腳本寫 wait.pid、結束時刪掉
 // 全部用暫存資料夾、假的 claude（不動真的 Claude Code 設定、不寫真的家目錄）；測試開的 watcher 用 pid 停
 // 用法：node scripts/one-line-start-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -463,8 +464,8 @@ try {
   process.exitCode = 1;
 } finally {
   for (const pid of new Set(testPids)) killPid(pid);
-  server.close();
-  db.close?.();
+  await stopServer(server);
+  await db.close?.();
   await new Promise(ok => setTimeout(ok, 500));
   try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
 }

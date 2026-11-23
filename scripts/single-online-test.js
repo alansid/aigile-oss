@@ -7,6 +7,7 @@
 //   B 建卡：requestId 相同回原卡（原本就有）；AI 30 分鐘內同專案同標題未結案也回原卡
 //   C 取代舊等待腳本比對命令列；wait.pid 超過 5 分鐘沒更新＝舊檔（PID 可能被重用），不算在跑、絕不停它
 // 用法：node scripts/single-online-test.js
+import { stopChild, stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -196,8 +197,8 @@ try {
   console.error('single-online-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
 } finally {
-  for (const w of procs) try { w.p.kill(); } catch {}
-  server.close();
-  await sleep(300);
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await Promise.all(procs.map(w => stopChild(w.p)));
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

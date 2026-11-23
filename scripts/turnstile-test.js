@@ -9,6 +9,7 @@ import assert from 'node:assert';
 import { createApp } from '../src/core.js';
 import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
+const databases = [];
 
 const SECRET = 'ts-secret-for-test-8841';
 // 假驗證器：token 以 ok- 開頭才算過；記下收到的 secret 與 remoteip
@@ -27,6 +28,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-turnstile-'));
 const seen = [];
 const mk = async (file, config) => {
   const db = await openTestDb(path.join(dataDir, file), {});
+  databases.push(db);
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', authFailLimit: '1000', ...config } });
   return async (token, p, method = 'GET', body, ip = '203.0.113.5') => {
     const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -95,5 +97,6 @@ try {
   process.exitCode = 1;
 } finally {
   fake.close();
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  for (const db of databases) await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

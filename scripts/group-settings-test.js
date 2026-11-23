@@ -8,6 +8,7 @@ import assert from 'node:assert';
 import { createApp } from '../src/core.js';
 import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
+const databases = [];
 
 const SECRET = 'blue-sky-7781';
 const ENV_CODE = 'env-code-5521';
@@ -18,6 +19,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-group-settings-'))
 const seen = [];
 const mk = async (file, config) => {
   const db = await openTestDb(path.join(dataDir, file), {});
+  databases.push(db);
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { rateLimitPerMin: '100000', teamCacheMs: '0', authFailLimit: '1000', ...config } });
   return async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + encodeURI(p), { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -112,5 +114,6 @@ try {
   console.error('group-settings-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  for (const db of databases) await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

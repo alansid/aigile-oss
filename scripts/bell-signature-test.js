@@ -104,5 +104,6 @@ try {
   process.exitCode = 1;
 } finally {
   await sleep(50);
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

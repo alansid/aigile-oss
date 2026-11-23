@@ -153,5 +153,6 @@ try {
   console.error('dm-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {} // Windows：資料庫檔還開著時刪不掉
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); // Windows：資料庫檔還開著時刪不掉
 }

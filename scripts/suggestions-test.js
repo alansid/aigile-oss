@@ -1,5 +1,6 @@
 // AI 建議批次處理驗收測試：批次採用／略過、AI 不能批次、部分失敗不中斷、通知合併、上限。
 // 用法：node scripts/suggestions-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -101,6 +102,6 @@ const rid = () => 'req_s' + (++n);
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

@@ -13,11 +13,13 @@ import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { createLiveHub } from '../src/live.js';
 import { testToken } from './test-token.js';
+const databases = [];
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-live-'));
 const mkApp = async (name, live) => {
   const db = await openTestDb(path.join(dataDir, name + '.db'));
+  databases.push(db);
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', peopleCheckMs: '1' }, live });
   const call = async (token, p, method = 'GET', body, signal) => app(new Request('http://localhost' + encodeURI(p), { method, signal, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   const json = async (...a) => { const r = await call(...a); return { status: r.status, body: await r.json().catch(() => ({})) }; };
@@ -121,4 +123,7 @@ try {
 } catch (e) {
   console.error('live-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
+} finally {
+  for (const db of databases) await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

@@ -5,6 +5,7 @@
 //   - 喚醒指令啟動失敗（沒有 exit 事件）後 running 一直是 true，之後每次門鈴都只「排隊補跑」
 //   - public/wait-for-bell.js、public/wake-qa.mjs 仍公開可下載
 // 用法：node scripts/bell-invite-wake-test.js
+import { stopChild, stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -105,7 +106,9 @@ try {
   console.error('bell-invite-wake-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  watcher?.kill(); server?.close();
+  await stopChild(watcher);
+  await stopServer(server);
   await sleep(200);
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await raw.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

@@ -1,5 +1,6 @@
 // 新登入驗收測試：邀請連結、被邀請頁資料、裝置與 6 位數配對、登入碼長期保留／換一組、重設登入、AI Token 不變。
 // 用法：node scripts/login-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -202,6 +203,6 @@ const tokenOf = url => url.split('/invite/')[1];
     console.error('❌', e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();

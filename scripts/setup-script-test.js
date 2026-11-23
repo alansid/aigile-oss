@@ -2,6 +2,7 @@
 // 修正前：接入要 AI 自己一步步下載、核對、寫設定（一個接入曾跑到 587 回合）；
 //   setup.md 的等待指令沒帶 --env-file，照抄就 CONFIG_ERROR；舊 watcher.env 缺 BELL_FILE、PID_FILE，重接也沒人補
 // 用法：node scripts/setup-script-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -167,6 +168,7 @@ try {
   console.error('setup-script-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  server.close();
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

@@ -3,6 +3,7 @@
 // 修正後：--max-min 是健康檢查間隔，沒事繼續等；結束就是有事（待處理、錯誤、Token 失效）；睡醒給 watcher 7 分鐘緩衝
 // 用本機記憶體資料庫，不連正式庫
 // 用法：node scripts/wait-no-exit-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -162,6 +163,7 @@ try {
   process.exitCode = 1;
 } finally {
   for (const w of procs) await w.kill().catch(() => {});
-  server.close();
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

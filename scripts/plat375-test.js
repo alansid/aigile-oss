@@ -1,4 +1,5 @@
 // PLAT-375 測試：腳本或 watcher.env 更新後，watcher 自動檢查語法並換新重開（換檔、壞檔、叫醒中不換、pid 交接、不重複叫醒）
+import { stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -120,6 +121,6 @@ try {
   console.log('plat375-test：全部通過');
 } finally {
   if (trackedPid && alive(trackedPid)) { try { process.kill(trackedPid, 'SIGKILL'); } catch {} }
-  srv.close();
+  await stopServer(srv);
   fs.rmSync(dir, { recursive: true, force: true });
 }

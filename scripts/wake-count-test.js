@@ -6,6 +6,7 @@
 // 5. watcher：WAKE_CMD 是 echo（只寫門鈴）不算；真的執行喚醒指令才算
 // 6. 腳本雜湊：watcher-env 給的雜湊等於改過的 watcher.mjs、aigile-wait.mjs
 // 本機暫存資料庫與本機伺服器，不連任何站。用法：node scripts/wake-count-test.js
+import { stopChild } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -187,7 +188,6 @@ try {
   console.error('wake-count-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
 } finally {
-  for (const k of kids) { try { k.kill(); } catch {} }
-  await sleep(500);
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  await Promise.all(kids.map(stopChild));
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

@@ -15,11 +15,13 @@ import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { startKit } from './browser-kit.js';
 import { testToken } from './test-token.js';
+const databases = [];
 
 const dirs = [];
 async function mk(config = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-harden-')); dirs.push(dir);
   const db = await openTestDb(path.join(dir, 'switch.db'), { legacyProjects: false });
+  databases.push(db);
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', teamCacheMs: '0', ...config } });
   const call = async (token, p, method = 'GET', body, ip = '198.51.100.1', raw) => {
     const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip, ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: raw ?? (body ? JSON.stringify(body) : undefined) }), 'http://localhost');
@@ -115,5 +117,6 @@ try {
   process.exitCode = 1;
 } finally {
   for (const k of kits) await k.stop().catch(() => {});
-  for (const d of dirs) try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+  for (const db of databases) await db.close();
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

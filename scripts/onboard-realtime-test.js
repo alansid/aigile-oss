@@ -10,11 +10,13 @@ import assert from 'node:assert';
 import { createApp } from '../src/core.js';
 import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
+const databases = [];
 
 const dirs = [];
 async function onboarding(extra) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-bell-')); dirs.push(dataDir);
   const db = await openTestDb(path.join(dataDir, 'switch.db'));
+  databases.push(db);
   const app = createApp({ db, storage: dbStorage(db), docText: '', ...extra, config: { openJoin: '1', rateLimitPerMin: '100000', ...(extra.config || {}) } });
   const call = async (token, p, method = 'GET', body) => (await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost')).json();
   const boss = await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' });
@@ -47,5 +49,6 @@ try {
   console.error('onboard-realtime-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  for (const d of dirs) try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+  for (const db of databases) await db.close();
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

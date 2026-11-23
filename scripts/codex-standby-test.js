@@ -1,4 +1,5 @@
 // Codex 接入、閒置巡檢與關窗後保留通知
+import { stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -114,6 +115,7 @@ try {
   console.error('codex-standby-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  server.close();
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

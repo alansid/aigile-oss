@@ -6,6 +6,7 @@
 // 5. 網頁：工具多一個 Copilot CLI、有一行啟動、寫明不自動叫醒與每月 50 次
 // 全部用暫存資料夾與假的 copilot（COPILOT_HOME 隔離，不碰真的 ~/.copilot、~/.aigile）
 // 用法：node scripts/copilot-cli-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -200,5 +201,7 @@ try {
   console.log('copilot-cli-test：全部通過');
 } finally {
   for (const f of pidFiles) { try { killPid(Number(fs.readFileSync(f, 'utf8'))); } catch {} }
-  server.close();
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

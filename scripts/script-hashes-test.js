@@ -17,6 +17,7 @@ import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { scriptHashes, HASHED_SCRIPTS } from './script-hashes.mjs';
 import { testToken } from './test-token.js';
+let db;
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = f => fs.readFileSync(path.join(root, f), 'utf8');
@@ -41,7 +42,7 @@ try {
   assert.match(JSON.parse(read('package.json')).scripts.deploy, /^node scripts\/releases\.mjs --deployed && /, 'npm run deploy 先跑 releases.mjs（才有最新雜湊）');
 
   // C4：API 回的就是傳進來的雜湊
-  const db = await openTestDb(path.join(dataDir, 'switch.db'));
+  db = await openTestDb(path.join(dataDir, 'switch.db'));
   const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: h, config: { openJoin: '1', rateLimitPerMin: '100000' } });
   const call = async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -79,5 +80,6 @@ try {
   console.error('script-hashes-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db?.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

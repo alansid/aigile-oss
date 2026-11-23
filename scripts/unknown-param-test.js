@@ -109,6 +109,6 @@ try {
 
   console.log(`unknown-param: all checks passed（呼叫端組合 ${combos} 個）`);
 } finally {
-  db.close?.();
+  await db.close?.();
   fs.rmSync(dataDir, { recursive: true, force: true });
 }

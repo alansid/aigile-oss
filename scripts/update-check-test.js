@@ -12,6 +12,7 @@ import { createApp } from '../src/core.js';
 import { openTestDb } from './test-db.js';
 import { dbStorage } from '../src/storage-db.js';
 import { APP_VERSION, cmpVersion } from '../src/version.js';
+const databases = [];
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-upd-'));
 let calls = 0, reply = null;
@@ -24,6 +25,7 @@ const fakeFetch = async (url, opts) => {
 };
 const site = async (name, config = {}) => {
   const db = await openTestDb(path.join(dataDir, name + '.db'), { legacyProjects: false });
+  databases.push(db);
   const app = createApp({ db, storage: dbStorage(db), docText: '', config: { openJoin: '1', rateLimitPerMin: '100000', updateFetch: fakeFetch, ...config } });
   const call = async (token, p, method = 'GET', body) => {
     const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
@@ -99,4 +101,7 @@ try {
 } catch (e) {
   console.error('update-check-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
+} finally {
+  for (const db of databases) await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

@@ -2,6 +2,7 @@
 // 修正後：--tool claude 時腳本直接裝通用 MCP aigile（使用者範圍，整台電腦一次；已裝跳過、失敗印指令且不中斷）；Codex 寫進 config.toml（先備份）
 // 用假的 claude（scripts/fake-claude.mjs）記錄呼叫，絕不動真的 Claude Code 設定
 // 用法：node scripts/mcp-install-test.js
+import { stopServer } from './test-process.js';
 import './test-home.mjs'; // 不寫到真的家目錄
 import fs from 'node:fs';
 import os from 'node:os';
@@ -89,7 +90,7 @@ try {
   console.error('mcp-install-test 失敗：', e.message);
   process.exitCode = 1;
 } finally {
-  server.close();
-  db.close?.();
+  await stopServer(server);
+  await db.close?.();
   fs.rmSync(dataDir, { recursive: true, force: true });
 }

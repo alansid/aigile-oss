@@ -11,6 +11,7 @@
 //   336 B ACK 順便推進工作記憶的 messagesCursor（帶 cursor 或推到確認的最新那則，只往前）
 //   336 D 待命規則：例行輪次對本機只回一行
 // 用法：node scripts/mcp-slim-test.js
+import { stopChild, stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,6 +54,7 @@ const BASE = `http://127.0.0.1:${server.address().port}`;
 const decode = c => JSON.parse(Buffer.from(c.replace(/^cur_/, '').replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString()).s;
 const LONG = '這是一段很長的說明文字，'.repeat(20); // 240 字
 
+let br;
 try {
   const liu = (await call(null, '/api/join', 'POST', { name: '王大明', role: 'PO' })).body;
   const mkAi = async name => {
@@ -197,7 +199,7 @@ try {
   // 轉接腳本：memory 成功、ack 回游標 → 寫本機 state.json
   const bw = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-p336c-')), bd = path.join(bw, '.aigile', 'PG_B');
   fs.mkdirSync(bd, { recursive: true }); fs.writeFileSync(path.join(bd, '.token'), B.tok); fs.writeFileSync(path.join(bd, 'watcher.env'), `AIGILE_BASE=${BASE}\n`);
-  const br = spawn(process.execPath, [path.join(ROOT, 'public', 'aigile-mcp.mjs')], { cwd: bw, env: { ...process.env, AIGILE_DIR: bw, AIGILE_AGENT: '', USERPROFILE: os.tmpdir(), HOME: os.tmpdir() }, stdio: 'pipe' });
+  br = spawn(process.execPath, [path.join(ROOT, 'public', 'aigile-mcp.mjs')], { cwd: bw, env: { ...process.env, AIGILE_DIR: bw, AIGILE_AGENT: '', USERPROFILE: os.tmpdir(), HOME: os.tmpdir() }, stdio: 'pipe' });
   let bout = ''; br.stdout.on('data', d => { bout += d; });
   let bid = 0;
   const brpc = async (name, args) => { const id = ++bid; br.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n');
@@ -210,9 +212,12 @@ try {
   const topB = (await call(B.tok, '/api/messages?limit=1')).body.nextCursor;
   await brpc('aigile_ack', { notificationIds: nB.map(n => n.notificationId), cursor: topB });
   assert.ok(local().messagesCursor === topB && local().currentTask.title === '本機同步測試', 'ack 回游標後本機 state.json 只改游標');
-  br.stdin.end(); br.kill();
+  br.stdin.end();
 
   console.log('mcp-slim-test：全部通過');
 } finally {
-  server.close();
+  await stopChild(br);
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

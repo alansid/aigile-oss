@@ -8,6 +8,7 @@
 //   C 重接設定（Claude Code）第一步：一次 ToolSearch 載入全部 aigile 工具
 //   D 測試；工具說明繁中
 // 用法：node scripts/mcp-write-tools-test.js
+import { stopChild, stopServer } from './test-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -154,6 +155,8 @@ try {
   console.error('mcp-write-tools-test 失敗：', e.stack || e.message);
   process.exitCode = 1;
 } finally {
-  try { bridge?.kill(); } catch {}
-  server.close();
+  try { await stopChild(bridge); } catch {}
+  await stopServer(server);
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

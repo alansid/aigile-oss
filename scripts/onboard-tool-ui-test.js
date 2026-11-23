@@ -10,7 +10,7 @@ import assert from 'node:assert';
 import { startKit, findBrowser, until, sleep } from './browser-kit.js';
 
 const kit = await startKit('tool');
-try {
+async function runChecks() {
   const { call } = kit;
   const P = '預設專案';
   const boss = (await call(null, '/api/join', 'POST', { name: '林志明', role: 'PO' })).body;
@@ -39,7 +39,7 @@ try {
   assert.equal((await call(boss.token, `/api/my-ais/${A.participantId}/onboarding`, 'POST', { tool: 'claude' })).status, 200, '完整版 POST 收 tool');
   console.log('onboard-tool-ui-test：API 通過');
 
-  if (!findBrowser()) { console.log('onboard-tool-ui-test：略過畫面（找不到 Chrome／Edge）'); await kit.stop(); process.exit(0); }
+  if (!findBrowser()) { console.log('onboard-tool-ui-test：略過畫面（找不到 Chrome／Edge）'); return; }
   const { js, login, cdp, goto } = await kit.browser(1280, 900);
   const J = async code => JSON.parse(await js(`JSON.stringify(${code})`));
   const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
@@ -150,6 +150,10 @@ try {
     console.log(`onboard-tool-ui-test：${zh ? '中文' : '英文'}通過`);
   }
   console.log('onboard-tool-ui-test：全部通過');
+}
+
+try {
+  await runChecks();
 } catch (e) {
   console.error('onboard-tool-ui-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('onboard-tool-ui-test.js')) || ''); process.exitCode = 1;
 } finally { await kit.stop(); }

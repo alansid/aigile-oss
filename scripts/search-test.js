@@ -94,5 +94,6 @@ try {
   console.error('search-test 失敗：', e.message, (e.stack.split('\n').find(l => l.includes('search-test.js')) || '').trim());
   process.exitCode = 1;
 } finally {
-  try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  await db.close();
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

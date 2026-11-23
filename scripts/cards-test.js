@@ -1,5 +1,6 @@
 // 工作卡片驗收測試（第一階段）：建立、權限、狀態連動、驗證規則、紀錄、增量讀取、衝突。
 // 用法：node scripts/cards-test.js
+import { stopChild } from './test-process.js';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -471,6 +472,6 @@ const rid = () => 'req_c' + (++n);
     console.error(e);
     process.exitCode = 1;
   } finally {
-    server.kill();
+    await stopChild(server);
   }
 })();
