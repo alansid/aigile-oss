@@ -33,7 +33,7 @@ try {
     await js('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
   };
   const pages = [
-    ['總覽', '/', "!!document.querySelector('body.at-hub #page-work .hub-card')"],
+    ['總覽', '/', "!!document.querySelector('body.at-hub #page-work .project-page')"],
     ['訊息', '/p/main/messages', "document.querySelector('#page-messages')?.hidden === false"],
     ['要你處理', '/p/main/inbox', "document.querySelector('#page-work .work-title h2')?.textContent === '要你處理'"],
     ['工作', '/p/main/work', "!!document.querySelector('#page-work #card-q')"],
