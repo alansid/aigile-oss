@@ -8981,64 +8981,131 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
   }
   // 專案 ⚙ › 審查（leader、管理員能改；其他人只看）
-  const RV_SEG = { // 「不要／要」的英文是 Off／On（字典的「不要」是 No thanks），用 L() 在畫的時候決定
+  const RV_SEG = {
     cards: [['off', '不審'], ['code', '只有程式卡'], ['all', '全部的卡']],
-    who: [['any', '人或 AI 都可以'], ['ai', '只有 AI'], ['human', '只有人'], ['roles', '指定角色'], ['members', '指定幾位']],
-    need: [[1, '1 位'], [2, '2 位']],
-    humanPass: [['separate', '分開按：通過後同一則直接出「同意 commit」'], ['combined', '通過就算同意 commit']],
-    needHuman: [[false, () => L('不要', 'Off')], [true, () => L('要', 'On')]], notOwner: [[false, () => L('不要', 'Off')], [true, () => L('要', 'On')]], diffUpload: [[false, '不可以：只附版本、分支'], [true, '可以：送審時附 diff 檔']],
+    who: [['any', '人或 AI'], ['ai', '只有 AI'], ['human', '只有人']],
+    whoPick: [['roles', '指定角色'], ['members', '指定成員']],
+    need: [[1, '1'], [2, '2']],
   };
-  // 審查者要多不一樣：單選卡片，每個附一句說明
-  const RV_DIFFER_OPTS = [['any', '不限（預設）', '不是作者就好。'], ['model', '不同模型', '寫和審用不同的模型，例如甲模型寫、乙模型審。同一家也可以，同一個模型的新舊版本也算不同。'], ['vendor', '不同家', '寫和審用不同家的工具，例如 Claude 寫、Codex 審。']];
+  const RV_DIFFER_OPTS = [
+    ['any', '不限', '不是作者就好（預設）'],
+    ['model', '不同模型', '同一家也可以，新舊版本算不同'],
+    ['vendor', '不同家', '例如 Claude 寫、Codex 審'],
+  ];
+  const RV_HUMAN_PASS_OPTS = [
+    ['separate', '分開按', '通過後再按一次「同意 commit」（預設）'],
+    ['combined', '一起算', '通過就等於同意 commit'],
+  ];
   async function openReviewSettings(pj) {
     let set;
     try { set = await api(`/api/projects/${encodeURIComponent(pj)}/review-settings`); } catch (err) { return toast(err.message); }
     const draft = { ...set.settings };
-    const seg = (k, dis = false) => `<div class="seg-scope rv-seg" role="radiogroup" aria-label="${esc(k)}">${RV_SEG[k].map(([v, t]) => `<button type="button" role="radio" data-rv-set="${k}" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft[k] === v}"${dis || !set.canEdit ? ' disabled' : ''}>${esc(typeof t === 'function' ? t() : t)}</button>`).join('')}</div>`;
-    const row = (label, sub, ctl, hint = '') => `<div class="rv-row"><div class="rv-row-l"><b>${label}</b>${sub ? `<span class="muted small">${sub}</span>` : ''}</div><div class="rv-row-r">${ctl}${hint ? `<p class="muted small">${hint}</p>` : ''}</div></div>`;
+    let pickOpen = draft.who === 'roles' || draft.who === 'members';
+    let diffHelpOpen = false;
+    let eligibleOpen = false;
+    let logOpen = false;
     const members = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && memberIn(p, pj));
-    const differ = () => `<div class="rv-differ" role="radiogroup" aria-label="審查者要多不一樣">${RV_DIFFER_OPTS.map(([v, t, d]) => `<button type="button" role="radio" class="rv-opt" data-rv-set="differ" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft.differ === v}"${set.canEdit ? '' : ' disabled'}><b>${esc(t)}</b><span class="muted small">${esc(d)}</span></button>`).join('')}</div>`;
-    // 現在符合的審查者：不限時照舊列；不同模型／不同家時，選一位 AI 當作者，看誰可以審、誰被劃掉（原因：同一個模型／同一家）
-    let authorId = ((set.ais || []).find(a => a.model) || (set.ais || [])[0])?.participantId || ''; // 預設挑第一位回報過模型的 AI
-    const whoCan = () => {
+    const seg = (k, dis = false) => `<div class="seg-scope rv-seg" role="radiogroup" aria-label="${esc(k)}">${RV_SEG[k].map(([v, t]) => `<button type="button" role="radio" data-rv-set="${k === 'whoPick' ? 'who' : k}" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft[k === 'whoPick' ? 'who' : k] === v}"${dis || !set.canEdit ? ' disabled' : ''}>${esc(t)}</button>`).join('')}</div>`;
+    const row = (label, ctl, hint = '') => `<div class="rv-row"><div class="rv-row-l"><b>${label}</b></div><div class="rv-row-r">${ctl}${hint ? `<p class="muted small">${hint}</p>` : ''}</div></div>`;
+    const sw = (k, label, hint = '') => `<div class="rv-sw-row"><button type="button" role="switch" class="rv-sw" data-rv-set="${k}" data-v="${esc(JSON.stringify(!draft[k]))}" aria-checked="${!!draft[k]}" aria-label="${esc(label)}"${set.canEdit ? '' : ' disabled'}></button><span>${label}</span></div>${hint ? `<p class="muted small">${hint}</p>` : ''}`;
+    const optList = (k, opts, aria) => `<div class="rv-differ" role="radiogroup" aria-label="${esc(aria)}">${opts.map(([v, t, d]) => `<button type="button" role="radio" class="rv-opt" data-rv-set="${k}" data-v="${esc(JSON.stringify(v))}" aria-checked="${draft[k] === v}"${set.canEdit ? '' : ' disabled'}><span><b>${esc(t)}</b> <span class="muted small">${esc(d)}</span></span></button>`).join('')}</div>`;
+    let authorId = ((set.ais || []).find(a => a.model) || (set.ais || [])[0])?.participantId || '';
+    const whoCanData = () => {
       const chips = `<div class="rv-chips">${set.eligible.map(p => `<span class="rv-chip">${rvWho(p)}</span>`).join('') || '<span class="muted small">沒有符合的人或 AI</span>'}</div>`;
       const author = (set.ais || []).find(a => a.participantId === authorId);
-      if (draft.differ === 'any' || !author) return chips + (set.eligible.some(p => p.kind === 'ai' && (!p.tool || !p.model)) && draft.differ !== 'any' ? '<p class="muted small">「模型不明」的 AI 當作跟誰都不一樣。</p>' : '');
-      const list = set.eligible.filter(p => p.participantId !== author.participantId).map(p => {
+      if (draft.differ === 'any' || !author) return { summary: `${set.eligible.length} 位可以審`, html: chips };
+      const cands = set.eligible.filter(p => p.participantId !== author.participantId);
+      let ok = 0, no = 0;
+      const list = cands.map(p => {
         const why = rvWhyNot(draft.differ, author, p), unk = p.kind === 'ai' && (!p.model || (draft.differ === 'vendor' && !p.tool));
+        if (why) no++; else ok++;
         return `<li class="${why ? 'rv-no' : 'rv-yes'}"><span aria-hidden="true">${why ? '⛔' : '✅'}</span> ${why ? `<s>${rvWho(p)}</s>` : rvWho(p)} <span class="muted small">${why ? esc(why) : p.kind !== 'ai' ? '人一律可以' : unk ? '模型不明，當作不一樣' : '可以'}</span></li>`;
       }).join('');
-      return `<label class="rv-author">作者<select data-rv-author>${set.ais.map(a => `<option value="${esc(a.participantId)}"${a.participantId === authorId ? ' selected' : ''}>${esc(a.name)} · ${esc(rvTagText(a))}</option>`).join('')}</select></label>
-        <ul class="rv-cands">${list || '<li class="muted small">沒有符合的人或 AI</li>'}</ul>`;
+      return {
+        summary: `${ok} 位可以審 · ${no} 位不行`,
+        html: `<label class="rv-author">作者<select data-rv-author>${set.ais.map(a => `<option value="${esc(a.participantId)}"${a.participantId === authorId ? ' selected' : ''}>${esc(a.name)} · ${esc(rvTagText(a))}</option>`).join('')}</select></label><ul class="rv-cands">${list || '<li class="muted small">沒有符合的人或 AI</li>'}</ul>`,
+      };
+    };
+    const nowSummary = () => {
+      if (draft.cards === 'off') return L('目前：<b>不審</b>（預設不審，不會多花 token）', 'Now: <b>Off</b> (off by default; saves tokens)');
+      const p1 = L(draft.cards === 'code' ? '只審程式卡' : '審全部的卡', draft.cards === 'code' ? 'code cards only' : 'all cards');
+      const whoRaw = L({ any: '人或 AI', ai: 'AI', human: '人', roles: '指定角色', members: '指定成員' }[draft.who] || '人或 AI', { any: 'person or AI', ai: 'AI', human: 'person', roles: 'selected roles', members: 'selected members' }[draft.who] || 'person or AI');
+      const whoText = whoRaw + (whoRaw.endsWith('AI') && state.lang !== 'en' ? ' ' : '');
+      const p2 = L(`${draft.need} 位${whoText}通過${draft.need === 2 && draft.needHuman ? '，至少 1 位是人' : ''}`, `${draft.need} ${whoText}${draft.need === 2 && draft.needHuman ? ', at least 1 person' : ''}`);
+      const p3 = L({ any: '審查者不是作者就好', model: '審查者要不同模型', vendor: '審查者要不同家' }[draft.differ] || '審查者不是作者就好', { any: 'reviewer: anyone but the author', model: 'reviewer on a different model', vendor: 'reviewer from a different vendor' }[draft.differ] || 'reviewer: anyone but the author');
+      return L(`目前：<b>${p1}</b> · <b>${p2}</b> · <b>${p3}</b>`, `Now: <b>${p1}</b> · <b>${p2}</b> · <b>${p3}</b>`);
+    };
+    const pickLinkLabel = () => {
+      if (draft.who === 'roles') return L(`已指定：${draft.roles.length ? esc(draft.roles.join('、')) : '未選'} ✎`, `Picked: ${draft.roles.length ? esc(draft.roles.join(', ')) : 'None'} ✎`);
+      if (draft.who === 'members') {
+        const names = members().filter(p => draft.members.includes(p.participantId)).map(p => p.name);
+        return L(`已指定：${names.length ? esc(names.join('、')) : '未選'} ✎`, `Picked: ${names.length ? esc(names.join(', ')) : 'None'} ✎`);
+      }
+      return L('指定角色或成員…', 'Pick roles or members…');
     };
     const draw = () => {
+      const elFold = body.querySelector('[data-rv-eligible-fold]'), lgFold = body.querySelector('[data-rv-log-fold]');
+      if (elFold) eligibleOpen = elFold.open;
+      if (lgFold) logOpen = lgFold.open;
       const on = draft.cards !== 'off';
+      const wc = on ? whoCanData() : null;
+      const nowEl = body.modal.querySelector('.rv-now');
+      if (nowEl) nowEl.innerHTML = nowSummary();
       body.querySelector('.rv-set').innerHTML = `
-        ${row('哪些卡要審', '', seg('cards'), on ? '程式卡＝有附 commit、分支、diff，或有人請同意 commit 的卡。' : '預設不審，不會多花 token。')}
-        ${on ? `${row('誰可以審', '', seg('who') + (draft.who === 'roles' ? `<input class="rv-roles" data-rv-roles maxlength="200" placeholder="角色，用頓號分開，例如 程式開發、使用體驗" value="${esc(draft.roles.join('、'))}"${set.canEdit ? '' : ' disabled'}>` : '')
-            + (draft.who === 'members' ? `<div class="rv-members">${members().map(p => `<label class="rv-check"><input type="checkbox" data-rv-member="${esc(p.participantId)}"${draft.members.includes(p.participantId) ? ' checked' : ''}${set.canEdit ? '' : ' disabled'}> ${esc(p.name)}</label>`).join('')}</div>` : ''))}
-          ${row('要幾位通過', '', seg('need'))}
-          ${row('送審可以上傳 diff', '只有 leader、管理員能改', seg('diffUpload'), `${set.diffUploadDefault ? '不可以' : '不可以（預設）'}：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。<br>${set.diffUploadDefault ? '可以（預設）' : '可以'}：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。<br>改這項會記在審查紀錄。`)}
-          ${row('人審查通過時', '審查者剛好也是同意 commit 的人', seg('humanPass'), '預設分開按，人會多看一眼要 commit 的版本。')}
-          ${row('至少要有一位是人', '「要幾位」選 2 才能設', seg('needHuman', draft.need !== 2))}
-          ${row('審查者要多不一樣', '只管 AI；人一律算不一樣', differ(), '模型是 AI 在簽到和送審、審查時自己回報的；中途換了模型，下次送審或審查就會更新。不知道模型或工具的 AI，當作跟誰都不一樣。')}
-          ${row('不能是作者的主人', '多人團隊用', seg('notOwner'), '開了以後，小明的 AI 寫的，要小華或小華的 AI 審。')}
-          ${row('固定規則', '', '<p class="rv-lock">🔒 審查者不能是作者。在這張卡上提交過程式的都算作者，這條每個專案都一樣，不能關。</p>')}
-          ${row('現在符合的審查者', draft.differ !== 'any' && set.ais?.length ? '選一位 AI 當作者，看誰可以審' : '', whoCan())}` : ''}
-        ${set.log?.length ? `<details class="rv-log"><summary>審查紀錄 · ${set.log.length}</summary><ul>${set.log.map(l => `<li>${rvTime(l.at)} · ${esc(l.byName || '')}${/^把/.test(l.text) ? ' ' : '：'}${esc(l.text)}</li>`).join('')}</ul></details>` : ''}`;
+        <div class="rv-grp-h">審哪些卡</div>
+        ${row('哪些卡要審', seg('cards'), on ? '程式卡：有附 commit、分支、diff，或有人請同意 commit 的卡。' : '預設不審，不會多花 token。')}
+        ${on ? `
+          <div class="rv-grp-h">誰來審</div>
+          ${row('誰可以審', `<div class="rv-who-bar">${seg('who')}<button type="button" class="link rv-pick-link" data-rv-pick>${pickLinkLabel()}</button></div>${pickOpen ? `<div class="rv-pick-box">${seg('whoPick')}${draft.who === 'roles' ? `<input class="rv-roles" data-rv-roles maxlength="200" placeholder="角色，用頓號分開，例如 程式開發、使用體驗" value="${esc(draft.roles.join('、'))}"${set.canEdit ? '' : ' disabled'}>` : draft.who === 'members' ? `<div class="rv-members">${members().map(p => `<label class="rv-check"><input type="checkbox" data-rv-member="${esc(p.participantId)}"${draft.members.includes(p.participantId) ? ' checked' : ''}${set.canEdit ? '' : ' disabled'}> ${esc(p.name)}</label>`).join('')}</div>` : '<p class="muted small">點上方「指定角色」或「指定成員」來挑選。</p>'}</div>` : ''}`)}
+          ${row('要幾位通過', `${seg('need')}${draft.need === 2 ? `<div class="rv-sub-sw">${sw('needHuman', '至少一位是人', '2 位裡要有 1 位是人。')}</div>` : ''}`, draft.need === 2 ? '' : '選 2 位時，可以要求至少一位是人。')}
+          ${row('要多不一樣', optList('differ', RV_DIFFER_OPTS, '審查者要多不一樣'))}
+          ${row('作者的主人', sw('notOwner', '不能審自己 AI 寫的', '多人團隊用：小明的 AI 寫的，要小華或小華的 AI 審。'))}
+          <p class="rv-lock">🔒 固定規則：審查者不能是作者，每個專案都一樣。</p>
+          <div class="rv-grp-h">送審與通過</div>
+          ${row('送審附 diff', `${sw('diffUpload', '允許送審時附 diff 檔')}<p class="muted small">關閉時審查者自己到 git 看版本，打開後 diff 存在專案文件。<button type="button" class="link rv-pick-link" data-rv-diff-help>說明</button></p>${diffHelpOpen ? `<p class="muted small rv-diff-more">${set.diffUploadDefault ? '關閉' : '關閉（預設）'}：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。<br>${set.diffUploadDefault ? '打開（預設）' : '打開'}：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。<br>改這項會記在審查紀錄。</p>` : ''}`)}
+          ${row('人審通過時', optList('humanPass', RV_HUMAN_PASS_OPTS, '人審通過時'))}
+          <details class="rv-fold" data-rv-eligible-fold${eligibleOpen ? ' open' : ''}><summary><span>現在符合的審查者</span><span class="muted small">${wc.summary}</span></summary><div class="rv-fold-body">${wc.html}</div></details>` : ''}
+        ${set.log?.length ? `<details class="rv-fold rv-log" data-rv-log-fold${logOpen ? ' open' : ''}><summary><span>審查紀錄</span><span class="muted small">${set.log.length} 筆</span></summary><div class="rv-fold-body"><ul>${set.log.map(l => `<li>${rvTime(l.at)} · ${esc(l.byName || '')}${/^把/.test(l.text) ? ' ' : '：'}${esc(l.text)}</li>`).join('')}</ul></div></details>` : ''}`;
     };
-    const body = openModal('審查：程式交出去前，先給不是作者的人或 AI 看過', '<div class="rv-set"></div><p class="error" role="alert" hidden></p>', {
-      sub: `${esc(projName(pj))} · 只有 leader、管理員能改。AI 審一次約 3～10 萬 token，人審不花 token 但比較慢；建議只開「程式卡」。`,
+    const body = openModal('審查設定', '<div class="rv-set"></div><p class="error" role="alert" hidden></p>', {
+      size: 'form',
+      sub: `${esc(projName(pj))} · 只有 leader、管理員能改`,
       foot: set.canEdit ? '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-rv-save>儲存</button>' : '<button class="btn" type="button" data-close>關閉</button>' });
+    body.modal.querySelector('.modal-head')?.insertAdjacentHTML('afterend', '<div class="rv-now rv-now-head"></div>');
     draw();
-    body.modal.addEventListener('change', e => { const s = e.target.closest('[data-rv-author]'); if (s) { authorId = s.value; draw(); body.querySelector('[data-rv-author]')?.focus(); } });
+    body.modal.addEventListener('change', e => {
+      const s = e.target.closest('[data-rv-author]');
+      if (s) { authorId = s.value; draw(); body.querySelector('[data-rv-author]')?.focus(); return; }
+      const m = e.target.closest('[data-rv-member]');
+      if (m) {
+        const id = m.dataset.rvMember;
+        draft.members = m.checked ? [...new Set([...draft.members, id])] : draft.members.filter(x => x !== id);
+        draw();
+      }
+    });
+    body.modal.addEventListener('input', e => {
+      const r = e.target.closest('[data-rv-roles]');
+      if (r) {
+        draft.roles = r.value.split(/[、,，\s]+/).map(s => s.trim()).filter(Boolean);
+        const link = body.querySelector('[data-rv-pick]');
+        if (link) link.innerHTML = pickLinkLabel();
+      }
+    });
     body.modal.addEventListener('click', async e => {
+      if (e.target.closest('[data-rv-pick]')) { pickOpen = !pickOpen; return draw(); }
+      if (e.target.closest('[data-rv-diff-help]')) { diffHelpOpen = !diffHelpOpen; return draw(); }
       const b = e.target.closest('[data-rv-set]');
-      if (b && !b.disabled) { draft[b.dataset.rvSet] = JSON.parse(b.dataset.v); if (draft.need !== 2) draft.needHuman = false; return draw(); }
+      if (b && !b.disabled) {
+        const k = b.dataset.rvSet, val = JSON.parse(b.dataset.v);
+        draft[k] = val;
+        if (k === 'who' && ['any', 'ai', 'human'].includes(val)) pickOpen = false;
+        if (k === 'who' && ['roles', 'members'].includes(val)) pickOpen = true;
+        if (draft.need !== 2) draft.needHuman = false;
+        return draw();
+      }
       if (!e.target.closest('[data-rv-save]')) return;
       const rolesIn = body.querySelector('[data-rv-roles]');
       if (rolesIn) draft.roles = rolesIn.value.split(/[、,，\s]+/).map(s => s.trim()).filter(Boolean);
-      if (draft.who === 'members') draft.members = [...body.querySelectorAll('[data-rv-member]:checked')].map(x => x.dataset.rvMember);
       try {
         const { log, ...send } = draft;
         await api(`/api/projects/${encodeURIComponent(pj)}/review-settings`, { method: 'PUT', body: send });

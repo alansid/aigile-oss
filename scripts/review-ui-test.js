@@ -58,28 +58,41 @@ try {
   for (const [w, h, tag] of [...sizes].reverse()) { // 先 375 只看不存，再 1280 存，兩種寬度都看得到預設「不審」
     await size(w, h);
     await openSettings();
-    assert.equal(await text('#modal-root h2'), '審查：程式交出去前，先給不是作者的人或 AI 看過', 'A 標題');
-    assert.match(await text('#modal-root .modal-sub'), /只有 leader、管理員能改。AI 審一次約 3～10 萬 token，人審不花 token 但比較慢；建議只開「程式卡」。$/, 'A 副標');
+    assert.equal(await text('#modal-root h2'), '審查設定', 'A 標題');
+    assert.match(await text('#modal-root .modal-sub'), /只有 leader、管理員能改$/, 'A 副標');
+    assert.equal(await text('.rv-now'), '目前：不審（預設不審，不會多花 token）', 'A 不審摘要');
     assert.equal(await js("document.querySelectorAll('.rv-set .rv-row').length"), 1, 'A 不審時只有一列');
     assert.equal(await text('.rv-set .rv-row'), '哪些卡要審 不審 只有程式卡 全部的卡 預設不審，不會多花 token。', 'A 不審時的說明');
     assert.ok(!(await hscroll()), `G ${tag} 審查設定不橫向捲動`);
     await shot(`01-${tag}-專案設定-審查-預設不審`);
     await click('[data-rv-set="cards"][data-v=\'"code"\']');
     await until(() => js("document.querySelectorAll('.rv-set .rv-row').length > 5"), 3000, 'A 打開後展開其他設定');
-    assert.match(await text('.rv-set'), /程式卡＝有附 commit、分支、diff，或有人請同意 commit 的卡。/, 'A 程式卡說明');
-    assert.match(await text('.rv-lock'), /^🔒 審查者不能是作者。在這張卡上提交過程式的都算作者，這條每個專案都一樣，不能關。$/, 'A 固定規則');
-    assert.equal(await js("document.querySelector('.rv-lock').closest('.rv-row').querySelector('button, input')"), null, 'A 固定規則不是開關');
-    assert.ok(await js("[...document.querySelectorAll('[data-rv-set=\"needHuman\"]')].every(b => b.disabled)"), 'A 選 1 位時「至少要有一位是人」不能按');
+    assert.equal(await text('.rv-now'), '目前：只審程式卡 · 1 位人或 AI 通過 · 審查者不是作者就好', 'A 打開後摘要即時更新');
+    assert.equal(await js("!!document.querySelector('.modal-body .rv-now')"), false, 'A 目前摘要固定在標題區、不在捲動區裡');
+    assert.deepEqual(await js("[...document.querySelectorAll('.rv-grp-h')].map(e => e.textContent)"), ['審哪些卡', '誰來審', '送審與通過'], 'A 分三組');
+    assert.match(await text('.rv-set'), /程式卡：有附 commit、分支、diff，或有人請同意 commit 的卡。/, 'A 程式卡說明');
+    assert.equal(await js("document.querySelectorAll('[data-rv-set=\"who\"]').length"), 3, 'A 誰可以審只留 3 鈕');
+    assert.equal(await text('[data-rv-pick]'), '指定角色或成員…', 'A 指定角色或成員連結');
+    assert.equal(await js("document.querySelector('[data-rv-set=\"needHuman\"]')"), null, 'A 選 1 位時「至少一位是人」隱藏');
+    await click('[data-rv-set="need"][data-v="2"]');
+    assert.ok(await js("document.querySelector('[data-rv-set=\"needHuman\"]')?.getAttribute('role') === 'switch'"), 'A 選 2 位時出現「至少一位是人」開關');
+    await click('[data-rv-set="need"][data-v="1"]');
+    assert.match(await text('.rv-lock'), /^🔒 固定規則：審查者不能是作者，每個專案都一樣。$/, 'A 固定規則');
+    assert.equal(await js("document.querySelector('.rv-lock').querySelector('button, input')"), null, 'A 固定規則不是開關');
+    assert.ok(!(await js("document.querySelector('[data-rv-eligible-fold]').open")), 'A 現在符合的審查者預設收起');
+    await click('[data-rv-eligible-fold] summary');
     const chips = await text('.rv-chips');
     assert.ok(chips.includes('示範AG AI · 工具不明 · 模型不明') && chips.includes('示範Codex AI · Codex · 模型不明') && chips.includes('小華 人'), 'A 現在符合的審查者：' + chips);
-    assert.match(await text('.rv-set'), /審查者要多不一樣 只管 AI；人一律算不一樣 不限（預設） 不是作者就好。 不同模型 .+ 不同家 /, 'A 審查者要多不一樣三段（PLAT-419）');
+    assert.match(await text('.rv-set'), /要多不一樣 不限 不是作者就好（預設） 不同模型 同一家也可以，新舊版本算不同 不同家 例如 Claude 寫、Codex 審/, 'A 要多不一樣三段');
     assert.equal(await js(`document.querySelector('[data-rv-set="differ"][aria-checked="true"]')?.dataset.v`), '"any"', 'A 預設不限');
-    assert.match(await text('.rv-set'), /送審可以上傳 diff 只有 leader、管理員能改 不可以：只附版本、分支 可以：送審時附 diff 檔 不可以：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。 可以（預設）：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。 改這項會記在審查紀錄。/, 'A v3 送審可以上傳 diff（開源預設可以）');
-    assert.match(await text('.rv-set'), /人審查通過時 審查者剛好也是同意 commit 的人 分開按：通過後同一則直接出「同意 commit」 通過就算同意 commit 預設分開按/, 'A 人審查通過時');
-    const rows = await js("[...document.querySelectorAll('.rv-set .rv-row b')].map(b => b.textContent)");
-    assert.deepEqual(rows.slice(2, 5), ['要幾位通過', '送審可以上傳 diff', '人審查通過時'], 'A v3 位置：' + rows);
+    assert.ok(await js("document.querySelector('[data-rv-set=\"diffUpload\"]')?.getAttribute('role') === 'switch'"), 'A 送審附 diff 是開關');
+    await click('[data-rv-diff-help]');
+    assert.match(await text('.rv-diff-more'), /打開（預設）：只有送審能附 diff/, 'A 點說明展開長說明（開源預設打開）');
+    assert.match(await text('.rv-set'), /人審通過時 分開按 通過後再按一次「同意 commit」（預設） 一起算 通過就等於同意 commit/, 'A 人審通過時');
+    const rows = await js("[...document.querySelectorAll('.rv-set .rv-row > .rv-row-l b')].map(b => b.textContent)");
+    assert.deepEqual(rows, ['哪些卡要審', '誰可以審', '要幾位通過', '要多不一樣', '作者的主人', '送審附 diff', '人審通過時'], 'A v2 欄位順序：' + rows);
     assert.ok(!(await hscroll()), `G ${tag} 展開後不橫向捲動`);
-    await js("document.querySelector('.rv-set .rv-row:nth-child(4)')?.scrollIntoView({ block: 'center' }); true");
+    await js("document.querySelector('.rv-set .rv-row:nth-of-type(4)')?.scrollIntoView({ block: 'center' }); true");
     await shot(`01a-${tag}-專案設定-審查-只有程式卡`);
     if (tag === '1280') {
       await click('[data-rv-save]');
@@ -88,6 +101,25 @@ try {
   }
   assert.equal((await call(liu.token, SET)).body.settings.cards, 'code', 'A 存進去了');
   assert.match((await call(liu.token, SET)).body.log[0].text, /哪些卡要審：不審 → 只有程式卡/, 'A 寫進審查紀錄');
+  // 指定成員勾兩位 → 收起指定框 → 儲存 → 再讀一次設定，members 還是那兩位
+  await openSettings();
+  await click('[data-rv-pick]');
+  await until(() => js("!!document.querySelector('[data-rv-set=\"who\"][data-v=\\'\"members\"\\']')"), 3000, 'A 展開指定框');
+  await click('[data-rv-set="who"][data-v=\'"members"\']');
+  await until(() => js("document.querySelectorAll('[data-rv-member]').length >= 2"), 3000, 'A 成員勾選框');
+  await click('[data-rv-member]:not(:checked)');
+  await click('[data-rv-member]:not(:checked)');
+  await click('[data-rv-pick]');
+  assert.equal(await js("document.querySelectorAll('[data-rv-member]').length"), 0, 'A 收起指定框後畫面上無勾選框');
+  await click('[data-rv-save]');
+  await toastIs(/^已存：只有程式卡要 1 位審查通過$/);
+  const savedMem = (await call(liu.token, SET)).body.settings;
+  assert.equal(savedMem.who, 'members', 'A 儲存後 who 為 members');
+  assert.equal(savedMem.members.length, 2, 'A 收起指定框後儲存仍保留兩位成員');
+  await openSettings();
+  await click('[data-rv-set="who"][data-v=\'"any"\']');
+  await click('[data-rv-save]');
+  await toastIs(/^已存：只有程式卡要 1 位審查通過$/);
 
   // ---------- B 卡片：還沒送審 → 送審視窗 ----------
   const openDrawer = async key => {
@@ -216,10 +248,11 @@ try {
   await openSettings();
   await enReady();
   await sleep(400);
-  assert.equal(await text('#modal-root h2'), 'Review: have someone other than the author check the code before it ships', 'H 標題');
-  assert.match(await text('.rv-lock'), /^🔒 Reviewers can't be the author\. Anyone who submitted code on the card counts as an author\. This applies to every project and can't be turned off\.$/, 'H 固定規則');
+  assert.equal(await text('#modal-root h2'), 'Review settings', 'H 標題');
+  assert.match(await text('.rv-now'), /^Now: code cards only · 1 person or AI · reviewer: anyone but the author$/, 'H 英文摘要');
+  assert.match(await text('.rv-lock'), /^🔒 Fixed rule: reviewers can't be the author, in every project\.$/, 'H 固定規則');
   assert.match(await text('.rv-set'), /Cards that need review Off Code cards only All cards/, 'H 哪些卡要審');
-  assert.match(await text('.rv-set'), /Allow diff uploads for review Only leaders and admins can change this No: commit and branch only Yes: attach a diff when requesting review No: reviewers open this commit in git\. .+ Yes \(default\): only review requests can attach a diff\./, 'H 送審可以上傳 diff 英文');
+  assert.match(await text('.rv-set'), /Attach diff Allow a diff file when submitting Off: reviewers check the version in git\. On: diffs are saved in project docs\. ?Notes/, 'H 送審附 diff 英文');
   await shot('08-1280-英文-審查設定');
   await openDrawer(K);
   await enReady();

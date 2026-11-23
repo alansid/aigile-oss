@@ -62,10 +62,11 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openSettings();
-    assert.equal(await rowText('審查者要多不一樣'), '審查者要多不一樣 只管 AI；人一律算不一樣 不限（預設） 不是作者就好。 不同模型 寫和審用不同的模型，例如甲模型寫、乙模型審。同一家也可以，同一個模型的新舊版本也算不同。 不同家 寫和審用不同家的工具，例如 Claude 寫、Codex 審。 模型是 AI 在簽到和送審、審查時自己回報的；中途換了模型，下次送審或審查就會更新。不知道模型或工具的 AI，當作跟誰都不一樣。', `A ${tag} 三段文字照 UX`);
+    assert.equal(await rowText('要多不一樣'), '要多不一樣 不限 不是作者就好（預設） 不同模型 同一家也可以，新舊版本算不同 不同家 例如 Claude 寫、Codex 審', `A ${tag} 三段文字照 UX v2`);
     assert.deepEqual(await js("[...document.querySelectorAll('[data-rv-set=\"differ\"]')].map(b => b.getAttribute('role') + ':' + b.getAttribute('aria-checked'))"), ['radio:true', 'radio:false', 'radio:false'], `A ${tag} 單選、預設不限`);
     assert.equal(await js("document.querySelectorAll('[data-rv-author]').length"), 0, `A ${tag} 不限時不用選作者`);
-    const chips = await rowText('現在符合的審查者');
+    await click('[data-rv-eligible-fold] summary');
+    const chips = await text('[data-rv-eligible-fold]');
     for (const c of [`示範PO AI · Claude · ${SONNET}`, `示範Codex AI · Codex · ${GPT}`, '示範AG AI · Antigravity · 模型不明', '小華 人']) assert.ok(chips.includes(c), `A ${tag} 現在符合的審查者標「AI · 工具 · 模型」：${c}｜${chips}`);
     assert.equal(await js("[...document.querySelectorAll('.rv-chip')].find(c => c.textContent.includes('示範AG')).querySelector('.rv-tag').className"), 'rv-tag unk', `A ${tag} 模型不明標黃`);
     assert.ok(!(await hscroll()), `C ${tag} 不橫向捲動`);
@@ -79,14 +80,14 @@ try {
     assert.deepEqual(await cands(), [`✓ 示範AG AI · Antigravity · 模型不明 模型不明，當作不一樣`, `✓ 示範Codex AI · Codex · ${GPT} 可以`, `✗ 示範PG2 AI · Claude · ${OPUS} 同一個模型`, `✓ 示範PO AI · Claude · ${SONNET} 可以`, '✓ 小華 人 人一律可以', '✓ 劉昱志 人 人一律可以'], `A ${tag} 不同模型：示範PG 寫的，誰可以審`);
     assert.equal(await js("document.querySelector('.rv-cands .rv-no s') !== null"), true, `A ${tag} 不符合的劃掉`);
     assert.ok(!(await hscroll()), `C ${tag} 不同模型不橫向捲動`);
-    await js(`${rowOf('現在符合的審查者')}.scrollIntoView({ block: 'center' }); true`);
+    await js("document.querySelector('[data-rv-eligible-fold]')?.scrollIntoView({ block: 'center' }); true");
     await shot(`02-${tag}-審查設定-不同模型`);
 
     await pick('vendor');
     await until(async () => (await cands()).some(x => x.includes('同一家')), 3000, 'A 不同家');
     assert.deepEqual(await cands(), [`✓ 示範AG AI · Antigravity · 模型不明 模型不明，當作不一樣`, `✓ 示範Codex AI · Codex · ${GPT} 可以`, `✗ 示範PG2 AI · Claude · ${OPUS} 同一家`, `✗ 示範PO AI · Claude · ${SONNET} 同一家`, '✓ 小華 人 人一律可以', '✓ 劉昱志 人 人一律可以'], `A ${tag} 不同家：示範PG 寫的，誰可以審`);
     assert.ok(!(await hscroll()), `C ${tag} 不同家不橫向捲動`);
-    await js(`${rowOf('現在符合的審查者')}.scrollIntoView({ block: 'center' }); true`);
+    await js("document.querySelector('[data-rv-eligible-fold]')?.scrollIntoView({ block: 'center' }); true");
     await shot(`03-${tag}-審查設定-不同家`);
   }
   await click('[data-rv-save]');
@@ -173,14 +174,16 @@ try {
   await openSettings();
   await enReady();
   await sleep(400);
-  assert.equal(await rowText('How different the reviewer must be'), "How different the reviewer must be AIs only; people always count as different Any (default) Anyone but the author. Different model Written and reviewed by different models, e.g. Model A writes, Model B reviews. Same vendor is fine, and different versions of a model count as different. Different vendor Written and reviewed with tools from different vendors, e.g. Claude writes, Codex reviews. Each AI reports its model when it signs in and when it sends or reviews code. If it switches models, the next review picks it up. AIs with an unknown model or tool count as different from everyone.", 'F 三段的英文');
-  for (const label of ["Can't be the author's owner", 'At least one person']) assert.match(await rowText(label), / Off On( |$)/, 'F 開關英文是 Off／On（UX）：' + label);
+  assert.equal(await rowText('How different'), 'How different Any Anyone but the author (default) Different model Same vendor OK; versions count as different Different vendor e.g. Claude writes, Codex reviews', 'F 三段的英文');
+  assert.ok(await js("document.querySelector('[data-rv-set=\"notOwner\"]')?.getAttribute('role') === 'switch'"), 'F 作者的主人英文是開關');
+  await click('[data-rv-eligible-fold] summary');
+  await until(() => js("!!document.querySelector('[data-rv-author]')"), 3000, 'F 展開作者選單');
   await js(`(() => { const s = document.querySelector('[data-rv-author]'); s.value = ${JSON.stringify(pg.participantId)}; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
   await until(async () => (await cands()).some(x => x.includes('Same model')), 5000, 'F 換作者（英文）');
   const enC = (await cands()).join('｜');
   for (const w of [`✗ 示範PG2 AI · Claude · ${OPUS} Same model`, '✓ 示範AG AI · Antigravity · Model unknown Model unknown, counts as different', '✓ 小華 Person People always qualify']) assert.ok(enC.includes(w), `F 誰可以審（英文）：${w}｜${enC}`);
   assert.ok(!/[㐀-鿿]/.test(enC.replace(/示範\w+|小華|劉昱志/g, '')), 'F 誰可以審沒有剩中文：' + enC);
-  await js(`${rowOf('Eligible reviewers now')}.scrollIntoView({ block: 'center' }); true`);
+  await js("document.querySelector('[data-rv-eligible-fold]')?.scrollIntoView({ block: 'center' }); true");
   await shot('06-1280-英文-審查設定');
   await openDrawer(Km);
   await enReady();
