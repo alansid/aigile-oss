@@ -8392,6 +8392,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         const topics = idx.items.filter(p => p.kind === 'topic'), srcs = idx.items.filter(p => p.kind !== 'topic');
         const todo = idx.todo.length ? `<p class="muted small"><span>整理中：${idx.todo.length} 份文件</span>（${[...new Set(idx.todo.map(t => t.cardId).filter(Boolean))].map(c => `<button type="button" class="link small" data-kb-card="${esc(c)}">${esc(c)}</button>`).join('、')}）</p>` : '';
         const docList = kdocs.length ? `<h3 class="kb-h">知識庫文件（${kdocs.length} 份） <span class="muted small">只有這裡的文件會被整理、被搜尋。</span></h3>
+          <p class="muted small kb-docs-note">這些文件也在「專案文件」裡，只存一份、不會自動刪除。移出知識庫不會刪檔，只是 AI 不再整理、搜尋它。</p>
           <div class="kb-docs">${kdocs.map(x => `<div class="kb-doc-row"><span class="file-icon" aria-hidden="true">${fileIcon(x.ext)}</span><b class="file-name">${esc(x.name)}</b><span class="kb-badges">${kbDocState(x, mgr, aiName)}</span>${kbDocMore(x, mgr)}</div>`).join('')}</div>
           ${kdocs.some(x => x.kb.org === 'off') ? '<p class="muted small">「只搜原文，不整理」：AI 搜得到原文、回答附出處，但沒有知識頁。</p>' : ''}` : '';
         el.innerHTML = !empty ? `${docList}
@@ -8655,7 +8656,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <p>放到 <b>${esc(projName(pj))} ▸ ${esc(where)}</b>，共 ${files.length} 個檔${okN < files.length ? `（${files.length - okN} 個不能上傳，原因寫在旁邊）` : ''}。</p>
       <ul class="up-list">${pre.map((x, i) => `<li data-up="${i}"><span class="file-icon" aria-hidden="true">${fileIcon(extOf(x.f))}</span><span class="up-name">${esc(x.f.name)}</span><span class="muted small">${fmtBytes(x.f.size)}</span><span class="up-st${x.problem ? ' bad' : ''}">${x.problem ? '✗ ' + esc(x.problem) : '等待上傳'}</span></li>`).join('')}</ul>
       ${okN && kb ? kbCurateBox() : ''}
-      ${okN ? `<div class="warn-box">專案文件長期保存、不會自動刪除，本專案成員都能下載。</div>
+      ${okN ? `<div class="warn-box">${kb ? '檔案會存進專案文件，長期保存、不會自動刪除，本專案成員都能下載。' : '專案文件長期保存、不會自動刪除，本專案成員都能下載。'}</div>
       <label class="declare-box"><input type="checkbox" id="up-declare"><span>我確認這些檔案都不含任何程式碼（原始碼、打包檔、設定檔）與客戶個資</span></label>` : ''}
       <p class="small" id="up-sum" role="status"></p>`, {
       foot: okN ? `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" id="up-go" disabled>上傳 ${okN} 個檔</button>` : '<button class="btn" type="button" data-close>關閉</button>',
@@ -8989,7 +8990,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         : L(`目前是預設的 24 小時（主機沒設 ${env}）。主機設了 ${env} 會改用它當初始值；在這裡改過之後就以這裡為準。`, `Currently the default of 24 hours (the server has no ${env}). If the server sets ${env}, that becomes the starting value; once you change it here, this setting wins.`);
     const logs = (t.log || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(L(`${e.byName || ''} 把保存時間從 ${ttlZh(e.from)} 改成 ${ttlZh(e.to)}`, `${e.byName || ''} changed retention from ${ttlEn(e.from)} to ${ttlEn(e.to)}`))}</li>`).join('');
     return `<div class="pm-card adm-ttl"><div class="pm-setrow"><label for="adm-ttl">訊息附件保存時間</label><select id="adm-ttl" aria-describedby="adm-ttl-hint">${hs.map(h => `<option value="${h}"${h === t.hours ? ' selected' : ''}>${esc(ttlLabel(h))}${h === t.defaultHours ? L('（預設）', ' (default)') : ''}</option>`).join('')}</select><button type="button" class="btn small primary" data-pp="filettl">儲存</button>
-      <span class="muted small" id="adm-ttl-hint">訊息裡上傳的文件、截圖過了這段時間自動刪除（專案文件不受影響）。改了只影響之後上傳的檔；已經上傳的照上傳當時的設定到期，不會提早或延後刪除。存好立即生效，不用重新啟動或部署。</span>
+      <span class="muted small" id="adm-ttl-hint">只有訊息附件（在訊息裡上傳的文件、截圖）會在這段時間後自動刪除。專案文件和知識庫都不會自動刪除；知識庫裡的文件就是專案文件，只存一份。改了只影響之後上傳的檔；已經上傳的照上傳當時的設定到期，不會提早或延後刪除。存好立即生效，不用重新啟動或部署。</span>
       <span class="muted small adm-ttl-src">${src}</span></div>
       <details class="pm-gs-log adm-ttl-log"${perm.ttlLogOpen ? ' open' : ''}><summary>異動紀錄</summary><ul class="pa-log">${logs || '<li class="muted small">還沒有紀錄</li>'}</ul></details></div>`;
   }

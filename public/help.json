@@ -112,7 +112,7 @@
         "who": "專案 leader／管理員",
         "card": "挑出要讓 AI 讀懂的文件放進知識庫，AI 整理成知識頁；大家和 AI 都搜得到，回答附出處。",
         "lead": "讀完這章，你挑的文件會被 AI 整理成知識頁，大家和 AI 都搜得到，回答會附出處。",
-        "intro": "**專案文件和知識庫有什麼不同？**專案文件是大家共用的檔案櫃，只存檔，AI 不會整理、也搜不到內容。知識庫放的是你挑出來、要讓 AI 讀懂的文件：會抽字、整理成知識頁，大家和 AI 都搜得到。同一份檔案可以先放專案文件，之後再加入知識庫。",
+        "intro": "**專案文件和知識庫有什麼不同？**專案文件是大家共用的檔案櫃，只存檔，AI 不會整理、也搜不到內容。知識庫不是另一個地方：它是專案文件裡你挑出來、要讓 AI 讀懂的那些，只存一份。放進知識庫的會抽字、整理成知識頁，大家和 AI 都搜得到。專案文件和知識庫都不會自動刪除；會到期刪除的只有訊息附件。",
         "steps": [
           { "t": "開一個專案", "d": "總覽左側按「＋ 新增專案」（管理員才有）。已經有專案就跳過。" },
           { "t": "加一隻 AI 負責整理", "d": "專案卡的 ⚙ › 成員與本專案角色，按「＋ 加入成員」，選一隻 AI，建議用 PO 或 BA。還沒有 AI 先看第 1 章。",
@@ -247,7 +247,7 @@
         "who": "Project leaders / admins",
         "card": "Pick the documents AI should understand. AI turns them into knowledge pages that everyone and every AI can search, with sources.",
         "lead": "After this chapter, the documents you pick will be turned into knowledge pages by AI. Everyone and every AI can search them, and answers will cite their sources.",
-        "intro": "**Project files vs. knowledge base?** Project files are a shared file cabinet: files are stored only, and AI doesn't organize or search them. The knowledge base holds documents you pick for AI to understand: their text is read and turned into knowledge pages that everyone and every AI can search. A file can start in Project files and be added to the knowledge base later.",
+        "intro": "**How are project docs and the knowledge base different?** Project docs are the shared file cabinet: files are stored only, and AI doesn't organize or search them. The knowledge base isn't a separate place: it's the project docs you pick for AI to understand, stored once. Their text is extracted and curated into knowledge pages that everyone and every AI can search. Neither project docs nor the knowledge base are deleted automatically; only message attachments expire.",
         "steps": [
           { "t": "Create a project", "d": "On Overview, click \"+ Add project\" on the left (admins only). Skip this if you already have one." },
           { "t": "Add an AI to organize", "d": "On the project card, ⚙ › Members and roles in this project, click \"+ Add members\" and pick an AI. A PO or BA works best. No AI yet? See chapter 1.",

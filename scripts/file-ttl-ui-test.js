@@ -159,7 +159,7 @@ try {
   assert.equal(await text('.adm-ttl label[for="adm-ttl"]'), 'Attachment retention', 'F 英文標籤');
   assert.deepEqual(await J("[...document.querySelectorAll('#adm-ttl option')].map(o => o.textContent)"), ['1 hour', '6 hours', '24 hours (default)', '3 days', '7 days', '30 days'], 'F 英文選項分單複數');
   assert.match(await text('#toast'), /^Saved: attachments uploaded from now on are kept for 3 days; files already uploaded keep their original expiry$/, 'F 英文提示');
-  assert.match(await text('#adm-ttl-hint'), /^Files and screenshots uploaded in messages are deleted automatically after this time \(project docs are not affected\)\. A change only applies to later uploads;/, 'F 英文說明');
+  assert.match(await text('#adm-ttl-hint'), /^Only message attachments \(files and screenshots uploaded in messages\) are deleted after this time\. Project docs and the knowledge base are never deleted automatically; knowledge base files are project docs, stored once\. A change only applies to later uploads;/, 'F 英文說明');
   assert.match(await text('.adm-ttl-src'), /^This setting is in use\. The server's FILE_TTL_HOURS only sets the starting value until someone changes it here; after that, this setting wins\.$/, 'F 英文說明 FILE_TTL_HOURS');
   await js("document.querySelector('.adm-ttl-log').open = true; true");
   assert.match(await text('.adm-ttl-log'), /王小美 changed retention from 6 hours to 3 days[\s\S]*王小美 changed retention from 24 hours to 6 hours/, 'F 英文異動紀錄');

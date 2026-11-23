@@ -3616,6 +3616,7 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .kb-search input { flex: 1; min-width: 0; font: inherit; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
 .kb-search input:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
 .kb-h { font-size: 15px; margin: 4px 0 0; }
+.kb-docs-note { margin: 2px 0 6px; }
 .kb-list { display: grid; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
 .kb-row { display: flex; gap: 12px; align-items: flex-start; text-align: left; font: inherit; color: inherit; background: none; border: 0; border-top: 1px solid var(--border); padding: 12px 14px; cursor: pointer; }
 .kb-row:first-child { border-top: 0; }
