@@ -25,7 +25,7 @@ try {
   const chIs = n => until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${n}'`), 20000, `第 ${n} 章`);
   const go = sel => js(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) throw new Error('找不到 ' + ${JSON.stringify(sel)}); e.click(); return true; })()`);
   const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
-  const hub = async t => { await login(t, '/'); await until(() => js("!!document.querySelector('.hub .work-head') && !document.querySelector('#app').hidden"), 15000, '總覽'); await sleep(400); };
+  const hub = async t => { await login(t, '/'); await until(() => js("!!document.querySelector('.project-page [data-hub-choice=tab]') && !document.querySelector('#app').hidden"), 15000, '總覽'); await sleep(400); };
 
   // ================= 中文 =================
   const wang = await join('王小明'), W = wang.participant.participantId;
@@ -33,7 +33,7 @@ try {
   await size(1280, 900); await setLang('zh');
   await hub(wang.token);
   // 1. 新手上路：最上面、3 項、0 件寫法、底下一行（1280／375）
-  const card = () => J(`(() => { const o = document.querySelector('.ob'); if (!o) return null; const r = o.getBoundingClientRect(), g = document.querySelector('.hub-grid').getBoundingClientRect();
+  const card = () => J(`(() => { const o = document.querySelector('.ob'); if (!o) return null; const r = o.getBoundingClientRect(), g = document.querySelector('.project-page nav.project-filters').getBoundingClientRect();
     return { prog: o.querySelector('.ob-prog').textContent, foot: o.querySelector('.ob-foot')?.innerText.trim() || '', collapsed: o.classList.contains('collapsed'), above: r.bottom <= g.top, hscroll: document.documentElement.scrollWidth > innerWidth + 1,
       items: [...o.querySelectorAll('.ob-item')].map(li => [li.dataset.obStep, li.classList.contains('done'), li.querySelector('.ob-txt .small').textContent, li.querySelector('.btn')?.textContent || '', li.querySelector('a.btn')?.getAttribute('href') || '']) }; })()`);
   for (const w of [1280, 375]) {

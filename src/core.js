@@ -1746,7 +1746,8 @@ ${ending}`;
     await loadProjectRoles();
     const adminId = adminOf(people)?.id;
     const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
-    return projectRows.map(r => ({ id: r.id, name: r.name, slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // ；C-xxx 網址英文名
+    const descriptions = new Map((await db.all('SELECT project, description FROM project_descriptions')).map(r => [r.project, r.description]));
+    return projectRows.map(r => ({ id: r.id, name: r.name, description: descriptions.get(r.id) || '', slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // ；C-xxx 網址英文名
       roles: (rdefs[r.id] || []).map(d => ({ ...d, createdByName: people.get(d.createdBy)?.name || null, inUse: inUse(r.id, d) })), // 本專案角色
       dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null },
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id) && !ghostAdminIn(p, r.id, adminId)).length,
@@ -2038,7 +2039,23 @@ ${ending}`;
   // UX ：不屬於全部專案的人，專案清單只回自己所屬的專案（不露出別專案名稱）
   // PLAT-381：被隔離的成員也列出自己所屬、已封存的專案（leader 才能還原）
   const scopeProjects = (r, me) => { if (!isolatedFrom(me)) return r; const mine = [...new Set([...projectsOf(me), ...listOf(me)])]; return { ...r, items: r.items.filter(p => mine.includes(p.id)), leaders: Object.fromEntries(Object.entries(r.leaders || {}).filter(([k]) => mine.includes(k))), archivedLeaders: Object.fromEntries(Object.entries(r.archivedLeaders || {}).filter(([k]) => mine.includes(k))), readOnly: Object.fromEntries(Object.entries(r.readOnly || {}).filter(([k]) => mine.includes(k))), join: Object.fromEntries(Object.entries(r.join || {}).filter(([k]) => mine.includes(k))) }; };
-  route('GET', '/api/projects', async ({ ctx, me }) => scopeProjects(await projectsResponse(ctx), me));
+  route('GET', '/api/projects', async ({ ctx, me }) => {
+    const result = scopeProjects(await projectsResponse(ctx), me);
+    const prefs = new Map((await db.all('SELECT * FROM project_preferences WHERE participant_id = ?', me.id)).map(p => [p.project, p]));
+    return { ...result, items: result.items.map(p => ({ ...p, starred: !!prefs.get(p.id)?.starred, visitedAt: prefs.get(p.id)?.visited_at || null })) };
+  });
+  route('PUT', '/api/projects/:id/preference', async ({ me, params, req }) => {
+    requireHuman(me);
+    await loadProjects();
+    if (!projectsOf(me).includes(params.id)) throw new ApiError(403, 'FORBIDDEN', '只能設定自己加入的專案');
+    const body = await readJson(req);
+    if (typeof body.starred === 'boolean') {
+      await db.run('INSERT INTO project_preferences(participant_id,project,starred) VALUES(?,?,?) ON CONFLICT(participant_id,project) DO UPDATE SET starred=excluded.starred', me.id, params.id, Number(body.starred));
+    } else if (body.visit === true) {
+      await db.run('INSERT INTO project_preferences(participant_id,project,visited_at) VALUES(?,?,?) ON CONFLICT(participant_id,project) DO UPDATE SET visited_at=excluded.visited_at', me.id, params.id, nowIso());
+    } else throw invalid('請指定 starred 或 visit');
+    return { ok: true };
+  });
   // 群組名稱（登入頁也要顯示，所以讀取不用登入）；只有管理員能改
   route('GET', '/api/group', async () => ({ name: await groupName() }), { open: true });
   // 第一次設定引導做完或全部略過：之後不再出現（群組名稱、專案、邀請、AI 都在管理頁改得到）
@@ -2176,13 +2193,26 @@ ${ending}`;
   });
   route('PATCH', '/api/projects/:id', async ({ ctx, me, req, params }) => {
     await requireAdminOrLeader(ctx, me, params.id, '改專案名稱');
-    const name = readProjectName((await readJson(req)).name);
+    const body = await readJson(req);
+    const changesDescription = 'description' in body;
+    if (changesDescription && (typeof body.description !== 'string' || [...body.description.trim()].length > 40)) throw invalid('專案描述最多 40 字');
     await loadProjects(true);
     const row = projectRows.find(r => r.id === params.id);
     if (!row) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    const name = changesDescription && !('name' in body) ? row.name : readProjectName(body.name);
     if (projectRows.some(r => !r.archived && r.id !== row.id && r.name === name)) throw new ApiError(409, 'NAME_TAKEN', '已有同名的專案');
-    if (name !== row.name) {
-      await db.batch([['UPDATE projects SET name = ? WHERE id = ?', [name, row.id]], projEvent(row.id, me.id, `${me.name} 改名：${row.name} → ${name}`, nowIso())]);
+    const updates = [];
+    if (name !== row.name) updates.push(['UPDATE projects SET name = ? WHERE id = ?', [name, row.id]], projEvent(row.id, me.id, `${me.name} 改名：${row.name} → ${name}`, nowIso()));
+    if (changesDescription) {
+      const description = body.description.trim();
+      const before = await db.get('SELECT description FROM project_descriptions WHERE project = ?', row.id);
+      if (description !== (before?.description || '')) {
+        updates.push(['INSERT INTO project_descriptions(project,description) VALUES(?,?) ON CONFLICT(project) DO UPDATE SET description=excluded.description', [row.id, description]],
+          projEvent(row.id, me.id, `${me.name} 更新專案描述`, nowIso()));
+      }
+    }
+    if (updates.length) {
+      await db.batch(updates);
       invalidateProjects();
     }
     return projectsResponse(ctx);
@@ -2751,7 +2781,7 @@ ${ending}`;
     for (const inv of await db.all("SELECT id, projects FROM invites WHERE used_at IS NULL AND revoked_at IS NULL AND (',' || projects || ',') LIKE ?", `%,${id},%`))
       settings.push(['UPDATE invites SET projects = ? WHERE id = ?', [String(inv.projects).split(',').filter(x => x && x !== id).join(','), inv.id]]);
     const log = { projectId: id, name: row.name, code: projCodes[id] || null, by: me.id, byName: me.name, at, counts, aisDeleted: onlyHere.map(p => p.name) };
-    settings.push(['DELETE FROM projects WHERE id = ?', [id]], [upsert, [`${DEL_LOG}${at}:${id}`, JSON.stringify(log)]]);
+    settings.push(['DELETE FROM project_preferences WHERE project = ?', [id]], ['DELETE FROM project_descriptions WHERE project = ?', [id]], ['DELETE FROM projects WHERE id = ?', [id]], [upsert, [`${DEL_LOG}${at}:${id}`, JSON.stringify(log)]]);
     await db.batch(settings);
     projRolesAt = 0; roAt = 0; leadersAt = 0;
     invalidatePeople(); invalidateProjects();
@@ -3614,6 +3644,7 @@ ${ending}`;
         ...identity(p, people),
         projectRoles: projectRolesOf(p),
         aiState: aiStates.get(p.id) || null,
+        createdAt: p.created_at,
         lastSeenAt: iso(p.last_seen_at),
         isOnline: isOnline(p, now),
         // 有 watcher 心跳的 AI（24 小時內有過）超過 60 分鐘沒任何呼叫才算可能斷線；其他 AI 維持原門檻
@@ -3741,13 +3772,13 @@ ${ending}`;
   Object.assign(kbHooks, registerKbPages({ route, db, ApiError, invalid, readJson, randId, nowIso, peopleMap, identity, projectsOf, PROJECTS, assertWritable, roIn, kbManager, findSecret, getJson, setJson, createMessage, cardKey, cardsApi, claimsOf, kbSkillState: (pj, ais) => skillsApi.templateState(pj, 'kb-curation', ais) })); // 知識頁、整理卡
 
   // 只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
-  async function scopeTeamMembers(me, members, priv) {
-    if (!isolatedFrom(me)) return members;
+  async function scopeTeamMembers(me, members, priv, project) {
+    if (!project && !isolatedFrom(me)) return members;
     if (!priv) return members.map(m => ({ ...m, status: null, pendingCount: 0, oldestPendingAt: null })); // 保險：沒有原始資料就不露任何工作內容
     const { cards, stateMsgs, pendRows } = priv;
     const mine = projectsOf(me), since = await isolationSince(), joined = me.created_at || '';
-    const seeMsg = (project, at) => (project && mine.includes(project)) || !since || (at >= since ? !project : at >= joined);
-    const work = workFrom(cards, c => mine.includes(c.project), pubNo);
+    const seeMsg = (pj, at) => project ? pj === project && (!isolatedFrom(me) || mine.includes(pj)) : (pj && mine.includes(pj)) || !since || (at >= since ? !pj : at >= joined);
+    const work = workFrom(cards, c => project ? c.project === project : mine.includes(c.project), pubNo);
     const msgState = new Map();
     for (const m of stateMsgs) if (!msgState.has(m.authorId) && seeMsg(m.project, m.created_at)) msgState.set(m.authorId, m.s);
     const pend = new Map();
@@ -3793,10 +3824,37 @@ ${ending}`;
     await loadCrossRoles();
     const sees = id => { const p = people.get(id); return !!p && seesPerson(me, p); };
     // 尚未回應：看得到那個人、也看得到那則訊息才列（曾經會把別專案的訊息 ID 給沒加入的人）
+    const project = url.searchParams.get('project');
+    if (project && !projectsOf(me).includes(project)) throw new ApiError(403, 'FORBIDDEN', '無法檢視這個專案');
+    const recentSince = new Date(Date.now() - 7 * 86400000).toISOString();
+    const inTeam = id => !project || projectsOf(people.get(id)).includes(project);
     const unanswered = [];
-    for (const u of d.unanswered) if (sees(u.participantId) && await canSeeMessage(me, { project: u._project, created_at: u._at || '' })) unanswered.push({ messageId: u.messageId, participantId: u.participantId, name: u.name, since: u.since });
-    return { ...d, decisions, unanswered,
-      members: roleForProject((await scopeTeamMembers(me, d.members, priv)).filter(m => sees(m.participantId)).map(m => (m.aiState && !canSeeState(me, people.get(m.participantId)) ? { ...m, aiState: null } : m)).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url, adminOf(people)?.id) }; // 工作記憶依專案可見；C-xxx 角色依專案
+    for (const u of d.unanswered) if ((!project || u._project === project && u.since >= recentSince && inTeam(u.participantId)) && sees(u.participantId) && await canSeeMessage(me, { project: u._project, created_at: u._at || '' })) unanswered.push({ messageId: u.messageId, participantId: u.participantId, name: u.name, since: u.since });
+    // 跨專案 AI 的待辦只顯示能對應到目前專案的卡。
+    const taskKeys = new Set();
+    if (project) {
+      const ids = d.members.filter(m => m.aiState && m.projects.includes(project) && m.projects.length > 1)
+        .flatMap(m => [m.aiState.currentTask, ...(m.aiState.backlog || [])])
+        .map(task => task?.cardId).filter(Boolean);
+      if (ids.length) {
+        const rows = await db.all('SELECT seq, project, proj_no FROM cards WHERE project = ? AND (seq IN (SELECT value FROM json_each(?)) OR proj_no IN (SELECT value FROM json_each(?)))',
+          project, JSON.stringify(ids.filter(id => /^C-\d+$/i.test(id)).map(id => Number(id.split('-')[1])-100)),
+          JSON.stringify(ids.map(id => Number(id.split('-')[1])).filter(Number.isInteger)));
+        for (const row of rows) { taskKeys.add(pubNo(row)); taskKeys.add('C-' + (row.seq+100)); }
+      }
+    }
+    function scopeMemory(m) {
+      if (!m.aiState) return m;
+      if (!canSeeState(me, people.get(m.participantId))) return { ...m, aiState: null };
+      if (!project || m.projects.length === 1) return m;
+      return { ...m, aiState: { ...m.aiState, currentTask: taskKeys.has(m.aiState.currentTask?.cardId) ? m.aiState.currentTask : null,
+        backlog: (m.aiState.backlog || []).filter(task => taskKeys.has(task.cardId)) } };
+    }
+    const disabled = project ? [...people.values()].filter(p => p.status === 'disabled' && p.kind !== 'system' && inTeam(p.id) && sees(p.id)).map(p => ({
+      ...identity(p, people), disabled: true, createdAt: p.created_at, lastSeenAt: iso(p.last_seen_at), projectRoles: projectRolesOf(p)
+    })) : [];
+    return { ...d, decisions: project ? decisions.filter(x => x.project === project) : decisions, unanswered,
+      members: roleForProject((await scopeTeamMembers(me, d.members, priv, project)).concat(disabled).filter(m => inTeam(m.participantId) && sees(m.participantId)).map(scopeMemory).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url, adminOf(people)?.id) }; // 工作記憶依專案可見；C-xxx 角色依專案
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);

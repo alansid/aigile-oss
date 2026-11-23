@@ -35,15 +35,13 @@ try {
   await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("document.querySelector('.hub-side [data-hub-todo-open] .hs-n')?.textContent === '4'"), 15000, '要你處理變 4');
   await sleep(500);
-  const panel = await js(`(() => ({ rows: document.querySelectorAll('.hub-todo .ht-row').length, empty: !!document.querySelector('.hub-todo .ht-empty'),
-    head: document.querySelector('.hub-todo .ht-head .ps-count')?.textContent || null, kinds: [...document.querySelectorAll('.hub-todo .ht-tag')].map(t => t.textContent) }))()`);
-  assert.equal(panel.empty, false, '右側不能寫「目前沒有」');
-  assert.equal(panel.rows, 4, `右側列出 4 件（實際 ${panel.rows}）`);
-  assert.equal(panel.head, '4', '右側標題數字跟側欄一樣');
-  assert.deepEqual(panel.kinds.sort(), ['回覆', '驗收', '驗收', '驗收'].sort(), '三張等你驗收＋一則要你回覆');
-  // 點一項 → 進那個專案的收件匣、捲到那一列
-  await js("[...document.querySelectorAll('.hub-todo .ht-row')].find(b => b.querySelector('.ht-tag').textContent === '驗收' && b.dataset.hubProj === '預設專案').click(); true");
-  await until(() => js("!!document.querySelector('#page-work [data-ver-row].focus-item')"), 8000, '收件匣那一列被標出來');
+  await until(() => js("!!document.querySelector('[data-hub-choice=tab][data-value=needs]')"), 15000, '總覽分頁');
+  await js("document.querySelector('[data-hub-choice=tab][data-value=needs]').click(); true");
+  assert.equal(await js("document.querySelectorAll('.hub-needs .ht-row').length"), 3, '兩個專案的驗收分組，加上一則要回覆');
+  assert.equal(await js("document.querySelectorAll('[data-accept-project]').length"), 2);
+  await js("document.querySelector('[data-accept-project=預設專案]').click(); true");
+  await until(() => js("document.querySelectorAll('#page-work [data-ver-row]').length === 2"), 8000, '專案的兩張待驗收卡');
+
 
   // 手機：選單裡的「總覽」也不放數字
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

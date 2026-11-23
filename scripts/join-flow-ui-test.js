@@ -47,10 +47,10 @@ try {
   assert.equal((await kit.call(boss.token, `/api/join-requests/${rq.id}/approve`, 'POST', { role: '', readOnly: false })).status, 200, '核准');
   // 3. 即時通道：幾秒內提示並出現專案（不靠一分鐘的輪詢）
   const t0 = Date.now();
-  await until(() => js("!!document.querySelector('.hub-card[data-proj=\"預設專案\"]')"), 8000, '核准後幾秒內主畫面出現專案');
+  await until(() => js("!!document.querySelector('.project-entry[data-proj=\"預設專案\"]')"), 8000, '核准後幾秒內主畫面出現專案');
   assert.ok(/你已加入「預設專案」/.test(await js("document.querySelector('#toast').textContent")), '提示你已加入：' + await js("document.querySelector('#toast').textContent"));
   console.log(`join-flow-ui-test：核准後 ${Date.now() - t0} ms 出現專案`);
-  await js("document.querySelector('.hub-card[data-proj=\"預設專案\"]').click(); true");
+  await js("document.querySelector('.project-entry[data-proj=\"預設專案\"]').click(); true");
   await until(() => js("/歡迎加入，這週先看登入頁/.test(document.querySelector('#page-messages, #messages, main')?.textContent || document.body.textContent)"), 15000, '看得到專案訊息');
   const cards = (await kit.call(lin.token, '/api/cards?project=預設專案')).body.items;
   assert.ok(cards.some(c => c.cardId === card.cardId), '看得到專案的卡片');
@@ -60,7 +60,7 @@ try {
   const ap2 = await kit.call(lin.token, `/api/projects/${encodeURIComponent(pj2)}/join-requests`, 'POST', { note: '' });
   assert.ok(ap2.status < 300, '申請第二專案：' + JSON.stringify(ap2.body) + ' pj2=' + pj2);
   await js("location.href = '/'; true");
-  await until(() => js("!!document.querySelector('.hub-card[data-proj=\"預設專案\"]')"), 15000, '重新整理後的主畫面');
+  await until(() => js("!!document.querySelector('.project-entry[data-proj=\"預設專案\"]')"), 15000, '重新整理後的主畫面');
   await new Promise(r => setTimeout(r, 2000)); // 等即時通道連上
   const rq2 = (await kit.call(boss.token, '/api/join-requests')).body.items.find(x => x.project === pj2);
   assert.equal((await kit.call(boss.token, `/api/join-requests/${rq2.id}/reject`, 'POST', { reason: '人手已滿' })).status, 200, '拒絕');

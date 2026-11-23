@@ -25,6 +25,7 @@ const MIG_DIR = path.join(ROOT, 'migrations');
 const SCHEMA = fs.readFileSync(path.join(ROOT, 'src/schema.sql'), 'utf8');
 // 1.0.x 的結構＝現在的 schema.sql 去掉 002 加的三欄（有 git 與版本標籤時，再對一次 v1.0.0、v1.0.2 的原檔）
 const OLD = SCHEMA.split('\n').filter(l => !/^\s+wake_(day|count|at) /.test(l) && !/^CREATE INDEX IF NOT EXISTS idx_files_message /.test(l)).join('\n') // 003 加的索引也去掉
+  .replace(/\nCREATE TABLE IF NOT EXISTS project_descriptions \([\s\S]*?\n\);\nCREATE TABLE IF NOT EXISTS project_preferences \([\s\S]*?\n\);\n/, '') // 008 的兩張新表
   .replace(/,\n\s*kb_status TEXT[\s\S]*?kb_card INTEGER[^\n]*(\n\s+in_kb [^\n]*)?/, '').replace(/-- 知識庫底層：[\s\S]*?CREATE INDEX IF NOT EXISTS idx_kb_pages [^\n]*\n/, '') // 004、005、006 知識庫加的欄位與表也去掉
   .replace(/-- 審查者（migrations\/007_card_reviews\.sql）[\s\S]*?idx_card_reviews_vote [^\n]*\n/, ''); // 007 審查者的表也去掉
 assert.notEqual(OLD, SCHEMA, '測試用的舊結構真的少了叫醒欄位');
@@ -85,7 +86,7 @@ try {
   // ---------- 3. 新版程式開舊資料庫：自動升級 ----------
   const BASE = await startServer(kids, dataDir, { TEAM_CACHE_MS: '0', AIGILE_TEST_PG_URL: '' }); // 這裡驗的是舊 SQLite 檔升級：Postgres 模式也開 SQLite
   const ALL_MIGS = listMigrations(MIG_DIR).map(f => f.name); // 002 之後還有別的升級時一起套
-  assert.ok(kids[0].tail.includes(`資料庫升級：套用 ${ALL_MIGS.filter(n => !OLD_MIGS.includes(n)).join('、')}（目前版本 ${ALL_MIGS.length}）`) && /套用 002_wake_counts\.sql/.test(kids[0].tail), '啟動時自動套 002：' + kids[0].tail);
+  assert.ok(kids[0].tail.includes(`資料庫升級：套用 ${ALL_MIGS.filter(n => !OLD_MIGS.includes(n)).join('、')}（目前版本 ${Math.max(...ALL_MIGS.map(n => parseInt(n, 10)))}）`) && /套用 002_wake_counts\.sql/.test(kids[0].tail), '啟動時自動套 002：' + kids[0].tail);
   {
     const db = new DatabaseSync(file);
     assert.ok(['wake_day', 'wake_count', 'wake_at'].every(c => cols(db, 'participants').includes(c)), 'Node：升級後有三欄');

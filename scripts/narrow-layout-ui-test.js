@@ -16,6 +16,8 @@ try {
   const mk = async (name, role = '程式開發') => (await kit.call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role, name, duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
   const ais = [await mk('程式助手'), await mk('測試助手'), await mk('設計助手', '使用體驗')];
   for (let i = 0; i < 12; i++) await kit.call(boss.token, '/api/messages', 'POST', { project: '預設專案', requestId: 'm' + i, text: `[需確認] 第 ${i} 則`, recipientIds: [ais[0].participantId] });
+  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  kit.sql('UPDATE participants SET wake_day = ?, wake_count = 6, wake_at = ?, last_seen_at = ? WHERE id = ?', today, Date.now() - 600_000, Date.now(), ais[1].participantId);
   for (const [i, st] of ['待處理', '進行中', '待確認', '受阻', '待處理', '進行中'].entries()) await kit.call(boss.token, '/api/cards', 'POST', { requestId: 'c' + i, project: '預設專案', title: `第 ${i + 1} 張卡：手機排版要看得到標題`, status: st });
 
   const { js, login, cdp, goto } = await kit.browser(1280, 900);
@@ -61,23 +63,30 @@ try {
   assert.ok(/還有 \d+ 欄 →/.test(more.t) && more.inTools && more.pos === 'static' && more.hit === 0, '還有 N 欄不蓋卡片：' + JSON.stringify(more));
   assert.equal(await js("document.querySelector('.bcol[data-col=\"待確認\"] .bcol-head b').textContent"), '待驗收／決定', '欄名改「待驗收／決定」，狀態值不變');
 
-  // 4. 團隊頁：桌機有欄名列；「未讀 N 則」
-  await open(1280, '/p/main/team', '.tm-row[data-tm-id]');
-  const th = JSON.parse(await js(`JSON.stringify([...document.querySelectorAll('.tm-th > div')].map(e => e.textContent))`));
-  assert.deepEqual(th, ['', '狀態', '目前工作', '未讀訊息', 'Token 到期'], '欄名');
-  assert.ok(await js("getComputedStyle(document.querySelector('.tm-th')).display !== 'none'"), '桌機看得到欄名列');
-  const row = id => `.tm-row[data-tm-id="${id}"]`;
-  assert.match(await js(`document.querySelector('${row(ais[0].participantId)} .tm-pend').textContent`), /^未讀 12 則/, '未讀 N 則');
-  assert.equal(await js(`document.querySelector('${row(ais[1].participantId)} .tm-pend').textContent`), '未讀 0');
-  assert.ok(!/待處理 \d+ 則|待處理 0/.test(await js("document.querySelector('.tm-list').textContent")), '不再叫「待處理 N 則」');
-  assert.equal(await js(`getComputedStyle(document.querySelector('${row(ais[0].participantId)} .tm-token .tm-lbl')).display`), 'none', '桌機格子裡不重複寫欄名');
-
-  // 375：沒有欄名列，格子裡寫「目前工作」；名字一行、角色放下一行
-  await open(375, '/p/main/team', '.tm-row[data-tm-id]');
-  assert.equal(await js("getComputedStyle(document.querySelector('.tm-th')).display"), 'none', '手機不放欄名列');
-  assert.notEqual(await js(`getComputedStyle(document.querySelector('${row(ais[0].participantId)} .tm-state .tm-lbl')).display`), 'none', '手機格子裡寫「目前工作」');
-  const who = JSON.parse(await js(`JSON.stringify([...document.querySelectorAll('.tm-row[data-tm-id] .tm-who')].map(w => { const b = w.querySelector('b'), r = w.querySelector('.muted.small'); return { n: b.textContent, full: b.scrollWidth <= b.clientWidth + 1, below: r.getBoundingClientRect().top >= b.getBoundingClientRect().bottom - 1 }; }))`));
-  assert.ok(who.length >= 3 && who.every(w => w.full && w.below), '名字一行沒被截、角色在下一行：' + JSON.stringify(who));
+  // 團隊頁：桌機欄名與手機單欄版，未讀、醒來次數及 Token 都在詳情內。
+  for (const width of [1280, 375]) {
+    await open(width, '/p/main/team', '.project-member[data-tm-id]');
+    const headings = await js("Array.from(document.querySelectorAll('.team-columns b'), b => b.textContent)");
+    assert.deepEqual(headings, ['成員', '狀態', '在做什麼', '最後出現']);
+    assert.equal(await js("getComputedStyle(document.querySelector('.team-columns')).display !== 'none'"), width === 1280);
+    for (const [idx, unread] of [[0, 12], [1, 0]]) {
+      const selector = `.project-member[data-tm-id="${ais[idx].participantId}"]`;
+      const details = await js(`(() => {
+        const row = document.querySelector('${selector}');
+        const summary = row.querySelector('summary'), body = row.querySelector('section');
+        const closedBeforeClick = !row.open;
+        summary.click();
+        return { opened: row.open, closedBeforeClick,
+          summary: summary.textContent, text: body.innerText, width: document.documentElement.scrollWidth };
+      })()`);
+      assert.ok(details.opened && details.closedBeforeClick);
+      assert.doesNotMatch(details.summary, /還沒看的訊息|Token|次醒來/);
+      assert.match(details.text, new RegExp('還沒看的訊息\\s*' + unread + '\\b'));
+      assert.match(details.text, /Token/);
+      if (idx === 1) assert.match(details.text, /6\s*次醒來/);
+      assert.ok(details.width <= width + 1, '展開詳情後不橫向捲動');
+    }
+  }
 
   // 5. 跨專案頻道 0 則：不放「↑ 載入更早」大按鈕和「0 則」分隔線；有訊息的頻道照舊
   await open(375, '/cross/messages', '#messages .empty');

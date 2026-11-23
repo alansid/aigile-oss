@@ -55,7 +55,9 @@ try {
   await until(() => js("/^Good (morning|afternoon|evening), /.test(document.querySelector('.work-title h2')?.textContent || '')"), 15000, '總覽問候英文');
   assert.match(await js("document.querySelector('.work-title h2').textContent"), /, 林志明$/, '問候用全名');
   await check('總覽');
-  assert.ok(await js("/\\b1 member · /.test(document.body.innerText)"), '總覽專案卡寫 1 member（單數）');
+  const tile = '.project-tile:has(.project-entry[data-proj="預設專案"])';
+  assert.equal(await js(`document.querySelectorAll('${tile} .project-people .avatar').length`), 1, '新版專案卡顯示一位成員的頭像');
+  assert.match(await js(`document.querySelector('${tile} .project-star').getAttribute('aria-label')`), /^Star /, '星號操作有英文名稱');
   for (const [path, sel, label] of [['/p/main/work', '.work-head', '工作'], ['/p/main/messages', '.msg-text', '訊息'], ['/my-ai', '#ai-list', '我的 AI'], ['/members', '.pm-tabs', '成員管理']]) {
     await login(boss.token, path);
     await until(() => js(`!!document.querySelector(${JSON.stringify(sel)})`), 15000, label);

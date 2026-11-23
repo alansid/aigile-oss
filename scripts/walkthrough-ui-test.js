@@ -95,7 +95,7 @@ try {
   await js('window.__staleReload = 1; true');
   await cdp('Page.reload'); await sleep(1500);
   await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
-  await until(() => js("!!document.querySelector('.hub')"), 15000, '主畫面');
+  await until(() => js("!!document.querySelector('[data-hub-choice=tab]')"), 15000, '主畫面');
   assert.equal(await visible('.hub-next'), false, '重新整理後不再出現');
   console.log('✓ 引導略過後的下一步提示');
 
@@ -109,8 +109,10 @@ try {
   await js('window.__staleReload = 1; true');
   await cdp('Page.reload');
   await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
-  await until(() => js("[...document.querySelectorAll('.hub-todo button, .hub-todo a')].some(b => /林新人 申請加入/.test(b.textContent))"), 20000, '主畫面「要你處理」有申請');
-  await js("[...document.querySelectorAll('.hub-todo button, .hub-todo a')].find(b => /林新人 申請加入/.test(b.textContent)).click(); true");
+  await until(() => js("!!document.querySelector('[data-hub-choice=tab][data-value=needs]')"), 15000, '總覽分頁');
+  await js("document.querySelector('[data-hub-choice=tab][data-value=needs]').click(); true");
+  await until(() => js("[...document.querySelectorAll('.hub-needs button, .hub-needs a')].some(b => /林新人 申請加入/.test(b.textContent))"), 20000, '主畫面「要你處理」有申請');
+  await js("[...document.querySelectorAll('.hub-needs button, .hub-needs a')].find(b => /林新人 申請加入/.test(b.textContent)).click(); true");
   await until(() => js("!!document.querySelector('[data-join-review], [data-jr-role]')"), 15000, '進到收件匣的申請');
   if (!(await js("!!document.querySelector('[data-jr-role]')")))   await js("document.querySelector('[data-join-review]').click(); true");
   await until(() => js("!!document.querySelector('[data-jr-role]')"), 10000, '審核視窗');

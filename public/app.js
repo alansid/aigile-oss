@@ -624,6 +624,7 @@
     await Promise.all([loadProjectList().catch(() => {}), loadParticipants()]);
     const route = parseRoute();
     state.view = route.view || 'hub';
+    if (route.view && myProjects().includes(route.view)) recordProjectVisit(route.view);
     drawProjSwitch();
     drawAvatarMenu(); refreshMyAiCount(); loadAdminTodo(); // 管理員設定的待處理數
     await loadWindow(winP);
@@ -633,7 +634,7 @@
     connectEvents();
     // 網址帶專案與頁面；多專案成員打開 / 先到第一層「我的專案」，只屬一個專案的人直接進自己的專案
     const savedPage = store.get(PAGE_KEY);
-    await showPage(route.page || (projectView() === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(savedPage) ? savedPage : 'messages'), { replace: true });
+    await showPage(route.page || (projectView() === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files','overview'].includes(savedPage) ? savedPage : 'messages'), { replace: true });
     $('#boot').hidden = true;
     $('#app').hidden = false;
     if (state.page === 'messages') scrollBottom();
@@ -1499,7 +1500,10 @@
   const PROJECTS = [];
   state.projectList = [];
   state.projMeta = { adminId: null, adminName: '', crossRoleIds: [], leaders: {} };
-  const projName = id => state.projectList.find(p => p.id === id)?.name || id;
+  const projName = id => {
+    const name = state.projectList.find(p => p.id === id)?.name || id;
+    return window.aigileI18n?.lang === 'en' && name === '預設專案' ? 'Default project' : name;
+  };
   // ---------- 每個專案各自的人類角色 ----------
   const ROLE_CHOICES = ['PO', 'PG', 'UX', 'QA', 'BA', 'SM', 'Sponsor', 'BU'];
   // 某人在某專案的角色：人類看 projectRoles（不在任何專案的畫面＝不顯示）；AI 照舊
@@ -1715,7 +1719,7 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.p === p).length;
     return n;
   }
-  const PAGE_NAME = { messages: '訊息', inbox: '要你處理', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員管理', dm: '私訊', releases: '版本紀錄', help: L('說明', 'Help') }; // 私訊整頁；「說明」在字典是交接的「Notes」，說明頁自己給英文
+  const PAGE_NAME = { overview: '概觀', messages: '訊息', inbox: '要你處理', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員管理', dm: '私訊', releases: '版本紀錄', help: L('說明', 'Help') }; // 私訊整頁；「說明」在字典是交接的「Notes」，說明頁自己給英文
   const pageNameOf = p => (p === 'perm' ? (state.permTab === 'admin' ? '管理員設定' : state.permTab === 'leadproj' ? '專案管理' : '成員管理') : PAGE_NAME[p]); // 成員管理、管理員設定兩頁
   const canSetProj = pj => PROJECTS.includes(pj) && (isAdmin() || leadersOf(pj).includes(meId())); // 專案卡 ⚙
   const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases', help: '/help' }; // 第一層頁面（不分專案）：版本紀錄、說明等
@@ -1821,7 +1825,7 @@
   // 網址：/p/<專案代號>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
   // 頁面用英文、專案用 API 代號（改名不壞、貼到 LINE／Slack 不會變一長串 %E…）；舊的中文頁名、專案名稱網址照樣能開，打開後換成新網址
   const PAGE_BY_NAME = Object.fromEntries(Object.entries(PAGE_NAME).map(([k, t]) => [t, k]));
-  const PAGE_SLUG = { messages: 'messages', inbox: 'inbox', work: 'work', team: 'team', files: 'files' };
+  const PAGE_SLUG = { overview: 'overview', messages: 'messages', inbox: 'inbox', work: 'work', team: 'team', files: 'files' };
   function parseRoute() {
     const seg = location.pathname.split('/').filter(Boolean).map(x => { try { return decodeURIComponent(x); } catch { return x; } });
     const page = x => (PAGE_SLUG[x] || x === 'dm' ? x : x === 'my-ai' ? 'myai' : PAGE_BY_NAME[x] || null); // /p/<專案>/my-ai
@@ -1860,17 +1864,19 @@
   // 切換所在：k＝hub／專案 id／cross；切專案時留在同一頁（工作頁在跨專案頻道沒有，改到訊息）
   function setProjectView(k, page) {
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); setProjectView(k, page); });
+    if (k !== state.view && myProjects().includes(k)) recordProjectVisit(k);
     state.view = k;
     if (state.replyTo) setReply(null);
     drawProjSwitch();
     syncFilterBar();
     renderMessages(true);
     const v = projectView();
-    return showPage(page || (v === 'hub' ? 'hub' : state.page === 'hub' ? 'messages' : state.page));
+    return showPage(page || (v === 'hub' ? 'hub' : state.page === 'hub' ? projectLastPage(v) || 'messages' : state.page));
   }
   window.addEventListener('popstate', () => {
     if (!state.me) return;
     const r = parseRoute();
+    if (r.view && state.view !== r.view && myProjects().includes(r.view)) recordProjectVisit(r.view);
     state.view = r.view || 'hub';
     if (state.replyTo) setReply(null);
     drawProjSwitch(); syncFilterBar(); renderMessages(true);
@@ -3319,44 +3325,180 @@
     }
   }
 
-  work.teamTab = 'status';
-  function renderTeamPage() {
-    const box = $('#page-work');
-    // 看板會在共用容器加 is-board（桌面版 overflow:hidden），切到團隊頁要清掉，否則滾輪捲不動
+  const pageText = (zh, en) => (window.aigileI18n?.lang === 'en' ? en : zh);
+  const ageDays = (value) => (value ? (Date.now() - Date.parse(value)) / 86400000 : Infinity);
+  const teamLabels = () => [
+    pageText('卡住', 'Stuck'),
+    pageText('等人決定', 'Awaiting decision'),
+    pageText('在做', 'Working'),
+    pageText('可能斷線', 'May be offline'),
+    pageText('待命', 'Standing by'),
+    pageText('離線', 'Offline')
+  ];
+  function teamRank(m) {
+    if (m.status?.state === 'blocked') return 0;
+    if (m.status?.state === 'waiting') return 1;
+    if (m.status?.state === 'working' && (m.status.cardId || ageDays(m.status.at) <= 2 / 24)) return 2;
+    if (m.stale) return 3;
+    return m.isOnline || m.standby ? 4 : 5;
+  }
+  function teamSummary(data) {
+    const inactive = [],
+      active = [],
+      alerts = [];
+    for (const m of data.members) {
+      (m.disabled || m.tokenExpired || ageDays(m.lastSeenAt || m.createdAt) >= 14 ? inactive : active).push(m);
+    }
+    active.sort((a, b) => teamRank(a) - teamRank(b) || a.name.localeCompare(b.name));
+    const labels = teamLabels();
+    const totals = [2, 0, 1, 3]
+      .map((i) => {
+        const count = active.filter((m) => teamRank(m) === i).length;
+        return count ? `<span class="project-chip rank-${i}">${count} ${labels[i]}</span>` : '';
+      })
+      .join('');
+    const mention = (name, label) => `<button class="link" data-team-mention="${esc(name)}">${label}</button>`;
+    for (const m of active) {
+      if (teamRank(m) === 0 && ageDays(m.status.at) <= 7)
+        alerts.push(`<div class="team-alert blocked"><span>${esc(m.name)} · ${labels[0]}</span> ${teamWorkLink(m)}</div>`);
+    }
+    for (const m of active) {
+      const unread = data.unanswered
+        .filter((x) => x.participantId === m.participantId)
+        .sort((a, b) => a.since.localeCompare(b.since));
+      if (unread.length)
+        alerts.push(
+          `<div class="team-alert"><span>${esc(m.name)} ${pageText(`有 ${unread.length} 則 @ ${m.memberType === 'ai' ? '它' : '這位成員'}的訊息還沒看，最早一則`, `has ${unread.length} unread mention${unread.length === 1 ? '' : 's'}, oldest`)} ${agoText(unread[0].since)}</span> <button class="btn small" data-team-message="${esc(unread[0].messageId)}">${pageText('看訊息', 'View messages')}</button></div>`
+        );
+    }
+    for (const m of active)
+      if (m.stale && ageDays(m.lastSeenAt) <= 7)
+        alerts.push(
+          `<div class="team-alert"><span>${esc(m.name)} · ${labels[3]} · ${agoText(m.lastSeenAt)}</span> ${m.ownerName ? mention(m.ownerName, pageText('@ 所屬的人', 'Mention owner')) : ''}</div>`
+        );
+    return { active, inactive, totals, alerts };
+  }
+  function teamWorkLink(m) {
+    const s = m.status;
+    if (s?.cardId)
+      return `<button class="link" data-project-card="${esc(s.cardId)}">${esc(s.cardId)} ${esc(s.title)}</button>`;
+    if (s?.messageId && teamRank(m) < 3)
+      return `<button class="link" data-team-message="${esc(s.messageId)}">${esc(s.title)}</button>`;
+    return m.memberType === 'ai' ? pageText('沒有在做的卡', 'No active card') : '—';
+  }
+  function teamAiDetails(m) {
+    const info = m.aiState, todo = info?.backlog || [];
+    const none = pageText('沒有', 'None');
+    const field = (zh, en, value) => `<p>${pageText(zh + '：', en + ': ')}${value}</p>`;
+    const connection = m.stale ? teamLabels()[3] : m.standby ? pageText('待命中：有人 @ 它就會醒來', 'Standing by: wakes when mentioned') : pageText('在線', 'Online');
+    const pending = m.pendingCount || 0;
+    const oldest = pending && m.oldestPendingAt ? pageText('，最早一則 ', ', oldest ') + agoText(m.oldestPendingAt) : '';
+    const wakes = m.wakesToday || 0;
+    const last = m.lastWakeAt ? pageText('，最近一次 ', ', last at ') + shortTime(m.lastWakeAt).split(' ').pop() : '';
+    const expiry = m.tokenExpiresAt && shortTime(m.tokenExpiresAt).split(' ')[0];
+    const owner = [m.ownerName, m.environment].filter(Boolean).map(esc).join(' · ');
+    return [
+      info?.currentTask ? `<p>${[info.currentTask.title, info.currentTask.stage].filter(Boolean).map(esc).join(' · ')}</p>` : '',
+      todo.length ? `<p>${pageText(`手上的待辦（AI 自己回報，${todo.length} 件）`, `Its to-do list (reported by the AI, ${todo.length})`)}</p>` +
+        todo.map(b => `<div>${[b.cardId, b.title, b.trigger].filter(Boolean).map(esc).join(' · ')}</div>`).join('') +
+        (info.updatedAt ? `<small>${pageText(agoText(info.updatedAt) + '更新', 'Updated ' + agoText(info.updatedAt))}</small>` : '')
+        : field('手上的待辦', 'Its to-do list', none),
+      field('連線', 'Connection', connection),
+      wakes ? `<small>${pageText(`今天醒來 ${wakes} 次`, `Woke up ${wakes} times today`)}${last}${wakes > 15 ? pageText(' ⚠ 今天醒來次數偏多', ' ⚠ Woke up more than usual today') : ''}</small>` : '',
+      field('還沒看的訊息', 'Unread messages', pending ? pageText(`${pending} 則`, String(pending)) + oldest : none),
+      expiry ? field('Token', 'Token', pageText(expiry + ' 到期', 'Expires ' + expiry) + (m.tokenExpiringSoon ? pageText('（快到期）', ' (expiring soon)') : '')) : '',
+      owner ? field('所屬', 'Owner', owner) : ''
+    ].join('');
+  }
+  function teamRow(m, project, inactive) {
+    const ai = m.memberType === 'ai',
+      rank = teamRank(m),
+      role = roleIn(m, project);
+    const mention = (name, label = '@ ' + name) => `<button class="btn small" data-team-mention="${esc(name)}">${esc(label)}</button>`;
+    const actions = mention(m.name, pageText('@ 提及', '@ Mention')) +
+      (ai && m.ownerParticipantId === meId() && dmVisible()
+        ? ` <button class="btn small" data-dm-open="${esc(m.participantId)}">${pageText('私訊', 'Message')}</button>`
+        : '');
+    const ownedCards = `<button class="btn small" data-team-cards="${esc(m.participantId)}">${pageText('它負責的卡', 'Its cards')}</button>`;
+    const reason = m.tokenExpired
+      ? pageText('Token 已過期', 'Token expired')
+      : m.disabled
+        ? pageText('已停用', 'Disabled')
+        : pageText('超過 14 天沒出現', 'Not seen for 14 days');
+    return `<details class="project-member" data-tm-id="${esc(m.participantId)}" data-person-search="${esc([m.name, role, m.shortCode].join(' ').toLowerCase())}">
+      <summary>${avatar(m)} <b>${esc(m.name)}<small>${esc([ai ? 'AI' : pageText('人', 'Human'), role, m.shortCode].filter(Boolean).join(' · '))}</small></b>
+      <span class="project-chip rank-${inactive ? 'idle' : rank}">${inactive ? reason : !ai && rank === 4 ? pageText('在線', 'Online') : teamLabels()[rank]}</span>
+      <span>${inactive ? '' : esc((m.status?.cardId ? m.status.cardId + ' ' : '') + (m.status?.title || (ai ? pageText('沒有在做的卡', 'No active card') : '—')))}</span>
+      <small>${m.isOnline && !ai ? pageText('在線', 'Online') : agoText(m.lastSeenAt)}</small><span class="member-more">${pageText('詳情', 'Details')} ▾</span><span class="member-less">${pageText('收起', 'Close')} ▴</span></summary>
+      <section>${
+        inactive
+          ? ai && m.ownerName
+            ? mention(m.ownerName)
+            : actions
+          : `${teamWorkLink(m)}
+      ${
+        ai
+          ? teamAiDetails(m)
+          : esc(role)
+      } <div class="team-actions">${actions} ${ai ? ownedCards : ''}</div>`
+      }</section></details>`;
+  }
+  async function renderTeamPage() {
+    const box = $('#page-work'),
+      project = projectView(),
+      page = state.page;
     box.classList.remove('is-board');
-    // 同一個分頁重畫（例如切專案）時保留捲動位置，不跳回頂端
-    const keep = work.teamScrollTab === work.teamTab ? box.scrollTop : 0;
-    work.teamScrollTab = work.teamTab;
-    if (work.teamTab === 'ai') work.teamTab = 'status'; // 我的 AI 移到頭像選單
-    const tabs = [['status', '團隊狀態'], ['memory', 'AI 工作記憶'], ['members', '成員名單']];
-    box.innerHTML = `<div class="work-head"><div class="work-title"><h2>團隊</h2></div>
-      <div class="seg-scope" role="group" aria-label="團隊分頁">${tabs.map(([k, t]) => `<button type="button" data-team-tab="${k}" aria-pressed="${work.teamTab === k}">${t}</button>`).join('')}</div></div>
-      <div id="team-pane" class="inline-pane"></div>`;
-    const done = ({ status: openTeam, memory: openTeamMemory, members: openMembers })[work.teamTab]();
-    if (keep) Promise.resolve(done).then(() => { box.scrollTop = keep; });
-    syncTeamNav();
+    const route = '/api/team-status' + (project === 'cross' ? '' : '?project=' + encodeURIComponent(project));
+    box.innerHTML = '<p role="status">…</p>';
+    try {
+      const [data] = await Promise.all([api(route), work.loaded ? null : loadCards()]);
+      if (state.page !== page || projectView() !== project) return;
+      const t = teamSummary(data);
+      if (page === 'overview') {
+        box.innerHTML = projectOverview(project, t);
+        return;
+      }
+      box.innerHTML = `<div class="project-page"><header class="work-title"><h2>${pageText('團隊', 'Team')}</h2><span>${esc(projName(project))} · ${pageText('只列這個專案的人', 'Only people in this project')}</span>
+        <input type="search" data-team-search placeholder="${pageText('搜尋名字、角色或代號', 'Search name, role or code')}"></header>
+        <div class="project-summary">${t.totals}${todoByView()[project] ? `<button class="link" data-nav="inbox">${pageText('要你處理', 'Needs you')} ${todoByView()[project]} ›</button>` : `<small>${pageText('沒有要你處理的事', 'Nothing needs you')}</small>`}</div>
+        <h3>${pageText('需要注意', 'Needs attention')} <small>${pageText('最近 7 天、這個專案', 'Last 7 days, this project')}</small></h3>
+        <div class="project-alerts">${t.alerts.slice(0, 3).join('') || pageText('目前沒有人卡住。', 'Nobody is stuck right now.')}${t.alerts.length > 3 ? `<details><summary>${pageText('再看', 'Show more')} ${t.alerts.length - 3}</summary>${t.alerts.slice(3).join('')}</details>` : ''}</div>
+        <h3>${pageText('在用的成員', 'Active members')} (${t.active.length})</h3>
+        <div class="team-columns"><b>${pageText('成員', 'Member')}</b><b>${pageText('狀態', 'Status')}</b><b>${pageText('在做什麼', 'Working on')}</b><b>${pageText('最後出現', 'Last seen')}</b></div>${t.active.map((m) => teamRow(m, project, false)).join('')}
+        <details class="inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true)).join('')}</details>
+        <details><summary>${pageText('狀態怎麼判斷？', 'How is status decided?')}</summary>${pageText('優先看負責的卡，再看最新訊息。AI 超過 20 分鐘沒出現算可能斷線，開著等待腳本放寬到 60 分鐘。', 'Cards take priority over tagged messages. An AI may be offline after 20 minutes, or 60 minutes with a watcher.')}</details></div>`;
+      box.querySelector('[data-team-search]').oninput = (e) =>
+        box.querySelectorAll('[data-person-search]').forEach((row) => {
+          row.hidden = !row.dataset.personSearch.includes(e.target.value.trim().toLowerCase());
+        });
+    } catch (err) {
+      if (state.page === page && projectView() === project) box.textContent = err.message;
+    }
   }
-  // AI 工作記憶（獨立一個子項目）
-  async function openTeamMemory() {
-    await loadTeam();
-    const t = state.team;
-    if (!t) return toast('無法取得團隊狀態');
-    openModal('團隊狀態', `${aiStateHtml(t) || '<p class="muted">還沒有 AI。</p>'}`, { sub: 'AI 自己回報的目前任務與待辦，只在狀態改變時更新；依專案可見。' });
-    const pane = $('#team-pane'); if (pane) pane.querySelectorAll('.modal-head h2').forEach(h => { h.textContent = 'AI 工作記憶'; });
-  }
-  // 側欄與手機選單的「團隊」兩層選單：展開狀態記在瀏覽器，目前所在子項目有選取標示
-  const TEAM_NAV_KEY = 'aigile-switch-team-nav';
-  function syncTeamNav() {
-    const open = store.get(TEAM_NAV_KEY) === '1' || state.page === 'team';
-    document.querySelectorAll('[data-team-group]').forEach(g => {
-      g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(open));
-      g.querySelector('.chev').textContent = open ? '▾' : '▸';
-      g.querySelector('.nav-sub').hidden = !open;
-      g.querySelector('[data-team-toggle]').toggleAttribute('data-current', state.page === 'team');
-      g.querySelectorAll('[data-team-go]').forEach(b => { if (state.page === 'team' && b.dataset.teamGo === work.teamTab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-    });
-  }
-  // 鍵盤：在子項目上用 ↑↓ 移動
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-project-card],[data-team-message],[data-team-mention],[data-team-cards]');
+    if (!b) return;
+    if (b.dataset.projectCard) {
+      const card = work.cards.get(b.dataset.projectCard);
+      if (card?.project) setProjectView(card.project, 'work');
+      else showPage('work');
+      openCard(b.dataset.projectCard);
+    }
+    if (b.dataset.teamCards) {
+      work.owner = b.dataset.teamCards;
+      work.q = '';
+      showPage('work');
+    }
+    if (b.dataset.teamMessage) {
+      showPage('messages');
+      jumpTo(b.dataset.teamMessage);
+    }
+    if (b.dataset.teamMention) {
+      showPage('messages');
+      input.value += ' @' + b.dataset.teamMention + ' ';
+      input.focus();
+    }
+  });
   document.addEventListener('keydown', e => {
     if (!['ArrowUp', 'ArrowDown'].includes(e.key) || !e.target.closest?.('.nav-sub')) return;
     e.preventDefault();
@@ -3377,12 +3519,6 @@
     const st = e.target.closest('[data-set-toggle]');
     if (st) { const open = st.getAttribute('aria-expanded') !== 'true'; store.set(SET_NAV_KEY, open ? '1' : '0'); syncSetNav(open); }
   });
-  document.addEventListener('click', e => {
-    const tg = e.target.closest('[data-team-toggle]');
-    if (tg) { const open = tg.getAttribute('aria-expanded') === 'true'; store.set(TEAM_NAV_KEY, open ? '0' : '1'); document.querySelectorAll('[data-team-group]').forEach(g => { g.querySelector('.nav-sub').hidden = open; g.querySelector('[data-team-toggle]').setAttribute('aria-expanded', String(!open)); g.querySelector('.chev').textContent = open ? '▸' : '▾'; }); return; }
-    const go = e.target.closest('[data-team-go]');
-    if (go) { closeSheet(false); if (go.dataset.teamGo === 'ai') return goTop('myai'); work.teamTab = go.dataset.teamGo; store.set(TEAM_NAV_KEY, '1'); if (state.page === 'team') renderTeamPage(); else showPage('team'); }
-  });
   function openTodoPage() { closeSheet(false); showPage('inbox'); }
   document.addEventListener('click', e => { if (e.target.closest('[data-todo]')) openTodoPage(); });
   function showPage(page, { replace = false, noHistory = false } = {}) {
@@ -3390,8 +3526,9 @@
     if (work.openId) closeCard();
     const v = projectView();
     if (page === 'dm') { page = 'messages'; setTimeout(() => dmPanel(true), 0); } // 私訊改面板，舊網址照樣打開
-    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files'].includes(page) && !(v === 'cross' && page === 'work') ? page : 'messages';
-    if (state.page !== 'team') work.teamScrollTab = null; // 離開團隊頁就不再保留捲動位置（UX），回來從頂端開始
+    state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files', 'overview'].includes(page) && !(v === 'cross' && ['work','overview'].includes(page)) ? page : 'messages';
+    if (myProjects().includes(v) && ['overview','messages','work','inbox','team','files'].includes(state.page)) store.set('aigile-project-page:'+meId()+':'+v,state.page);
+    if (state.page !== 'inbox') work.acceptOnly = false;
     if (state.page !== 'hub' && !TOP_PAGES[state.page]) store.set(PAGE_KEY, state.page);
     if (!noHistory) syncUrl(replace);
     drawChrome();
@@ -3401,11 +3538,10 @@
     document.querySelectorAll('[data-nav]').forEach(b => {
       if (b.dataset.nav === state.page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
-    syncTeamNav();
     if (state.page === 'work') {
       return (work.loaded ? Promise.resolve() : loadCards()).then(renderWork).catch(err => toast(err.message));
-    } else if (state.page === 'team') {
-      renderTeamPage();
+    } else if (state.page === 'team' || state.page === 'overview') {
+      return renderTeamPage();
     } else if (state.page === 'hub') {
       return Promise.all([work.loaded ? null : loadCards(), loadTeam().catch(() => {})]).then(renderWork).catch(err => toast(err.message));
     } else if (state.page === 'files') {
@@ -3429,6 +3565,7 @@
     const b = e.target.closest('[data-nav]');
     if (!b) return;
     closeSheet(false);
+    work.acceptOnly = false;
     showPage(b.dataset.nav);
     if (b.dataset.nav === 'messages') $('#input').focus();
   });
@@ -3722,27 +3859,195 @@
   }
   const greeting = () => { const h = new Date().getHours(); return h >= 5 && h < 11 ? '早安' : h >= 11 && h < 18 ? '午安' : '晚安'; };
   // 問候只叫名字：三個中文字、第一個字是常見姓氏才去掉姓（「管理員」「測試員」這類不是人名的不截）
-  function hubHtml() {
-    const counts = todoByView();
-    const cards = myProjects().map(p => {
-      const n = projStats(p), m = lastMsgOf(p);
-      const st = (label, v, cls) => `<span class="hs${v && cls ? ' ' + cls : ''}${v ? '' : ' zero'}">${label}<b>${v}</b></span>`;
-      return `<button type="button" class="hub-card" style="--pc:${projColor(p)}" data-proj="${esc(p)}" aria-label="進入 ${esc(projName(p))}">
-        <span class="hc-head">${projIcon(p, 44)}<span class="hc-name"><b>${esc(projName(p))}</b><span class="small">成員 ${projMembers(p)} · 最後動態 ${m ? whenText(m.createdAt) : '—'}${leadersOf(p).length ? ` · ★ leader：${esc(leadersOf(p).map(id => state.participants.get(id)?.name).filter(Boolean).join('、'))}` : ''}</span></span>${counts[p] ? `<span class="hc-todo">要你處理 ${counts[p]}</span>` : ''}</span>
-        <span class="hc-stats">${st('今日完成', n.done)}${st('進行中', n.doing)}${st('受阻', n.blocked, 'bad')}${st('待驗收', n.verify, 'warn')}</span>
-        <span class="hc-last">${m ? `最新：${esc(m.author.name)}「${esc(oneLine(m.text, 50))}」` : '最近 12 小時沒有新訊息'}</span>
-        <span class="hc-go">進入 ›</span></button>`;
-    }).join('');
-    const cm = lastMsgOf(null);
-    return `<div class="hub"><section class="hub-main">
-        <div class="work-head"><div class="work-title"><h2>${esc(greeting())}，<span data-nt>${esc(shownName(state.me?.name || ''))}</span></h2><span class="muted small"><span>${esc(new Date().toLocaleDateString(window.aigileI18n?.lang === 'en' ? 'en-US' : 'zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short' }))}</span>${counts.hub ? ` · ${counts.hub} 件要你處理` : ' · 沒有要你處理的事'}</span></div></div>
-        ${onboardHtml()}${hubNewAiHtml()}${nextStepsHtml()}<div class="hub-grid">${cards || hubJoinHtml()}</div>
-        <button type="button" class="link hub-join" data-join-open>＋ 申請加入專案</button>
-        ${isAdmin() ? '<button type="button" class="link hub-join" data-hub-newproj>＋ 新增專案</button>' : ''}
-        <button type="button" class="hub-card hub-cross" data-proj="cross" aria-label="進入跨專案頻道">${projIcon('cross', 44)}<span class="hc-name"><b>跨專案頻道</b><span class="small">規則公告、跨團隊協調。${cm ? `最新：${esc(cm.author.name)} ${whenText(cm.createdAt)}「${esc(oneLine(cm.text, 40))}」` : '最近 12 小時沒有新訊息'}</span></span><span class="hc-go">進入 ›</span></button>
-      </section>
-      <aside class="hub-todo" aria-label="要你處理">${hubTodoHtml()}</aside></div>`;
+  const projectLastPage = (pj) => store.get('aigile-project-page:' + meId() + ':' + pj);
+  const hubView = { tab: 'projects', filter: 'all', search: '', group: 'type', cards: 'open', showAll: false };
+  const hubChoice = (key, value, label) =>
+    `<button type="button" class="btn small" data-hub-choice="${key}" data-value="${value}" aria-pressed="${hubView[key] === value}">${esc(label)}</button>`;
+  const projectCards = (pj) => [...work.cards.values()].filter((c) => c.project === pj);
+  const projectCardLink = (c) =>
+    `<button class="link" data-project-card="${esc(c.cardId)}">${esc(ckeyOf(c))} ${esc(c.title)}</button>`;
+  function projectOverview(pj, team) {
+    const cards = projectCards(pj),
+      dates = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date();
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() - 6 + i);
+        return d;
+      });
+    const completed = cards
+      .filter((c) => Date.parse(c.done?.at) >= dates[0])
+      .sort((a, b) => b.done.at.localeCompare(a.done.at));
+    const counts = [
+      [pageText('新建的卡', 'Cards created'), cards.filter((c) => Date.parse(c.createdAt) >= dates[0]).length],
+      [pageText('完成的卡', 'Cards done'), completed.length],
+      [pageText('等驗收', 'Awaiting acceptance'), cards.filter((c) => c.status === '已完成' && !c.verified).length],
+      [pageText('卡住', 'Stuck'), cards.filter((c) => c.status === '受阻').length]
+    ];
+    const values = dates.map(
+      (d) => completed.filter((c) => new Date(c.done.at).toDateString() === d.toDateString()).length
+    );
+    return `<section class="project-page"><h2>${esc(projName(pj))} · ${pageText('概觀', 'Overview')}</h2><p>${pageText('最近 7 天', 'Last 7 days')} · ${dates[0].toLocaleDateString()} – ${dates[6].toLocaleDateString()}</p>
+      <div class="overview-stats">${counts.map(([label, n]) => `<div>${label}<strong>${n}</strong></div>`).join('')}</div>
+      <h3>${pageText('每天完成幾張', 'Cards done per day')}</h3><div class="overview-chart">${dates.map((d, i) => `<div><b>${values[i]}</b><i style="height:${Math.max(2, (72 * values[i]) / Math.max(1, ...values))}px"></i><small>${d.getMonth() + 1}/${d.getDate()}</small></div>`).join('')}</div>
+      <h3>${pageText('團隊', 'Team')}</h3><div class="project-summary">${team.totals}<button data-nav="team" class="link">${pageText('看團隊', 'Open team')} ›</button></div>${team.alerts[0] || ''}
+      <h3>${pageText('最近完成', 'Recently done')}</h3>${
+        completed
+          .slice(0, 5)
+          .map((c) => `<p>${projectCardLink(c)} · ${esc(c.done.by?.name || '')} · ${agoText(c.done.at)}</p>`)
+          .join('') || pageText('最近 7 天沒有完成的卡。', 'No cards completed in the last 7 days.')
+      }</section>`;
   }
+  async function recordProjectVisit(pj) {
+    const project = state.projectList.find((p) => p.id === pj);
+    if (!project || Date.now() - Date.parse(project.visitedAt) < 10 * 60_000) return;
+    const previous = project.visitedAt;
+    const visitedAt = new Date().toISOString();
+    project.visitedAt = visitedAt;
+    try {
+      await api('/api/projects/' + encodeURIComponent(pj) + '/preference', { method: 'PUT', body: { visit: true } });
+    } catch {
+      if (project.visitedAt === visitedAt) project.visitedAt = previous;
+    }
+  }
+  function hubProjects(counts) {
+    if (!myProjects().length) return hubJoinHtml();
+    const all = state.projectList
+      .filter((p) => myProjects().includes(p.id))
+      .filter(
+        (p) =>
+          p.name.toLowerCase().includes(hubView.search.toLowerCase()) &&
+          (hubView.filter === 'all' || (hubView.filter === 'star' ? p.starred : leadersOf(p.id).includes(meId())))
+      );
+    const ordered = all.sort(
+      (a, b) =>
+        Number(!!b.starred) - Number(!!a.starred) ||
+        (b.visitedAt || '').localeCompare(a.visitedAt || '') ||
+        a.name.localeCompare(b.name)
+    );
+    const recent = ordered.filter((p) => p.starred || p.visitedAt).slice(0, 6),
+      rest = ordered.filter((p) => !recent.includes(p)).sort((a, b) => a.name.localeCompare(b.name));
+    const tile = (p) => {
+      const people = [...state.participants.values()].filter((m) => m.status !== 'disabled' && memberIn(m, p.id)),
+        activity = lastMsgOf(p.id);
+      return `<article class="project-tile"><button type="button" class="project-star" data-project-star="${esc(p.id)}" aria-label="${pageText('加星號', 'Star')} ${esc(p.name)}" aria-pressed="${!!p.starred}">${p.starred ? '★' : '☆'}</button>
+      <button type="button" class="project-entry" data-proj="${esc(p.id)}">${projIcon(p.id, 32)}<span><b>${esc(p.name)}</b><small>${esc(p.description || '')}</small></span>
+      <span class="project-people">${people
+        .slice(0, 3)
+        .map((m) => avatar(m))
+        .join(
+          ''
+        )}${people.length > 3 ? '+' + (people.length - 3) : ''}</span><small>${pageText('最後動態', 'Last activity')} ${activity ? agoText(activity.createdAt) : '—'}</small>
+      ${counts[p.id] ? `<span>${pageText('要你處理', 'Needs you')} ${counts[p.id]}</span>` : ''}</button></article>`;
+    };
+    const grid = (label, list, total = list.length) =>
+      `<h3>${label} (${total})</h3><div class="project-grid">${list.map(tile).join('')}</div>`;
+    return `<div class="project-filters"><input type="search" id="hub-search" value="${esc(hubView.search)}" placeholder="${pageText('篩選專案', 'Filter projects')}">
+      ${hubChoice('filter', 'all', pageText('全部', 'All'))}${hubChoice('filter', 'star', pageText('★ 加星號', '★ Starred'))}${hubChoice('filter', 'lead', pageText('我是 leader', 'I lead'))}
+      ${isAdmin() ? '<button class="btn small" data-hub-newproj>＋ ' + pageText('新增專案', 'New project') + '</button>' : ''}</div>
+      ${ordered.length <= 6 ? grid(pageText('專案', 'Projects'), ordered) : grid(pageText('加星號和最近去過', 'Starred and recent'), recent) + grid(pageText('其他專案', 'Other projects'), rest.slice(0, hubView.showAll ? rest.length : 6), rest.length)}
+      ${rest.length > 6 && !hubView.showAll ? '<button class="link" data-project-more>' + pageText('再顯示', 'Show more') + ' ' + (rest.length - 6) + ' ▾</button>' : ''}
+      <p><button class="btn" data-proj="cross">${pageText('跨專案頻道 · 規則公告、跨團隊協調', 'Cross-project channel · Announcements and coordination')} ›</button></p><button class="link" data-join-open>＋ ${pageText('申請加入專案', 'Request to join a project')}</button>`;
+  }
+  function hubNeeds() {
+    const stamp = (x) => {
+      const [kind, id] = x.key.split(':');
+      if (kind === 'c' || kind === 'v') return work.cards.get(id)?.updatedAt;
+      return work.notes?.find((n) => n.notificationId === id)?.createdAt || state.byId?.get(x.mid || id)?.createdAt;
+    };
+    const group = new Map(),
+      accepts = new Map();
+    for (const item of hubTodoItems()) {
+      const label =
+        hubView.group === 'project'
+          ? item.p
+            ? projName(item.p)
+            : pageText('跨專案頻道', 'Cross-project channel')
+          : { 決策: '要你決定', 需確認: '要你決定', 回覆: '要你回覆', 驗收: '等你驗收' }[item.kind] || '其他';
+      if (!group.has(label)) group.set(label, []);
+      if (item.kind === '驗收') {
+        const key = item.p || 'cross';
+        if (!accepts.has(key)) {
+          const batch = [];
+          accepts.set(key, batch);
+          group.get(label).push(batch);
+        }
+        accepts.get(key).push(item);
+      } else group.get(label).push(item);
+    }
+    const labels =
+      hubView.group === 'project'
+        ? [...group.keys()]
+        : ['要你決定', '要你回覆', '等你驗收', '其他'].filter((k) => group.has(k));
+    const row = (x) =>
+      Array.isArray(x)
+        ? `<button class="ht-row" data-accept-project="${esc(x[0].p || 'cross')}">${esc(projName(x[0].p))} · ${x.length} ${pageText('張做完等你驗收', 'done cards to accept')} · ${pageText('最早', 'Oldest')} ${agoText(x.map(stamp).filter(Boolean).sort()[0])} ›</button>`
+        : `<button class="ht-row" data-hub-todo="${esc(x.key)}" data-hub-proj="${esc(x.p || 'cross')}"><span class="ht-tag">${esc(x.kind)}</span><span class="ht-title">${esc(x.title)}</span> · ${esc(x.p ? projName(x.p) : '—')} · ${stamp(x) ? agoText(stamp(x)) : ''} ›</button>`;
+    return (
+      '<div class="project-filters">' + hubChoice('group', 'type', pageText('照類別', 'By type')) +
+      hubChoice('group', 'project', pageText('照專案', 'By project')) + '</div>' +
+      labels
+        .map(
+          (k) =>
+            `<h3>${esc(hubView.group === 'type' ? pageText(k, { 要你決定: 'Decide', 要你回覆: 'Reply', 等你驗收: 'Accept', 其他: 'Other' }[k]) : k)}</h3>${group.get(k).map(row).join('')}`
+        )
+        .join('') +
+      (!labels.length ? `<p>${pageText('目前沒有要你處理的事。', 'Nothing needs you right now.')}</p>` : '')
+    );
+  }
+  function hubMyCards(mine) {
+    const done = hubView.cards === 'done';
+    const list = mine.filter((c) =>
+      done
+        ? c.status === '已完成' && ageDays(c.done?.at) <= 14
+        : !['已完成', '取消', '已取消'].includes(c.status) || (c.status === '已完成' && !c.verified)
+    );
+    const groups = done
+      ? [['最近完成', list]]
+      : [
+          ['卡住', list.filter((c) => c.status === '受阻')],
+          ['等驗收或決定', list.filter((c) => ['待確認', '已完成'].includes(c.status))],
+          ['進行中', list.filter((c) => c.status === '進行中')],
+          ['還沒開始', list.filter((c) => ['待整理', '待處理'].includes(c.status))]
+        ];
+    const row = (c) =>
+      `<p>${projectCardLink(c)} · ${esc(projName(c.project))} · ${esc(c.status)} · ${agoText(c.updatedAt)}</p>`;
+    return (
+      hubChoice('cards', 'open', pageText('還沒完成', 'Open')) +
+      hubChoice('cards', 'done', pageText('最近完成', 'Recently done')) +
+      groups
+        .filter(([, l]) => l.length)
+        .map(
+          ([k, l]) =>
+            `<h3>${pageText(k, { 最近完成: 'Recently done', 卡住: 'Stuck', 等驗收或決定: 'Awaiting review', 進行中: 'In progress', 還沒開始: 'To do' }[k])}</h3>${l.slice(0, 5).map(row).join('')}${l.length > 5 ? `<details><summary>＋ ${l.length - 5}</summary>${l.slice(5).map(row).join('')}</details>` : ''}`
+        )
+        .join('') +
+      (list.length ? '' : `<p>${done ? pageText('最近 14 天沒有完成的卡。', 'No cards completed in the last 14 days.') : pageText('你目前沒有負責、還沒完成的卡。', 'You have no unfinished cards.')}</p>`)
+    );
+  }
+  function hubHtml() {
+    const counts=todoByView(), mine=[...work.cards.values()].filter(c=>c.owner?.participantId===meId()),tab=hubView.tab;
+    return `<div class="project-page"><header class="work-title"><h2>${esc(greeting())}，<span data-nt>${esc(shownName(state.me?.name || ''))}</span></h2> ${new Date().toLocaleDateString()}</header>${onboardHtml()}${hubNewAiHtml()}${nextStepsHtml()}
+      <nav class="project-filters">${hubChoice('tab','projects',pageText('專案','Projects')+' '+myProjects().length)}${hubChoice('tab','needs',pageText('要你處理','Needs you')+' '+(counts.hub||0))}${hubChoice('tab','mine',pageText('我負責的卡','My cards')+' '+mine.length)}</nav>
+      ${tab==='projects'?hubProjects(counts):tab==='needs'?'<section class="hub-needs">'+hubNeeds()+'</section>':hubMyCards(mine)}</div>`;
+  }
+  document.addEventListener('click',async e=>{
+    const b=e.target.closest('[data-hub-choice],[data-project-star],[data-project-more],[data-accept-project]');
+    if(!b)return;
+    if(b.dataset.acceptProject){work.acceptOnly=true;return setProjectView(b.dataset.acceptProject,'inbox');}
+    if(b.dataset.hubChoice)hubView[b.dataset.hubChoice]=b.dataset.value;
+    if(b.hasAttribute('data-project-more'))hubView.showAll=true;
+    if(b.dataset.projectStar){
+      const p=state.projectList.find(x=>x.id===b.dataset.projectStar);if(!p)return;
+      const starred=!p.starred;b.disabled=true;
+      try{await api('/api/projects/'+encodeURIComponent(p.id)+'/preference',{method:'PUT',body:{starred}});p.starred=starred;}catch(err){toast(err.message);}
+    }
+    if(state.page==='hub')renderWork();
+  });
+  document.addEventListener('input',e=>{
+    if(e.target.id!=='hub-search')return;
+    hubView.search=e.target.value;renderWork();const el=$('#hub-search');el?.focus();
+  });
+
   // 新手上路：總覽最上面 3 件事（AI 加入 → 走一遍說明第 2 章 → 回覆第一件），狀態由伺服器算（GET /api/me 的 onboard）；收合、「不用了」記在帳號，換裝置一樣
   // 第 1、2 項後面的小連結「帶我走」直接開始那一章的聚光燈導覽（寬不到 1000 不顯示）；走完導覽不算完成
   const obTour = n => `<button type="button" class="link small ob-tour" data-tour-start="${n}">帶我走</button>`;
@@ -3851,7 +4156,7 @@
   // 總覽側欄「要你處理」捲到右邊清單（窄畫面沒有右欄就開視窗）；「＋ 新增專案」
   document.addEventListener('click', e => {
     if (e.target.closest?.('[data-hub-todo-open]')) {
-      const go = () => { const t = document.querySelector('.hub-todo'); if (t && t.offsetParent) { t.scrollIntoView({ behavior: 'smooth', block: 'start' }); t.classList.add('flash'); setTimeout(() => t.classList.remove('flash'), 1400); } else openModal('要你處理', hubTodoHtml(true), { size: 'narrow', sub: '各專案彙總；點一項進到該專案處理' }); };
+      const go = () => { hubView.tab='needs'; renderWork(); };
       return state.page === 'hub' ? go() : Promise.resolve(setProjectView('hub')).then(() => setTimeout(go, 50));
     }
     if (e.target.closest?.('[data-hub-newproj]')) { closeSheet(false); return openNewProject(); }
@@ -3904,6 +4209,7 @@
           <div class="sugg-main"><b>${cidHtml(c)} ${cardPTag(c)} ${esc(cardTitle(c))}</b><span class="muted small">${c.next ? '下一步：' + esc(c.next) + ' · ' : ''}<span>${agoText(c.updatedAt)}交來</span></span></div>
           <div class="sugg-actions">${reportBtn(c)}<button type="button" class="btn small primary" data-ver-ok="${esc(c.cardId)}">驗收通過</button><button type="button" class="btn small" data-ver-no="${esc(c.cardId)}">退回…</button><button type="button" class="link small" data-card="${esc(c.cardId)}">查看詳情</button></div>
         </div>`).join('')}</section>` : '';
+    if (work.acceptOnly) return verSection || pageText('目前沒有待驗收的卡。','No cards to accept.');
     for (const id of [...work.confSel]) if (!confirms.some(d => d.messageId === id)) work.confSel.delete(id);
     const confN = work.confSel.size, confAll = confirms.length > 0 && confN === confirms.length;
     const confSection = confirms.length ? `
@@ -4002,8 +4308,6 @@
       return workBox.querySelector('[data-col="已封存"]')?.scrollIntoView({ inline: 'end', block: 'nearest' });
     }
     if (t.closest('[data-goto-inbox]')) { showPage('inbox'); return; }
-    const tt = t.closest('[data-team-tab]');
-    if (tt) { work.teamTab = tt.dataset.teamTab; renderTeamPage(); return; }
     const ng = t.closest('[data-note-goto]');
     if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
     const pv = t.closest('[data-ask-pv]');
@@ -5101,6 +5405,13 @@
   work.answered = new Set(); // 已經有人類回覆的 [需確認]，不等團隊狀態快取（約 1 分鐘）就先移走
   const myDecisions = t => t.decisions.filter(d => ((!d.cardId && !cardOfConfirm(d)) || d.deciderId === meId()) && !(d.messageId && work.answered.has(d.messageId)));
   const agoText = iso => {
+    if (window.aigileI18n?.lang === 'en') {
+      if (!iso) return 'Never online';
+      const minutes = Math.floor((Date.now() - Date.parse(iso)) / 60000);
+      if (!minutes) return 'Just now';
+      const [count, unit] = minutes < 60 ? [minutes, 'minute'] : minutes < 1440 ? [Math.floor(minutes / 60), 'hour'] : [Math.floor(minutes / 1440), 'day'];
+      return new Intl.RelativeTimeFormat('en').format(-count, unit);
+    }
     if (!iso) return '從未上線';
     const min = Math.floor((Date.now() - new Date(iso)) / 60000);
     if (min < 1) return '剛剛';
@@ -5522,11 +5833,10 @@
     const a = e.target.closest?.('[data-ainow]'), t = e.target.closest?.('[data-ainow-team]');
     if (!a && !t) return;
     if (a?.closest('.modal')) closeModal();
-    work.teamTab = 'status';
-    showPage('team');
+      showPage('team');
     if (!a) return;
     const id = a.dataset.ainow, until = Date.now() + 3000;
-    const seek = () => { const row = document.querySelector(`.tm-row[data-tm-id="${CSS.escape(id)}"]`); if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1600); } else if (Date.now() < until) setTimeout(seek, 150); };
+    const seek = () => { const row = document.querySelector(`.project-member[data-tm-id="${CSS.escape(id)}"]`); if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1600); } else if (Date.now() < until) setTimeout(seek, 150); };
     seek();
   });
   document.addEventListener('change', e => {
@@ -8988,7 +9298,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           <button type="button" class="pa-pick" data-pa="pick" aria-pressed="${p.id === pm.sel}"><b>${esc(p.name)}</b>${p.archived ? ' <span class="pill-tag grey">已封存</span>' : ''}
             <span class="muted small">成員 ${p.memberCount} · 未結案卡 ${p.openCards}</span></button>
           ${p.archived ? '<button type="button" class="btn small" data-pa="unarchive">還原</button>'
-            : `<button type="button" class="btn small" data-pa="rename">改名</button>
+            : `<button type="button" class="btn small" data-pa="description">一句描述</button> <button type="button" class="btn small" data-pa="rename">改名</button>
                <button type="button" class="btn small danger-outline" data-pa="archive" ${blocked ? `aria-disabled="true" title="還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案"` : ''}>封存</button>`}
         </div>`;
       }).join('');
@@ -9052,6 +9362,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           if (!name) return toast('請輸入專案名稱');
           const r = await api('/api/projects', { method: 'POST', body: { name } });
           pm.sel = r.id; toast(crossNames().length ? `已新增專案，你和 ${crossNames().join('、')} 已加入` : '已新增專案，目前只有你');
+        } else if (act === 'description') {
+          const project = state.projectList.find(x => x.id === id);
+          const description = window.prompt(pageText('一句描述（最多 40 字）','Description (up to 40 characters)'),project?.description || '');
+          if (description === null) return;
+          await api('/api/projects/'+encodeURIComponent(id), {method:'PATCH',body:{description}});
         } else if (act === 'rename') {
           const p = state.projectList.find(x => x.id === id);
           const name = await promptName('改名', p?.name || '');
@@ -9605,7 +9920,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const repo = p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
         : p.archived ? '<span class="muted">—</span>' : `<span class="pm-sub">未填 · </span><button type="button" class="link small" data-pm-repo="${esc(p.id)}">設定</button>`;
       const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
-          <button type="button" role="menuitem" data-pp="rename">改名</button>
+          <button type="button" role="menuitem" data-pp="description">一句描述</button><button type="button" role="menuitem" data-pp="rename">改名</button>
           <button type="button" role="menuitem" data-pp="slug">網址英文名…<span class="pm-sub">/p/${esc(p.slug || p.id)}</span></button>
           <button type="button" role="menuitem" data-pp="code">專案代號…<span class="pm-sub">${esc(p.code || '')}-1、${esc(p.code || '')}-2…</span></button>
           <button type="button" role="menuitem" data-pm-repo="${esc(p.id)}">程式庫設定</button>
@@ -10196,6 +10511,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         if (!name) return toast('請輸入專案名稱');
         await api('/api/projects', { method: 'POST', body: { name } });
         toast(crossNames().length ? `已新增專案「${name}」，你和 ${crossNames().join('、')} 已加入` : `已新增專案「${name}」，目前只有你`);
+      } else if (a === 'description') {
+        const project=state.projectList.find(x=>x.id===id);
+        const description=window.prompt(pageText('一句描述（最多 40 字）','Description (up to 40 characters)'),project?.description || '');
+        if(description===null)return;
+        await api('/api/projects/'+encodeURIComponent(id),{method:'PATCH',body:{description}});
       } else if (a === 'rename') {
         const name = await promptName('改專案名稱', projName(id));
         if (!name || name === projName(id)) return;

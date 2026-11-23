@@ -465,3 +465,12 @@ CREATE INDEX IF NOT EXISTS idx_card_reviews_card ON card_reviews (card_seq, at);
 CREATE INDEX IF NOT EXISTS idx_card_reviews_reviewer ON card_reviews (reviewer_id, ev);
 -- 每一輪（送審訊息）每位審查者只算一次：併發重送的回覆也擋得住
 CREATE UNIQUE INDEX IF NOT EXISTS idx_card_reviews_vote ON card_reviews (card_seq, message_id, actor_id) WHERE ev IN ('pass', 'changes');
+
+CREATE TABLE IF NOT EXISTS project_descriptions (
+  project TEXT PRIMARY KEY, description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS project_preferences (
+  participant_id TEXT NOT NULL, project TEXT NOT NULL,
+  starred INTEGER NOT NULL DEFAULT 0, visited_at TEXT,
+  PRIMARY KEY (participant_id, project)
+);

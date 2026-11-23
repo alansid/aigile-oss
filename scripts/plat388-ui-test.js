@@ -27,8 +27,10 @@ try {
   const rowText = `${rows}.map(r => r.textContent.replace(/\\s+/g, ' ').trim())`;
   // 1. 總覽：合併成兩項
   await login(boss.token, '/');
-  await until(() => js("[...document.querySelectorAll('.hub-todo .ht-row')].filter(r => r.textContent.includes('回你了')).length === 2"), 15000, '總覽兩項私訊');
-  const hub = await js("[...document.querySelectorAll('.hub-todo .ht-row')].map(r => r.textContent.replace(/\\s+/g, ' ').trim()).filter(t => t.includes('回你了'))");
+  await until(() => js("!!document.querySelector('[data-hub-choice=tab][data-value=needs]')"), 15000, '總覽分頁');
+  await js("document.querySelector('[data-hub-choice=tab][data-value=needs]').click(); true");
+  await until(() => js("[...document.querySelectorAll('.hub-needs .ht-row')].filter(r => r.textContent.includes('回你了')).length === 2"), 15000, '總覽兩項私訊');
+  const hub = await js("[...document.querySelectorAll('.hub-needs .ht-row')].map(r => r.textContent.replace(/\\s+/g, ' ').trim()).filter(t => t.includes('回你了'))");
   assert.ok(hub.some(t => t.includes('PG一號 回你了（3 則）')), '總覽合併：' + JSON.stringify(hub));
   assert.ok(hub.some(t => t.includes('PG二號 回你了') && !t.includes('則）')), JSON.stringify(hub));
 

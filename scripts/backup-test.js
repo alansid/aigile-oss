@@ -77,6 +77,12 @@ try {
   // ---- 站 A：做一些資料 ----
   const liu = (await A.call(null, '/api/join', 'POST', { name: '王小明', role: 'PO' })).body; // 第一位＝管理員
   const pj = (await A.call(liu.token, '/api/me')).body.projects[0];
+  assert.equal((await A.call(liu.token, '/api/projects/' + pj, 'PATCH', { description: '團隊測試' })).status, 200);
+  for (const body of [{ starred: true }, { visit: true }]) {
+    assert.equal((await A.call(liu.token, '/api/projects/' + pj + '/preference', 'PUT', body)).status, 200);
+  }
+  const preference = await A.db.get('SELECT * FROM project_preferences WHERE participant_id = ? AND project = ?', liu.participant.participantId, pj);
+  assert.ok(preference.starred && preference.visited_at);
   assert.equal((await A.call(liu.token, '/api/me/password', 'PUT', { username: 'boss', newPassword: 'pass-word-1', newPasswordAgain: 'pass-word-1' })).status, 200);
   const chen = (await A.call(null, '/api/join', 'POST', { name: '陳大文', role: 'PG' })).body;
   const ai = (await A.call(liu.token, '/api/my-ais', 'POST', { projects: [pj], roleKey: 'PG', role: 'PG', name: '小明的PG', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
@@ -167,6 +173,8 @@ try {
   const decB = await B.call(dev, `/api/cards/${dec.cardId}`);
   assert.equal(decB.body.decision?.question, '？', '決策卡：' + JSON.stringify(decB.body).slice(0, 300));
   assert.equal((await B.call(dev, `/api/projects/${pj}/skills`)).body.items.length, 2, '技能（含技能包）');
+  assert.deepEqual(await B.db.get('SELECT * FROM project_preferences WHERE participant_id = ? AND project = ?', liu.participant.participantId, pj), preference);
+  assert.equal((await B.db.get('SELECT description FROM project_descriptions WHERE project = ?', pj)).description, '團隊測試');
   const pk = (await B.db.get("SELECT id FROM skills WHERE name = 'demo-pack'")).id;
   assert.ok(await B.db.get('SELECT 1 AS x FROM file_chunks WHERE file_id = ?', 'skillpack_' + pk), '技能包本體');
   const docId = doc.body.docId || doc.body.items?.[0]?.docId || doc.body.doc?.docId || backup.tables.docs[0].id;

@@ -35,8 +35,10 @@ try {
   const bad = t => /回你了|https?:\/\/|node \.aigile/.test(t);
   // 總覽「要你處理」
   await login(boss.token, '/');
-  await until(() => js("document.querySelectorAll('.hub-todo .ht-row').length >= 2"), 15000, '總覽要你處理');
-  const hub = await js("[...document.querySelectorAll('.hub-todo .ht-row')].map(r => r.textContent.replace(/\\s+/g, ' ').trim())");
+  await until(() => js("!!document.querySelector('[data-hub-choice=tab][data-value=needs]')"), 15000, '總覽分頁');
+  await js("document.querySelector('[data-hub-choice=tab][data-value=needs]').click(); true");
+  await until(() => js("document.querySelectorAll('.hub-needs .ht-row').length >= 2"), 15000, '總覽要你處理');
+  const hub = await js("[...document.querySelectorAll('.hub-needs .ht-row')].map(r => r.textContent.replace(/\\s+/g, ' ').trim())");
   const hubSys = hub.filter(t => t.includes('平台通知'));
   assert.equal(hubSys.length, 2, '總覽兩則平台通知：' + JSON.stringify(hub));
   assert.ok(hubSys.some(t => t.includes('平台通知：🧩 技能「pg-rules」有第 1 版，1 隻 AI 要同步')), JSON.stringify(hubSys));

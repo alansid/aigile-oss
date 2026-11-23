@@ -102,7 +102,7 @@ try {
   // 6. 手機 375：總覽與選單的新增專案
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
   await login(liu.token, '/');
-  await until(() => js("document.querySelector('.hub-join[data-hub-newproj]')?.offsetParent != null"), 8000, '手機總覽看得到「＋ 新增專案」'); // 等排版完成再看（原本只等元素出現，偶發失敗；平台 plat359 同修法）
+  await until(() => js("document.querySelector('.project-page [data-hub-newproj]')?.offsetParent != null"), 8000, '手機總覽看得到「＋ 新增專案」'); // 等排版完成再看（原本只等元素出現，偶發失敗；平台 plat359 同修法）
   assert.ok(!(await js("document.getElementById('m-newproj').hidden")), '手機選單有「＋ 新增專案」');
   await click('#m-newproj');
   await until(() => js("!!document.querySelector('#np-form')"), 5000, '手機選單 › 新增專案');

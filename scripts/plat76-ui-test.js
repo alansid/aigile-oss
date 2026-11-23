@@ -23,14 +23,16 @@ try {
   await login(boss.token, '/');
   await until(() => js("document.querySelector('.hub-side [data-hub-todo-open] .hs-n')?.textContent === '2'"), 15000, '總覽側欄要你處理 = 2');
   await sleep(300);
+  await until(() => js("!!document.querySelector('[data-hub-choice=tab][data-value=needs]')"), 15000, '總覽分頁');
+  await js("document.querySelector('[data-hub-choice=tab][data-value=needs]').click(); true");
   const hub = JSON.parse(await js(`JSON.stringify((() => {
     const n = s => document.querySelector(s)?.querySelector('.hs-n')?.textContent || null;
     return {
       todo: n('.hub-side [data-hub-todo-open]'),
       main: n('.hub-side [data-proj="預設專案"]'),
       sec: n('.hub-side [data-proj="第二專案"]'),
-      head: document.querySelector('.hub-todo .ht-head .ps-count')?.textContent || null,
-      rows: [...document.querySelectorAll('.hub-todo .ht-row')].map(r => ({ proj: r.dataset.hubProj, tag: r.querySelector('.ht-tag')?.textContent })),
+      head: document.querySelector('[data-hub-choice=tab][data-value=needs]')?.textContent.trim().split(' ').pop(),
+      rows: [...document.querySelectorAll('.hub-needs .ht-row')].map(r => ({ proj: r.dataset.hubProj, tag: r.querySelector('.ht-tag')?.textContent })),
     };
   })())`));
   assert.equal(hub.todo, '2', '總覽側欄要你處理 2 件');
