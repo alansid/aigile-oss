@@ -109,9 +109,22 @@ try {
   mode = 'ok';
 
   // 3. 電腦睡醒：時鐘跳 1 小時（門鈴檔心跳看起來舊了），watcher 程序還在 → 不印 WARN；先查一次待處理數
+  // 等子程序跑到 checkWatcher、更新自己的 wait.pid，再跳模擬時鐘。
+  // 只看到啟動查詢還不夠：此時 lastTick 可能還沒初始化。
+  const startSleepCase = async args => {
+    const child = startWait(['--alive-sec=0.2', '--wake-grace-min=0.05', ...args]);
+    const pidFile = path.join(dir, 'wait.pid');
+    let firstMtime;
+    await until(() => {
+      if (!fs.existsSync(pidFile) || fs.readFileSync(pidFile, 'utf8').trim() !== String(child.p.pid)) return false;
+      const mtime = fs.statSync(pidFile).mtimeMs;
+      firstMtime ??= mtime;
+      return mtime !== firstMtime;
+    }, 10000, '睡醒測試：等待子程序首次心跳', child);
+    return child;
+  };
   setSkew(0); alive(); writeBell(0);
-  w = startWait(['--alive-sec=0.2', '--wake-grace-min=0.05']); // 緩衝 3 秒
-  await sleep(700);
+  w = await startSleepCase([]); // 緩衝 3 秒
   const c1 = waitCounts;
   setSkew(60 * 60_000);
   await until(() => /偵測到電腦睡醒（停了約 60 分鐘）/.test(w.out()), 5000, '偵測睡醒', w);
@@ -125,8 +138,8 @@ try {
   await w.kill();
   // 睡醒後 watcher 真的沒回來（緩衝過了心跳還是舊的）→ 印 WARN、改備援，不結束
   setSkew(0); alive(); writeBell(0);
-  w = startWait(['--alive-sec=0.2', '--wake-grace-min=0.05', '--poll-sec=1']);
-  await sleep(700); setSkew(60 * 60_000);
+  w = await startSleepCase(['--poll-sec=1']);
+  setSkew(60 * 60_000);
   await until(() => /偵測到電腦睡醒/.test(w.out()), 5000, '偵測睡醒', w);
   await until(() => /WARN watcher 不在/.test(w.out()), 8000, '緩衝過了還沒心跳就印 WARN', w);
   assert.ok(w.running(), '改備援輪詢，不結束');
