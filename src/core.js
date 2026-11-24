@@ -12,7 +12,6 @@ import { registerJoin, joinOpen } from './join.js'; // 申請加入專案
 import { registerDocs, DOC_MAX_TOTAL_BYTES } from './docs.js'; // 專案文件區
 import { registerKbPages } from './kb-pages.js'; // 知識頁、整理卡
 import { registerReviews } from './reviews.js'; // 審查者
-import { registerLauncher } from './launcher.js'; // PLAT-436 AI 啟動器
 import { registerBackup } from './backup.js'; // 備份匯出與匯入
 import { registerUpdateCheck } from './update.js'; // 管理頁「有新版本」
 import { registerDemo } from './demo.js'; // 示範資料
@@ -189,20 +188,6 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
         body: JSON.stringify({ messages: [{ topic: SB_TOPIC, event: 'doorbell', payload: { ids, at, n, sigs }, private: false }] }),
       });
     })().catch(e => console.error('doorbell failed:', e.message)).finally(() => bellPending.delete(p));
-    bellPending.add(p);
-  }
-  function notifyLauncher(launcherId, jobId, at) {
-    if (!SB_URL || !SB_KEY) return;
-    const p = (async () => {
-      const ln = await db.get('SELECT id, token_hash FROM launchers WHERE id = ? AND revoked_at IS NULL', launcherId);
-      if (!ln) return;
-      const n = randId('lnb', 12), sig = await bellSig(ln.token_hash, ln.id, at, n);
-      await fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
-        method: 'POST',
-        headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [{ topic: SB_TOPIC, event: 'launcher', payload: { launcherId: ln.id, jobId, at, n, sig }, private: false }] }),
-      });
-    })().catch(e => console.error('launcher notify failed:', e.message)).finally(() => bellPending.delete(p));
     bellPending.add(p);
   }
   const flushBells = () => Promise.allSettled([...bellPending]);
@@ -604,8 +589,6 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     if (await db.get('SELECT 1 AS x FROM participants WHERE token IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(keys))) leak('Token');
     const dv = cands.filter(s => s.startsWith('dv_'));
     if (dv.length && await db.get('SELECT 1 AS x FROM devices WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(dv.map(s => sha256(s)))))) leak('Token');
-    const lk = cands.filter(s => s.startsWith('lk_'));
-    if (lk.length && await db.get('SELECT 1 AS x FROM launchers WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(lk.map(s => sha256(s)))))) leak('Token');
   }
   // 知識庫抽出的長文字找密鑰（有就不建索引，不然 AI 一搜就把密鑰帶進對話）。回傳找到什麼或 null
   // 跟 assertNoSecret 同一套（接入連結、成員現在的 Token），但候選字串分批全查；再加常見金鑰樣式與連線字串裡的密碼
@@ -621,8 +604,6 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       if (await db.get('SELECT 1 AS x FROM participants WHERE token IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(keys))) return 'Token';
       const dv = part.filter(s => s.startsWith('dv_'));
       if (dv.length && await db.get('SELECT 1 AS x FROM devices WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(dv.map(s => sha256(s)))))) return 'Token';
-      const lk = part.filter(s => s.startsWith('lk_'));
-      if (lk.length && await db.get('SELECT 1 AS x FROM launchers WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(lk.map(s => sha256(s)))))) return 'Token';
     }
     return null;
   }
@@ -3315,7 +3296,6 @@ ${ending}`;
       ["UPDATE participants SET status = 'deleted', token = ?, token_expires_at = 0, updated_at = ? WHERE id = ?", ['deleted_' + ai.id, at, ai.id]],
       ["UPDATE notifications SET status = 'acked', acked_at = ? WHERE recipient_id = ? AND status = 'pending'", [at, ai.id]],
       ['DELETE FROM ai_state WHERE participant_id = ?', [ai.id]],
-      ['DELETE FROM launcher_regs WHERE ai_id = ?', [ai.id]],
     ];
     for (const c of cards) {
       stmts.push(["UPDATE cards SET owner_id = NULL, status = '待處理', wait_for_id = CASE WHEN wait_for_id = ? THEN NULL ELSE wait_for_id END, updated_at = ?, version = version + 1 WHERE seq = ?", [ai.id, at, c.seq]]);
@@ -3890,7 +3870,6 @@ ${ending}`;
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）
   const reviewsApi = registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager: kbManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, isolatedFrom,
     roleNamesIn: (p, pj) => (p.kind === 'ai' ? [p.role_key, p.role] : [projRoles[p.id]?.[pj]]).filter(Boolean), repoOf: async pj => (await reposMap())[pj] || null, docStorage, audit });
-  registerLauncher({ route, db, ApiError, invalid, readJson, randId, newToken, sha256, requireHuman, peopleMap, isOnline, agentDir, live, notifyLauncher }); // PLAT-436
   Object.assign(kbHooks, registerKbPages({ route, db, ApiError, invalid, readJson, randId, nowIso, peopleMap, identity, projectsOf, PROJECTS, assertWritable, roIn, kbManager, findSecret, getJson, setJson, createMessage, cardKey, cardsApi, claimsOf, kbSkillState: (pj, ais) => skillsApi.templateState(pj, 'kb-curation', ais) })); // 知識頁、整理卡
 
   // 只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）
@@ -4000,7 +3979,6 @@ ${ending}`;
     await db.batch([
       ["UPDATE participants SET status = 'disabled', updated_at = ? WHERE id = ? OR owner_id = ?", [at, me.id, me.id]],
       ['UPDATE devices SET revoked_at = ? WHERE participant_id = ? AND revoked_at IS NULL', [Date.now(), me.id]],
-      ['UPDATE launchers SET revoked_at = ? WHERE owner_id = ? AND revoked_at IS NULL', [Date.now(), me.id]],
       ["UPDATE notifications SET status = 'acked', acked_at = ? WHERE status = 'pending' AND recipient_id IN (SELECT id FROM participants WHERE id = ? OR owner_id = ?)", [at, me.id, me.id]],
     ]);
     return { ok: true };

@@ -7154,7 +7154,7 @@
   const maAvatar = ai => ai.avatar || ai.imgUrl || ai.avatarImg ? avatar(ai)
     : avatar({ ...ai, avatar: /^[A-Za-z]{2,4}$/.test(ai.roleKey || '') ? ai.roleKey.toUpperCase() : [...(ai.name || 'AI')][0] });
   const maRank = ai => ai.status !== 'active' ? 4 : maNeedsYou(ai) ? 0 : ai.isOnline || ai.standby ? 1 : 2;
-  function myAiRowHtml(ai, tab, menu, q = '', ln = null) {
+  function myAiRowHtml(ai, tab, menu, q = '') {
     const id = esc(ai.participantId), active = ai.status === 'active', level = tokenLevel(ai.expiresAt);
     const [stCls, stText] = maState(ai), pjs = state.projMeta.crossRoleIds.includes(ai.participantId) ? null : (ai.projects || []).filter(p => PROJECTS.includes(p));
     const pjTags = pjs === null ? '<span class="ptag ptag-all">跨專案角色</span>' : pjs.slice(0, 2).map(projTag).join('') + (pjs.length > 2 ? `<span class="ptag">+${pjs.length - 2}</span>` : '');
@@ -7163,30 +7163,6 @@
     const main = !active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
       : maWarn(ai) ? `<button class="btn warn" type="button" data-act="reissue" data-id="${id}">重發<span class="ma-long"> Token</span></button>`
       : `<button class="btn ma-copy" type="button" data-act="short" data-id="${id}">複製接入文字</button>`; // 短版接入是主要做法
-    const LN_TOOLS = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity CLI' };
-    let lnBtn = '', lnSub = '', lnPill = '';
-    if (ln && active && level !== 'expired') {
-      if (ai.isOnline) {
-        lnBtn = `<button class="btn ma-launch" type="button" disabled>▶ 已在執行</button>`;
-        lnSub = '<div class="ma-ln-sub">已經開著，有事會由 watcher 叫醒</div>';
-      } else if (ln.pending) {
-        lnPill = '<span class="pill-tag yellow">啟動中…</span>';
-        lnBtn = `<button class="btn ma-launch" type="button" disabled>▶ 啟動</button>`;
-        lnSub = `<div class="ma-ln-sub">已送到「${esc(ln.launcherName)}」，等它開視窗（最多 30 秒）</div>`;
-      } else if (ln.fail) {
-        lnBtn = `<button class="btn primary ma-launch" type="button" data-act="launch" data-id="${id}">▶ 啟動</button>`;
-        lnSub = `<div class="ma-ln-sub warn">${esc(ln.fail)}</div>`;
-      } else if (ln.registered && ln.launcherOnline) {
-        lnBtn = `<button class="btn primary ma-launch" type="button" data-act="launch" data-id="${id}">▶ 啟動</button>`;
-        lnSub = `<div class="ma-ln-sub">${esc(ln.launcherName)} · ${esc(ln.folder)} · ${esc(LN_TOOLS[ln.tool] || ln.tool)}</div>`;
-      } else if (ln.registered) {
-        lnBtn = `<button class="btn ma-launch" type="button" disabled>▶ 啟動</button>`;
-        lnSub = `<div class="ma-ln-sub">「${esc(ln.launcherName)}」離線 · ${esc(ln.ago || '離線')}</div>`;
-      } else {
-        lnBtn = `<button class="btn ma-launch" type="button" data-act="launch-reg" data-id="${id}">怎麼登記</button>`;
-        lnSub = '<div class="ma-ln-sub">還沒登記資料夾：在那台電腦跑一行指令登記</div>';
-      }
-    }
     const menuHtml = menu ? `<div class="ma-menu" role="menu">
         <button type="button" role="menuitem" data-act="edit" data-id="${id}">✏️ 編輯名稱、角色、專案</button>
         ${active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
@@ -7198,9 +7174,9 @@
     return `<div class="ma-item${tab ? ' open' : ''}" data-ma="${id}">
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
         ${maAvatar(ai)}
-        <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${lnPill}${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
-          <div class="ma-meta">${[markQ(ai.role || '', q)].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div>${lnSub}</div>
-        <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}${lnBtn}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
+        <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
+          <div class="ma-meta">${[markQ(ai.role || '', q)].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
+        <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
       </div>
       ${tab ? myAiPanelHtml(ai, tab) : ''}
     </div>`;
@@ -7249,110 +7225,23 @@
     Object.assign(m.style, { position: 'fixed', right: Math.max(8, innerWidth - r.right) + 'px', left: 'auto',
       top: (below >= h || r.top < h + 12 ? Math.min(r.bottom + 4, innerHeight - h - 8) : r.top - h - 4) + 'px' });
   }
-  const LAUNCH_DEFAULT_ORIGIN = 'https://aigile-switch.alansid87.workers.dev';
-  const lnAgo = isoStr => {
-    if (!isoStr) return '';
-    const mins = Math.max(0, Math.round((Date.now() - Date.parse(isoStr)) / 60_000));
-    if (mins < 1) return '剛剛';
-    if (mins < 60) return `${mins} 分鐘前`;
-    const hrs = Math.round(mins / 60);
-    return hrs < 24 ? `${hrs} 小時前` : `${Math.round(hrs / 24)} 天前`;
-  };
-  const lnFmtTime = isoStr => {
-    if (!isoStr) return '';
-    const d = new Date(isoStr);
-    return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  };
-  const lnFmtCode = c => (String(c || '').length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : String(c || ''));
-  const lnResultPill = j => {
-    if (j.status === 'opened') return '<span class="pill-tag green">已開視窗</span>';
-    if (j.status === 'offline') return '<span class="pill-tag yellow">電腦不在線</span>';
-    if (j.status === 'timeout') return '<span class="pill-tag yellow">電腦沒回應</span>';
-    if (j.status === 'pending') return '<span class="pill-tag yellow">啟動中…</span>';
-    const r = j.detail === 'folder not registered' || j.detail === 'folder missing' ? '資料夾沒登記' : (j.detail || '未執行');
-    return `<span class="pill-tag gray">拒絕：${esc(r)}</span>`;
-  };
   async function openMyAi(waitFor = null) {
     const body = openModal('我的 AI', `
-      <div class="ma-page-tabs" role="tablist">
-        <button type="button" role="tab" data-ma-ptab="ai" aria-selected="true">我的 AI</button>
-        <button type="button" role="tab" data-ma-ptab="computers" aria-selected="false">電腦與啟動器</button>
-      </div>
-      <div id="ma-ai-view">
-        <div class="ma-head"><span class="ma-sum" id="ma-sum">載入中…</span><span class="grow"></span>
-          ${inProjectView() ? '<button type="button" class="btn ghost" id="ma-all">看全部 AI</button>' : ''}
-          <button type="button" class="btn ghost" id="ma-skills">技能庫 ›</button>
-          <button class="btn primary" type="button" id="ai-new">＋ 新增 AI</button></div>
-        <div id="ma-sync"></div>
-        <div id="ma-find"></div>
-        <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>
-        <div id="ma-launch-logs"></div>
-      </div>
-      <div id="ma-comp-view" hidden></div>`, { sub: inProjectView() ? `你在「${esc(projName(projectView()))}」的 AI；新增和新角色都用這個專案。點一列看接入、技能、設定。` : '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
-    let items = [], pageTab = 'ai', launchData = null;
+      <div class="ma-head"><span class="ma-sum" id="ma-sum">載入中…</span><span class="grow"></span>
+        ${inProjectView() ? '<button type="button" class="btn ghost" id="ma-all">看全部 AI</button>' : ''}
+        <button type="button" class="btn ghost" id="ma-skills">技能庫 ›</button>
+        <button class="btn primary" type="button" id="ai-new">＋ 新增 AI</button></div>
+      <div id="ma-sync"></div>
+      <div id="ma-find"></div>
+      <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: inProjectView() ? `你在「${esc(projName(projectView()))}」的 AI；新增和新角色都用這個專案。點一列看接入、技能、設定。` : '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
+    let items = [];
     const scope = inProjectView() ? projectView() : null;
     const open = new Map(); // AI id → 展開的分頁
-    const lnFail = new Map(); // AI id → 啟動失敗或逾時訊息
     let menuFor = null;
     const fs = finder('myai', () => drawList());
     const useFind = () => items.length >= 6;
     const fq = () => (useFind() ? findQ(fs.q) : '');
-    const lnFor = ai => {
-      const info = launchData?.ais?.[ai.participantId];
-      if (!info) return null;
-      return { ...info, ago: info.launcherLastSeenAt ? lnAgo(info.launcherLastSeenAt) : '', pending: !!info.pendingJob, fail: lnFail.get(ai.participantId) || '' };
-    };
-    const row = id => { const ai = items.find(x => x.participantId === id); const el = body.querySelector(`[data-ma="${CSS.escape(id)}"]`); if (ai && el) { el.outerHTML = myAiRowHtml(ai, open.get(id), menuFor === id, fq(), lnFor(ai)); if (open.get(id) === 'skills') loadSkills(ai); } };
-    function drawLogs() {
-      const box = body.querySelector('#ma-launch-logs');
-      if (!box || !body.isConnected) return;
-      const logs = launchData?.logs || [];
-      box.innerHTML = `<div class="ln-card ln-logs-card"><h3>啟動紀錄（最近 20 筆）</h3>${logs.length
-        ? `<table class="ln-table"><thead><tr><th>時間</th><th>AI</th><th>電腦</th><th>結果</th></tr></thead><tbody>${logs.map(j => `<tr><td>${esc(lnFmtTime(j.createdAt))}</td><td>${esc(j.aiName)}</td><td>${esc(j.launcherName)}</td><td>${lnResultPill(j)}</td></tr>`).join('')}</tbody></table>
-           <div class="ln-cards">${logs.map(j => `<div class="ln-mcard"><div class="ln-mcard-top"><b>${esc(j.aiName)}</b>${lnResultPill(j)}</div><div class="muted small">${esc(lnFmtTime(j.createdAt))} · ${esc(j.launcherName)}</div></div>`).join('')}</div>`
-        : '<p class="muted small">還沒有啟動紀錄。</p>'}</div>`;
-    }
-    function drawComputers() {
-      const box = body.querySelector('#ma-comp-view');
-      if (!box || !body.isConnected) return;
-      const code = lnFmtCode(launchData?.pairing?.code || '');
-      const baseFlag = location.origin === LAUNCH_DEFAULT_ORIGIN ? '' : ` --base ${location.origin}`;
-      const pairCmd = `npx aigile-launcher pair ${code}${baseFlag}`;
-      const sampleAgent = items[0] ? `${items[0].roleKey && items[0].roleKey !== 'custom' ? items[0].roleKey : 'AI'}_${items[0].shortCode || 'ABCD'}` : 'PG_ABCD';
-      const allowCmd = `npx aigile-launcher allow ${sampleAgent} . --tool claude`;
-      const comps = launchData?.launchers || [];
-      box.innerHTML = `
-        <div class="ln-safe-banner" role="note">🔒 啟動器只做一件事：在登記過的資料夾，用 Claude Code／Codex／Antigravity 開登記過的 AI。平台傳來其他任何指令，一律拒絕。</div>
-        <div class="ln-card">
-          <h3>裝到一台新電腦</h3>
-          <ol class="ln-steps">
-            <li>在那台電腦的終端機貼上（需要 Node 22 以上）：
-              <div class="ln-cmd-row"><pre class="ln-cmd">${esc(pairCmd)}</pre><button type="button" class="btn small" data-ln-copy="${esc(pairCmd)}">複製</button></div>
-              <span class="ma-small">配對碼 10 分鐘內有效，用過就失效，不含 Token。</span></li>
-            <li>在要讓 AI 工作的資料夾開啟終端機，再貼上這行（每隻 AI 一次）：
-              <div class="ln-cmd-row"><pre class="ln-cmd">${esc(allowCmd)}</pre><button type="button" class="btn small" data-ln-copy="${esc(allowCmd)}">複製</button></div></li>
-            <li>完成後這裡會出現那台電腦，狀態「在線」。</li>
-          </ol>
-          <button type="button" class="btn primary" id="ln-new-code">產生新的配對碼</button>
-        </div>
-        <div class="ln-card">
-          <h3>我的電腦</h3>
-          ${comps.length ? `
-          <table class="ln-table"><thead><tr><th>電腦</th><th>狀態</th><th>登記的 AI</th><th></th></tr></thead><tbody>
-            ${comps.map(c => `<tr><td><b>${esc(c.name)}</b></td><td>${c.online ? '<span class="pill-tag green">在線</span>' : `<span class="pill-tag gray">${esc(c.lastSeenAt ? `離線 · ${lnAgo(c.lastSeenAt)}` : '離線')}</span>`}</td><td>${esc((c.ais || []).map(a => a.name).join('、') || '—')}</td><td><button type="button" class="btn small" data-ln-disable="${esc(c.id)}">停用</button></td></tr>`).join('')}
-          </tbody></table>
-          <div class="ln-cards">${comps.map(c => `<div class="ln-mcard"><div class="ln-mcard-top"><b>${esc(c.name)}</b>${c.online ? '<span class="pill-tag green">在線</span>' : `<span class="pill-tag gray">${esc(c.lastSeenAt ? `離線 · ${lnAgo(c.lastSeenAt)}` : '離線')}</span>`}</div><div class="muted small">登記的 AI：${esc((c.ais || []).map(a => a.name).join('、') || '—')}</div><div><button type="button" class="btn small" data-ln-disable="${esc(c.id)}">停用</button></div></div>`).join('')}</div>`
-            : '<p class="muted small">還沒有已配對的電腦。照上方步驟配對後就會出現在這裡。</p>'}
-          <div class="ln-foot-hint">▸ 「停用」會讓那台電腦的啟動器馬上失效；要再用得重新配對。在電腦上也可以跑 <code>npx aigile-launcher uninstall</code> 移除。</div>
-        </div>`;
-    }
-    function switchPageTab(next) {
-      pageTab = next === 'computers' ? 'computers' : 'ai';
-      body.querySelectorAll('[data-ma-ptab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.maPtab === pageTab)));
-      body.querySelector('#ma-ai-view').hidden = pageTab !== 'ai';
-      body.querySelector('#ma-comp-view').hidden = pageTab !== 'computers';
-      if (pageTab === 'computers') drawComputers();
-    }
+    const row = id => { const ai = items.find(x => x.participantId === id); const el = body.querySelector(`[data-ma="${CSS.escape(id)}"]`); if (ai && el) { el.outerHTML = myAiRowHtml(ai, open.get(id), menuFor === id, fq()); if (open.get(id) === 'skills') loadSkills(ai); } };
     function drawList() {
       if (!body.isConnected) return;
       const pjs = scope ? null : PROJECTS.filter(p => items.some(a => (a.projects || []).includes(p)));
@@ -7365,53 +7254,18 @@
       const exp = act.filter(a => tokenLevel(a.expiresAt) === 'expired').length, soon = act.filter(maWarn).length - exp;
       const on = act.filter(a => a.isOnline && tokenLevel(a.expiresAt) !== 'expired').length, sw = act.filter(a => a.skillsWaiting > 0).length;
       body.querySelector('#ma-sum').innerHTML = `${scope ? `<b>${esc(projName(scope))}</b> 的 AI · ` : ''}${items.length} 隻 · ${on} 在線${exp ? ` · <span class="error">Token 已過期 ${exp} 隻</span>` : ''}${soon ? ` · <span class="warn-text">Token 快到期 ${soon} 隻</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 隻有技能等你允許</span>` : ''}`;
-      body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId, q, lnFor(ai))).join('')
+      body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId, q)).join('')
         : items.length ? findEmptyHtml('myai', true) : '<p class="muted">還沒有 AI。按「＋ 新增 AI」選一個角色範例開始。</p>';
       for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
-      drawLogs();
-    }
-    async function refreshLauncher() {
-      try { launchData = await api('/api/launcher'); } catch { launchData = null; }
-      if (!body.isConnected) return;
-      drawList();
-      if (pageTab === 'computers') drawComputers();
     }
     async function draw() {
-      const [d, lnRes] = await Promise.all([api('/api/my-ais'), api('/api/launcher').catch(() => null), waitFor]); waitFor = null;
+      const d = (await Promise.all([api('/api/my-ais'), waitFor]))[0]; waitFor = null;
       items = d.items; maToolsOff = new Set(d.toolsOff || []);
-      launchData = lnRes;
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
       if (scope) items = items.filter(a => (a.projects || []).includes(scope) || state.projMeta.crossRoleIds.includes(a.participantId));
       drawList();
-      if (pageTab === 'computers') drawComputers();
       drawSync();
     }
-    body.querySelector('.ma-page-tabs').addEventListener('click', e => {
-      const b = e.target.closest('[data-ma-ptab]');
-      if (b) switchPageTab(b.dataset.maPtab);
-    });
-    body.querySelector('#ma-comp-view').addEventListener('click', async e => {
-      const cp = e.target.closest('[data-ln-copy]');
-      if (cp) return toast((await copyText(cp.dataset.lnCopy)) ? '已複製指令' : '複製失敗，請手動複製');
-      if (e.target.closest('#ln-new-code')) {
-        try {
-          const p = await api('/api/launcher/pair-code', { method: 'POST' });
-          if (launchData) launchData.pairing = p;
-          drawComputers();
-          toast('已產生新的配對碼');
-        } catch (err) { toast(err.message); }
-        return;
-      }
-      const dis = e.target.closest('[data-ln-disable]');
-      if (dis) {
-        const comp = launchData?.launchers?.find(c => c.id === dis.dataset.lnDisable);
-        if (!comp) return;
-        if (!await confirmDialog({ title: '停用這台電腦的啟動器？', confirmText: '停用', danger: true,
-          message: `停用後「<b>${esc(comp.name)}</b>」的啟動器會馬上失效，要再用得重新配對。` })) return;
-        try { await api(`/api/launchers/${encodeURIComponent(comp.id)}/disable`, { method: 'POST' }); await refreshLauncher(); toast('已停用'); }
-        catch (err) { toast(err.message); }
-      }
-    });
     // 有技能要同步的 AI 才顯示這一條
     let syncIds = [], syExpired = 0, syWait = [];
     async function drawSync() {
@@ -7465,29 +7319,6 @@
       const id = ai.participantId;
       try {
         if (b.dataset.act === 'row') { if (open.has(id)) open.delete(id); else open.set(id, ai.status === 'active' ? (ai.skillsWaiting ? 'skills' : 'conn') : 'set'); menuFor = null; return row(id); }
-        if (b.dataset.act === 'launch-reg') { switchPageTab('computers'); return; }
-        if (b.dataset.act === 'launch') {
-          lnFail.delete(id);
-          const { job } = await api(`/api/my-ais/${encodeURIComponent(id)}/launch`, { method: 'POST' });
-          if (launchData?.ais?.[id]) launchData.ais[id].pendingJob = job;
-          row(id);
-          (async () => {
-            for (let k = 0; k < 35 && body.isConnected; k++) {
-              await new Promise(r => setTimeout(r, 1000));
-              try {
-                const j = await api(`/api/launcher/jobs/${encodeURIComponent(job.id)}`);
-                if (j.status !== 'pending') {
-                  if (j.status === 'timeout') lnFail.set(id, '沒開成功：電腦沒回應');
-                  else if (j.status === 'refused') lnFail.set(id, `沒開成功：${j.detail || '被拒絕'}`);
-                  await refreshLauncher();
-                  return;
-                }
-              } catch { break; }
-            }
-            if (body.isConnected) await refreshLauncher();
-          })();
-          return;
-        }
         if (b.dataset.act === 'menu') { menuFor = menuFor === id ? null : id; row(id); maPlaceMenu(body); return body.querySelector('.ma-menu [role=menuitem]')?.focus(); }
         if (menuFor) { const m = menuFor; menuFor = null; row(m); }
         if (b.dataset.act === 'tab') { open.set(id, b.dataset.tab); return row(id); }
