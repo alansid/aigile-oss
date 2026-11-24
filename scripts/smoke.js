@@ -56,7 +56,7 @@ async function stopServer(server) {
     assert.ok(amy.token && boss.token, 'join');
     // 之後加入的人類預設沒有專案，由群組管理員（最早加入的 Amy）加入
     assert.equal((await call(amy.token, `/api/participants/${boss.participant.participantId}/projects`, 'PUT', { projects: ['預設專案', '第二專案'] })).status, 200, '管理員把林志明加入專案');
-    assert.equal(errCode(await call(null, '/api/join', 'POST', { name: 'amy' })), 'NAME_TAKEN');
+    assert.equal(errCode(await call(amy.token, '/api/invites', 'POST', { name: 'amy', projects: ['預設專案'] })), 'NAME_TAKEN');
 
     // 角色範本
     const roles = (await call(null, '/api/roles')).body;

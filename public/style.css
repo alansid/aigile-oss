@@ -1493,6 +1493,13 @@ button.ph-card.is-hub:focus-visible { outline: 2px solid var(--primary); outline
 .mention-warn[hidden] { display: none; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mention-warn { background: #451a03; color: #fde68a; } }
 :root[data-theme="dark"] .mention-warn { background: #451a03; color: #fde68a; }
+.name-code { display: inline-block; margin-left: 5px; padding: 1px 6px; border-radius: 5px; background: var(--surface-2, #f1f5f9); border: 1px solid var(--line, #e2e8f0); color: var(--muted, #64748b); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78em; font-weight: 600; letter-spacing: .03em; vertical-align: baseline; line-height: 1.35; }
+.mention-ambig { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: #fef3c7; border: 1px solid #fcd34d; color: #78350f; font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mention-ambig[hidden] { display: none; }
+.mention-ambig .amb-title { font-weight: 600; margin-right: 4px; }
+.mention-ambig .amb-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mention-ambig { background: #451a03; border-color: #92400e; color: #fde68a; } }
+:root[data-theme="dark"] .mention-ambig { background: #451a03; border-color: #92400e; color: #fde68a; }
 
 /* ===== 白話用詞 ===== */
 .file-ok { margin-left: 6px; padding: 0 8px; border-radius: 10px; background: var(--ok-bg); color: var(--ok-text); font-size: 12px; white-space: nowrap; }

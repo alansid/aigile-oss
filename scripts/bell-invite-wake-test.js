@@ -25,7 +25,7 @@ let raceName = null; // B8：設了就在建人前一刻讓別人先用掉這個
 const db = { ...raw, run: async (sql, ...a) => {
   if (raceName && /^INSERT INTO participants/.test(sql.trim())) {
     const n = raceName; raceName = null;
-    await raw.run('INSERT INTO participants (id, kind, name, code, token, created_at, updated_at) VALUES (?,?,?,?,?,?,?)', 'p_racer', 'human', n, 'RACE', 'tok_racer', new Date().toISOString(), new Date().toISOString());
+    await raw.run('INSERT INTO participants (id, kind, name, code, token, created_at, updated_at, projects) VALUES (?,?,?,?,?,?,?,?)', 'p_racer', 'human', n, 'RACE', 'tok_racer', new Date().toISOString(), new Date().toISOString(), '預設專案');
   }
   return raw.run(sql, ...a);
 } };

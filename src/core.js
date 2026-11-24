@@ -17,6 +17,7 @@ import { registerUpdateCheck } from './update.js'; // 管理頁「有新版本�
 import { registerDemo } from './demo.js'; // 示範資料
 import { optionWarnings } from './questions.js';
 import { wakeHintWarnings } from './wake-hint.js';
+import { parseMentions } from './mentions.js';
 import { formatProblems, dbBlockCounter, blockMessage, passWarning } from './post-format.js';
 import { mcpDispatch } from './mcp.js'; // 平台 MCP
 import { hashPassword, verifyPassword, normUsername } from './password.js';
@@ -669,6 +670,43 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
         recipientIds.add(p.id);
       }
     }
+
+    // 專案：只屬一個專案的人沒帶＝自己的專案（回覆全部專案的訊息也一樣，不再繼承「全部專案」）；
+    // 兩邊成員從 API 發文（checkProject）沒帶一律 400，要發全部專案必須明確帶 'all'；'all'＝全部專案
+    const mine = projectsOf(me);
+    let project;
+    if (body.project === undefined || body.project === null || body.project === '') {
+      if (mine.length === 1) project = mine[0];
+      else if (checkProject && mine.length > 1) throw new ApiError(400, 'PROJECT_REQUIRED', `你屬於多個專案，發訊息一定要帶 project（${mine.map(nameOf).join('、')}）；要發給全部專案請明確帶 project: "all"。`);
+      else project = replyTo?.project && (!isolatedFrom(me) || mine.includes(replyTo.project)) ? replyTo.project : null; // 不屬於那個專案就不繼承
+    } else if (body.project === 'all') project = null;
+    else if (PROJECTS.includes(body.project)) {
+      if (!mine.includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，只能發自己專案或全部專案（project: "all"）的訊息。');
+      project = body.project;
+    } else throw invalid(`project 需為：${PROJECTS.join('、')}、all`);
+    if (checkProject) {
+      const head = /^\s*(?:\[[^\]\n]{1,12}\]\s*)?【([^】\n]{1,20})】/.exec(text || '');
+      const named = head && projectRows.find(p => p.name === head[1] || p.id === head[1]);
+      if (named && project !== named.id) throw new ApiError(400, 'PROJECT_TEXT_MISMATCH', `訊息開頭寫【${named.name}】，project 必須帶 ${named.id}（目前是${project ? '「' + nameOf(project) + '」' : '全部專案'}）。真的要發給全部專案，請把開頭改成【全部專案】。`);
+    }
+    if (!systemNotice) await assertWritable(me, project); // （平台自動發的通知，例如「X 已加入」，不擋）
+
+    // 解析正文中的 @名字·短代碼 與未消歧 @名字（同名者 >= 2 且未寫短代碼也沒在 recipientIds／replyFrom 指定 → 400 AMBIGUOUS_MENTION）
+    const scopeMembers = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && (!project || projectsOf(p).includes(project)));
+    const pm = !systemNotice && me.kind !== 'system' ? parseMentions(text, scopeMembers, { selfId: me.id }) : { resolvedIds: [], codedIds: [], ambiguous: [] };
+    if (!audience && pm.ambiguous.length) {
+      const explicit = new Set([...rawIds, ...(rawAsk || [])]);
+      const amb = pm.ambiguous.find(a => !a.candidates.some(c => explicit.has(c.id)));
+      if (amb) {
+        const cands = amb.candidates.map(c => ({ participantId: c.id, name: c.name, shortCode: c.code, memberType: c.kind, role: c.role || '', projects: projectsOf(c) }));
+        const list = cands.map(c => `${c.name}·${c.shortCode}（${c.participantId}${c.role ? '，' + c.role : ''}）`).join('、');
+        throw new ApiError(400, 'AMBIGUOUS_MENTION', `「@${amb.name}」有 ${cands.length} 位同名成員：${list}。請在訊息中寫「@${amb.name}·短代碼」，或改在 recipientIds 指定 participantId。`, { name: amb.name, candidates: cands });
+      }
+    }
+    if (!audience && pm.codedIds.length && !(body.cardId && Array.isArray(body.recipientIds))) {
+      for (const cid of pm.codedIds) recipientIds.add(cid);
+    }
+
     // 回覆某則訊息＝原作者自動成為收件人（即時門鈴、算要回覆）；自己回自己、@所有人除外
     let replyAuthor = null;
     if (replyTo && !audience && replyTo.author_id !== me.id) {
@@ -693,29 +731,10 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     else if (recipientIds.size === 1) ask = [...recipientIds];
     else if (replyAuthor && recipientIds.has(replyAuthor)) ask = [replyAuthor]; // 被回覆的人預設要回覆，其他知會
 
-    // 專案：只屬一個專案的人沒帶＝自己的專案（回覆全部專案的訊息也一樣，不再繼承「全部專案」）；
-    // 兩邊成員從 API 發文（checkProject）沒帶一律 400，要發全部專案必須明確帶 'all'；'all'＝全部專案
-    const mine = projectsOf(me);
-    let project;
-    if (body.project === undefined || body.project === null || body.project === '') {
-      if (mine.length === 1) project = mine[0];
-      else if (checkProject && mine.length > 1) throw new ApiError(400, 'PROJECT_REQUIRED', `你屬於多個專案，發訊息一定要帶 project（${mine.map(nameOf).join('、')}）；要發給全部專案請明確帶 project: "all"。`);
-      else project = replyTo?.project && (!isolatedFrom(me) || mine.includes(replyTo.project)) ? replyTo.project : null; // 不屬於那個專案就不繼承
-    } else if (body.project === 'all') project = null;
-    else if (PROJECTS.includes(body.project)) {
-      if (!mine.includes(body.project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，只能發自己專案或全部專案（project: "all"）的訊息。');
-      project = body.project;
-    } else throw invalid(`project 需為：${PROJECTS.join('、')}、all`);
-    if (checkProject) {
-      const head = /^\s*(?:\[[^\]\n]{1,12}\]\s*)?【([^】\n]{1,20})】/.exec(text || '');
-      const named = head && projectRows.find(p => p.name === head[1] || p.id === head[1]);
-      if (named && project !== named.id) throw new ApiError(400, 'PROJECT_TEXT_MISMATCH', `訊息開頭寫【${named.name}】，project 必須帶 ${named.id}（目前是${project ? '「' + nameOf(project) + '」' : '全部專案'}）。真的要發給全部專案，請把開頭改成【全部專案】。`);
-    }
-    if (!systemNotice) await assertWritable(me, project); // （平台自動發的通知，例如「X 已加入」，不擋）
     if (project) for (const rid of [...recipientIds]) {
       const rp = people.get(rid);
       if (!roIn(rp, project)) continue;
-      if (rawIds.includes(rid) || (rawAsk || []).includes(rid)) throw new ApiError(400, 'READ_ONLY_RECIPIENT', `${rp.name} 在「${nameOf(project)}」是唯讀，不能被 @ 或指定要回覆。`);
+      if (rawIds.includes(rid) || (rawAsk || []).includes(rid) || pm.codedIds.includes(rid)) throw new ApiError(400, 'READ_ONLY_RECIPIENT', `${rp.name} 在「${nameOf(project)}」是唯讀，不能被 @ 或指定要回覆。`);
       recipientIds.delete(rid);
     }
     if (ask) ask = ask.filter(id => recipientIds.has(id));
@@ -918,9 +937,20 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     if (name === '所有人' || name === SYSTEM_NAME) throw invalid(`「${name}」是保留字`);
     return name;
   }
-  async function assertNameFree(name, exceptId = null) {
-    const p = await db.get('SELECT id FROM participants WHERE name = ?', name);
-    if (p && p.id !== exceptId) throw new ApiError(409, 'NAME_TAKEN', `名稱「${name}」已被使用`);
+  // 同專案內不能重複（不分大小寫）；不同專案可同名（管理員／跨專案視同所有專案）
+  async function assertNameFree(name, opts = {}) {
+    const { exceptId = null, projects = null } = opts && typeof opts === 'object' ? opts : { exceptId: opts };
+    const pjs = [...new Set((projects || []).map(String).filter(p => PROJECTS.includes(p)))];
+    const hits = (await db.all("SELECT * FROM participants WHERE name = ? AND status != 'disabled' AND kind != 'system'", name)).filter(h => h.id !== exceptId);
+    if (!hits.length) return;
+    await loadCrossRoles();
+    for (const h of hits) {
+      const hPjs = crossRole(h) || Number(h.is_admin) === 1 ? [...PROJECTS] : listOf(h);
+      const overlap = pjs.length ? pjs.filter(pj => hPjs.includes(pj)) : (PROJECTS.length && PROJECTS.every(pj => hPjs.includes(pj)) ? PROJECTS : []);
+      if (overlap.length) {
+        throw new ApiError(409, 'NAME_TAKEN', `名稱「${name}」在「${overlap.map(nameOf).join('、')}」已被使用，請改用別的名字`);
+      }
+    }
   }
   async function newCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -1042,13 +1072,13 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
 
   async function createAi(ctx, me, body) {
     const name = validateName(body.name);
-    await assertNameFree(name);
     const ts = nowIso();
     const id = randId('p');
     // 新增 AI 必須選專案（至少一個）；沒帶時，所屬人類只有一個專案才自動帶入
     const mineP = projectsOf(me);
     const aiProjects = body.projects !== undefined ? readProjects(body.projects).join(',') : mineP.length === 1 ? mineP[0] : null;
     if (aiProjects === null) throw invalid(`projects 為必填：這位 AI 屬於哪些專案（至少一個，專案編號：${PROJECTS.join('、')}）`);
+    await assertNameFree(name, { projects: aiProjects.split(',') });
     const s = readSettings(body, null, await projRoleKeys(aiProjects.split(',')));
     await loadReadOnly(); { const bad = aiProjects.split(',').filter(pj => roHuman(me.id, pj)); if (bad.length) throw readOnlyError(me, bad[0]); }
     const outside = aiProjects.split(',').filter(x => !mineP.includes(x));
@@ -1060,22 +1090,29 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       id, 'ai', name, s.role, s.roleKey, await newCode(), me.id, s.duties, s.style, s.autonomy, s.mustConfirm, s.handoff,
       s.avatar, await tokenKey(token), Date.now() + AI_TOKEN_TTL_MS, ts, ts,
       aiProjects);
+    try { await assertNameFree(name, { exceptId: id, projects: aiProjects.split(',') }); }
+    catch (e) { await db.run('DELETE FROM participants WHERE id = ?', id); invalidatePeople(); throw e; }
     return { ...aiView(await db.get('SELECT * FROM participants WHERE id = ?', id), await peopleMap(ctx)), token }; // Token 原文只在建立當下給一次
   }
 
   async function updateAi(ctx, me, id, body) {
     const ai = await myAi(me, id);
-    // 所屬人類可以改自己 AI 的專案（只能選自己在的專案）；移出專案時他負責的卡退回待處理，dryRun 先看影響
-    let impact;
-    if (body.projects !== undefined) {
-      const next = readProjects(body.projects), mineP = projectsOf(me);
-      const outside = next.filter(x => !mineP.includes(x));
+    const nextProj = body.projects !== undefined ? readProjects(body.projects) : null;
+    if (nextProj) {
+      const mineP = projectsOf(me);
+      const outside = nextProj.filter(x => !mineP.includes(x));
       if (outside.length) throw new ApiError(400, 'OWNER_NOT_IN_PROJECT', `你不在「${outside.map(nameOf).join('、')}」，AI 的專案不能超出所屬人類。`);
-      impact = await applyMembership(ctx, me, [{ id: ai.id, projects: next }], { dryRun: body.dryRun === true });
-      if (body.dryRun === true) return { dryRun: true, impact };
     }
     const name = body.name !== undefined ? validateName(body.name) : ai.name;
-    await assertNameFree(name, ai.id);
+    await loadCrossRoles();
+    const targetPjs = crossRole(ai) ? [...PROJECTS] : (nextProj || projectsOf(ai));
+    await assertNameFree(name, { exceptId: ai.id, projects: targetPjs });
+    // 所屬人類可以改自己 AI 的專案（只能選自己在的專案）；移出專案時他負責的卡退回待處理，dryRun 先看影響
+    let impact;
+    if (nextProj) {
+      impact = await applyMembership(ctx, me, [{ id: ai.id, projects: nextProj }], { dryRun: body.dryRun === true });
+      if (body.dryRun === true) return { dryRun: true, impact };
+    }
     const s = readSettings(body, { role: ai.role, avatar: ai.avatar || '', ...settingsOf(ai) }, await projRoleKeys(body.projects !== undefined ? readProjects(body.projects) : projectsOf(ai)));
     invalidatePeople();
     await db.run(`UPDATE participants SET name = ?, role = ?, role_key = ?, duties = ?, style = ?, autonomy = ?, must_confirm = ?,
@@ -1513,14 +1550,20 @@ ${ending}`;
     return new Response(bytes, { headers: { 'Content-Type': a.mime, 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } });
   });
 
-  // 更新自己的頭像文字（人類與 AI 皆可）
+  // 更新自己的頭像文字或顯示名稱（名稱只限人類；同專案不可重複）
   route('PATCH', '/api/me', async ({ me, req, ctx }) => {
     const body = await readJson(req);
-    if (body.avatar === undefined) throw invalid('目前只能更新 avatar');
-    const avatar = readAvatar(body.avatar);
+    if (body.avatar === undefined && body.name === undefined) throw invalid('只能更新 name 或 avatar');
+    const avatar = body.avatar !== undefined ? readAvatar(body.avatar) : (me.avatar || '');
+    const name = body.name !== undefined ? validateName(body.name) : me.name;
+    if (body.name !== undefined) {
+      requireHuman(me);
+      await loadCrossRoles();
+      await assertNameFree(name, { exceptId: me.id, projects: crossRole(me) || Number(me.is_admin) === 1 ? [...PROJECTS] : projectsOf(me) });
+    }
     invalidatePeople();
-    await db.run('UPDATE participants SET avatar = ?, updated_at = ? WHERE id = ?', avatar, nowIso(), me.id);
-    return identity({ ...me, avatar }, await peopleMap(ctx));
+    await db.run('UPDATE participants SET name = ?, avatar = ?, updated_at = ? WHERE id = ?', name, avatar, nowIso(), me.id);
+    return identity({ ...me, name, avatar }, await peopleMap(ctx));
   });
   // ---------- 專案與成員管理：只有群組管理員能新增／改名／封存專案、調整成員所屬專案 ----------
   // 群組管理員＝最早加入、仍有效的人類（建立群組的人）
@@ -1809,6 +1852,23 @@ ${ending}`;
         target.id, ...removed) : [];
       if (added.length || removed.length) plan.push({ target, next, added, removed, cards });
     }
+    // 同名檢查（以這次調整後的最終各人專案為準，允許同一批一進一出）
+    if (plan.some(x => x.added.length)) {
+      const planMap = new Map(plan.map(x => [x.target.id, x]));
+      const all = await peopleMap(ctx);
+      for (const x of plan) {
+        if (!x.added.length) continue;
+        const nameL = x.target.name.toLowerCase();
+        for (const other of all.values()) {
+          if (other.id === x.target.id || other.status !== 'active' || other.kind === 'system' || other.name.toLowerCase() !== nameL) continue;
+          const otherPjs = planMap.get(other.id)?.next ?? (crossRole(other, ov) || Number(other.is_admin) === 1 ? [...PROJECTS] : listOf(other));
+          const overlap = x.added.filter(pj => otherPjs.includes(pj));
+          if (overlap.length) {
+            throw new ApiError(409, 'NAME_TAKEN', `名稱「${x.target.name}」在「${overlap.map(nameOf).join('、')}」已被使用，請先請其中一位改名再加入`);
+          }
+        }
+      }
+    }
     const impact = plan.map(x => ({ participantId: x.target.id, name: x.target.name, added: x.added, removed: x.removed, returnedCards: x.cards.map(pubNo) }));
     if (dryRun || !plan.length) return impact;
     const at = nowIso(), stmts = [];
@@ -2001,6 +2061,15 @@ ${ending}`;
     for (const pj of PROJECTS) if (nextLeaders[pj].some(id => nextRo[pj].includes(id))) throw invalid(`唯讀的人不能當 leader（${nameOf(pj)}）`);
     for (const c of memberChanges) for (const pj of PROJECTS) if (!c.projects.includes(pj) && nextRo[pj].includes(c.id)) nextRo[pj] = nextRo[pj].filter(x => x !== c.id); // 移出專案就不用記唯讀
     const dryRun = body.dryRun === true;
+    for (const c of crossChanges) {
+      if (!c.crossRole) continue;
+      const nameL = c.name.toLowerCase();
+      for (const other of people.values()) {
+        if (other.id === c.participantId || other.status !== 'active' || other.kind === 'system' || other.name.toLowerCase() !== nameL) continue;
+        const otherPjs = memberChanges.find(m => m.id === other.id)?.projects ?? (crossRole(other, ov) || Number(other.is_admin) === 1 ? [...PROJECTS] : listOf(other));
+        if (otherPjs.length) throw new ApiError(409, 'NAME_TAKEN', `名稱「${c.name}」在「${otherPjs.map(nameOf).join('、')}」已被使用，請先請其中一位改名再設跨專案`);
+      }
+    }
     const impact = await applyMembership(ctx, me, memberChanges, { dryRun, ov, byLeader: !isAdmin });
     if (!dryRun && (roChanges.length || JSON.stringify(nextRo) !== JSON.stringify(Object.fromEntries(PROJECTS.map(pj => [pj, roMap[pj] || []]))))) {
       const at = nowIso(), stmts = [["INSERT INTO app_settings (key, value) VALUES ('read_only', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [JSON.stringify(nextRo)]]];
@@ -4065,7 +4134,7 @@ ${ending}`;
         e = new ApiError(500, 'INTERNAL', '伺服器錯誤');
       }
       const headers = e.extra.retryAfter ? { 'Retry-After': String(e.extra.retryAfter) } : {};
-      return json(e.status, { error: { code: e.code, message: e.message, ...(e.extra.captchaRequired ? { captchaRequired: true } : {}), ...(e.extra.suggestion ? { suggestion: e.extra.suggestion } : {}), ...(e.extra.field ? { field: e.extra.field } : {}) } }, headers);
+      return json(e.status, { error: { code: e.code, message: e.message, ...(e.extra.captchaRequired ? { captchaRequired: true } : {}), ...(e.extra.suggestion ? { suggestion: e.extra.suggestion } : {}), ...(e.extra.field ? { field: e.extra.field } : {}), ...(e.extra.candidates ? { candidates: e.extra.candidates } : {}) } }, headers);
     }
   }
 }

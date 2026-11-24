@@ -69,7 +69,7 @@
       const err = new Error(window.aigileI18n ? window.aigileI18n.err(data?.error?.code, msg) : msg); // 英文介面：依錯誤代碼顯示英文
       err.raw = msg; // 原文（中文）：表單用來對出錯的是哪一欄（英文介面 message 已經翻過）
       err.status = r.status;
-      err.code = data?.error?.code; err.captchaRequired = !!data?.error?.captchaRequired; err.suggestion = data?.error?.suggestion || ''; err.field = data?.error?.field || '';
+      err.code = data?.error?.code; err.detail = data?.error; err.captchaRequired = !!data?.error?.captchaRequired; err.suggestion = data?.error?.suggestion || ''; err.field = data?.error?.field || '';
       state.lastErr = { code: err.code || `HTTP ${r.status}`, at: Date.now() };
       if (state.me && (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED')) logout(false);
       throw err;
@@ -146,16 +146,115 @@
     return firstChar(p.name, L('人', 'H'));
   }
   // 有圖片頭像時先顯示文字，圖片載入後由 hydrateAvatars 補上
-  const avatar = p => {
+  const personTitle = (p, pj = null) => {
+    if (!p) return '';
+    const en = window.aigileI18n?.lang === 'en';
+    const kind = p.memberType === 'ai' ? 'AI' : p.memberType === 'system' ? (en ? 'System' : '系統') : (en ? 'Human' : '人');
+    const projs = pj ? projName(pj) : (p.projects || []).map(projName).join(en ? ', ' : '、');
+    return [p.name, p.shortCode, kind, projs].filter(Boolean).join(' · ');
+  };
+  const avatar = (p, pj = null) => {
     const shape = p.memberType === 'ai' ? 'ai' : 'human';
-    if (p.imgUrl) return `<span class="avatar ${shape} img-on" style="background-image:url(&quot;${esc(p.imgUrl)}&quot;)" aria-hidden="true"></span>`;
+    const tip = personTitle(p, pj);
+    const tAttr = tip ? ` title="${esc(tip)}"` : '';
+    if (p.imgUrl) return `<span class="avatar ${shape} img-on" style="background-image:url(&quot;${esc(p.imgUrl)}&quot;)"${tAttr} aria-hidden="true"></span>`;
     const img = p.avatarImg && p.participantId ? ` data-avimg="${esc(p.participantId)}" data-v="${esc(p.avatarImg)}"` : '';
-    return `<span class="avatar ${shape}"${img} aria-hidden="true">${esc(avatarText(p))}</span>`;
+    return `<span class="avatar ${shape}"${img}${tAttr} aria-hidden="true">${esc(avatarText(p))}</span>`;
   };
   const memberTag = p => p.memberType === 'ai'
     ? `<span class="tag ai">AI | 所屬: ${esc(p.ownerName || '?')}</span>`
     : p.memberType === 'system' ? '<span class="tag sys">[系統]</span>'
     : '<span class="tag human">[人類]</span>';
+  // 同畫面範圍內 >= 2 位同名才加灰底短代碼（不同名維持原樣）
+  const nameKey = s => String(s || '').trim().toLowerCase();
+  const activePeopleList = () => [...state.participants.values()].filter(p => p.status !== 'disabled');
+  function dupNameSet(list = activePeopleList()) {
+    const seen = new Map();
+    for (const p of list) {
+      const k = nameKey(p?.name);
+      if (!k || p.memberType === 'all') continue;
+      seen.set(k, (seen.get(k) || 0) + 1);
+    }
+    return new Set([...seen].filter(([, n]) => n >= 2).map(([k]) => k));
+  }
+  const isDupIn = (p, dups) => !!(p?.shortCode && dups?.has?.(nameKey(p.name)));
+  const nameCodeHtml = (p, dups, q = '') => `${q ? markQ(p.name, q) : esc(p.name)}${isDupIn(p, dups) ? `<span class="name-code">${q ? markQ(p.shortCode, q) : esc(p.shortCode)}</span>` : ''}`;
+  const nameCodeText = (p, dups) => (isDupIn(p, dups) ? `${p.name} · ${p.shortCode}` : (p?.name || ''));
+  const scopePeopleOf = (pv = projectView()) => (pv === 'cross' || pv === 'hub' ? activePeopleList() : activePeopleList().filter(p => memberIn(p, pv)));
+  const viewDups = (pv = projectView()) => dupNameSet(scopePeopleOf(pv));
+  function msgDups(msgs = []) {
+    const map = new Map();
+    for (const p of scopePeopleOf(projectView())) map.set(p.participantId, p);
+    for (const m of msgs) {
+      if (m.author?.participantId) map.set(m.author.participantId, state.participants.get(m.author.participantId) || m.author);
+      for (const r of m.recipients || []) if (r.participantId) map.set(r.participantId, state.participants.get(r.participantId) || r);
+    }
+    return dupNameSet([...map.values()]);
+  }
+  // 解析正文 @名字·短代碼 與未消歧 @名字（與後端 src/mentions.js 相同邏輯）
+  function parseTextMentions(text, members, selfId = meId()) {
+    text = String(text || '');
+    if (!text.includes('@')) return { resolvedIds: [], codedIds: [], ambiguous: [] };
+    const list = [...members].filter(Boolean);
+    let scan = text;
+    const hits = [], codedIds = [], ambiguous = [];
+    const scanLower = () => scan.toLowerCase();
+    const byLen = [...list].filter(p => p.name).sort((a, b) => b.name.length - a.name.length);
+    for (const p of byLen) {
+      if (!p.shortCode || !p.participantId) continue;
+      const tag = '@' + p.name + '·' + p.shortCode, tagL = tag.toLowerCase();
+      let from = 0;
+      for (;;) {
+        const idx = scanLower().indexOf(tagL, from);
+        if (idx < 0) break;
+        const next = scan[idx + tag.length] || '';
+        if (/[A-Za-z0-9]/.test(next)) { from = idx + tag.length; continue; }
+        hits.push({ at: idx, id: p.participantId, member: p, coded: true });
+        if (p.participantId !== selfId) codedIds.push(p.participantId);
+        scan = scan.slice(0, idx) + ' '.repeat(tag.length) + scan.slice(idx + tag.length);
+        from = idx + tag.length;
+      }
+    }
+    const groups = new Map();
+    for (const p of list) {
+      if (!p.name) continue;
+      const k = p.name.toLowerCase();
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(p);
+    }
+    for (const k of [...groups.keys()].sort((a, b) => b.length - a.length)) {
+      const cands = groups.get(k), name = cands[0].name, tag = '@' + name, tagL = tag.toLowerCase();
+      let from = 0;
+      for (;;) {
+        const idx = scanLower().indexOf(tagL, from);
+        if (idx < 0) break;
+        const next = scan[idx + tag.length] || '';
+        if (next === '·') { from = idx + tag.length; continue; }
+        scan = scan.slice(0, idx) + ' '.repeat(tag.length) + scan.slice(idx + tag.length);
+        if (cands.length >= 2) {
+          if (!ambiguous.some(a => a.name.toLowerCase() === k)) ambiguous.push({ at: idx, name, candidates: cands });
+        } else hits.push({ at: idx, id: cands[0].participantId, member: cands[0], coded: false });
+        from = idx + tag.length;
+      }
+    }
+    const ordered = hits.sort((a, b) => a.at - b.at);
+    return {
+      resolvedIds: [...new Set(ordered.filter(h => h.id && h.id !== selfId).map(h => h.id))],
+      codedIds: [...new Set(codedIds)],
+      ambiguous: ambiguous.sort((a, b) => a.at - b.at),
+    };
+  }
+  function replaceAmbigMention(text, ambName, replacement) {
+    const tag = '@' + ambName, tagL = tag.toLowerCase();
+    let out = '', i = 0;
+    while (i < text.length) {
+      if (text.slice(i, i + tag.length).toLowerCase() === tagL && text[i + tag.length] !== '·') {
+        out += replacement;
+        i += tag.length;
+      } else { out += text[i]; i++; }
+    }
+    return out;
+  }
 
   // ---------- 登入：邀請連結加入、6 位數配對、登入碼（長期保留） ----------
   async function useDevice(token) {
@@ -1095,9 +1194,29 @@
       if (t) { lead = withLead === 'strip' ? '' : leadPill(t[1]); text = text.slice(t[0].length); } // strip：名字旁已經有標籤，內文不再放一次
     }
     let html = esc(text);
-    const names = [...state.participants.values()].map(p => p.name).concat(ALL.name).sort((a, b) => b.length - a.length);
-    for (const n of names) html = html.split('@' + esc(n)).join(`\u0000@${esc(n)}\u0001`);
-    html = html.replace(/\u0000/g, '<span class="mention">').replace(/\u0001/g, '</span>');
+    const coded = [...state.participants.values()].filter(p => p.shortCode).map(p => `@${p.name}·${p.shortCode}`);
+    const plain = [...new Set([...state.participants.values()].map(p => p.name).concat(ALL.name))].map(n => '@' + n);
+    const tokens = [...new Set([...coded, ...plain])].sort((a, b) => b.length - a.length);
+    const held = [];
+    for (const rawTok of tokens) {
+      const t = esc(rawTok), codedTok = rawTok.includes('·');
+      let out = '', pos = 0;
+      for (;;) {
+        const hit = html.indexOf(t, pos);
+        if (hit < 0) { out += html.slice(pos); break; }
+        const next = html[hit + t.length] || '';
+        if ((!codedTok && next === '·') || (codedTok && /[A-Za-z0-9]/.test(next))) {
+          out += html.slice(pos, hit + t.length);
+          pos = hit + t.length;
+          continue;
+        }
+        out += html.slice(pos, hit) + `\u0002${held.length}\u0003`;
+        held.push(`<span class="mention">${t}</span>`);
+        pos = hit + t.length;
+      }
+      html = out;
+    }
+    html = html.replace(/\u0002(\d+)\u0003/g, (_, i) => held[Number(i)]);
     // 網址轉連結；網址以外的 40 碼 SHA 只顯示前 7 碼，點一下複製完整值
     return lead + html.split(/(\bhttps?:\/\/[^\s<]+)/).map((part, i) => i % 2
       ? `<a href="${part}" target="_blank" rel="noopener">${part}</a>`
@@ -1132,10 +1251,10 @@
   }
 
   function subLine(a, pj) {
-    if (a.memberType === 'ai') return [a.role, 'AI', a.ownerName].filter(Boolean).join(' · ');
+    if (a.memberType === 'ai') return [a.shortCode, a.role, 'AI', a.ownerName].filter(Boolean).join(' · ');
     if (a.memberType === 'system') return '系統';
     const r = pj === undefined ? roleNoPj(a) : roleIn(a, pj); // 依那則訊息的專案；跨專案頻道（pj＝null）不顯示
-    return r || '人類';
+    return [a.shortCode, r || '人類'].filter(Boolean).join(' · ');
   }
   function statusTags(m, toMe, replyMe) {
     const tags = [ // 「全體通知」「指定給我」改寫在標頭（toHtml）
@@ -1190,23 +1309,23 @@
     const r = p.memberType === 'human' ? (m.project ? roleIn(p, m.project) : roleNoPj(p)) : '';
     return r ? `<span class="msg-role">${esc(r)}</span>` : '';
   }
-  function toHtml(m) {
+  function toHtml(m, dups = curMsgDups()) {
     if (m.audience === 'all') return '<span class="to-h to-all">📣 全體</span>';
     if (!m.recipients?.length) return '';
     const me = meId(), asked = new Set(m.replyFrom ? m.recipients.filter(r => r.ask).map(r => r.participantId) : []);
     const names = [...m.recipients].sort((a, b) => (b.participantId === me) - (a.participantId === me))
-      .map(r => (r.participantId === me ? L('你', 'you') : r.name) + (asked.has(r.participantId) && r.participantId !== me && !m.resolution ? L('（要回覆）', ' (reply needed)') : '')); // 名字之外的字直接寫英文，名字不給畫面翻譯碰
+      .map(r => (r.participantId === me ? L('你', 'you') : nameCodeText(state.participants.get(r.participantId) || r, dups)) + (asked.has(r.participantId) && r.participantId !== me && !m.resolution ? L('（要回覆）', ' (reply needed)') : '')); // 名字之外的字直接寫英文，名字不給畫面翻譯碰
     const askMe = m.recipients.some(r => r.participantId === me) && !isMine(m) && myAsk(m) !== false && !m.resolution; // 要你回覆＝橘色；知會你＝灰色
     return `<span class="to-h${askMe ? ' to-you' : ''}" title="${esc(m.replyFrom ? (askMe ? '要你回覆' : '知會') : '')}">→ <span data-nt>${esc(names.join(L('、', ', ')))}</span></span>${m.resolution ? resolvedLabel(m) : ''}`;
   }
   // 細行：接單、AI 簽到（完整模式、卡片串裡）；點了看全文
-  function thinLineHtml(m) {
-    const tag = tagOf(m.text), a = m.author, text = tag === 'AI 簽到' ? '' : firstSentence(m.text);
-    return `<article class="msg thin" id="msg-${esc(m.messageId)}"><button type="button" class="thin-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${a.name} ${tag} ${text}，${tOnly(m.createdAt)}，展開`)}">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}${text ? `<span class="thin-text" data-nt>${esc(text)}</span>` : ''}${timeHtml(m)}</button></article>`;
+  function thinLineHtml(m, dups = curMsgDups()) {
+    const tag = tagOf(m.text), a = m.author, ap = state.participants.get(a.participantId) || a, text = tag === 'AI 簽到' ? '' : firstSentence(m.text);
+    return `<article class="msg thin" id="msg-${esc(m.messageId)}"><button type="button" class="thin-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${nameCodeText(ap, dups)} ${tag} ${text}，${tOnly(m.createdAt)}，展開`)}">${avatar(ap, m.project || null)}<b class="msg-author nm-cut" data-nt>${nameCodeHtml(ap, dups)}</b>${tag ? leadPill(tag) : ''}${text ? `<span class="thin-text" data-nt>${esc(text)}</span>` : ''}${timeHtml(m)}</button></article>`;
   }
   // 精簡：連續 AI 簽到收一行「🤖 3 個 AI 上線：…」，點了逐則展開
-  function checkinGroupHtml(run) {
-    const names = run.map(m => m.author.name);
+  function checkinGroupHtml(run, dups = curMsgDups()) {
+    const names = run.map(m => nameCodeText(state.participants.get(m.author.participantId) || m.author, dups));
     for (const m of run) state.ciOf.set(m.messageId, run[0].messageId);
     return `<button type="button" class="flow-line ci-line" id="ci-${esc(run[0].messageId)}" data-open-msgs="${esc(run.map(m => m.messageId).join(','))}" aria-label="${esc(`${run.length} 個 AI 上線：${names.join('、')}，展開`)}"><span class="fl-icon" aria-hidden="true">🤖</span><span class="fl-text"><b>${run.length} 個 AI 上線</b>${L('：', ': ')}<span data-nt>${esc(names.join(L('、', ', ')))}</span> <time datetime="${esc(run[0].createdAt)}">${tOnly(run[run.length - 1].createdAt)}</time></span></button>`;
   }
@@ -1232,16 +1351,17 @@
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
   const hasOptBtns = m => /^\s*\[需確認\]/.test(m.text) && parseQuestions(m.text).length > 0 && authHtml(m).includes('data-q-opt');
-  function flowLineHtml(m) {
-    const tag = tagOf(m.text), card = cardIdOf(m.text);
-    const to = tag === '交接' ? (m.audience === 'all' ? '所有人' : m.recipients.map(r => r.name).join('、')) : '';
+  const curMsgDups = () => state._msgDups || msgDups();
+  function flowLineHtml(m, dups = curMsgDups()) {
+    const tag = tagOf(m.text), card = cardIdOf(m.text), ap = state.participants.get(m.author.participantId) || m.author;
+    const to = tag === '交接' ? (m.audience === 'all' ? '所有人' : m.recipients.map(r => nameCodeText(state.participants.get(r.participantId) || r, dups)).join('、')) : '';
     const desc = [tag, card, to ? '給 ' + to : ''].filter(Boolean).join(' ');
-    return `<button type="button" class="flow-line" id="msg-${esc(m.messageId)}" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${m.author.name} ${desc}，${tOnly(m.createdAt)}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text"><b>${esc(m.author.name)}</b> ${esc(desc)} · <time datetime="${esc(m.createdAt)}" title="${esc(fmtTime(m.createdAt))}">${tOnly(m.createdAt)}</time></span></button>`;
+    return `<button type="button" class="flow-line" id="msg-${esc(m.messageId)}" data-open-msg="${esc(m.messageId)}" aria-expanded="false" aria-label="${esc(`${nameCodeText(ap, dups)} ${desc}，${tOnly(m.createdAt)}，展開`)}"><span class="fl-icon" aria-hidden="true">⇢</span><span class="fl-text"><b data-nt>${nameCodeHtml(ap, dups)}</b> ${esc(desc)} · <time datetime="${esc(m.createdAt)}" title="${esc(fmtTime(m.createdAt))}">${tOnly(m.createdAt)}</time></span></button>`;
   }
-  function slimHtml(m) {
-    const tag = tagOf(m.text), card = cardIdOf(m.text), need = needReply(m);
+  function slimHtml(m, dups = curMsgDups()) {
+    const tag = tagOf(m.text), card = cardIdOf(m.text), need = needReply(m), ap = state.participants.get(m.author.participantId) || m.author;
     return `<article class="msg slim${need ? ' need-me' : ''}" id="msg-${esc(m.messageId)}"><button type="button" class="slim-btn" data-open-msg="${esc(m.messageId)}" aria-expanded="false">
-      <span class="slim-head"><span class="msg-author">${esc(m.author.name)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}${resolvedPill(m)}${timeHtml(m)}</span>
+      <span class="slim-head"><span class="msg-author" data-nt>${nameCodeHtml(ap, dups)}</span>${tag ? leadPill(tag) : ''}${card ? `<span class="slim-card">${card}</span>` : ''}${m.replyFrom ? myAskPill(m) : ''}${resolvedPill(m)}${timeHtml(m)}</span>
       <span class="slim-text">${esc(firstSentence(m.text))}</span><span class="sr-only">，展開全文</span></button></article>`;
   }
   function flowGroupHtml(run) {
@@ -1251,6 +1371,7 @@
   }
   // 整串清單：連續 3 則以上的一行流程訊息合成一列
   function listHtml(list) {
+    state._msgDups = msgDups(list);
     state.groupOf = new Map();
     state.grpHidden = new Map();
     state.ciOf = new Map();
@@ -1331,21 +1452,21 @@
     const toMe = isToMe(m);
     const replyMe = isReplyToMe(m);
     const parent = m.replyToMessageId ? state.byId.get(m.replyToMessageId) : null;
-    const a = m.author;
+    const a = m.author, ap = state.participants.get(a.participantId) || a, dups = curMsgDups();
     const kid = isKid(m);
     const cls = ['msg', isMine(m) ? 'mine' : '', (toMe || replyMe) && !isMine(m) && myAsk(m) !== false && !m.resolution ? 'to-me' : '', needReply(m) ? 'need-me' : '', kid ? 'kid' : ''].join(' '); // 知會我的不上底色
     // 標頭壓成一行（拿掉角色那行）；收件人併進標頭；時間只寫時分
     return `
       <article class="${cls}" id="msg-${esc(m.messageId)}">
         <div class="msg-head">
-          ${avatar(state.participants.get(a.participantId) || a)}
+          ${avatar(ap, m.project || null)}
           <div class="msg-who">
-            <div class="msg-line1"><span class="msg-author" title="${esc(subLine(a, m.project || null))}">${esc(a.name)}</span>${roleChip(a, m)}${toHtml(m)}${m.project === projectView() ? '' : projTag(m.project)}${m.replyFrom ? '' : resolvedPill(m)}${timeHtml(m)}</div>
+            <div class="msg-line1"><span class="msg-author" data-nt title="${esc(subLine(ap, m.project || null))}">${nameCodeHtml(ap, dups)}</span>${roleChip(a, m)}${toHtml(m, dups)}${m.project === projectView() ? '' : projTag(m.project)}${m.replyFrom ? '' : resolvedPill(m)}${timeHtml(m)}</div>
           </div>
         </div>
         ${statusTags(m, toMe, replyMe)}
         ${cardRefHtml(m, prevCard)}
-        ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
+        ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${nameCodeHtml(state.participants.get(parent.author.participantId) || parent.author, dups)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
         ${m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, ai) : textHtml(m)}
         ${authHtml(m)}
         <div class="msg-foot${linkedCapsules(m) || state.open.has(m.messageId) || (!m.file && !ai && isLong(m.text)) || repliesOf(m.messageId).length ? '' : ' acts-only'}">
@@ -1360,11 +1481,11 @@
 
   // ---------- 要回覆／知會 ----------
   // 黃＝要回覆、灰＝知會；輪到我的那顆加外框、寫「要你回覆／知會你」；@所有人一律知會
-  function askPillsHtml(m) {
+  function askPillsHtml(m, dups = curMsgDups()) {
     if (m.resolution) return resolvedLabel(m); // 已處理就不再寫「要你回覆」
-    const pill = (ask, me, name) => `<span class="apill ${ask ? 'ask' : 'fyi'}${me ? ' me' : ''}">${ask ? (me ? '要你回覆' : '要回覆') : (me ? '知會你' : '知會')} · ${esc(name)}</span>`;
+    const pill = (ask, me, label) => `<span class="apill ${ask ? 'ask' : 'fyi'}${me ? ' me' : ''}">${ask ? (me ? '要你回覆' : '要回覆') : (me ? '知會你' : '知會')} · ${esc(label)}</span>`;
     if (m.audience === 'all') return pill(false, isToMe(m) && !isMine(m), '所有人');
-    return [...m.recipients].sort((a, b) => (b.ask ? 1 : 0) - (a.ask ? 1 : 0)).map(r => pill(r.ask, r.participantId === meId(), r.name)).join(' ');
+    return [...m.recipients].sort((a, b) => (b.ask ? 1 : 0) - (a.ask ? 1 : 0)).map(r => pill(r.ask, r.participantId === meId(), nameCodeText(state.participants.get(r.participantId) || r, dups))).join(' ');
   }
   // [需確認] 被人類按「已處理」（沒有回覆）：訊息上標出來，AI 也讀得到同一個狀態
   const resolvedLabel = m => { const n = esc(m.resolution.by?.name || ''), t = esc(fmtTime(m.resolution.at)); return `<span class="tag resolved" title="AI 會當成暫緩，不再等、不重問">${L(`已處理（未回覆）· ${n} ${t}`, `Handled, no reply · ${n} ${t}`)}</span>`; };
@@ -1821,9 +1942,9 @@
     const v = projectView(), base = v === 'cross' || v === 'hub' ? 'all' : v;
     // 同一列的小字「發到 X」，太長省略，完整說明放 title
     const name = t === 'all' ? '跨專案頻道' : projName(t);
-    const note = [t === 'all' ? '所有專案都看得到' : '', state.replyTo && t !== base ? '跟著被回覆的訊息' : ''].filter(Boolean).join('，');
-    el.innerHTML = `<span class="st-lead">發到</span> <b>${esc(name)}</b>${note ? `<span class="st-note">（${esc(note)}）</span>` : ''}`;
-    el.title = `發到 ${name}${note ? `（${note}）` : ''}`;
+    const note = [t === 'all' ? L('所有專案都看得到', 'visible to all projects') : '', state.replyTo && t !== base ? L('跟著被回覆的訊息', 'following the message you replied to') : ''].filter(Boolean).join(L('，', ', '));
+    el.innerHTML = `<span class="st-lead">發到</span> <b>${esc(name)}</b>${note ? `<span class="st-note">${L('（', ' (')}${esc(note)}${L('）', ')')}</span>` : ''}`;
+    el.title = `${L('發到', 'Post to')} ${name}${note ? `${L('（', ' (')}${note}${L('）', ')')}` : ''}`;
   }
   // 網址：/p/<專案代號>/<頁面>、/cross/<頁面>、/＝第一層；重新整理停在原處、可加書籤
   // 頁面用英文、專案用 API 代號（改名不壞、貼到 LINE／Slack 不會變一長串 %E…）；舊的中文頁名、專案名稱網址照樣能開，打開後換成新網址
@@ -1932,7 +2053,8 @@
     const sel = $('#f-member');
     if (f.member && !inViewPerson(f.member)) f.member = ''; // 換專案時，篩選的成員不在這個專案就清掉
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
-    sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('');
+    const fdups = dupNameSet(people);
+    sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, fdups))}</option>`).join('');
     sel.value = f.member;
     $('#f-clear').hidden = !filtering();
     const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
@@ -1956,13 +2078,14 @@
   function openFilterSheet() {
     const f = state.filter;
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    const fsDups = dupNameSet(people);
     const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
     const draft = { scope: f.scope, member: f.member, tag: f.tag, view: slimMode() ? 'slim' : 'full' };
     const body = openModal('篩選', `
       <div class="stack">
         <div class="field"><span class="field-label" id="fs-scope">範圍</span>
           <div class="seg-scope full" role="group" aria-labelledby="fs-scope" id="fs-scope-g"></div></div>
-        <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}</option>`).join('')}</select></label>
+        <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, fsDups))}</option>`).join('')}</select></label>
         <label>訊息類型<select id="fs-tag"><option value="">所有類型</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
         <div class="field"><span class="field-label" id="fs-view">顯示</span>
           <div class="seg-scope full" role="group" aria-labelledby="fs-view" id="fs-view-g"></div>
@@ -2362,31 +2485,63 @@
     return [...(!q || ALL.name.includes(q) || all.role.includes(q) ? [{ ...all, _q: q }] : []), ...g(recent, '最近 @ 過'),
       ...(q ? [...g(kind('ai'), 'AI'), ...g(kind('human'), '人類')] : [...g(kind('human'), '人類'), ...g(kind('ai'), 'AI')])];
   }
-  // 選單一列：分組標題（不能選）＋名字（標黃）＋代號、角色
+  // 選單一列：分組標題（不能選）＋名字（標黃）＋同範圍同名者顯示短代碼＋角色／所屬
   function mentionItemsHtml(items, index, pj) {
+    const nk = s => String(s || '').trim().toLowerCase();
+    const tr = (zh, en) => (typeof L === 'function' ? L(zh, en) : zh);
+    const dupCounts = new Map();
+    for (const p of items) if (p.memberType !== 'all') dupCounts.set(nk(p.name), (dupCounts.get(nk(p.name)) || 0) + 1);
+    const dups = new Set();
+    if (typeof state !== 'undefined' && state?.participants) {
+      const seen = new Map();
+      for (const p of state.participants.values()) {
+        if (p.status === 'disabled' || p.memberType === 'all') continue;
+        if (pj && pj !== 'cross' && pj !== 'hub' && typeof memberIn === 'function' && !memberIn(p, pj)) continue;
+        const k = nk(p.name);
+        seen.set(k, (seen.get(k) || 0) + 1);
+      }
+      for (const [k, n] of seen) if (n >= 2) dups.add(k);
+    }
+    const ordered = items.some(p => (dupCounts.get(nk(p.name)) || 0) >= 2 && p._q)
+      ? [...items.filter(p => p.memberType === 'all'), ...items.filter(p => p.memberType !== 'all' && dupCounts.get(nk(p.name)) >= 2).sort((a, b) => nk(a.name).localeCompare(nk(b.name))), ...items.filter(p => p.memberType !== 'all' && !(dupCounts.get(nk(p.name)) >= 2))]
+      : items;
+    const seenDupGrp = new Set();
     let last = null;
-    return items.map((p, i) => {
-      const head = p._grp && p._grp !== last ? `<li class="mention-grp" role="presentation">${esc(p._grp)}${p._q ? ` · 符合 ${items.filter(x => x._grp === p._grp).length}` : ''}</li>` : '';
-      last = p._grp || last;
-      const meta = p.memberType === 'all' ? esc(p.role || '') : [p.shortCode ? '#' + markQ(p.shortCode, p._q) : '', markQ(roleIn(p, pj), p._q) + (p._q && p.roleKey && p.roleKey !== roleIn(p, pj) && p.roleKey.toLowerCase().includes(p._q) ? ' (' + markQ(p.roleKey, p._q) + ')' : '')].filter(Boolean).join(' · ');
-      return `${head}<li role="option" data-i="${i}" aria-selected="${i === index}">
-        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b>${p.label ? esc(p.label) : markQ(p.name, p._q)}</b>
-        <span class="muted small">${meta}</span>${p.memberType === 'ai' ? '<span class="tag ai">AI</span>' : ''}
+    return ordered.map((p, i) => {
+      const k = nk(p.name), nDup = dupCounts.get(k) || 0, dup = p.memberType !== 'all' && (nDup >= 2 || dups.has(k));
+      const grpLabel = dup && nDup >= 2 ? tr(`有 ${nDup} 位叫「${p.name}」`, `${nDup} people named "${p.name}"`) : p._grp;
+      let head = '';
+      if (dup && nDup >= 2) {
+        if (!seenDupGrp.has(k)) { seenDupGrp.add(k); head = `<li class="mention-grp" role="presentation">${esc(grpLabel)}</li>`; }
+      } else if (grpLabel && grpLabel !== last) {
+        head = `<li class="mention-grp" role="presentation">${esc(grpLabel)}${p._q ? ` · 符合 ${ordered.filter(x => x._grp === grpLabel).length}` : ''}</li>`;
+      }
+      last = grpLabel || last;
+      const role = markQ(roleIn(p, pj), p._q) + (p._q && p.roleKey && p.roleKey !== roleIn(p, pj) && p.roleKey.toLowerCase().includes(p._q) ? ' (' + markQ(p.roleKey, p._q) + ')' : '');
+      const meta = p.memberType === 'all' ? esc(p.role || '')
+        : dup
+          ? [p.memberType === 'ai' ? 'AI' : tr('人', 'Human'), role, p.memberType === 'ai' && p.ownerName ? tr(`${esc(p.ownerName)} 的 AI`, `${esc(p.ownerName)}'s AI`) : ''].filter(Boolean).join(' · ')
+          : [p.shortCode ? '#' + markQ(p.shortCode, p._q) : '', role].filter(Boolean).join(' · ');
+      const origIdx = items.indexOf(p);
+      return `${head}<li role="option" data-i="${origIdx}" aria-selected="${i === index}">
+        <span class="dot ${p.isOnline ? 'on' : ''}"></span><b data-nt>${p.label ? esc(p.label) : markQ(p.name, p._q)}${dup && p.shortCode ? `<span class="name-code">${markQ(p.shortCode, p._q)}</span>` : ''}</b>
+        <span class="muted small">${meta}</span>${p.memberType === 'ai' && !dup ? '<span class="tag ai">AI</span>' : ''}
       </li>`;
     }).join('') + (items.some(p => p._grp) ? '<li class="mention-grp mention-tip" role="presentation">↑↓ 選、Enter 選定、Esc 關；只列這個專案的人</li>' : '');
   }
   // 手打 @ 了不在這個專案的人：輸入框下方先提示，不用等送出才被擋
   function outsideMentions(text, scope = mentionScope()) {
     if (!scope) return [];
-    let scan = text;
+    const pm = parseTextMentions(text, activePeopleList(), meId());
     const out = [];
-    for (const p of [...state.participants.values()].sort((a, b) => b.name.length - a.name.length)) {
-      const tag = '@' + p.name;
-      if (!scan.includes(tag)) continue;
-      if (p.participantId !== meId() && !inScope(p, scope)) out.push(p.name);
-      scan = scan.split(tag).join(' ');
+    for (const id of pm.resolvedIds) {
+      const p = state.participants.get(id);
+      if (p && !inScope(p, scope)) out.push(p.name);
     }
-    return out;
+    for (const amb of pm.ambiguous) {
+      if (!amb.candidates.some(c => c.participantId !== meId() && inScope(c, scope))) out.push(amb.name);
+    }
+    return [...new Set(out)];
   }
   const outsideText = (names, scope = mentionScope()) => (names.length ? `${names.join('、')} 不在${projName(scope)}專案，請到跨專案頻道找對方` : '');
   function drawMentionWarn() {
@@ -2428,7 +2583,8 @@
   function pickMention(i) {
     const p = mentionState.items[i];
     noteRecentAt(p);
-    const insert = '@' + p.name + ' ';
+    const scopeDups = dupNameSet(mentionState.items.filter(x => x.memberType !== 'all'));
+    const insert = (p.shortCode && (scopeDups.has(nameKey(p.name)) || viewDups(mentionScope() || 'cross').has(nameKey(p.name))) ? `@${p.name}·${p.shortCode}` : `@${p.name}`) + ' ';
     input.value = input.value.slice(0, mentionState.start) + insert + input.value.slice(mentionState.end);
     const caret = mentionState.start + insert.length;
     input.setSelectionRange(caret, caret);
@@ -2478,19 +2634,10 @@
   });
   sendBtn.addEventListener('click', send);
 
-  // 正文中的 @名字 → 收件人（依出現順序）；@所有人 → audience: all
+  // 正文中的 @名字·短代碼 或明確 @名字 → 收件人（依出現順序）；@所有人 → audience: all
   function mentionedIds(text) {
-    const hits = [];
-    let scan = text;
-    const people = [...state.participants.values()].sort((a, b) => b.name.length - a.name.length);
-    for (const p of people) {
-      const tag = '@' + p.name, at = scan.indexOf(tag);
-      if (at >= 0) {
-        if (p.participantId !== meId()) hits.push([at, p.participantId]);
-        scan = scan.split(tag).join(' '.repeat(tag.length)); // 保留長度，位置才準
-      }
-    }
-    return hits.sort((a, b) => a[0] - b[0]).map(h => h[1]);
+    const scope = sendTarget(), list = scope === 'all' ? activePeopleList() : scopePeopleOf(scope);
+    return parseTextMentions(text, list, meId()).resolvedIds;
   }
   const askPick = new Map(); // 使用者點過的「要回覆／知會」
   const askOfId = (id, i) => (askPick.has(id) ? askPick.get(id) : i === 0);
@@ -2511,9 +2658,45 @@
     for (const id of [...askPick.keys()]) if (!ids.includes(id)) askPick.delete(id);
     row.hidden = ids.length < 2;
     if (row.hidden) { row.innerHTML = ''; return; }
-    row.innerHTML = `<span class="muted small">誰要回覆：</span>${ids.map((id, i) => { const on = askOfId(id, i), name = state.participants.get(id)?.name || id;
-      return `<button type="button" class="ask-chip ${on ? 'ask' : 'fyi'}" data-ask-toggle="${esc(id)}" aria-pressed="${on}" aria-label="${esc(`${name}：${on ? '要回覆' : '知會'}，點一下切換`)}">${esc(name)} <b>${on ? '要回覆' : '知會'}</b></button>`; }).join('')}`;
+    const dups = dupNameSet(ids.map(id => state.participants.get(id)).filter(Boolean));
+    row.innerHTML = `<span class="muted small">誰要回覆：</span>${ids.map((id, i) => { const on = askOfId(id, i), p = state.participants.get(id) || { participantId: id, name: id };
+      return `<button type="button" class="ask-chip ${on ? 'ask' : 'fyi'}" data-ask-toggle="${esc(id)}" aria-pressed="${on}" aria-label="${esc(`${nameCodeText(p, dups)}：${on ? '要回覆' : '知會'}，點一下切換`)}"><span data-nt>${nameCodeHtml(p, dups)}</span> <b>${on ? '要回覆' : '知會'}</b></button>`; }).join('')}`;
   }
+  function drawAmbig(amb) {
+    const box = $('#composer-ambig');
+    if (!box) return;
+    if (!amb) { box.hidden = true; box.innerHTML = ''; box._amb = null; return; }
+    const scopeId = sendTarget() === 'all' ? null : sendTarget();
+    const n = amb.candidates.length;
+    const bothLabel = n === 2 ? L('兩位都叫', 'Mention both') : L(`全部 ${n} 位都叫`, `Mention all ${n}`);
+    box.innerHTML = `<span class="amb-title">${esc(L(`「@${amb.name}」有 ${n} 位，要叫誰？`, `${n} people match "@${amb.name}" — who should be notified?`))}</span>
+      <div class="amb-acts">${amb.candidates.map(c => {
+        const role = roleIn(c, scopeId);
+        const roleHtml = role ? `<span>${esc(role)}</span>` : '';
+        const ownerHtml = c.ownerName ? L(`${esc(c.ownerName)} 的 AI`, `${esc(c.ownerName)}'s AI`) : '';
+        const detailHtml = c.memberType === 'ai' ? ['AI', roleHtml, ownerHtml].filter(Boolean).join(' · ') : [L('人', 'Human'), roleHtml].filter(Boolean).join(' · ');
+        return `<button type="button" class="btn small amb-pick" data-amb-pick="${esc(c.participantId)}"><span data-nt>${esc(c.name)}·${esc(c.shortCode)}</span>${L('（', ' (')}${detailHtml}${L('）', ')')}</button>`;
+      }).join('')}<button type="button" class="btn small primary" data-amb-all>${esc(bothLabel)}</button><button type="button" class="btn small" data-amb-close>${esc(L('取消', 'Cancel'))}</button></div>`;
+    box._amb = amb;
+    box.hidden = false;
+  }
+  $('#composer-ambig')?.addEventListener('click', e => {
+    const box = $('#composer-ambig'), amb = box?._amb;
+    if (!amb) return;
+    const pick = e.target.closest('[data-amb-pick]');
+    const all = e.target.closest('[data-amb-all]');
+    const close = e.target.closest('[data-amb-close]');
+    if (close) { drawAmbig(null); input.focus(); return; }
+    if (pick) {
+      const c = amb.candidates.find(x => x.participantId === pick.dataset.ambPick);
+      if (c) input.value = replaceAmbigMention(input.value, amb.name, `@${c.name}·${c.shortCode}`);
+    } else if (all) {
+      input.value = replaceAmbigMention(input.value, amb.name, amb.candidates.map(c => `@${c.name}·${c.shortCode}`).join(' '));
+    } else return;
+    drawAmbig(null);
+    onInput();
+    input.focus();
+  });
   $('#ask-row')?.addEventListener('click', e => {
     const b = e.target.closest('[data-ask-toggle]');
     if (!b) return;
@@ -2543,6 +2726,12 @@
     const text = input.value.trim();
     if (!text || sending) return;
     if (text.length > 2000) return toast(`訊息上限 2000 字（目前 ${text.length} 字）`);
+    if (!text.includes('@' + ALL.name)) {
+      const scope = sendTarget(), list = scope === 'all' ? activePeopleList() : scopePeopleOf(scope);
+      const pm = parseTextMentions(text, list, meId());
+      if (pm.ambiguous.length) { drawAmbig(pm.ambiguous[0]); return; }
+    }
+    drawAmbig(null);
     sending = true; sendBtn.disabled = true;
     pendingRequestId = pendingRequestId || newRequestId();
     try {
@@ -2566,7 +2755,7 @@
       sendBtn.disabled = !input.value.trim();
     }
   }
-  input.addEventListener('input', () => { pendingRequestId = null; $('#composer-error').hidden = true; });
+  input.addEventListener('input', () => { pendingRequestId = null; $('#composer-error').hidden = true; drawAmbig(null); });
   // 手機版：打字時收起頂欄大小、警示與篩選列，鍵盤出現時訊息區才有空間
   const typingMq = matchMedia('(max-width: 600px)');
   input.addEventListener('focus', () => { if (typingMq.matches) document.body.classList.add('typing'); });
@@ -3113,21 +3302,17 @@
     const text = work.drafts[key] || '', out = new Map();
     const add = (id, why) => { if (id && id !== meId() && !out.has(id)) out.set(id, why); };
     const members = cardMembers(c);
-    for (const tok of text.match(/@[^\s@]+/g) || []) {
-      const name = tok.slice(1).replace(/[，。、,.!?！？：:；;）)」]+$/, '');
-      const p = members.find(x => x.name === name);
-      if (p) add(p.participantId, '你 @ 的');
-    }
+    for (const id of parseTextMentions(text, members, meId()).resolvedIds) add(id, '你 @ 的');
     add(c.owner?.participantId, '負責人');
     add(c.waitFor?.participantId, '等誰');
     if (!c.owner) add(c.createdBy?.participantId, '建卡人');
     const rm = work.inlRm[key] || new Set();
-    return [...out].filter(([id]) => !rm.has(id)).map(([id, why]) => ({ id, why, name: state.participants.get(id)?.name || '?' }));
+    return [...out].filter(([id]) => !rm.has(id)).map(([id, why]) => ({ id, why, name: state.participants.get(id)?.name || '?', shortCode: state.participants.get(id)?.shortCode || '' }));
   }
   function cardToHtml(key, c) {
-    const to = cardRecipients(key, c);
+    const to = cardRecipients(key, c), dups = dupNameSet(cardMembers(c));
     return `<div class="inl-to" data-inl-to="${esc(key)}"><span class="muted small">會通知：</span>${to.length
-      ? to.map(r => `<span class="to-chip"><b>${esc(r.name)}</b><span class="muted small">${esc(r.why)}</span><button type="button" class="to-x" data-inl-rm="${esc(r.id)}" data-inl="${esc(key)}" aria-label="不通知 ${esc(r.name)}">×</button></span>`).join('')
+      ? to.map(r => `<span class="to-chip"><b>${nameCodeHtml(r, dups)}</b><span class="muted small">${esc(r.why)}</span><button type="button" class="to-x" data-inl-rm="${esc(r.id)}" data-inl="${esc(key)}" aria-label="不通知 ${esc(r.name)}">×</button></span>`).join('')
       : `<span class="muted small">沒有人（${isMeRef(c.owner) ? '你是負責人' : c.owner ? '負責人已移除' : '沒有負責人'}，${c.waitFor ? '等誰已移除' : '也沒有等誰'}）</span>`}</div>`;
   }
   const cardSendLabel = n => (n ? `送出並通知 ${n} 人` : '只留紀錄，不通知');
@@ -3461,12 +3646,13 @@
       owner ? field('所屬', 'Owner', owner) : ''
     ].join('');
   }
-  function teamRow(m, project, inactive) {
+  function teamRow(m, project, inactive, dups = viewDups(project)) {
     const ai = m.memberType === 'ai',
       rank = teamRank(m),
       role = roleIn(m, project);
-    const mention = (name, label = '@ ' + name) => `<button class="btn small" data-team-mention="${esc(name)}">${esc(label)}</button>`;
-    const actions = mention(m.name, pageText('@ 提及', '@ Mention')) +
+    const mention = (name, label = '@ ' + name, tag = name) => `<button class="btn small" data-team-mention="${esc(tag)}">${esc(label)}</button>`;
+    const mTag = isDupIn(m, dups) ? `${m.name}·${m.shortCode}` : m.name;
+    const actions = mention(m.name, pageText('@ 提及', '@ Mention'), mTag) +
       (ai && m.ownerParticipantId === meId() && dmVisible()
         ? ` <button class="btn small" data-dm-open="${esc(m.participantId)}">${pageText('私訊', 'Message')}</button>`
         : '');
@@ -3477,7 +3663,7 @@
         ? pageText('已停用', 'Disabled')
         : pageText('超過 14 天沒出現', 'Not seen for 14 days');
     return `<details class="project-member" data-tm-id="${esc(m.participantId)}" data-person-search="${esc([m.name, role, m.shortCode].join(' ').toLowerCase())}">
-      <summary>${avatar(m)} <b>${esc(m.name)}<small>${esc([ai ? 'AI' : pageText('人', 'Human'), role, m.shortCode].filter(Boolean).join(' · '))}</small></b>
+      <summary>${avatar(m, project === 'cross' ? null : project)} <b><span data-nt>${nameCodeHtml(m, dups)}</span><small>${esc([ai ? 'AI' : pageText('人', 'Human'), role, m.shortCode].filter(Boolean).join(' · '))}</small></b>
       <span class="project-chip rank-${inactive ? 'idle' : rank}">${inactive ? reason : !ai && rank === 4 ? pageText('在線', 'Online') : teamLabels()[rank]}</span>
       <span>${inactive ? '' : esc((m.status?.cardId ? m.status.cardId + ' ' : '') + (m.status?.title || (ai ? pageText('沒有在做的卡', 'No active card') : '—')))}</span>
       <small>${m.isOnline && !ai ? pageText('在線', 'Online') : agoText(m.lastSeenAt)}</small><span class="member-more">${pageText('詳情', 'Details')} ▾</span><span class="member-less">${pageText('收起', 'Close')} ▴</span></summary>
@@ -3505,6 +3691,7 @@
       const [data] = await Promise.all([api(route), work.loaded ? null : loadCards()]);
       if (state.page !== page || projectView() !== project) return;
       const t = teamSummary(data);
+      const tdups = dupNameSet([...t.active, ...t.inactive]);
       if (page === 'overview') {
         box.innerHTML = projectOverview(project, t);
         return;
@@ -3515,8 +3702,8 @@
         <h3>${pageText('需要注意', 'Needs attention')} <small>${pageText('最近 7 天、這個專案', 'Last 7 days, this project')}</small></h3>
         <div class="project-alerts">${t.alerts.slice(0, 3).join('') || pageText('目前沒有人卡住。', 'Nobody is stuck right now.')}${t.alerts.length > 3 ? `<details><summary>${pageText('再看', 'Show more')} ${t.alerts.length - 3}</summary>${t.alerts.slice(3).join('')}</details>` : ''}</div>
         <h3>${pageText('在用的成員', 'Active members')} (${t.active.length})</h3>
-        <div class="team-columns"><b>${pageText('成員', 'Member')}</b><b>${pageText('狀態', 'Status')}</b><b>${pageText('在做什麼', 'Working on')}</b><b>${pageText('最後出現', 'Last seen')}</b></div>${t.active.map((m) => teamRow(m, project, false)).join('')}
-        <details class="inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true)).join('')}</details>
+        <div class="team-columns"><b>${pageText('成員', 'Member')}</b><b>${pageText('狀態', 'Status')}</b><b>${pageText('在做什麼', 'Working on')}</b><b>${pageText('最後出現', 'Last seen')}</b></div>${t.active.map((m) => teamRow(m, project, false, tdups)).join('')}
+        <details class="inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true, tdups)).join('')}</details>
         <details><summary>${pageText('狀態怎麼判斷？', 'How is status decided?')}</summary>${pageText('優先看負責的卡，再看最新訊息。AI 超過 20 分鐘沒出現算可能斷線，開著等待腳本放寬到 60 分鐘。', 'Cards take priority over tagged messages. An AI may be offline after 20 minutes, or 60 minutes with a watcher.')}</details></div>`;
       box.querySelector('[data-team-search]').oninput = (e) =>
         box.querySelectorAll('[data-person-search]').forEach((row) => {
@@ -3546,8 +3733,10 @@
     }
     if (b.dataset.teamMention) {
       showPage('messages');
-      input.value += ' @' + b.dataset.teamMention + ' ';
+      const sep = input.value && !/\s$/.test(input.value) ? ' ' : '';
+      input.value += sep + '@' + b.dataset.teamMention + ' ';
       input.focus();
+      onInput();
     }
   });
   document.addEventListener('keydown', e => {
@@ -4786,10 +4975,11 @@
     const d = work.detail, hoKey = 'ho:' + d.cardId;
     attClear(hoKey);
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && memberIn(p, d.project));
+    const hdups = dupNameSet(people);
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
         <div class="info-box">${esc(ckeyOf(d))} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
-        <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(p.name)}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
+        <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, hdups))}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
         <div class="field"><label for="ho-note">交接說明（必填）</label>
           <div class="att-box">${attGridHtml(hoKey)}<textarea autocomplete="off" autocorrect="on" id="ho-note" class="inl-text" name="note" rows="3" required maxlength="300" data-att-key="${esc(hoKey)}" placeholder="我做完了什麼、希望對方接著做什麼"></textarea>
           ${attDeclHtml(hoKey)}<div class="att-bar">${attPickBtn(hoKey)}${attHint('Enter 換行 · 可直接貼上截圖')}</div></div></div>
@@ -4834,7 +5024,8 @@
   const projPeople = project => [...state.participants.values()].filter(p => p.status !== 'disabled' && (!project || memberIn(p, project)));
   function peopleOpts(project, cur, none) {
     const list = projPeople(project), extra = cur && !list.some(p => p.participantId === cur) && state.participants.get(cur);
-    return `<option value="">${none}</option>` + [...list, ...(extra ? [extra] : [])].map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(p.name)}${roleIn(p, project) ? '（' + esc(roleIn(p, project)) + '）' : ''}${p === extra ? '（不在此專案）' : ''}</option>`).join('');
+    const all = [...list, ...(extra ? [extra] : [])], dups = dupNameSet(all);
+    return `<option value="">${none}</option>` + all.map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(nameCodeText(p, dups))}${roleIn(p, project) ? '（' + esc(roleIn(p, project)) + '）' : ''}${p === extra ? '（不在此專案）' : ''}</option>`).join('');
   }
   // 卡片表單換專案時，負責人、等誰跟著換清單；原本選的人不在新專案就清掉
   document.addEventListener('change', e => {
@@ -5700,7 +5891,7 @@
       .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
   }
   const aiNowText = x => (x.now.kind === 'work' ? L(`在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`, `Working on${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`) : x.now.kind === 'idle' ? '待命' : x.now.why === 'expired' ? 'Token 已過期' : x.now.why === 'new' ? '還沒接入' : '離線');
-  const aiNowBtn = x => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${x.mb.name} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" title="${esc(x.mb.name)}">${esc(x.mb.name)}</span> <span class="an-st">${x.now.kind === 'work' && x.now.cardId ? `在做 <span data-nt>${esc(ckey(x.now.cardId))}</span>` : esc(aiNowText(x))}</span></button>`; // 卡號另包不翻：「在做」才查得到字典
+  const aiNowBtn = (x, dups = viewDups()) => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${nameCodeText(x.mb, dups)} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" data-nt title="${esc(nameCodeText(x.mb, dups))}">${esc(x.mb.name)}</span>${isDupIn(x.mb, dups) && x.mb.shortCode ? `<span class="name-code" data-nt>${esc(x.mb.shortCode)}</span>` : ''} <span class="an-st">${x.now.kind === 'work' && x.now.cardId ? `在做 <span data-nt>${esc(ckey(x.now.cardId))}</span>` : esc(aiNowText(x))}</span></button>`; // 卡號另包不翻：「在做」才查得到字典
   function drawAiNow() {
     drawDmSide();
     const el = $('#ai-now');
@@ -5709,8 +5900,8 @@
     drawPresence(list);
     el.hidden = !aiNowOn() || !list.length || projectView() === 'hub';
     if (el.hidden) { el.innerHTML = ''; return; }
-    const n = list.filter(x => x.now.kind === 'work').length;
-    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(x => aiNowBtn(x)).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
+    const n = list.filter(x => x.now.kind === 'work').length, dups = viewDups();
+    el.innerHTML = `<div class="an-strip" aria-label="AI 現況"><b class="an-lab">AI</b>${list.map(x => aiNowBtn(x, dups)).join('')}<button type="button" class="link small an-team" data-ainow-team>團隊狀態 ›</button></div>
       <button type="button" class="an-chip" data-ainow-sheet><span class="an-dot ${n ? 'work' : 'idle'}" aria-hidden="true"></span>${n ? `${n} 隻 AI 在做事` : 'AI 都沒在做事'} <span aria-hidden="true">›</span></button>`;
   }
   // ---------- 私訊自己的 AI ----------
@@ -5902,8 +6093,9 @@
     let top = sorted.filter(has).slice(0, 3);
     if (!top.length) top = sorted.slice(0, 3);
     const rest = sorted.filter(a => !top.includes(a));
+    const dups = dupNameSet(ais);
     const row = a => { const u = dmUnread(a.participantId);
-      return `<button type="button" class="dm-row" data-dm-open="${esc(a.participantId)}">${avatar(a)}<span class="dm-row-main"><b>${esc(a.name)}</b><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; };
+      return `<button type="button" class="dm-row" data-dm-open="${esc(a.participantId)}">${avatar(a)}<span class="dm-row-main"><b data-nt>${nameCodeHtml(a, dups)}</b><span class="dm-prev">${esc(dmPreview(a.participantId))}</span></span>${u ? `<span class="dm-unread" aria-label="${u} 則未讀">${u}</span>` : ''}</button>`; };
     return `<div class="dm-listpage"><p class="muted small dm-lp-note">只有你和自己的 AI 看得到。</p>${top.map(row).join('')}${rest.length ? `<button type="button" class="dm-row dm-more" data-dm-more aria-expanded="${state.dmMore ? 'true' : 'false'}">${state.dmMore ? '－ 收起' : `＋ 私訊其他 AI（${rest.length}）`}</button>${state.dmMore ? rest.map(row).join('') : ''}` : ''}</div>`;
   }
   function drawDmList(ais) {
@@ -6030,8 +6222,8 @@
     document.querySelectorAll('.sb-presence-text').forEach(el => { el.innerHTML = `<span class="nw">人類 ${humans} 在線</span><br><span class="nw">AI ${w} 在做事、</span><wbr><span class="nw">${nw ? `${i} 待命、` : `${i} 待命`}</span>${nw ? `<wbr><span class="nw">${nw} 還沒接入</span>` : ''}`; }); // <wbr>：英文在段與段之間換行（中文本來就能斷）
   }
   function openAiNowSheet() {
-    const list = aiNowList();
-    openModal('AI 現況', `<div class="an-sheet">${list.map(x => aiNowBtn(x)).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
+    const list = aiNowList(), dups = viewDups();
+    openModal('AI 現況', `<div class="an-sheet">${list.map(x => aiNowBtn(x, dups)).join('') || '<p class="muted">這個專案沒有 AI。</p>'}</div>`, { size: 'narrow', sub: '在做的排前面；點一個看團隊狀態' });
   }
   document.addEventListener('click', e => {
     if (e.target.closest?.('[data-ainow-sheet]')) return openAiNowSheet();
@@ -6053,12 +6245,13 @@
     const t = state.team;
     const bar = $('#team-bar');
     if (!t) { bar.hidden = true; return; }
+    const bdups = dupNameSet(t.members);
     const chips = t.members.map(mb => {
       const h = health(mb);
       const st = mb.status ? STATE_LABEL[mb.status.state] : '';
-      const tip = [mb.name, h.text, `最後上線 ${agoText(mb.lastSeenAt)}`, mb.status ? `${st}：${mb.status.title}` : '', mb.pendingCount ? `待處理通知 ${mb.pendingCount}` : ''].filter(Boolean).join('\n');
+      const tip = [nameCodeText(mb, bdups), h.text, `最後上線 ${agoText(mb.lastSeenAt)}`, mb.status ? `${st}：${mb.status.title}` : '', mb.pendingCount ? `待處理通知 ${mb.pendingCount}` : ''].filter(Boolean).join('\n');
       return `<button type="button" class="chip h-${h.cls}" data-team title="${esc(tip)}">
-        <span class="dot"></span><b>${esc(mb.name)}</b>
+        <span class="dot"></span><b data-nt>${nameCodeHtml(mb, bdups)}</b>
         ${st ? `<span class="st st-${mb.status.state}">${st}</span>` : ''}
         <span class="muted">${mb.memberType === 'ai' ? agoText(mb.lastSeenAt) : (mb.isOnline ? '在線' : agoText(mb.lastSeenAt))}</span>
       </button>`;
@@ -6117,12 +6310,12 @@
     await loadTeam();
     const t = state.team;
     if (!t) return toast('無法取得團隊狀態');
-    const pv = projectView();
-    const rows = t.members.filter(mb => inViewPerson(mb.participantId)).map(mb => {
+    const pv = projectView(), visible = t.members.filter(mb => inViewPerson(mb.participantId)), tdups = dupNameSet(visible);
+    const rows = visible.map(mb => {
       const h = health(mb);
       const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
       return `<div class="tm-row" data-tm-id="${esc(mb.participantId)}">
-        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b>${esc(mb.name)}</b><span class="muted small"><span>${esc(roleIn(mb, pv))}</span>${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
+        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b data-nt>${nameCodeHtml(mb, tdups)}</b><span class="muted small"><span>${esc(roleIn(mb, pv))}</span>${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
         <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span>${wakeLine(mb)}</div>
         <div class="tm-state"><span class="tm-lbl muted small">目前工作</span>${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
         <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `未讀 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '未讀 0'}</div>
@@ -6159,6 +6352,7 @@
   const avatarDot = p => `<span class="avatar-wrap">${avatar(p)}<span class="presence-dot ${p.isOnline ? 'on' : ''}" aria-label="${p.isOnline ? '近期活躍' : '離線或閒置'}"></span></span>`;
   async function openMembers() {
     const items = (await loadParticipants()).filter(p => inViewPerson(p.participantId));
+    const dups = dupNameSet(items);
     const online = items.filter(p => p.isOnline).length;
     const body = openModal('成員名單', `
       <input id="member-q" type="search" placeholder="搜尋姓名、角色或代碼" aria-label="搜尋成員">
@@ -6168,14 +6362,15 @@
       const line2 = p.memberType === 'ai'
         ? ['AI', p.ownerName ? `所屬 ${p.ownerName}` : '', p.ownerDisabled ? '主人已停用' : ''].filter(Boolean).join(' · ')
         : '人類';
+      const mTag = isDupIn(p, dups) ? `${p.name}·${p.shortCode}` : p.name;
       return `<div class="mem-row">
         ${avatarDot(p)}
         <div class="mem-main">
-          <div class="mem-name"><b title="代號（AI 用來找你）：${esc(p.shortCode)}">${esc(p.name)}</b>${myProjects().includes(projectView()) ? leaderTag(p.participantId, projectView()) : ''}<span class="muted small">${esc(roleIn(p, projectView()))}</span></div>
+          <div class="mem-name"><b title="代號（AI 用來找你）：${esc(p.shortCode)}" data-nt>${nameCodeHtml(p, dups)}</b>${myProjects().includes(projectView()) ? leaderTag(p.participantId, projectView()) : ''}<span class="muted small">${esc(roleIn(p, projectView()))}</span></div>
           <div class="muted small">${esc(line2)}</div>
           ${p.duties ? `<div class="mem-duty muted small">${esc(p.duties)}</div>` : ''}
         </div>
-        ${self ? '<span class="self">本人</span>' : `<button class="btn small" type="button" data-mention="${esc(p.name)}">@ 提及</button>`}
+        ${self ? '<span class="self">本人</span>' : `<button class="btn small" type="button" data-mention="${esc(mTag)}">@ 提及</button>`}
       </div>`;
     };
     const draw = () => {

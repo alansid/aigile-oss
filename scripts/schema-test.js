@@ -13,15 +13,20 @@ try {
   const cols = t => new Set(db.prepare(`PRAGMA table_info(${t})`).all().map(c => c.name));
   const idx = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map(r => r.name));
   const miss = [];
-  const dropped = new Set();
-  for (const f of fs.readdirSync(new URL('migrations/', root)).filter(f => f.endsWith('.sql'))) for (const [, n] of fs.readFileSync(new URL('migrations/' + f, root), 'utf8').replace(/--.*$/gm, '').matchAll(/DROP INDEX\s+(?:IF EXISTS\s+)?(\w+)/gi)) dropped.add(n);
+  const dropped = new Set(), droppedTables = new Set();
+  for (const f of fs.readdirSync(new URL('migrations/', root)).filter(f => f.endsWith('.sql'))) {
+    const msql = fs.readFileSync(new URL('migrations/' + f, root), 'utf8').replace(/--.*$/gm, '');
+    for (const [, n] of msql.matchAll(/DROP INDEX\s+(?:IF EXISTS\s+)?(\w+)/gi)) dropped.add(n);
+    for (const [, t] of msql.matchAll(/DROP TABLE\s+(?:IF EXISTS\s+)?(\w+)/gi)) droppedTables.add(t);
+    for (const [, t] of msql.matchAll(/ALTER TABLE\s+(\w+)\s+RENAME TO/gi)) droppedTables.add(t);
+  }
   for (const f of fs.readdirSync(new URL('migrations/', root)).filter(f => f.endsWith('.sql')).sort()) {
     const sql = fs.readFileSync(new URL('migrations/' + f, root), 'utf8').replace(/--.*$/gm, '');
     for (const [, t, c] of sql.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(\w+)/gi)) {
       if (!cols(t).has(c)) miss.push(`${f}: ${t}.${c}`);
     }
     for (const [, t] of sql.matchAll(/CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)/gi)) {
-      if (!cols(t).size) miss.push(`${f}: 表 ${t}`);
+      if (!cols(t).size && !droppedTables.has(t)) miss.push(`${f}: 表 ${t}`);
     }
     for (const [, name] of sql.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:IF NOT EXISTS\s+)?(\w+)/gi)) {
       if (!idx.has(name) && !dropped.has(name)) miss.push(`${f}: 索引 ${name}`);

@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS participants (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,                      -- human | ai
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL COLLATE NOCASE,       -- 同專案不可重複（程式檢查）；不同專案可同名
   role TEXT NOT NULL DEFAULT '',
   role_key TEXT NOT NULL DEFAULT '',
   code TEXT NOT NULL UNIQUE,               -- 顯示用短代碼，如 TG57
@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notif_recipient ON notifications (recipient_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_participants_seen ON participants (last_seen_at); -- 在線狀態只讀最近有活動的人
+CREATE INDEX IF NOT EXISTS idx_participants_name ON participants (name);
 -- 上傳文件（需求 v1.1，方案 B）：中繼資料
 CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY,

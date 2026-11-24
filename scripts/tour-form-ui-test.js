@@ -99,7 +99,7 @@ try {
   await mouse('#modal-root .modal-foot button[type="submit"]');
   await until(async () => !!(await err()), 5000, '名稱重複：欄位錯誤');
   let e = await err();
-  assert.ok(e.seen && e.focus === 'name' && e.text === '名稱「林的助手」已被使用', '名稱重複捲到名稱欄：' + JSON.stringify(e));
+  assert.ok(e.seen && e.focus === 'name' && e.text === '名稱「林的助手」在「預設專案」已被使用，請改用別的名字', '名稱重複捲到名稱欄：' + JSON.stringify(e));
   assert.equal((await pop()).meta, '第 1 章 · 第 2 步 › 表單 · 4 / 4', '導覽停在 4/4');
   await js(`${F('input[name="name"]')}.value = '陳的新助手'; document.querySelectorAll('#modal-root #ai-form input[name="proj"]').forEach(c => { c.checked = false; }); true`);
   await mouse('#modal-root .modal-foot button[type="submit"]');

@@ -296,11 +296,12 @@ export function registerLogin(d) {
     await requireAdmin(ctx, me, '邀請新成員');
     const body = await readJson(req);
     const name = validateName(body.name);
-    await assertNameFree(name);
-    const now = Date.now();
-    const dup = await db.get('SELECT id FROM invites WHERE name = ? COLLATE NOCASE AND participant_id IS NULL AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?', name, now);
-    if (dup) throw new ApiError(409, 'INVITE_EXISTS', `已經有給「${name}」的有效邀請，可以在「邀請」清單重新產生`);
     const projects = readInviteProjects(body.projects);
+    await assertNameFree(name, { projects });
+    const now = Date.now();
+    const invs = await db.all('SELECT id, projects FROM invites WHERE name = ? COLLATE NOCASE AND participant_id IS NULL AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?', name, now);
+    const dup = invs.find(x => { const xp = listOf(x.projects); return !xp.length || !projects.length || projects.some(pj => xp.includes(pj)); });
+    if (dup) throw new ApiError(409, 'INVITE_EXISTS', `已經有給「${name}」的有效邀請，可以在「邀請」清單重新產生`);
     const ttlMs = readTtl(body.ttl);
     // roles＝{ 專案: 角色 }（勾的每個專案各一個）；舊的 role 字串照舊收
     let role;
@@ -342,8 +343,7 @@ export function registerLogin(d) {
     const ttlMs = readTtl((await readJson(req).catch(() => ({}))).ttl, prevTtl);
     if (iv.used_at) throw new ApiError(400, 'INVITE_USED', `${iv.name} 已經用這個邀請加入，不需要重發`);
     if (!iv.participant_id) {
-      const taken = await db.get('SELECT id FROM participants WHERE name = ?', iv.name);
-      if (taken) throw new ApiError(409, 'NAME_TAKEN', `「${iv.name}」已經是成員了，不需要邀請`);
+      await assertNameFree(iv.name, { projects: listOf(iv.projects) });
     }
     return inviteOut(ctx, base, iv.id, await newInviteToken(iv.id, ttlMs));
   });
@@ -452,9 +452,10 @@ export function registerLogin(d) {
         if (!iv) return null;
         const now = Date.now();
         let pid = iv.participant_id, name = iv.name, created = false;
+        const proj = listOf(iv.projects);
         if (!pid) {
           name = validateName(body.name ?? iv.name);
-          await assertNameFree(name);
+          await assertNameFree(name, { projects: proj });
         } else {
           const t = await db.get("SELECT * FROM participants WHERE id = ? AND status = 'active'", pid);
           if (!t) throw gone();
@@ -476,14 +477,17 @@ export function registerLogin(d) {
           const roles = rolesOf(iv.role);
           try {
             await db.run(`INSERT INTO participants (id, kind, name, role, code, token, token_expires_at, created_at, updated_at, last_seen_at, projects)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?)`, pid, 'human', name, roles ? Object.values(roles)[0] || '' : iv.role || '', await newCode(), await tokenKey(newToken()), 0, ts, ts, now, listOf(iv.projects).join(','));
+              VALUES (?,?,?,?,?,?,?,?,?,?,?)`, pid, 'human', name, roles ? Object.values(roles)[0] || '' : iv.role || '', await newCode(), await tokenKey(newToken()), 0, ts, ts, now, proj.join(','));
+            await assertNameFree(name, { exceptId: pid, projects: proj });
           } catch (e) {
-            // 檢查名稱到建人之間，名稱被別人用掉（UNIQUE 失敗）→ 把邀請還回去，換個名稱就能重試（原本邀請已用掉、人沒建、回 500）
+            // 檢查名稱到建人之間，名稱在同專案被別人用掉 → 刪掉剛建的列並把邀請還回去，換個名稱就能重試
+            await db.run('DELETE FROM participants WHERE id = ?', pid).catch(() => {});
             await db.run('UPDATE invites SET used_at = NULL WHERE id = ? AND used_at = ? AND used_by IS NULL', iv.id, now);
-            await assertNameFree(name);
+            invalidatePeople();
+            await assertNameFree(name, { projects: proj });
             throw e;
           }
-          await setInitialRoles(pid, roles || Object.fromEntries(listOf(iv.projects).map(pj => [pj, iv.role || ''])));
+          await setInitialRoles(pid, roles || Object.fromEntries(proj.map(pj => [pj, iv.role || ''])));
           if (roOf(iv.role).length) await setInitialReadOnly(pid, roOf(iv.role));
           created = true;
         }
@@ -495,7 +499,6 @@ export function registerLogin(d) {
         const people = await peopleMap(c2);
         const p = people.get(pid), inviter = people.get(iv.created_by);
         if (inviter && inviter.status === 'active') {
-          const proj = listOf(iv.projects);
           const text = created
             ? `[通知] ${name} 已加入（${[roleText(iv.role), proj.length ? '專案：' + proj.map(nameOf).join('、') : '還沒有專案'].filter(Boolean).join('，')}）`
             : `[通知] ${name} 已用新的邀請連結重新登入`;
