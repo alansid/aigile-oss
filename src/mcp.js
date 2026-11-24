@@ -67,7 +67,7 @@ export const MCP_TOOLS = [
   // 審查者：專案開了審查時，做完先送審，通過了才找人同意 commit；被退回照意見改、改完重新送審
   { name: 'aigile_review_request', description: '送審：專案開了審查時，做完先送審，通過了才請人同意 commit。只送版本、說明這類資料：version 帶要審的 40 碼 SHA 或 diff 指紋；note 寫改了什麼、怎麼驗證；model 帶你目前用的完整模型代號（記在審查紀錄上）；branch 選填（有設 GitHub 程式庫時審查者拿到比較連結）；reviewerId 選填（不符合專案規則會回錯誤，不帶平台自動挑；審查者不能是作者）；diffDocId 選填（先用 aigile_review_diff 上傳拿到的）。被退回改完重新送審，預設還是同一位審。',
     inputSchema: obj({ cardId: CARD_ID, version: str('要審的版本：40 碼 SHA 或 diff 指紋', { minLength: 7, maxLength: 80 }), note: str('改了什麼、怎麼驗證', { maxLength: 500 }),
-      branch: str('分支名（選填）', { maxLength: 100 }), reviewerId: str('指定審查者 participantId（選填）', { pattern: '^p_' }), isCode: { type: 'boolean', description: '是不是程式卡（預設 true；判斷錯了作者可以改）' },
+      repo: str('程式庫名稱（選填，預設主要）'), branch: str('分支名（選填）', { maxLength: 100 }), reviewerId: str('指定審查者 participantId（選填）', { pattern: '^p_' }), isCode: { type: 'boolean', description: '是不是程式卡（預設 true；判斷錯了作者可以改）' },
       diffDocId: str('aigile_review_diff 回的 diffDocId（選填）', { pattern: '^doc_' }), model: MODEL }, ['cardId', 'version', 'note']) },
   { name: 'aigile_review_diff', description: '送審附 diff：上傳程式差異給審查者看，回 diffDocId，再帶進 aigile_review_request。專案要開「送審可以上傳 diff」；declared 必填 true（這是本專案自己的程式差異，不含密鑰與客戶個資）。每次都要人核准；watcher 叫醒的回合不能用（只送版本與說明）。diff 帶文字，或 diffPath 帶工作區內的 .diff／.patch／.txt（經轉接腳本讀，≤2 MB）。',
     inputSchema: obj({ cardId: CARD_ID, version: str('要審的版本：40 碼 SHA 或 diff 指紋', { minLength: 7, maxLength: 80 }), diff: str('diff 內容（≤2 MB）'), diffPath: str('本機 diff 檔路徑（經轉接腳本讀；限工作區內的 .diff／.patch／.txt）'),
@@ -240,7 +240,7 @@ async function runTool(name, a, { api, me }) {
     }
     case 'aigile_card_get': return ok(await api('GET', `/api/cards/${enc(a.cardId)}`));
     case 'aigile_review_request': {
-      const r = ok(await api('POST', `/api/cards/${enc(a.cardId)}/review-request`, { version: a.version, note: a.note, branch: a.branch, reviewerId: a.reviewerId, isCode: a.isCode, diffDocId: a.diffDocId, model: a.model }));
+      const r = ok(await api('POST', `/api/cards/${enc(a.cardId)}/review-request`, { version: a.version, note: a.note, repo: a.repo, branch: a.branch, reviewerId: a.reviewerId, isCode: a.isCode, diffDocId: a.diffDocId, model: a.model }));
       return { cardId: r.cardId, version: r.version, reviewers: r.reviewers.map(p => `${p.name}（${p.kind === 'ai' ? 'AI' : '人'}）`), messageId: r.messageId, ...(a.diffDocId ? { diffDocId: a.diffDocId } : {}) };
     }
     case 'aigile_review_diff': { // 上傳程式差異：不自動核准；watcher 回合由轉接腳本擋

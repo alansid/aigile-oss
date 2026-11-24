@@ -88,7 +88,8 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     let me = (await call(pg.token, '/api/me')).body;
     assert.deepEqual(me.grants.items.map(i => i.key), ['deploy']);
     assert.ok(!('other' in me.grants), '沒有其他欄');
-    assert.deepEqual(me.repos, { 預設專案: { url: 'https://github.com/example/project', branch: 'main' } }, '只列有填的專案');
+    const primary = { name: '', primary: true, url: 'https://github.com/example/project', branch: 'main' };
+    assert.deepEqual(me.repos, { 預設專案: { ...primary, items: [primary] } }, '只列有填的專案');
     assert.deepEqual((await call(other.token, '/api/me')).body.grants, { items: [], until: null }, '沒設的 grants 是空的');
     assert.ok(!('grants' in (await call(boss.token, '/api/me')).body), '人類沒有 grants');
     // 先拿這份給接入設定用，再測到期

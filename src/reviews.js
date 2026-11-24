@@ -55,19 +55,39 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   async function cfgOf(pj) { return normReviewCfg(((await getJson('review')) || {})[pj] || {}); }
   async function logOf(pj) { return (((await getJson('review')) || {})[pj]?.log || []); }
   // 有設程式庫（GitHub）就給比較連結：有分支＝compare 預設分支...分支；只有 SHA＝那個 commit
-  async function githubOf(pj) {
-    const repo = await repoOf(pj);
+  function githubRepo(repo) {
     const url = String(repo?.url || '').replace(/\.git$|\/$/g, '');
     return /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+$/.test(url) ? { url, branch: repo.branch || 'main' } : null;
   }
-  async function compareUrl(pj, version, branch) {
-    const gh = await githubOf(pj);
+  function compareUrl(repo, version, branch) {
+    const gh = githubRepo(repo);
     if (!gh) return null;
     if (branch) return `${gh.url}/compare/${encodeURIComponent(gh.branch)}...${encodeURIComponent(branch)}`;
     return /^[0-9a-f]{7,40}$/.test(version) ? `${gh.url}/commit/${version}` : null;
   }
   // 送審說明後面接「分支：x」存在同一欄；畫面要分開顯示
   const splitNote = (comment = '') => { const m = /\n分支：(\S+)$/.exec(comment || ''); return m ? { note: comment.slice(0, m.index), branch: m[1] } : { note: comment || '', branch: null }; };
+  // Older review requests store plain text, optionally followed by a branch line.
+  function requestDetails(comment) {
+    if (comment?.startsWith('\u001e{')) {
+      try {
+        const detail = JSON.parse(comment.slice(1));
+        if (typeof detail.note === 'string' && Object.hasOwn(detail, 'repo')) {
+          return { note: detail.note, branch: detail.branch, repo: detail.repo };
+        }
+      } catch { /* A legacy note can start with the same characters. */ }
+    }
+    return splitNote(comment);
+  }
+  async function comparison(pj, version, details) {
+    const config = await repoOf(pj);
+    const items = config?.items || (config ? [config] : []);
+    const current = details.repo ? items.find(item => item.name === details.repo) : config;
+    return {
+      compareUrl: compareUrl(current, version, details.branch),
+      comparisons: items.map(item => ({ name: item.name, primary: item.primary, branch: item.branch, url: compareUrl(item, version, details.branch) })),
+    };
+  }
   const SET_LABEL = { cards: { off: '不審', code: '只有程式卡', all: '全部的卡' }, who: { any: '人或 AI 都可以', ai: '只有 AI', human: '只有人', roles: '指定角色', members: '指定幾位' }, humanPass: { separate: '分開按', combined: '通過就算同意 commit' }, differ: { any: '不限', model: '不同模型', vendor: '不同家' } };
   function changesText(a, b) {
     const out = [];
@@ -187,8 +207,8 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     return {
       required: needsReview(cfg, round), rule: { cards: cfg.cards, need: cfg.need, needHuman: cfg.needHuman, differ: cfg.differ, notOwner: cfg.notOwner, humanPass: cfg.humanPass, diffUpload: cfg.diffUpload },
       state, isCode: round.req ? round.req.is_code !== 0 : null, roundId: round.id || null,
-      ...(round.req ? { version: round.req.version, requestedBy: person(people, round.req.actor_id, maps, round.req), requestedAt: round.req.at, ...splitNote(round.req.comment), messageId: round.req.message_id, diffDocId: round.req.diff_file || null,
-        compareUrl: await compareUrl(c.project, round.req.version, splitNote(round.req.comment).branch),
+      ...(round.req ? { version: round.req.version, requestedBy: person(people, round.req.actor_id, maps, round.req), requestedAt: round.req.at, ...requestDetails(round.req.comment), messageId: round.req.message_id, diffDocId: round.req.diff_file || null,
+        ...await comparison(c.project, round.req.version, requestDetails(round.req.comment)),
         reviewers: round.reviewers.map(id => { const r = replyOf(id); return { ...person(people, id, maps, r), result: r ? r.ev : null }; }) } : {}),
       ...(round.changes ? { changes: { by: person(people, round.changes.actor_id, maps, round.changes), at: round.changes.at, comment: round.changes.comment, version: round.changes.version } } : {}),
       ...(round.voided ? { voided: { at: round.voided.at, version: round.voided.version } } : {}),
@@ -203,7 +223,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const people = await peopleMap(ctx), maps = await aiInfo();
     const ais = [...people.values()].filter(p => p.kind === 'ai' && p.status === 'active' && projectsOf(p).includes(pj)).map(p => person(people, p.id, maps)).sort((a, b) => a.name.localeCompare(b.name));
     return { project: pj, settings: cfg, canEdit, eligible: await eligibleList(pj, cfg, people, [], maps, await loads()), ais,
-      log, declaration: DIFF_DECLARATION, diffUploadDefault: REVIEW_DEFAULTS.diffUpload, github: await githubOf(pj) };
+      log, declaration: DIFF_DECLARATION, diffUploadDefault: REVIEW_DEFAULTS.diffUpload, github: githubRepo(await repoOf(pj)) };
   }
   route('GET', '/api/projects/:id/review-settings', async ({ ctx, me, params }) => {
     const pj = params.id;
@@ -287,7 +307,11 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       stmts.push(['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, at) VALUES (?,?,?,?,?,?,?)', [randId('rv'), c.seq, c.project, 'void', version, me.id, at]]);
     // 群組訊息（作者名義）：AI 審查者用 replyFrom 叫醒；人進「要你處理」的審查清單（不另外佔 replyFrom）
     const names = reviewers.map(id => people.get(id).name);
-    const cmp = await compareUrl(c.project, version, branch);
+    const config = await repoOf(c.project);
+    const selected = body.repo === undefined ? config : config?.items?.find(item => item.name === body.repo);
+    if (body.repo !== undefined && !selected) throw invalid('找不到指定的程式庫名稱');
+    const cmp = compareUrl(selected, version, branch);
+    const requestComment = '\u001e' + JSON.stringify({ note, branch: branch || null, repo: selected?.name || null });
     const text = `[交接] ${names.map(n => '@' + n).join(' ')} ${key} 請你審查：${c.title}\n版本：${version}${branch ? `（分支 ${branch}）` : ''}\n改了什麼、怎麼驗證：${note}${diffDocId ? `\ndiff：專案文件 ${diffDocId}` : cmp ? `\n比較：${cmp}` : ''}\n審完用 aigile_review（cardId ${key}、version 照上面、roundId＝這則訊息的 messageId、result pass／changes、意見）。`;
     const firstAi = reviewers.find(id => people.get(id).kind === 'ai');
     const msg = await createMessage(ctx, me, { project: c.project, text: text.slice(0, 4000), recipientIds: reviewers, ...(firstAi ? { replyFrom: [firstAi] } : {}), requestId: `review:${c.seq}:${version}:${at}` });
@@ -296,7 +320,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     for (const id of reviewers) {
       const p = people.get(id);
       stmts.push(['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, reviewer_id, reviewer_kind, tool, model, comment, diff_file, is_code, message_id, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-        [randId('rv'), c.seq, c.project, 'request', version, me.id, id, kindOf(p), myTool, myModel, note + (branch ? `\n分支：${branch}` : ''), diffDocId, isCode ? 1 : 0, mid, at]]);
+        [randId('rv'), c.seq, c.project, 'request', version, me.id, id, kindOf(p), myTool, myModel, requestComment, diffDocId, isCode ? 1 : 0, mid, at]]);
     }
     stmts.push(['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, REVIEW_LOG, `${me.name} ${round.req ? '重新送審' : '送審'} ${short(version)}，審查者 ${names.join('、')}：${note}`.slice(0, 1000)]]);
     stmts.push(['INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', [c.seq, mid]]);
@@ -387,7 +411,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       const { round } = stateOf(evs, cfg, people);
       if (!round.waiting.includes(me.id)) continue;
       const msg = round.req.message_id ? await db.get('SELECT seq FROM messages WHERE id = ?', round.req.message_id).catch(() => null) : null;
-      items.push({ cardId: cardKey(c) || `C-${c.seq + 100}`, title: c.title, project: c.project, version: round.req.version, ...splitNote(round.req.comment), at: round.req.at, diffDocId: round.req.diff_file || null, compareUrl: await compareUrl(c.project, round.req.version, splitNote(round.req.comment).branch),
+      items.push({ cardId: cardKey(c) || `C-${c.seq + 100}`, title: c.title, project: c.project, version: round.req.version, ...requestDetails(round.req.comment), at: round.req.at, diffDocId: round.req.diff_file || null, ...await comparison(c.project, round.req.version, requestDetails(round.req.comment)),
         author: person(people, round.req.actor_id, maps, round.req), messageId: round.req.message_id, roundId: round.id, sequence: msg?.seq ?? null, humanPass: cfg.humanPass,
         canApproveCommit: people.get(round.req.actor_id)?.owner_id === me.id });
     }

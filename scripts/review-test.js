@@ -196,6 +196,35 @@ try {
   assert.equal(r.body.log[0].text, '把「送審可以上傳 diff」改成不可以', 'F 關掉也寫紀錄');
 
   // ---------- G MCP ----------
+  const repoPath = `/api/projects/${pj}/repo`;
+  const legacy = { url: 'https://github.com/demo/app', branch: 'main', name: '', primary: true };
+  const getRepo = async () => (await req(pg.token, '/api/me')).body.repos['預設專案'];
+  assert.deepEqual(await getRepo(), { ...legacy, items: [legacy] });
+  const first = { ...legacy, name: 'UI', primary: false };
+  const second = { name: 'API', url: 'https://github.com/demo/api', branch: 'stable', primary: true };
+  const putRepos = items => req(liu.token, repoPath, 'PUT', { items });
+  assert.equal((await putRepos([first, second])).status, 200);
+  for (const items of [
+    [first, { ...second, name: 'UI' }], [first, { ...second, name: '' }],
+    [first, { ...second, primary: false }], [{ ...first, primary: true }, second],
+    [first, { ...second, url: 'https://user@example.com/demo/api' }],
+    Array.from({ length: 6 }, (_, i) => ({ ...first, name: String(i), primary: !i })),
+  ]) assert.equal((await putRepos(items)).status, 400);
+  assert.equal((await req(liu.token, repoPath, 'PUT', legacy)).status, 400);
+  assert.deepEqual(await getRepo(), { ...second, items: [first, second] });
+  const reconnect = await app(new Request(BASE + '/api/me/reconnect', {
+    headers: { Authorization: 'Bearer ' + pg.token },
+  }), BASE);
+  const settingsText = await reconnect.text();
+  for (const item of [first, second]) assert.ok(settingsText.includes(item.url) && settingsText.includes(item.name));
+  assert.equal((await rq(pg.token, { branch: 'feat/default' })).status, 200);
+  assert.equal((await getCard()).review.compareUrl, second.url + '/compare/stable...feat%2Fdefault');
+  assert.equal((await rq(pg.token, { repo: 'missing' })).status, 400);
+  assert.equal((await rq(pg.token, { repo: 'UI', branch: 'feat/test' })).status, 200);
+  const selected = (await getCard()).review;
+  assert.equal(selected.repo, 'UI');
+  assert.equal(selected.compareUrl, first.url + '/compare/main...feat%2Ftest');
+  assert.deepEqual(selected.comparisons.map(item => item.name), ['UI', 'API']);
   await req(lead.token, SET, 'PUT', { need: 1, humanPass: 'separate' });
   const card2 = (await req(pg.token, '/api/cards', 'POST', { project: '預設專案', title: '第二張', ownerId: id(pg), requestId: 'c2' })).body;
   let t = await tool(pg.token, 'aigile_review_request', { cardId: card2.cardId, version: SHA1, note: '第二張', reviewerId: id(cx) });

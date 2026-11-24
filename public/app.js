@@ -7873,26 +7873,66 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     } catch (err) { toast('沒有通知成功：' + err.message); }
   }
   // 專案程式庫連結（管理員、該專案 leader）
+  function repoLinks(project) {
+    const names = project.repositories.map(item => item.name).join(' · ');
+    const links = project.repositories.map(item => `<a class="pm-url" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" title="${esc([item.name, item.url, item.branch].filter(Boolean).join(' · '))}">${esc(item.name)}</a>`);
+    return `<span class="repo-names" title="${esc(names)}">${links.join(' · ')}</span>`;
+  }
   function repoLine(p, canEdit, { code = true } = {}) {
     const r = p.repo;
-    return `<div class="pm-repo small">${code ? `<span>API 代號：<b>${esc(p.id)}</b></span>` : ''}<span class="pm-repo-url">${r ? `程式庫：<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>${r.branch ? `（分支 ${esc(r.branch)}）` : ''}` : '<span class="muted">還沒有程式庫連結</span>'}</span>${canEdit ? `<button type="button" class="link small" data-pm-repo="${esc(p.id)}">程式庫設定</button>` : ''}</div>`;
+    return `<div class="pm-repo small">${code ? `<span>API 代號：<b>${esc(p.id)}</b></span>` : ''}<span class="pm-repo-url">${p.repositories?.length > 1 ? repoLinks(p) : r ? `程式庫：<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.url)}</a>${r.branch ? `（分支 ${esc(r.branch)}）` : ''}` : '<span class="muted">還沒有程式庫連結</span>'}</span>${canEdit ? `<button type="button" class="link small" data-pm-repo="${esc(p.id)}">程式庫設定</button>` : ''}</div>`;
   }
   function openRepoEditor(pj) {
     const p = state.projectList.find(x => x.id === pj);
     if (!p) return;
-    const r = p.repo || {};
-    const body = openModal(`程式庫設定 · ${p.name}`, `<form id="repo-form" class="stack">
-        <p class="small">專案名稱 <b>${esc(p.name)}</b><br><span class="muted">API 代號：<b>${esc(p.id)}</b>（AI 發訊息、查卡片用這個，不能改）</span></p>
-        <label class="field">程式庫連結（選填）<input name="url" maxlength="300" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/帳號/專案" value="${esc(r.url || '')}"></label>
-        <label class="field">分支（選填）<input name="branch" maxlength="100" autocomplete="off" spellcheck="false" placeholder="main" value="${esc(r.branch || '')}"></label>
-        <ul class="muted small repo-hints"><li>只放連結，不放帳號密碼或 Token；網址含帳密或 token 會被擋下。</li><li>改了之後，這個專案 AI 的接入設定下次複製就會帶上；已接入的 AI 不會自動知道，存檔後可以通知它們。</li><li>只有管理員和這個專案的 leader 能改。</li></ul>
+    const items = (p.repositories || (p.repo ? [{ ...p.repo, name: '', primary: true }] : [])).map(item => ({ ...item }));
+    const body = openModal(`程式庫與分支 · ${p.name}`, `<form id="repo-form" class="stack">
+        <p class="small muted">API 代號：<b>${esc(p.id)}</b>（AI 發訊息、查卡片用這個，不能改）</p>
+        <div class="repo-list"></div>
+        <button class="btn repo-add" type="button">＋ 加一個程式庫（最多 5 個）</button>
+        <ul class="muted small repo-hints"><li>名稱給人和 AI 看。</li><li>卡片未指定程式庫時，使用主要程式庫。</li><li>只放連結，不放帳號密碼或 Token。</li></ul>
         <p class="error" id="repo-err" role="alert"></p>
       </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="repo-form">儲存</button>' });
+    const form = body.querySelector('#repo-form');
+    function drawRows() {
+      form.querySelector('.repo-list').innerHTML = items.map((item, i) => `<fieldset data-row="${i}" class="repo-row">
+        <div class="repo-row-head"><label class="field">名稱<input name="name" value="${esc(item.name)}" ${items.length > 1 ? 'required' : ''}></label>
+          ${item.primary ? '<b class="repo-primary">主要</b>' : '<button type="button" class="link" data-primary>設為主要</button>'}
+          <button type="button" class="link" data-remove>✕ 移除</button></div>
+        <div class="repo-fields"><label class="field">連結<input name="url" type="url" required maxlength="300" value="${esc(item.url)}" placeholder="https://github.com/org/repo"></label>
+          <label class="field">分支（選填）<input name="branch" maxlength="100" value="${esc(item.branch)}" placeholder="main"></label></div>
+        ${items.length > 1 ? `<div class="repo-order">
+          <button type="button" class="link" data-move="-1" ${i === 0 ? 'disabled' : ''}>上移</button>
+          <button type="button" class="link" data-move="1" ${i === items.length - 1 ? 'disabled' : ''}>下移</button>
+        </div>` : ''}</fieldset>`).join('') || '<span class="muted">尚無程式庫</span>';
+      form.querySelector('.repo-add').disabled = items.length >= 5;
+    }
+    form.addEventListener('input', e => {
+      const row = e.target.closest('[data-row]');
+      if (row) items[Number(row.dataset.row)][e.target.name] = e.target.value;
+    });
+    form.addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const row = btn.closest('[data-row]');
+      if (btn.matches('.repo-add') && items.length < 5) items.push({ url: '', branch: '', name: '', primary: !items.length });
+      else if (btn.hasAttribute('data-primary')) items.forEach((item, i) => { item.primary = i === Number(row.dataset.row); });
+      else if (btn.hasAttribute('data-move')) {
+        const from = Number(row.dataset.row), to = from + Number(btn.dataset.move);
+        items.splice(to, 0, items.splice(from, 1)[0]);
+      } else if (btn.hasAttribute('data-remove')) {
+        const i = Number(row.dataset.row);
+        const [removed] = items.splice(i, 1);
+        if (removed.primary && items.length) items[i % items.length].primary = true;
+      } else return;
+      drawRows();
+      if (btn.matches('.repo-add')) form.querySelector('.repo-row:last-child input').focus();
+    });
+    drawRows();
     body.querySelector('#repo-form').addEventListener('submit', async e => {
       e.preventDefault();
-      const f = e.target;
       try {
-        await api(`/api/projects/${encodeURIComponent(pj)}/repo`, { method: 'PUT', body: { url: f.url.value.trim(), branch: f.branch.value.trim() } });
+        await api(`/api/projects/${encodeURIComponent(pj)}/repo`, { method: 'PUT', body: { items } });
         closeModal();
         await loadProjectList().catch(() => {});
         drawPerm();
@@ -9108,7 +9148,10 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const rvVer = v => `<code class="rv-ver">${esc(rvShort(v))}</code>`;
   const rvTime = t => esc(shortTime(t));
   const rvLinks = (r, pj) => [r.diffDocId ? `<a class="link small" href="/api/projects/${encodeURIComponent(pj)}/docs/${encodeURIComponent(r.diffDocId)}" target="_blank" rel="noopener">📎 看 diff</a>` : '',
-    r.compareUrl ? `<a class="link small" href="${esc(r.compareUrl)}" target="_blank" rel="noopener noreferrer">在 GitHub 比較 ↗</a>` : ''].filter(Boolean).join(' ');
+    r.comparisons?.length > 1 && r.comparisons.some(item => item.url) ? `<details class="repo-compare"><summary>比較 ▾</summary>${r.comparisons.map(item => {
+      const label = `<span data-nt>${esc(item.name)}</span>${item.primary ? ' · <span>主要</span>' : ''}${item.branch ? ' · <span data-nt>' + esc(item.branch) + '</span>' : ''}`;
+      return item.url ? `<a class="link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : `<span class="muted">${label}</span>`;
+    }).join('')}</details>` : r.compareUrl ? `<a class="link small" href="${esc(r.compareUrl)}" target="_blank" rel="noopener noreferrer">在 GitHub 比較 ↗</a>` : ''].filter(Boolean).join(' ');
   const rvCodeTag = r => (r.isCode ? `程式卡${r.diffDocId ? '（附 diff）' : r.branch ? '（有分支）' : ''}` : '');
   const RV_EV = { request: '送審', changes: '要改', pass: '通過', void: '版本變了，通過作廢' };
   // 卡片上的審查欄
@@ -10265,7 +10308,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const list = state.projectList, active = list.filter(p => !p.archived);
     const rows = list.map(p => {
       const open = perm.openLog === p.id, blocked = !p.archived && p.openCards > 0, why = `還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案`;
-      const repo = p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
+      const repo = p.repositories?.length > 1 ? repoLinks(p) : p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
         : p.archived ? '<span class="muted">—</span>' : `<span class="pm-sub">未填 · </span><button type="button" class="link small" data-pm-repo="${esc(p.id)}">設定</button>`;
       const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
           <button type="button" role="menuitem" data-pp="description">一句描述</button><button type="button" role="menuitem" data-pp="rename">改名</button>
@@ -10290,7 +10333,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const list = myLeadRows();
     const rows = list.map(p => {
       const blocked = !p.archived && p.openCards > 0, why = `還有 ${p.openCards} 張未結案卡，請先結案或移到別的專案`;
-      const repo = p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
+      const repo = p.repositories?.length > 1 ? repoLinks(p) : p.repo ? `<a class="pm-url" href="${esc(p.repo.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.repo.url)}">${esc(p.repo.url.replace(/^https?:\/\//, ''))}</a>${p.repo.branch ? `<span class="pm-sub">${esc(p.repo.branch)}</span>` : ''}`
         : p.archived ? '<span class="muted">—</span>' : `<span class="pm-sub">未填 · </span><button type="button" class="link small" data-pm-repo="${esc(p.id)}">設定</button>`;
       const menu = perm.moreOpen === p.id ? `<div class="pm-more-menu" role="menu" aria-label="${esc(p.name)} 的動作" data-pj="${esc(p.id)}">
           <button type="button" role="menuitem" data-pp="rename">✏️ 改名</button>

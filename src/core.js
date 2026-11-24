@@ -1161,7 +1161,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     const projLines = aiProj.length ? aiProj.map(pj => {
       const r = repos[pj];
       return `- ${pj}（${nameOf(pj)}）\n` + (r
-        ? `  - 程式庫：${r.url}${r.branch ? `，分支 ${r.branch}` : ''}\n  - 開工前先確認本機的 git remote 和分支跟這裡一致；不一致先問 ${O}，不要自己改 remote 或切分支。`
+        ? `${r.items.map(item => `  - 程式庫：${item.url}${item.name ? `（${item.name}${item.primary ? '，主要' : ''}）` : ''}${item.branch ? `，分支 ${item.branch}` : ''}`).join('\n')}\n  - 開工前先確認本機的 git remote 和分支跟這裡一致；不一致先問 ${O}，不要自己改 remote 或切分支。`
         : `  - 沒有填程式庫：需要時問 ${O}，不要自己猜。`);
     }).join('\n') : `- 你目前不屬於任何專案，發文只能用 project: "all"；請 ${O} 在網頁把你加進專案。`;
     const grantLines = !canGrant ? ''
@@ -1692,11 +1692,18 @@ ${ending}`;
   async function reposMap() {
     const out = {};
     for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'repo:' AND key < 'repo;')").catch(() => [])) {
-      try { const v = JSON.parse(r.value); if (v?.url) out[r.key.slice(5)] = { url: v.url, branch: v.branch || '' }; } catch {}
+      try {
+        const saved = JSON.parse(r.value);
+        const items = saved.items || (saved.url ? [{ name: '', url: saved.url, branch: saved.branch || '', primary: true }] : []);
+        if (items.length) out[r.key.slice(5)] = { ...items.find(item => item.primary), items };
+      } catch {}
     }
     return out;
   }
-  const reposOf = async p => { const m = await reposMap(); return Object.fromEntries(projectsOf(p).filter(pj => m[pj]).map(pj => [pj, m[pj]])); };
+  const reposOf = async p => {
+    const all = await reposMap();
+    return Object.fromEntries(projectsOf(p).filter(pj => all[pj]).map(pj => [pj, all[pj]]));
+  };
   const REPO_SECRET = '連結裡不要放帳號密碼或 Token，只放網址';
   function readRepo(body) {
     const url = String(body.url ?? '').trim(), branch = String(body.branch ?? '').trim();
@@ -1749,7 +1756,7 @@ ${ending}`;
     const adminId = adminOf(people)?.id;
     const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
     const descriptions = new Map((await db.all('SELECT project, description FROM project_descriptions')).map(r => [r.project, r.description]));
-    return projectRows.map(r => ({ id: r.id, name: r.name, description: descriptions.get(r.id) || '', slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] || null, // ；C-xxx 網址英文名
+    return projectRows.map(r => ({ id: r.id, name: r.name, description: descriptions.get(r.id) || '', slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] ? { url: repos[r.id].url, branch: repos[r.id].branch } : null, repositories: repos[r.id]?.items || [], // ；C-xxx 網址英文名
       roles: (rdefs[r.id] || []).map(d => ({ ...d, createdByName: people.get(d.createdBy)?.name || null, inUse: inUse(r.id, d) })), // 本專案角色
       dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null },
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id) && !ghostAdminIn(p, r.id, adminId)).length,
@@ -2228,10 +2235,32 @@ ${ending}`;
     const admin = adminOf(await peopleMap(ctx));
     await loadLeaders(true);
     if (!(admin && admin.id === me.id) && !leaderProjectsOf(me.id).includes(row.id)) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員或「${row.name}」的 leader 能改程式庫設定。`);
-    const repo = readRepo(await readJson(req));
+    const body = await readJson(req);
+    let items;
+    if (body.items === undefined) {
+      const legacy = readRepo(body);
+      items = legacy.url ? [{ ...legacy, name: '', primary: true }] : [];
+    } else {
+      if (!Array.isArray(body.items) || body.items.length > 5) throw invalid('最多 5 個程式庫');
+      const names = new Set();
+      items = body.items.map(item => {
+        if (!item || typeof item !== 'object' || typeof item.url !== 'string' || typeof item.primary !== 'boolean') throw invalid('程式庫格式錯誤');
+        const repo = readRepo(item);
+        if (!repo.url) throw invalid('請填程式庫連結');
+        if (item.name != null && typeof item.name !== 'string') throw invalid('請填程式庫名稱');
+        const name = (item.name || '').trim();
+        if (body.items.length > 1 && !name) throw invalid('多個程式庫都需要名稱');
+        if (names.has(name)) throw invalid('程式庫名稱不能重複');
+        names.add(name);
+        return { ...repo, name, primary: item.primary };
+      });
+      if (items.length && items.filter(item => item.primary).length !== 1) throw invalid('請選一個主要程式庫');
+    }
+    const repo = items.find(item => item.primary) || { url: '', branch: '' };
     const at = nowIso();
+    if (body.items === undefined && (await reposMap())[row.id]?.items.length > 1) throw invalid('這個專案有多個程式庫，請以清單更新');
     await db.batch([
-      ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['repo:' + row.id, JSON.stringify({ ...repo, updatedAt: at, by: me.id })]],
+      ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['repo:' + row.id, JSON.stringify({ ...repo, items, updatedAt: at, by: me.id })]],
       projEvent(row.id, me.id, repo.url ? `${me.name} 設定程式庫：${repo.url}${repo.branch ? `（分支 ${repo.branch}）` : ''}` : `${me.name} 清除程式庫連結`, at),
     ]);
     return projectsResponse(ctx);
