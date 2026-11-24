@@ -6310,6 +6310,9 @@
   // 每章有自己的網址可以直接傳；第 5 章每題 /help/5#題號；第 2 章（跟著走一遍）看到最後或按「試試看」就記走完（新手上路打勾）
   // 章節正文是長文，不走畫面字典：help.json 的 zh、en 各存一份，英文介面直接畫英文那份；頁面上的固定字（章號、上一章…）照舊進字典
   const HELP_MODE_KEY = 'aigile-help-mode';
+  const SKILL_INTRO_KEY = 'aigile-skill-intro-dismissed';
+  const skillIntroHtml = () => (store.get(SKILL_INTRO_KEY) === '1' ? ''
+    : '<div class="sk-intro" role="note"><span class="sk-intro-ic" aria-hidden="true">🧩</span><span class="sk-intro-tx"><b>技能是給 AI 的做事說明書。</b>掛在角色上，那個角色的 AI 按「同步」後就會照著做。含腳本的要管理員核准、AI 主人允許。<a href="/help/7" class="sk-intro-link">看說明 ›</a></span><button type="button" class="sk-intro-x" data-sk-intro-x aria-label="關閉說明">✕</button></div>');
   const HELP_WALK_CH = 2; // 「跟著走一遍」在第幾章
   const help = { data: null, ch: 0, back: null, jump: '', walkSent: false, obs: null };
   const helpLang = () => (window.aigileI18n?.lang === 'en' ? 'en' : 'zh');
@@ -6535,6 +6538,7 @@
     if (go === 'myai') return goTop('myai');
     if (go === 'settings') return openSettings();
     if (go === 'kb') { const p = proj && PROJECTS.includes(proj) ? proj : myProjects().find(x => PROJECTS.includes(x)); if (!p) return; filesUi.tab = 'kb'; return setProjectView(p, 'files'); } // 第 6 章試試看
+    if (go === 'skills') { const p = proj && PROJECTS.includes(proj) ? proj : (myProjects().find(x => PROJECTS.includes(x)) || PROJECTS[0]); if (!p) return; return (isAdmin() || myLeadProjects().includes(p)) ? openPermTab('members', { tab: 'skills', memView: 'byProject', selProj: p, mobileDetail: true, pq: '' }) : openSkillsView(p); } // 第 7 章試試看
   }
   // ---------- 聚光燈導覽：說明頁章首「▶ 帶我在畫面上走一次」、新手上路「帶我走」 ----------
   // 框架在 /tour.js（自寫、沒有外部套件；說明文字由它照介面語言翻）；這裡只寫每條路線框哪裡、說什麼。只框、只說明，不替使用者按、不送出、不動資料。
@@ -6746,9 +6750,11 @@
   }
   document.addEventListener('click', e => {
     if (e.defaultPrevented || e.button > 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // 開新分頁照瀏覽器
+    const sx = e.target.closest?.('[data-sk-intro-x]');
+    if (sx) { store.set(SKILL_INTRO_KEY, '1'); document.querySelectorAll('.sk-intro').forEach(el => el.remove()); return; }
     const a = e.target.closest?.('a[href^="/help"], [data-help-open]');
     const m = a && !a.closest('.help-fig') && state.me && /^\/help(?:\/(\d))?(?:#(.+))?$/.exec(a.getAttribute('href') || '/help');
-    if (m) { e.preventDefault(); return openHelp(m[1] || 0, m[2] ? decodeURIComponent(m[2]) : ''); }
+    if (m) { e.preventDefault(); if ($('#modal-root')?.firstElementChild) closeModal(); document.querySelectorAll('.sk-drawer-wrap').forEach(w => w.remove()); return openHelp(m[1] || 0, m[2] ? decodeURIComponent(m[2]) : ''); }
     const cp = e.target.closest?.('[data-help-copy]');
     if (cp) { const url = `${location.origin}/help/${cp.dataset.helpCopy}`; return (navigator.clipboard?.writeText(url) || Promise.reject(new Error())).then(() => toast('已複製這一題的連結'), () => toast(url)); }
     const md = e.target.closest?.('[data-help-mode]');
@@ -7200,7 +7206,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const skBody = text => (text || '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
 
   // 技能分頁的狀態（成員與權限 › 技能，或我的 AI 頁打開的同一個畫面）
-  const skv = { data: null, loading: false, filter: '', q: '', rules: false, redraw: null, modal: false };
+  const skv = { data: null, loading: false, filter: '', q: '', redraw: null, modal: false };
   async function skLoad() {
     if (skv.loading) return;
     skv.loading = true;
@@ -7238,6 +7244,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       </button>`;
     };
     return `<div class="sk-view">
+      ${skillIntroHtml()}
       <div class="sk-bar" role="group" aria-label="依專案篩選">
         ${chip('', '全部', skCount())}${first.map(p => chip(p.id, p.name, p.count)).join('')}
         ${more.length ? `<select class="sk-more" aria-label="更多專案"><option value="">更多 ▾</option>${more.map(p => `<option value="${esc(p.id)}"${skv.filter === p.id ? ' selected' : ''}>${esc(p.name)}（${p.count}）</option>`).join('')}</select>` : ''}
@@ -7245,8 +7252,6 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <input type="search" class="sk-q" placeholder="找技能名稱或說明" aria-label="找技能" value="${esc(skv.q)}">
         ${upPj ? `<button type="button" class="btn primary" data-sknew="${esc(upPj.id)}">＋ 新增技能</button>` : ''}
       </div>
-      <p class="sk-rule">技能＝給 AI 的做事方法（SKILL.md，可附腳本）。含腳本的要核准、每台 AI 主人允許才會裝。<button type="button" class="link small" data-skrule aria-expanded="${skv.rules}">完整規則</button></p>
-      ${skv.rules ? `<div class="sk-rules small">• 專案成員都能上傳（資料夾或 zip，最上層要有 SKILL.md 寫 name、description；1 MB 內、只收文字、擋金鑰）。<br>• 只有說明文件的直接上架；含腳本的：leader／管理員上傳的直接上架，其他成員上傳的要 leader／管理員看過全文與差異才核准。<br>• 技能只發給該專案、指定角色的 AI；含腳本的要該 AI 的主人在「我的 AI › 技能」允許那一版。<br>• 同步全手動：主人按「同步」或 AI 重跑接入檢查才下載安裝；AI 不會自己去查。新版、下架由平台私訊主人。<br>• 執行技能裡的腳本照 AI 工具本身的權限，不另外問。</div>` : ''}
       ${review.length ? `<div class="sk-alert" role="status">⏳ <b>${review.length} 個技能等你核准上架</b>：${review.slice(0, 2).map(s => `${esc(s.uploadedBy.name)} 上傳的 ${esc(s.name)} v${s.version}（含腳本 ${s.scripts} 個）`).join('、')}${review.length > 2 ? '…' : ''}<span class="grow"></span><button type="button" class="btn small" data-skc="${esc(review[0].skillId)}">看腳本並核准</button></div>` : ''}
       <div class="sk-grid">
         ${shown.map(card).join('')}
@@ -7648,13 +7653,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const lib = e.target.closest('[data-skills-lib]');
     if (lib) return openSkillsView(lib.dataset.skillsLib);
     if (!e.target.closest('.sk-view')) return;
-    const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), rule = e.target.closest('[data-skrule]'), tp = e.target.closest('[data-sktpl]'), nw = e.target.closest('[data-sknew]');
+    const f = e.target.closest('[data-skf]'), c = e.target.closest('[data-skc]'), up = e.target.closest('[data-skup]'), tp = e.target.closest('[data-sktpl]'), nw = e.target.closest('[data-sknew]');
     if (tp) return skOpenApply(tp.dataset.sktpl, tp.dataset.sktplPj || skv.filter || '');
     if (nw) return skOpenNew(nw.dataset.sknew, { all: nw.hasAttribute('data-sknew-all') });
     if (f) { skv.filter = f.dataset.skf; skv.redraw?.(); }
     else if (c) skOpenDrawer(c.dataset.skc);
     else if (up) skOpenUpload(up.dataset.skup);
-    else if (rule) { skv.rules = !skv.rules; skv.redraw?.(); }
   });
   document.addEventListener('change', e => { if (e.target.closest?.('.sk-more')) { skv.filter = e.target.value; skv.redraw?.(); } });
   document.addEventListener('input', e => {
@@ -7672,7 +7676,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const draw = async () => {
       const { items, removed = [] } = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/skills`);
       if (!body.isConnected) return;
-      body.innerHTML = `${items.length ? items.map(s => `
+      body.innerHTML = `${skillIntroHtml()}${items.length ? items.map(s => `
         <div class="sk-row"><div class="sk-main"><b>${esc(s.name)}</b>${s.kind === 'pack' ? ' <span class="pill-tag blue">技能包</span>' : ''} <span class="muted small">${esc(projName(s.project))} · 第 ${s.version} 版 · ${s.to === 'ais' ? '指定給這隻' : s.to === 'roles' ? '發給 ' + esc(s.roles.map(k => skRoleLabel(s.project, k)).join('、')) : '所有 AI'}</span>${s.hasScripts ? ` <span class="pill-tag purple">含腳本 ${s.scripts}</span>` : ''}
           <div class="muted small">${esc(s.description)} · SHA-256 ${esc(s.sha256.slice(0, 4))}…${esc(s.sha256.slice(-3))}</div>${s.state ? `<div class="small">${skMarkHtml(s)}${s.why ? ` <span class="muted">${esc(s.why)}</span>` : ''}</div>` : ''}</div>
           ${s.hasScripts ? `<div class="row"><button type="button" class="btn small" data-sk-look="${esc(s.skillId)}">看腳本</button>${s.allowed ? `<button type="button" class="btn small" data-sk-revoke="${esc(s.skillId)}">收回允許</button>` : `<button type="button" class="btn small primary" data-sk-allow="${esc(s.skillId)}">允許並同步到這台</button>`}</div>` : '<span class="muted small">純文字，會安裝</span>'}</div>`).join('')

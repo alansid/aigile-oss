@@ -2651,8 +2651,15 @@ html, body { overflow-x: clip; }
 .sk-chip .pill-tag { font-size: 11px; }
 .sk-more { width: auto; min-height: 36px; border-radius: 999px; padding: 0 12px; }
 .sk-q { width: 200px; max-width: 100%; min-height: 36px; }
-.sk-rule { margin: 0; font-size: 13px; color: var(--muted); }
-.sk-rules { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); line-height: 1.8; }
+/* 技能頁上方簡短說明（成員管理 › 技能、我的 AI › 技能） */
+.sk-intro { display: flex; align-items: flex-start; gap: 10px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; border-radius: 10px; padding: 10px 12px; font-size: 13.5px; line-height: 1.6; }
+.sk-intro-ic { flex: none; font-size: 16px; line-height: 1.4; }
+.sk-intro-tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sk-intro-link { margin-left: 8px; color: inherit; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.sk-intro-link:hover, .sk-intro-link:focus-visible { text-decoration: underline; }
+.sk-intro-x { flex: none; margin: -4px -4px 0 auto; background: transparent; border: 0; color: inherit; font: inherit; font-size: 15px; line-height: 1; cursor: pointer; opacity: .75; min-width: 32px; min-height: 32px; display: inline-grid; place-items: center; border-radius: 6px; }
+.sk-intro-x:hover, .sk-intro-x:focus-visible { opacity: 1; background: rgba(30, 64, 175, .08); }
+.ma-skills .sk-intro { margin-bottom: 10px; }
 .sk-alert { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; background: #fef3c7; border: 1px solid #e8cf86; color: #6b4e00; font-size: 14px; }
 .sk-alert .grow { flex: 1; }
 .sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
@@ -2737,9 +2744,11 @@ html, body { overflow-x: clip; }
 .sk-push { margin-left: auto; }
 .sk-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: auto; padding-top: 14px; }
 .pill-tag.purple { background: #ede9fe; color: #5b21b6; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sk-alert { background: #3a2e0a; border-color: #6b5410; color: #fde68a; } :root:not([data-theme="light"]) .pill-tag.purple { background: #2e1065; color: #ddd6fe; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sk-alert { background: #3a2e0a; border-color: #6b5410; color: #fde68a; } :root:not([data-theme="light"]) .pill-tag.purple { background: #2e1065; color: #ddd6fe; } :root:not([data-theme="light"]) .sk-intro { background: #102a43; border-color: #1e4b6e; color: #bfdbfe; } :root:not([data-theme="light"]) .sk-intro-x:hover, :root:not([data-theme="light"]) .sk-intro-x:focus-visible { background: rgba(191, 219, 254, .12); } }
 :root[data-theme="dark"] .sk-alert { background: #3a2e0a; border-color: #6b5410; color: #fde68a; }
 :root[data-theme="dark"] .pill-tag.purple { background: #2e1065; color: #ddd6fe; }
+:root[data-theme="dark"] .sk-intro { background: #102a43; border-color: #1e4b6e; color: #bfdbfe; }
+:root[data-theme="dark"] .sk-intro-x:hover, :root[data-theme="dark"] .sk-intro-x:focus-visible { background: rgba(191, 219, 254, .12); }
 @media (max-width: 640px) {
   .sk-grid { grid-template-columns: 1fr; }
   .sk-q { width: 100%; }

@@ -1,8 +1,8 @@
 {
   "note": "說明頁六章（/help、/help/1～6）。中文放 zh、英文放 en，網頁照介面語言選一份；兩份的章、步驟、題號、畫面格要一樣（help-test 會檢查）。{桌機|手機} 是桌機與手機寫法不同的地方；**粗體**。card 是目錄卡上那一行（沒寫就用 lead）。畫面圖放 public/help-img/<語言>/<格>.webp（手機版 <格>-m.webp），把檔名（不含副檔名）加進該語言的 imgs，寬高寫進 imgSize（先留位置，載入時版面不跳）；沒加進的不顯示，只有桌機圖時手機寬度也不顯示。figText 是畫面描述（也當圖的替代文字）。",
   "zh": {
-    "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2"],
-    "imgSize": {"1-1": [1280,1504], "1-2": [880,1014], "1-3": [2060,639], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,270], "2-2": [1942,350], "2-3": [2560,526], "2-4": [1984,262], "3-1": [1942,960], "3-3": [973,988], "3-4": [1958,170], "3-5": [1958,155], "4-1": [1880,1208], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
+    "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2", "7-1", "7-2"],
+    "imgSize": {"1-1": [1280,1504], "1-2": [880,1014], "1-3": [2060,639], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,270], "2-2": [1942,350], "2-3": [2560,526], "2-4": [1984,262], "3-1": [1942,960], "3-3": [973,988], "3-4": [1958,170], "3-5": [1958,155], "4-1": [1880,1208], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122], "7-1": [1380,774], "7-2": [1500,555]},
     "chapters": [
       {
         "n": 1,
@@ -132,12 +132,33 @@
         "note": { "t": "用 Codex 的整理 AI", "d": "如果你是自己直接打開 Codex 視窗（不是平台叫醒它），讀文件的工具可能被擋，AI 會回報「requires approval」。請 AI 的主人在 Codex 設定裡把 aigile_kb_search、aigile_kb_read、aigile_kb_write、aigile_doc_read 加進核准，或讓平台叫醒它就好。" },
         "after": "整理好之後，成員問 AI 公司規定，它會先查知識庫、附上出處。",
         "try": { "text": "打開這個專案的知識庫。", "label": "打開知識庫", "go": "kb" }
+      },
+      {
+        "n": 7,
+        "title": "技能：教 AI 照你的做法做事",
+        "mins": "4 分鐘",
+        "who": "專案 leader、帶 AI 的人",
+        "card": "技能是給 AI 的做事說明書；掛在角色上，按「同步」就裝好，含腳本的要核准與允許。",
+        "lead": "技能是給 AI 的做事說明書。寫一次，同一個角色的 AI 都會照著做，不用每次在訊息裡重講。",
+        "steps": [
+          { "t": "技能是什麼", "d": "例如「報價單怎麼檢查」「知識庫整理的規則」。技能掛在專案的角色上：專案裡當「程式開發」的 AI，都會拿到給程式開發的技能。",
+            "list": ["技能只是說明，不會讓 AI 多做你沒允許的事；上傳程式、上線、刪資料，照樣會先問你。"] },
+          { "t": "從範本加一個技能", "d": "專案 ⚙ › 成員管理 › 技能，按「＋ 新增技能」：",
+            "list": ["選「從範本開始」（建議），挑一個範本。內容已經寫好，可以先改。", "選要發給哪些角色，按「上架」。", "也可以上傳自己的 SKILL.md。"],
+            "fig": "7-1", "figText": "成員管理 › 技能，「＋ 新增技能」視窗的「從範本開始」" },
+          { "t": "含腳本的要先核准", "d": "技能裡如果有會執行的腳本，上架前要管理員核准；裝到 AI 之前，還要 AI 的主人按「允許」。沒有腳本的技能直接上架。" },
+          { "t": "讓 AI 裝上：同步", "d": "右上角頭像 › 我的 AI，點那隻 AI › 🧩 技能，按「同步」。平台會請 AI 在自己的資料夾跑一次接入檢查，把技能裝好；進度會顯示在同步清單。裝好後，請 AI 重開對話才會讀到。（Codex 先不支援。）",
+            "fig": "7-2", "figText": "我的 AI › 🧩 技能分頁和「同步」按鈕" },
+          { "t": "有新版或下架時", "d": "技能有新版或被下架，平台會私訊你，告訴你哪幾隻 AI 用到。再按一次「同步」就會更新或移除。同步全靠手動，AI 不會自己去查。" }
+        ],
+        "note": { "t": "技能不是密碼箱", "d": "不要在技能裡寫 Token、密碼或客戶資料，技能內容同角色的 AI 都看得到。" },
+        "try": { "text": "打開這個專案的技能。", "label": "打開技能", "go": "skills" }
       }
     ]
   },
   "en": {
-    "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2"],
-    "imgSize": {"1-1": [1280,1504], "1-2": [880,1245], "1-3": [2060,639], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,317], "2-2": [1942,397], "2-3": [2560,527], "2-4": [1984,320], "3-1": [1942,960], "3-3": [973,1246], "3-4": [1958,170], "3-5": [1958,166], "4-1": [1880,1290], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122]},
+    "imgs": ["1-1", "1-2", "1-3", "1-4", "1-5", "2-1", "2-2", "2-3", "2-4", "3-1", "3-3", "3-4", "3-5", "4-1", "4-2", "4-3", "5-1", "5-2", "7-1", "7-2"],
+    "imgSize": {"1-1": [1280,1504], "1-2": [880,1245], "1-3": [2060,639], "1-4": [2032,350], "1-5": [1400,459], "2-1": [1942,317], "2-2": [1942,397], "2-3": [2560,527], "2-4": [1984,320], "3-1": [1942,960], "3-3": [973,1246], "3-4": [1958,170], "3-5": [1958,166], "4-1": [1880,1290], "4-2": [2560,1440], "4-3": [1520,1250], "5-1": [2000,203], "5-2": [2032,122], "7-1": [1380,806], "7-2": [1500,695]},
     "chapters": [
       {
         "n": 1,
@@ -267,6 +288,27 @@
         "note": { "t": "Curator AI on Codex", "d": "If you open the Codex window yourself (instead of letting the platform wake it), its document tools may be blocked and it reports \"requires approval\". Ask the AI's owner to approve aigile_kb_search, aigile_kb_read, aigile_kb_write and aigile_doc_read in Codex settings, or just let the platform wake it." },
         "after": "Once pages are organized, when members ask AI about company rules it checks the knowledge base first and cites sources.",
         "try": { "text": "Open this project's knowledge base.", "label": "Open knowledge base", "go": "kb" }
+      },
+      {
+        "n": 7,
+        "title": "Skills: teach your AI your way",
+        "mins": "4 min",
+        "who": "Project leads and AI owners",
+        "card": "A skill is a how-to for your AI; assign it to roles, press \"Sync\" to install, and approve scripts before use.",
+        "lead": "A skill is a how-to for your AI. Write it once and every AI in that role follows it, so you don't repeat yourself in messages.",
+        "steps": [
+          { "t": "What a skill is", "d": "For example, \"How to check a quote\" or \"Knowledge base rules\". Skills belong to a role in a project: every AI with that role gets them.",
+            "list": ["A skill is only guidance. It never lets the AI skip asking you before uploading code, going live or deleting data."] },
+          { "t": "Add a skill from a template", "d": "Project ⚙ › Members › Skills, then \"+ New skill\":",
+            "list": ["Choose \"Start from a template\" (recommended), pick a template, and edit if you like.", "Pick which roles should receive it, then press \"Publish\".", "You can also upload your own SKILL.md."],
+            "fig": "7-1", "figText": "Members › Skills, \"Start from a template\" in the \"+ New skill\" modal" },
+          { "t": "Skills with scripts need approval", "d": "If a skill has scripts that run, an admin approves it before it is published, and each AI owner presses \"Allow\" before it is installed. Skills without scripts publish right away." },
+          { "t": "Install it on the AI: sync", "d": "Avatar › My AIs, open the AI › 🧩 Skills, press \"Sync\". The platform asks the AI to re-run its setup check and install the skills; progress shows in the sync list. Restart the AI's conversation afterwards. (Codex isn't supported yet.)",
+            "fig": "7-2", "figText": "My AIs › 🧩 Skills tab and the \"Sync\" button" },
+          { "t": "When a skill updates or is removed", "d": "When a skill gets a new version or is removed, the platform messages you with the AIs that use it. Press \"Sync\" again to update or remove it. Syncing is manual; AIs don't check on their own." }
+        ],
+        "note": { "t": "A skill isn't a vault", "d": "Don't put tokens, passwords or customer data in a skill; every AI in the role can read it." },
+        "try": { "text": "Open this project's skills.", "label": "Open skills", "go": "skills" }
       }
     ]
   }
