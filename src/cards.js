@@ -71,8 +71,9 @@ export async function teamCards(db, keyOf = c => cardNo(c.seq)) {
   return { work, open, decisions: decisions.map(d => ({ cardId: keyOf(d), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, readCardReturn, storeCardReturnFile, checkFiles = async () => { throw new Error('checkFiles 未提供'); }, filesText = (note, files) => note, reviewOf = async () => null, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours }) {
+export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, readCardReturn, storeCardReturnFile, checkFiles = async () => { throw new Error('checkFiles 未提供'); }, filesText = (note, files) => note, reviewOf = async () => null, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours, boardLimit = 200 }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // 卡片多久沒更新才可能過時
+  const BOARD_LIMIT = boardLimit;
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
   const maybeArchive = async () => { if (Date.now() - archivedAt < archiveEveryMs) return; archivedAt = Date.now(); await autoArchive(db).catch(e => console.error('autoArchive', e.message)); };
@@ -292,10 +293,16 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
         .filter(c => !isolatedFrom(me) || projectsOf(me).includes(c.project)); // 過時提示的卡也只能是看得到的專案（曾經會帶出別專案的卡）
     }
     let counts;
-    if (q.get('counts') === '1') { // 已封存總數（依可見專案）
+    if (q.get('counts') === '1') { // 已封存總數＋未結案總數與看板上限（依可見專案）
       const mine = isolatedFrom(me) ? projectsOf(me) : null;
       const cw = mine ? ` AND project IN (${mine.map(() => '?').join(',') || "''"})` : '';
-      counts = { archived: (await db.get(`SELECT COUNT(*) AS n FROM cards WHERE status = '已封存'${cw}${me.kind === 'human' ? '' : " AND type != '人類紀錄'"}`, ...(mine || []))).n };
+      const vis = `${cw}${me.kind === 'human' ? '' : " AND type != '人類紀錄'"}`;
+      const [archRow, openRows] = await Promise.all([
+        db.get(`SELECT COUNT(*) AS n FROM cards WHERE status = '已封存'${vis}`, ...(mine || [])),
+        db.all(`SELECT project, COUNT(*) AS n FROM cards WHERE status IN ${UNFINISHED_SQL}${vis} GROUP BY project`, ...(mine || [])),
+      ]);
+      const openByProject = Object.fromEntries(openRows.map(r => [r.project, Number(r.n)]));
+      counts = { archived: archRow.n, open: openRows.reduce((s, r) => s + Number(r.n), 0), openByProject, boardLimit: BOARD_LIMIT };
     }
     out = await attachMerged(out);
     const withNotes = q.get('type') === NOTE; // 主動查人類紀錄：一次拿全部，含紀錄

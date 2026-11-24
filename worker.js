@@ -42,6 +42,7 @@ const app = env => {
       unansweredMinutes: env.UNANSWERED_MINUTES,
       tokenWarnHours: env.TOKEN_WARN_HOURS,
       cardStaleHours: env.CARD_STALE_HOURS,
+      boardLimit: env.AIGILE_BOARD_LIMIT,
       supabaseUrl: env.SUPABASE_URL,
       supabaseKey: env.SUPABASE_KEY,
       supabaseTopic: env.SUPABASE_TOPIC,

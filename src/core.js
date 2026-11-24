@@ -216,6 +216,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     || !(ask === false || (reasons.length === 1 && reasons[0] === 'reply') || FYI_PREFIX.test(text || ''));
   const AI_TOKEN_TTL_MS = (Number(config.aiTokenTtlHours) || 168) * 3600_000; // 預設 7 天
   const HUMAN_TOKEN_TTL_MS = (Number(config.humanTokenTtlHours) || 720) * 3600_000;
+  const BOARD_LIMIT = (() => { const n = Number(config.boardLimit); return config.boardLimit !== undefined && config.boardLimit !== '' && Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 200; })();
   // 訊息附件保存時間：管理員在「管理員設定 › 稽核與儲存」調整，存 app_settings 的 file_ttl＝{ hours, log }（不改資料表）。
   // 沒改過就用主機的 FILE_TTL_HOURS（沒設＝24 小時）；改過一次就以這裡為準。只影響之後上傳的檔：到期時間在上傳時就寫進 files.expires_at
   const FILE_TTL_DEFAULT_H = Number(config.fileTtlHours) > 0 ? Number(config.fileTtlHours) : 24;
@@ -1465,6 +1466,7 @@ ${ending}`;
       isOnline: true,
       expiresAt: iso(me.token_expires_at),
       fileTtlHours: await fileTtlHours(), // 訊息附件保存時間（小時），網頁與 AI 的說明照這個寫
+      boardLimit: BOARD_LIMIT, // 看板一次最多載入幾張卡片（左邊未結案優先）
       ...(me.kind === 'human' ? { authKind: me.authKind, deviceId: me.deviceId, prefs: await prefsOf(me), onboard: await onboardOf(me) } : {}), // 個人偏好（風格）、新手上路記在帳號
       ...(me.mustChangeCredentials ? { mustChangeCredentials: true } : {}), // 還在用預設帳密：網頁只顯示改帳密
       ...(me.kind === 'human' && adminOf(people)?.id === me.id && (await db.get("SELECT value FROM app_settings WHERE key = 'setup_wizard'"))?.value === 'pending' ? { setupWizard: true } : {}), // 第一次設定引導還沒做完
@@ -3765,7 +3767,7 @@ ${ending}`;
   registerUpdateCheck({ route, db, requireAdmin, requireHuman, config });
   registerDemo({ route, db, ApiError, randId, nowIso, requireAdmin, requireHuman, newCode, newToken,
     afterChange: async () => { invalidatePeople(); await bumpPeopleVer(); await loadProjects(true); } });
-  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage, reviewOf: (c, ctx) => reviewsApi.reviewOf(c, ctx), archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours });
+  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage, reviewOf: (c, ctx) => reviewsApi.reviewOf(c, ctx), archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours, boardLimit: BOARD_LIMIT });
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）
   const reviewsApi = registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager: kbManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, isolatedFrom,
     roleNamesIn: (p, pj) => (p.kind === 'ai' ? [p.role_key, p.role] : [projRoles[p.id]?.[pj]]).filter(Boolean), repoOf: async pj => (await reposMap())[pj] || null, docStorage, audit });

@@ -50,3 +50,4 @@ crons = ["*/10 * * * *"]
 # 新站會自動建管理員帳號 admin：初始密碼請先設 `wrangler secret put ADMIN_PASSWORD`（沒設＝admin），第一次登入要改帳號和密碼
 # [vars]
 # AI_TOKEN_TTL_HOURS = "168"
+# AIGILE_BOARD_LIMIT = "200"

@@ -86,6 +86,9 @@ window.AIGILE_EN = {
       "異動紀錄": "change log"
   },
   dict: {
+    "⚠ 卡片太多，看板只放 {0} 張。還有 {1} 張未結案的卡沒顯示，可以用搜尋或篩選找。": "⚠ Too many cards; the board shows {0}. {1} more open cards aren't shown. Use search or filters to find them.",
+    "顯示 {0}／共 {1} 張未完成": "Showing {0} of {1} open cards",
+    "因為上限沒有載入已完成的卡": "Done cards not loaded (board limit)",
     '去驗收': 'Verify',
     '去決定': 'Decide',
     '有新的決定、回覆或驗收時會出現在這裡。': 'New decisions, replies and reviews will appear here.',
@@ -2602,6 +2605,7 @@ window.AIGILE_EN = {
     "還在用預設帳號密碼：請先改帳號（不能是 admin）和密碼，才能用其他功能。": "You're still using the default username and password: change the username (not admin) and password first to use other features.",
     "還有 {0} 個成員在用「{1}」，先停用，等沒人用再刪。": "{0} members are still using \"{1}\"; disable it first and delete it once no one uses it.",
     "還有 {0} 張未結案卡，請先結案或移到別的專案": "{0} open cards left. Close them or move them to another project first",
+    "還有 {0} 張沒顯示": "{0} more not shown",
     "還有 {0} 題未選": "{0} questions left",
     "還有 {0} 欄 →": "{0} more columns →",
     "還有沒儲存的變更": "You have unsaved changes",

@@ -242,6 +242,7 @@ npm start -- -p 8080 --host 127.0.0.1    # 只給這台電腦連；沒指定就�
 | `STALE_MINUTES` | `20` | ✓ | ✓ | AI 多久沒出現算「可能斷線」 |
 | `UNANSWERED_MINUTES` | `20` | ✓ | ✓ | 指派多久沒讀算「尚未回應」 |
 | `CARD_STALE_HOURS` | `24` | ✓ | ✓ | 卡片多久沒更新算停滯 |
+| `AIGILE_BOARD_LIMIT` | `200` | ✓ | ✓ | 看板一次最多載入幾張卡片（左邊未結案欄位優先，剩餘名額補最近已完成） |
 | `TEAM_CACHE_MS` | `180000` | ✓ | | 團隊狀態快取時間（毫秒） |
 | `ARCHIVE_EVERY_MS` | `600000` | ✓ | | 多久檢查一次自動封存（毫秒） |
 | `RATE_LIMIT_PER_MIN` | `120` | ✓ | | 每人每分鐘請求上限（Workers 固定 120） |

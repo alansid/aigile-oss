@@ -3262,11 +3262,44 @@
     return `<p class="muted small">${c.waitFor && c.waitFor.participantId !== d.decider?.participantId ? `已請 ${esc(who)} 補充後，再回到 ${esc(d.decider?.name || '決策者')} 決定。` : `等 ${esc(who)} 決定。`}</p>`;
   }
 
+  async function loadCardPages(query, { counts = false, initialSince = null, cap = 100_000 } = {}) {
+    const items = [];
+    let next = initialSince, resCounts = null, more = true, limitCap = cap;
+    for (let off = 0; more && items.length < limitCap && off <= 100_000; ) {
+      const lim = Math.min(200, limitCap - items.length);
+      if (lim <= 0) break;
+      const qs = [query, `limit=${lim}`, `offset=${off}`, !off && counts ? 'counts=1' : ''].filter(Boolean).join('&');
+      const d = await api(`/api/cards?${qs}`);
+      if (!off && d.counts) {
+        resCounts = d.counts;
+        if (counts && d.counts.boardLimit) limitCap = Math.min(limitCap, d.counts.boardLimit);
+      }
+      items.push(...d.items);
+      off += lim;
+      more = !!d.hasMore && d.items.length > 0;
+      if (d.nextSince && (!next || d.nextSince > next)) next = d.nextSince;
+    }
+    if (items.length > limitCap) items.length = limitCap;
+    return { items, counts: resCounts, nextSince: next };
+  }
   async function loadCards() {
-    const d = await api('/api/cards?limit=200&counts=1'); // 預設不載入已封存
-    work.cards = new Map(d.items.map(c => [c.cardId, c]));
-    work.archived = { count: d.counts?.archived ?? 0, loaded: 0, hasMore: false, fetched: false, loading: false };
-    work.since = d.nextSince;
+    const initCap = state.me?.boardLimit || 200;
+    // 上限內左邊未結案欄位優先（待整理／待處理／進行中／待確認／受阻），剩餘名額再放最近已完成
+    const open = await loadCardPages('status=open', { counts: true, cap: initCap });
+    const cap = open.counts?.boardLimit ?? initCap;
+    const openList = open.items.slice(0, cap);
+    const rem = Math.max(0, cap - openList.length);
+    const done = rem > 0 ? await loadCardPages(`status=${encodeURIComponent('已完成')}`, { cap: rem }) : { items: [], nextSince: null };
+    const map = new Map();
+    for (const c of [...openList, ...done.items.slice(0, rem)]) if (!map.has(c.cardId)) map.set(c.cardId, c);
+    work.cards = map;
+    work.boardCap = cap;
+    work.openCount = open.counts?.open ?? openList.length;
+    work.openByProject = open.counts?.openByProject ?? null;
+    work.openHidden = Math.max(0, work.openCount - openList.length);
+    work.doneSkipped = rem === 0;
+    work.archived = { count: open.counts?.archived ?? 0, loaded: 0, hasMore: false, fetched: false, loading: false };
+    work.since = !open.nextSince || (done.nextSince && done.nextSince > open.nextSince) ? done.nextSince : open.nextSince;
     work.loaded = true;
     work.lastSync = Date.now();
     drawAiNow(); // 卡片到了，「在做」才準
@@ -3278,16 +3311,8 @@
   }
   // 增量同步：只讀上次之後有變動的卡片
   // 增量同步讀完所有頁：伺服器新到舊排、每頁最多 200，一次改很多張（例如資料遷移補驗收）時只讀第一頁會漏；同一個 since 用 offset 讀到底，游標取這批最新的時間
-  async function cardsChangedSince(since) {
-    const items = [];
-    let next = since || null, more = true;
-    for (let off = 0; more && off <= 100_000; off += 200) {
-      const d = await api(`/api/cards?since=${encodeURIComponent(since)}&limit=200&offset=${off}`);
-      items.push(...d.items);
-      more = !!d.hasMore && d.items.length > 0;
-      if (d.nextSince && (!next || d.nextSince > next)) next = d.nextSince;
-    }
-    return { items, nextSince: next };
+  function cardsChangedSince(since) {
+    return loadCardPages(`since=${encodeURIComponent(since)}`, { initialSince: since || null });
   }
   async function syncCards() {
     if (!work.loaded) return;
@@ -3666,9 +3691,15 @@
     const all = visibleCards();
     const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
     const keep = document.activeElement?.id;
+    const shownOpen = all.filter(c => !closedSt(c.status)).length;
+    const pv = projectView();
+    const serverOpen = (pv === 'hub' || pv === 'cross' ? work.openCount : work.openByProject?.[pv]) ?? work.openCount;
+    const openTitle = !(work.q || work.owner || work.type) && work.openHidden > 0 && serverOpen > shownOpen
+      ? L(`顯示 ${shownOpen}／共 ${serverOpen} 張未完成`, `Showing ${shownOpen} of ${serverOpen} open cards`)
+      : L(`${shownOpen} 張未完成`, `${shownOpen} open cards`);
     box.innerHTML = `
       <div class="work-head">
-        <div class="work-title"><h2>工作</h2><span class="muted small">${all.filter(c => !closedSt(c.status)).length} 張未完成</span></div>
+        <div class="work-title"><h2>工作</h2><span class="muted small">${openTitle}</span></div>
         <div class="seg-scope" role="group" aria-label="檢視方式">
           <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
           <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
@@ -3715,7 +3746,7 @@
         ${panel('要你處理', 'mine', waitMe, myTodo.length ? `有 ${myTodo.length} 張你負責的卡還在待整理，還不用動手。` : '目前沒有要你處理的卡片。', c => `${c.status} · ${c.owner?.name || '未指派'}`,
           !waitMe.length && myTodo.length ? '<button type="button" class="link small" data-filter="待整理">看待整理的卡</button>' : '', !waitMe.length && myTodo.length > 0)}
         ${panel('受阻', 'blocked', blocked, '沒有受阻的卡片。', c => waitText(c) || '未填寫阻塞原因')}
-        ${panel('最近完成（7 天）', 'done', done, '最近 7 天沒有完成的卡片。', c => `${c.verified ? (archiveLeftMs(c) < DAY_MS ? '已驗證 · 明天收起' : '已驗證') : pendingDays(c) > ARCHIVE_DAYS ? `待驗證 ${pendingDays(c)} 天` : '待驗證'} · ${c.done?.by?.name || ''} · ${shortTime(c.done?.at || c.updatedAt)}`,
+        ${panel('最近完成（7 天）', 'done', done, work.doneSkipped ? L('因為上限沒有載入已完成的卡', 'Done cards not loaded (board limit)') : '最近 7 天沒有完成的卡片。', c => `${c.verified ? (archiveLeftMs(c) < DAY_MS ? '已驗證 · 明天收起' : '已驗證') : pendingDays(c) > ARCHIVE_DAYS ? `待驗證 ${pendingDays(c)} 天` : '待驗證'} · ${c.done?.by?.name || ''} · ${shortTime(c.done?.at || c.updatedAt)}`,
           work.archived.count ? `<button type="button" class="link small" data-filter="已封存">更早的 ${work.archived.count} 張已封存</button>` : '')}
       </div>
       <div class="wchips" role="group" aria-label="依狀態篩選">
@@ -4332,7 +4363,7 @@
         const pend = list.filter(c => !c.verified), ver = list.filter(c => c.verified);
         return `${pend.length ? `<div class="bsub warn">待驗證 ${pend.length}（不會自動收起）</div>${pend.map(tile).join('')}` : ''}
           ${ver.length ? `<div class="bsub ok">已驗證 ${ver.length}（精簡一行，點開看詳情）</div>${ver.map(mini).join('')}` : ''}
-          ${!pend.length && !ver.length ? '<p class="muted small bempty">最近 7 天沒有完成的卡</p>' : ''}${archFoot}`;
+          ${!pend.length && !ver.length ? `<p class="muted small bempty">${work.doneSkipped ? L('因為上限沒有載入已完成的卡', 'Done cards not loaded (board limit)') : L('最近 7 天沒有完成的卡', 'No cards completed in the last 7 days')}</p>` : ''}${archFoot}`;
       }
       if (st === '已封存') return (list.length ? list.map(tile).join('') : `<p class="muted small bempty">${work.archived.loading ? '載入中…' : '沒有已封存的卡片'}</p>`)
         + (work.archived.hasMore ? `<button type="button" class="bfoot" data-arch-more>再載入 50 張</button>` : '');
@@ -4340,13 +4371,15 @@
     };
     const mLabel = st => (st === '已完成' ? '已完成（7 天）' : colName(st));
     return `
+      ${work.openHidden > 0 ? `<div class="board-cap">${L(`⚠ 卡片太多，看板只放 ${work.boardCap ?? state.me?.boardLimit ?? 200} 張。還有 ${work.openHidden} 張未結案的卡沒顯示，可以用搜尋或篩選找。`, `⚠ Too many cards; the board shows ${work.boardCap ?? state.me?.boardLimit ?? 200}. ${work.openHidden} more open cards aren't shown. Use search or filters to find them.`)}</div>` : ''}
       ${wide() ? `<div class="board-tools"><span class="muted small">拖曳卡片到其他欄可以改狀態</span><span class="grow"></span><span class="muted small">已封存 ${work.archived.count} 張（完成滿 7 天自動收起）</span><button type="button" class="link small" id="toggle-archived">${work.showArchived ? '隱藏已封存' : '顯示已封存'}</button></div>`
-        : `<div class="wchips" role="group" aria-label="狀態">${BOARD_ORDER.map(st => `<button type="button" data-mcol="${esc(st)}" aria-pressed="${work.mCol === st}"${st === '已封存' ? ' class="dashed"' : ''}>${mLabel(st)}<span>${st === '已封存' ? work.archived.count : all.filter(c => c.status === st).length}</span></button>`).join('')}</div>`}
+        : `<div class="wchips" role="group" aria-label="狀態">${BOARD_ORDER.map(st => `<button type="button" data-mcol="${esc(st)}" aria-pressed="${work.mCol === st}"${st === '已封存' ? ' class="dashed"' : ''}>${mLabel(st)}<span>${st === '已封存' ? work.archived.count : st === '已完成' && work.doneSkipped && !all.some(c => c.status === '已完成') ? '—' : all.filter(c => c.status === st).length}</span></button>`).join('')}</div>`}
       <div class="board">
         ${cols.map(s => {
           const list = all.filter(c => c.status === s);
+          const colCount = s === '已封存' ? work.archived.count : s === '已完成' && work.doneSkipped && !list.length ? '—' : list.length;
           return `<section class="bcol" data-col="${esc(s)}" aria-label="${esc(colName(s))}">
-            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(colName(s))}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount${s === '受阻' && list.length ? ' bad' : ''}">${s === '已封存' ? work.archived.count : list.length}</span></div>
+            <div class="bcol-head"><span class="wdot" data-st="${esc(s)}"></span><b>${esc(colName(s))}</b>${s === '已完成' ? '<span class="small ok-text">最近 7 天</span>' : ''}<span class="wcount${s === '受阻' && list.length ? ' bad' : ''}">${colCount}</span></div>
             <div class="bcol-list">${colBody(s, list)}</div>
           </section>`;
         }).join('')}

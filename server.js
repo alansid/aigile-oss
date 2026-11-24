@@ -84,6 +84,7 @@ const handle = createApp({
     teamCacheMs: process.env.TEAM_CACHE_MS,
     tokenWarnHours: process.env.TOKEN_WARN_HOURS,
     cardStaleHours: process.env.CARD_STALE_HOURS,
+    boardLimit: process.env.AIGILE_BOARD_LIMIT,
     archiveEveryMs: process.env.ARCHIVE_EVERY_MS,
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseKey: process.env.SUPABASE_KEY,

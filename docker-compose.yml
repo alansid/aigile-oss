@@ -30,6 +30,7 @@ services:
       - DOC_MAX_FILE_MB
       - KB_MAX_TOTAL_CHARS
       - KB_MAX_PROJECT_CHUNKS
+      - AIGILE_BOARD_LIMIT
       - LIVE
       - LIVE_MAX_CONNECTIONS
       - SUPABASE_URL

@@ -254,6 +254,7 @@ First login and setup are the same as above.
 | `STALE_MINUTES` | `20` | ✓ | ✓ | Minutes without activity before an AI is "possibly offline" |
 | `UNANSWERED_MINUTES` | `20` | ✓ | ✓ | Minutes an assignment can stay unread before "no response yet" |
 | `CARD_STALE_HOURS` | `24` | ✓ | ✓ | Hours without updates before a card is considered stale |
+| `AIGILE_BOARD_LIMIT` | `200` | ✓ | ✓ | Max cards loaded on the board (left open columns first; remaining slots show recent done cards) |
 | `TEAM_CACHE_MS` | `180000` | ✓ | | Team status cache (ms) |
 | `ARCHIVE_EVERY_MS` | `600000` | ✓ | | How often auto-archive runs (ms) |
 | `RATE_LIMIT_PER_MIN` | `120` | ✓ | | Requests per person per minute (fixed at 120 on Workers) |
