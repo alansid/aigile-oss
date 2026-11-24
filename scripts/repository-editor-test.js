@@ -34,20 +34,31 @@ try {
     await click('.ph-gear[data-pset="' + project + '"]');
     await click('[data-pset-act="repo"]');
     await until(() => js("document.querySelectorAll('.repo-row').length === 2"), 8000, 'two repositories');
-    if (lang === 'en') await until(() => js("document.querySelector('.repo-primary').textContent === 'Primary'"), 5000, 'English');
+    if (lang === 'en') await until(() => js("document.querySelector('.repo-primary span').textContent === 'Primary'"), 5000, 'English');
     for (const width of [1280, 375]) {
       await cdp('Emulation.setDeviceMetricsOverride', { width, height: 850, deviceScaleFactor: 1, mobile: false });
       assert.ok(await js("document.querySelector('#repo-form').scrollWidth <= document.querySelector('#repo-form').clientWidth + 1"));
-      if (width === 1280) assert.equal(await js("document.querySelector('.modal:has(#repo-form)').offsetWidth"), 600);
+      if (width === 1280) assert.equal(await js("document.querySelector('.modal:has(#repo-form)').offsetWidth"), 640);
       await screenshot(lang + '-' + width);
     }
     await cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 850, deviceScaleFactor: 1, mobile: false });
   }
-  await click('[data-row="1"] [data-move="-1"]');
+  await js("Promise.all(document.querySelector('.modal').getAnimations().map(animation => animation.finished))");
+  const grips = await js("Array.from(document.querySelectorAll('.repo-grip'), el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })");
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...grips[0], button: 'left', clickCount: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...grips[1], buttons: 1 });
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...grips[1], button: 'left', clickCount: 1 });
+  assert.equal(await js("document.querySelector('.repo-name input').value"), 'Backend');
+  await js("document.querySelector('.repo-grip').focus();true");
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowDown' });
+  assert.equal(await js("document.querySelector('.repo-name input').value"), 'Frontend');
+  await js("document.querySelectorAll('.repo-grip')[1].focus();true");
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowUp' });
+  assert.equal(await js("document.querySelector('.repo-name input').value"), 'Backend');
   await click('[data-row="0"] [data-primary]');
   await click('[data-row="0"] [data-remove]');
   assert.equal(await js("document.querySelector('.repo-row input[name=name]').value"), 'Frontend');
-  assert.ok(await js("!!document.querySelector('.repo-row .repo-primary')"));
+  assert.ok(await js("!!document.querySelector('.repo-row [data-primary]:checked')"));
   await click('button[form="repo-form"][type="submit"]');
   await until(async () => (await kit.call(user.token, '/api/projects')).body.items.find(p => p.id === project)?.repositories.length === 1, 10000, 'persisted removal');
   const single = (await kit.call(user.token, '/api/projects', 'POST', { name: 'Docs' })).body.id;

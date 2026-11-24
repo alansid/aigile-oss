@@ -8260,39 +8260,63 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const items = (p.repositories || (p.repo ? [{ ...p.repo, name: '', primary: true }] : [])).map(item => ({ ...item }));
     const body = openModal(`程式庫與分支 · ${p.name}`, `<form id="repo-form" class="stack">
         <p class="small muted">API 代號：<b>${esc(p.id)}</b>（AI 發訊息、查卡片用這個，不能改）</p>
-        <div class="repo-list"></div>
-        <button class="btn repo-add" type="button">＋ 加一個程式庫（最多 5 個）</button>
-        <ul class="muted small repo-hints"><li>名稱給人和 AI 看。</li><li>卡片未指定程式庫時，使用主要程式庫。</li><li>只放連結，不放帳號密碼或 Token。</li></ul>
+        <div><div class="repo-head" aria-hidden="true"><span>名稱</span><span>連結</span><span>分支</span></div><div class="repo-list"></div></div>
+        <button class="link repo-add" type="button">＋ 加一個程式庫（最多 5 個）</button>
+        <p class="muted small">拖 ⋮⋮ 排順序；點「主要」設成卡片預設用的那個。最多 5 個；只放連結，不放帳密或 Token。</p>
         <p class="error" id="repo-err" role="alert"></p>
       </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="repo-form">儲存</button>' });
     const form = body.querySelector('#repo-form');
     function drawRows() {
-      form.querySelector('.repo-list').innerHTML = items.map((item, i) => `<fieldset data-row="${i}" class="repo-row">
-        <div class="repo-row-head"><label class="field">名稱<input name="name" value="${esc(item.name)}" ${items.length > 1 ? 'required' : ''}></label>
-          ${item.primary ? '<b class="repo-primary">主要</b>' : '<button type="button" class="link" data-primary>設為主要</button>'}
-          <button type="button" class="link" data-remove>✕ 移除</button></div>
-        <div class="repo-fields"><label class="field">連結<input name="url" type="url" required maxlength="300" value="${esc(item.url)}" placeholder="https://github.com/org/repo"></label>
-          <label class="field">分支（選填）<input name="branch" maxlength="100" value="${esc(item.branch)}" placeholder="main"></label></div>
-        ${items.length > 1 ? `<div class="repo-order">
-          <button type="button" class="link" data-move="-1" ${i === 0 ? 'disabled' : ''}>上移</button>
-          <button type="button" class="link" data-move="1" ${i === items.length - 1 ? 'disabled' : ''}>下移</button>
-        </div>` : ''}</fieldset>`).join('') || '<span class="muted">尚無程式庫</span>';
-      form.querySelector('.repo-add').disabled = items.length >= 5;
+      form.querySelector('.repo-list').innerHTML = items.map((item, i) => `<div data-row="${i}" class="repo-row">
+        <button type="button" class="repo-grip" aria-label="拖曳或用上下鍵排序" ${items.length < 2 ? 'disabled' : ''}>⋮⋮</button>
+        <label class="field repo-name"><span>名稱</span><input name="name" value="${esc(item.name)}" ${items.length > 1 ? 'required' : ''}></label>
+        <label class="field repo-url"><span>連結</span><input name="url" type="url" required maxlength="300" value="${esc(item.url)}" placeholder="https://github.com/org/repo"></label>
+        <label class="field repo-branch"><span>分支</span><input name="branch" maxlength="100" value="${esc(item.branch)}" placeholder="main"></label>
+        <label class="repo-primary"><input type="radio" name="primary" data-primary ${item.primary ? 'checked' : ''}><span>主要</span></label>
+        <button type="button" class="repo-remove" data-remove aria-label="移除">✕</button>
+      </div>`).join('') || '<span class="muted">尚無程式庫</span>';
+      const add = form.querySelector('.repo-add');
+      add.disabled = items.length >= 5;
+      add.textContent = add.disabled ? '最多 5 個' : '＋ 加一個程式庫';
     }
+    function moveRow(from, to) {
+      if (to < 0 || to >= items.length || to === from) return;
+      items.splice(to, 0, items.splice(from, 1)[0]);
+      drawRows();
+      form.querySelector(`[data-row="${to}"] .repo-grip`).focus();
+    }
+    form.addEventListener('keydown', e => {
+      if (!e.target.matches('.repo-grip') || !['ArrowUp', 'ArrowDown'].includes(e.key)) return;
+      e.preventDefault();
+      const from = Number(e.target.closest('[data-row]').dataset.row);
+      moveRow(from, from + (e.key === 'ArrowUp' ? -1 : 1));
+    });
+    let drag = null;
+    form.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || !e.target.matches('.repo-grip')) return;
+      drag = { id: e.pointerId, from: Number(e.target.closest('[data-row]').dataset.row) };
+      e.target.setPointerCapture(e.pointerId);
+    });
+    form.addEventListener('pointercancel', () => { drag = null; });
+    form.addEventListener('pointerup', e => {
+      if (drag?.id !== e.pointerId) return;
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('#repo-form [data-row]');
+      if (target) moveRow(drag.from, Number(target.dataset.row));
+      drag = null;
+    });
     form.addEventListener('input', e => {
       const row = e.target.closest('[data-row]');
-      if (row) items[Number(row.dataset.row)][e.target.name] = e.target.value;
+      if (!row) return;
+      if (e.target.matches('[data-primary]')) {
+        items.forEach((item, i) => { item.primary = i === Number(row.dataset.row); });
+      } else items[Number(row.dataset.row)][e.target.name] = e.target.value;
     });
     form.addEventListener('click', e => {
       const btn = e.target.closest('button');
       if (!btn) return;
       const row = btn.closest('[data-row]');
       if (btn.matches('.repo-add') && items.length < 5) items.push({ url: '', branch: '', name: '', primary: !items.length });
-      else if (btn.hasAttribute('data-primary')) items.forEach((item, i) => { item.primary = i === Number(row.dataset.row); });
-      else if (btn.hasAttribute('data-move')) {
-        const from = Number(row.dataset.row), to = from + Number(btn.dataset.move);
-        items.splice(to, 0, items.splice(from, 1)[0]);
-      } else if (btn.hasAttribute('data-remove')) {
+      else if (btn.hasAttribute('data-remove')) {
         const i = Number(row.dataset.row);
         const [removed] = items.splice(i, 1);
         if (removed.primary && items.length) items[i % items.length].primary = true;
