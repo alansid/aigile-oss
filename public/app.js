@@ -1740,15 +1740,18 @@
       if (v === 'hub' && !el.classList.contains('sheet-proj')) {
         const n = k => counts[k] ? `<span class="hs-n" aria-label="要你處理 ${counts[k]} 件">${counts[k] > 99 ? '99+' : counts[k]}</span>` : '';
         const cur = state.page === 'hub';
+        const previousTop = el.querySelector('.hs-projects')?.scrollTop || 0;
         el.innerHTML = `<nav class="hub-side" aria-label="總覽">
           <button type="button" class="hs-item${cur ? ' on' : ''}" data-proj="hub"${cur ? ' aria-current="page"' : ''}><span class="hs-ico" aria-hidden="true">🏠</span><span class="hs-name">總覽</span></button>
           <button type="button" class="hs-item" data-hub-todo-open><span class="hs-ico" aria-hidden="true">📥</span><span class="hs-name">要你處理</span>${n('hub')}</button>
-          <div class="hs-head">我的專案</div>
+          <div class="hs-projects"><div class="hs-head">我的專案</div>
           ${myProjects().map(p => `<button type="button" class="hs-item" data-proj="${esc(p)}" title="${esc(projName(p))}">${projIcon(p, 22)}<span class="hs-name">${esc(projName(p))}</span>${n(p)}</button>`).join('') || '<p class="muted small hs-empty">還沒有加入任何專案</p>'}
           <button type="button" class="hs-item hs-muted" data-proj="cross">${projIcon('cross', 22)}<span class="hs-name">跨專案頻道</span>${n('cross')}</button>
           <button type="button" class="hs-item hs-add" data-join-open><span class="hs-ico" aria-hidden="true">↪</span><span class="hs-name">申請加入專案</span></button>
           ${isAdmin() ? '<button type="button" class="hs-item hs-add" data-hub-newproj><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">新增專案</span></button>' : ''}
+          </div>
         </nav>`;
+        el.querySelector('.hs-projects').scrollTop = previousTop;
         return;
       }
       if (v === 'hub') { el.innerHTML = `<button type="button" class="ph-card is-hub" data-proj="hub" aria-label="我的專案，${myProjects().length} 個專案＋跨專案頻道"><span class="ph-name"><b>我的專案</b><span class="small">${myProjects().length} 個專案＋跨專案頻道</span></span></button>`; return; } // 總覽不放數字（件數在「要你處理」）

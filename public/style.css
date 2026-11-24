@@ -4022,3 +4022,11 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
   .sidebar.narrow [aria-current="page"] { background: var(--human-bg); color: var(--human-text); }
 }
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* Keep the two hub actions visible while the project list scrolls. */
+.sidebar .proj-switch:has(.hs-projects) { min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.sidebar .hub-side { min-height: 0; }
+.hs-projects { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.hs-projects .hs-item { flex-shrink: 0; }
+.ps-list { max-height: 55dvh; overflow-y: auto; overscroll-behavior: contain; }
+.sheet-panel { max-height: 100dvh; overflow-y: auto; }
