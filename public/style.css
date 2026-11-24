@@ -984,6 +984,15 @@ body.drawer-docked #app { padding-right: 400px; }
 .auth-row.hint { border-style: dashed; background: none; color: var(--muted); font-size: 13px; }
 .auth-btn { min-height: 44px; border-color: var(--primary); color: var(--primary); font-weight: 500; }
 .auth-btn.plain { border-color: var(--border); color: var(--text); }
+.auth-btn.push { border-color: #c2410c; color: #c2410c; }
+.auth-btn.push:hover, .auth-btn.push:focus-visible { background: rgba(194, 65, 12, .08); }
+.auth-pair { display: grid; border: 1px solid var(--human-border); background: var(--human-bg); border-radius: 8px; overflow: hidden; }
+.auth-pair > .auth-row { border: 0; border-radius: 0; background: transparent; }
+.auth-pair > .auth-row + .auth-row { border-top: 1px solid var(--human-border); }
+.auth-pair > .auth-row.sent { background: var(--ok-bg); }
+.auth-pair > .auth-confirm { margin: 8px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .auth-btn.push { border-color: #fb923c; color: #fb923c; } }
+:root[data-theme="dark"] .auth-btn.push { border-color: #fb923c; color: #fb923c; }
 .auth-confirm { display: grid; gap: 8px; padding: 12px; border: 2px solid var(--primary); border-radius: 8px; background: var(--surface); }
 .auth-confirm .row { display: flex; gap: 8px; }
 .auth-confirm .btn { min-height: 44px; }

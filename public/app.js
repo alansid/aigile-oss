@@ -5341,12 +5341,17 @@
     if (kind === 'commit') return `[回覆] 同意 commit（針對第 ${m.sequence} 則），請附完整 40 碼 SHA`;
     return kind === 'ok' ? '[回覆] 同意照辦' : '[回覆] 暫緩處理';
   }
-  const authBtn = (m, kind, label, sha, plain) => `<button type="button" class="btn auth-btn${plain ? ' plain' : ''}" data-auth="${kind}" data-asha="${sha || ''}" data-amsg="${esc(m.messageId)}">${label}</button>`;
+  const authBtn = (m, kind, label, sha, plain) => `<button type="button" class="btn auth-btn${plain ? ' plain' : kind === 'push' ? ' push' : ''}" data-auth="${kind}" data-asha="${sha || ''}" data-amsg="${esc(m.messageId)}">${label}</button>`;
   function authConfirm(m, p) {
+    const hint = p.text.includes('push')
+      ? '<span class="muted small">授權只綁這個 SHA 與這一次；下次 push 需重新授權。</span>'
+      : p.text.includes('同意 commit')
+        ? '<span class="muted small">只授權建本機 commit，不會自動推上遠端。</span>'
+        : '';
     return `<div class="auth-confirm" role="group" aria-label="確認送出">
       <b>你將以自己的名義送出：</b>
       <div class="auth-text">${esc(p.text)}<span class="muted small">回覆 ${esc(m.author.name)} 那則；收件人 ${esc(m.author.name)}</span></div>
-      ${p.text.includes('push') ? '<span class="muted small">授權只綁這個 SHA 與這一次；下次 push 需重新授權。</span>' : ''}
+      ${hint}
       ${p.error ? `<p class="error" role="alert">送出失敗：${esc(p.error)}　可按「重試」。</p>` : ''}
       <div class="row"><button type="button" class="btn primary" data-auth-send="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>${p.error ? '重試' : '確認送出'}</button>
       <button type="button" class="btn" data-auth-cancel="${esc(m.messageId)}" ${p.busy ? 'disabled' : ''}>取消</button></div></div>`;
@@ -5550,6 +5555,29 @@
   }
 
   const ansOpen = new Set(); // 已處理的 [需確認]，按「還是要回答」才展開選項與回答框
+  // PLAT-438：區分 commit／push 請求；請 commit 時附的基底 SHA 不誤判成 push（C-140：[需確認] 以外不畫授權列）
+  const PUSH_NEG_RE = /(?:不要|先不|暫不|還不|不需|不用|無需|不會|勿|未|不|don\x27t|do\s+not|not\s+to|without)\s*(?:直接|一起|順便)?(?:push(?:es|ed|ing)?|推送)/gi;
+  const PUSH_ASK_RE = /(?:^|[^a-z])push(?:es|ed|ing)?(?=$|[^a-z])|推送/i;
+  const PUSH_TARGET_RE = /(?:要\s*push\s*的\s*SHA|push\s*(?:的\s*)?SHA|推送\s*(?:的\s*)?SHA|SHA\s*to\s*push)\s*[:：]?\s*\b([0-9a-f]{40})\b/gi;
+  const PUSH_AFTER_RE = /(?:push(?:es|ed|ing)?|推送)[^\n]{0,20}\b([0-9a-f]{40})\b/gi;
+  const BASE_SHA_RE = /(?:基底|基準|parent|base)\s*(?:版本|SHA|HEAD|commit)?\s*[:：]?\s*\b[0-9a-f]{40}\b/gi;
+  const COMMIT_DONE_RE = /(?:已(?:經)?|先前|上次|前次|剛剛?)\s*commit\b|\bcommit(?:ted)?\s*(?:完成|已做好)/gi;
+  const COMMIT_EXPLICIT_RE = /(?:請|要|能否|可以|是否|同意|授權)[^\n]{0,12}\bcommit\b|\bcommit\b[^\n]{0,8}[?？]/i;
+  function parseGitAuth(text) {
+    const pushAsk = PUSH_ASK_RE.test(text.replace(PUSH_NEG_RE, ' '));
+    const commitAsk = /\bcommit\b/i.test(text.replace(COMMIT_DONE_RE, ' ')) || COMMIT_EXPLICIT_RE.test(text);
+    const labeled = [...text.matchAll(PUSH_TARGET_RE)].map(x => x[1]);
+    let shas = [];
+    if (pushAsk) {
+      if (labeled.length) shas = [...new Set(labeled)];
+      else if (!commitAsk) {
+        const cleaned = text.replace(BASE_SHA_RE, ' ');
+        const direct = [...cleaned.matchAll(PUSH_AFTER_RE)].map(x => x[1]);
+        shas = [...new Set(direct.length ? direct : (cleaned.match(SHA40) || []))];
+      }
+    }
+    return { commitAsk, pushAsk, shas };
+  }
   function authHtml(m, { inbox = false } = {}) {
     if (m.resolution && !inbox && !ansOpen.has(m.messageId) && /^\s*\[需確認\]/.test(m.text)) return `<button type="button" class="link small ans-reopen" data-ans-reopen="${esc(m.messageId)}">還是要回答</button>`;
     const owner = myAiMsg(m);
@@ -5558,33 +5586,36 @@
     const text = m.text, mineR = repliesOf(m.messageId).filter(isMine);
     const pend = authPending.get(m.messageId);
     const rows = [];
-    // Push 授權列只給「程式開發（PG）AI 發的 [需確認]」；[完成]／[進度]／[通知] 就算含完整 SHA 也不顯示（事後會被誤按成再授權一次）
+    // Push／Commit 授權列只給「程式開發（PG）AI 發的 [需確認]」；[完成]／[進度]／[通知] 就算含完整 SHA 也不顯示（事後會被誤按成再授權一次）
     const authorPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG';
-    const pushAsk = owner && authorPG && /^\s*\[需確認\]/.test(text);
-    const shas = pushAsk ? [...new Set(text.match(SHA40) || [])] : [];
+    const isNeed = /^\s*\[需確認\]/.test(text);
+    const { commitAsk, pushAsk, shas } = owner && authorPG && isNeed ? parseGitAuth(text) : { commitAsk: false, pushAsk: false, shas: [] };
+    if (isNeed) {
+      // 任何人類回覆都算已處理（和伺服器收件匣規則一致），選項區收起；同時請 commit 與 push 時分開追蹤
+      const humanR = repliesOf(m.messageId).filter(r => (state.participants.get(r.author.participantId) || r.author).memberType === 'human');
+      const commitR = commitAsk && pushAsk ? humanR.filter(r => !r.text.includes('同意 push：')) : humanR;
+      const sent = commitR.find(isMine) || commitR[0];
+      const answered = sent || repliesOf(m.messageId).some(r => !isMine(r) && poRole(r));
+      const hasCommit = commitAsk;
+      const showQuick = !hasCommit && !pushAsk;
+      if (sent) rows.push(answeredHtml(m, sent));
+      else if (pend && (pend.key === 'commit' || (showQuick && pend.key === 'need'))) rows.push(authConfirm(m, pend));
+      else if (!answered && (hasCommit || showQuick)) rows.push(hasCommit
+        ? ((rv = rvCommitBox(m)) => (rv ? rv.html : '') + (rv?.mismatch ? `<div class="auth-row rv-mm"><button type="button" class="btn auth-btn" data-rv-back="${esc(m.messageId)}">退回重新送審</button>${authBtn(m, 'commit', '仍要同意', '', true)}</div>` : `<div class="auth-row"><span class="auth-title">授權 commit</span>${authBtn(m, 'commit', '💾 同意 commit（只存在本機）')}</div>`))() // 審查欄
+        : quickHtml(m));
+    }
     for (const sha of shas) {
       const sent = mineR.find(r => r.text.includes('同意 push：' + sha));
       if (sent) rows.push(`<div class="auth-row sent"><b>已授權 Push · ${shortTime(sent.createdAt)}</b><span class="muted small">僅限 ${sha.slice(0, 7)}…${sha.slice(-4)}</span></div>`);
       else if (pend && pend.key === 'push:' + sha) rows.push(authConfirm(m, pend));
-      else rows.push(`<div class="auth-row"><span class="auth-title">授權此 SHA（${sha.slice(0, 7)}…${sha.slice(-4)}）</span>${authBtn(m, 'push', '同意 Push', sha)}</div>`);
+      else rows.push(`<div class="auth-row"><span class="auth-title">要推上去的版本：${sha.slice(0, 7)}…${sha.slice(-4)}</span>${authBtn(m, 'push', '⬆ 同意 push（推上 GitHub）', sha)}</div>`);
     }
-    if (pushAsk && !shas.length && /push/i.test(text) &&/\b(?=[0-9a-f]*\d)[0-9a-f]{7,39}\b/.test(text) && !mineR.some(r => /同意 push/.test(r.text))) {
-      rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
+    if (pushAsk && !shas.length && !mineR.some(r => /同意 push/.test(r.text))) {
+      if (commitAsk) rows.push('<div class="auth-row hint">同時提到 commit 與 push：只會將「要 push 的 SHA：40 碼 SHA」視為推送目標（不會誤拿基底 SHA）。要一併授權 push 請補寫該欄，或先同意 commit。</div>');
+      else if (/\b(?=[0-9a-f]*\d)[0-9a-f]{7,39}\b/.test(text)) rows.push('<div class="auth-row hint">訊息沒有完整 40 碼 SHA，無法一鍵授權 push。請要求 AI 補上，或手動回覆。</div>');
     }
-    if (!shas.length && /^\s*\[需確認\]/.test(text)) {
-      // 任何人類回覆都算已處理（和伺服器收件匣規則一致），選項區收起；自己的回覆優先顯示
-      const humanR = repliesOf(m.messageId).filter(r => (state.participants.get(r.author.participantId) || r.author).memberType === 'human');
-      const sent = humanR.find(isMine) || humanR[0];
-      const answered = sent || repliesOf(m.messageId).some(r => !isMine(r) && poRole(r));
-      const isPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG'; // Commit 授權只給程式開發 AI 的 [需確認]
-      const hasCommit = owner && isPG && /commit/i.test(text);
-      if (sent) rows.push(answeredHtml(m, sent));
-      else if (pend && pend.key === 'need') rows.push(authConfirm(m, pend));
-      else if (!answered) rows.push(hasCommit
-        ? ((rv = rvCommitBox(m)) => (rv ? rv.html : '') + (rv?.mismatch ? `<div class="auth-row rv-mm"><button type="button" class="btn auth-btn" data-rv-back="${esc(m.messageId)}">退回重新送審</button>${authBtn(m, 'commit', '仍要同意', '', true)}</div>` : `<div class="auth-row"><span class="auth-title">授權 commit</span>${authBtn(m, 'commit', '同意 commit')}</div>`))() // 審查欄
-        : quickHtml(m));
-    }
-    return rows.length ? `<div class="auth-box">${rows.join('')}</div>` : '';
+    const content = commitAsk && pushAsk && rows.length > 1 ? `<div class="auth-pair">${rows.join('')}</div>` : rows.join('');
+    return rows.length ? `<div class="auth-box">${content}</div>` : '';
   }
   // 回覆裡寫了「選 A」「A」「問題1 選 B」就標出已選的選項
   function answerPicks(qs, body) {
@@ -5624,7 +5655,7 @@
       const m = state.byId.get(go.dataset.amsg);
       if (!m) return true;
       const kind = go.dataset.auth, sha = go.dataset.asha;
-      authPending.set(m.messageId, { key: kind === 'push' ? 'push:' + sha : 'need', text: authText(m, kind, sha), requestId: newRequestId() });
+      authPending.set(m.messageId, { key: kind === 'push' ? 'push:' + sha : kind === 'commit' ? 'commit' : 'need', text: authText(m, kind, sha), requestId: newRequestId() });
       refreshMsg(m.messageId);
       return true;
     }
