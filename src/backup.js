@@ -14,9 +14,10 @@ export const EXPORT_TABLES = ['projects', 'project_descriptions', 'project_event
   'decision_resolutions', 'cards', 'card_log', 'card_msgs', 'suggestions', 'avatars', 'avatar_proposals',
   'skills', 'skill_allows', 'skill_installs', 'skill_syncs', 'join_requests', 'doc_folders', 'docs', 'card_attachments', 'files', 'file_audit', 'file_chunks',
   'kb_chunks', 'kb_pages', 'card_reviews', 'ai_models']; // card_reviews：審查紀錄；ai_models：每隻 AI 最近回報的模型；知識庫：kb_chunks 是文件抽出的文字（跟著文件走），kb_pages 是 AI 寫的知識頁（一定帶）
-// 不匯出：登入用的（Token、密碼雜湊、裝置、登入碼、邀請、救援連結、登入通知、失敗次數）
+// 不匯出：登入用的（Token、密碼雜湊、裝置、登入碼、邀請、救援連結、登入通知、失敗次數）、本機啟動器配對／裝置金鑰與派工紀錄
 // schema_migrations：每個站自己套過哪些資料庫升級，不跟著備份搬
-export const SKIP_TABLES = ['devices', 'invites', 'pair_codes', 'credentials', 'login_fails', 'rescue_links', 'account_notices', 'schema_migrations'];
+export const SKIP_TABLES = ['devices', 'invites', 'pair_codes', 'credentials', 'login_fails', 'rescue_links', 'account_notices', 'schema_migrations',
+  'launchers', 'launcher_pair_codes', 'launcher_regs', 'launcher_jobs'];
 const FILE_TABLES = ['docs', 'card_attachments', 'files', 'kb_chunks']; // 不含附件時整張不帶（kb_chunks 是文件內容，沒文件就不帶）
 const BLOB_COLS = { avatars: ['data'], avatar_proposals: ['data'], file_chunks: ['data'] };
 const DROP_COLS = { participants: ['token', 'token_expires_at'] }; // 匯入時換新：Token 隨機、已過期

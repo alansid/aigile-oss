@@ -1,0 +1,13 @@
+{
+  "name": "aigile-launcher",
+  "version": "1.0.0",
+  "description": "Aigile-Switch 本機 AI 啟動器（配對、資料夾白名單登記、網頁開新終端機啟動 AI）",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0"
+  },
+  "bin": {
+    "aigile-launcher": "./bin/aigile-launcher.mjs"
+  }
+}
