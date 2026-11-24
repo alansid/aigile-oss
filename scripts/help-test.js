@@ -26,16 +26,16 @@ try {
   const zh = help.zh, en = help.en;
   assert.ok(zh?.chapters && en?.chapters, 'help.json 有 zh、en 兩份');
   // 1. 章序與結構
-  assert.deepEqual(zh.chapters.map(c => c.n), [1, 2, 3, 4, 5, 6], '六章');
-  assert.deepEqual(zh.chapters.map(c => c.title), ['讓你的 AI 加入', '跟著走一遍：從交辦到驗收', 'AI 會來問你什麼、怎麼回', '帳號與裝置', '常見狀況', '知識庫：讓 AI 讀懂你的文件'], '中文章名');
-  assert.deepEqual(en.chapters.map(c => c.title), ['Bring your AI on board', 'Walk through it: from request to verification', 'What AIs ask you, and how to answer', 'Account and devices', 'Common situations', 'Knowledge base: help AI understand your documents'], '英文章名');
+  assert.deepEqual(zh.chapters.map(c => c.n), [1, 2, 3, 4, 5, 6, 7], '七章');
+  assert.deepEqual(zh.chapters.map(c => c.title), ['讓你的 AI 加入', '跟著走一遍：從交辦到驗收', 'AI 會來問你什麼、怎麼回', '帳號與裝置', '常見狀況', '知識庫：讓 AI 讀懂你的文件', '技能：教 AI 照你的做法做事'], '中文章名');
+  assert.deepEqual(en.chapters.map(c => c.title), ['Bring your AI on board', 'Walk through it: from request to verification', 'What AIs ask you, and how to answer', 'Account and devices', 'Common situations', 'Knowledge base: help AI understand your documents', 'Skills: teach your AI your way'], '英文章名');
   const shape = d => d.chapters.map(c => ({ n: c.n, forAi: !!c.forAi, faq: !!c.faq, steps: c.steps.map(s => [s.id || '', s.fig || '', (s.list || []).length, !!s.d]), note: c.note ? c.note.fig || '-' : '', after: !!c.after, intro: !!c.intro, card: !!c.card, try: c.try?.go || '' }));
   assert.deepEqual(shape(en), shape(zh), '中英兩份的章、步驟、題號、畫面格、清單項數、試試看一樣');
   const ch = n => zh.chapters[n - 1];
   assert.ok(ch(1).forAi && zh.chapters.filter(c => c.forAi).length === 1, '只有第 1 章是要帶 AI 的人看的');
   assert.deepEqual(ch(2).steps.map(s => s.fig), ['2-1', '2-2', '2-3', '2-4'], '跟著走一遍四步各一格畫面');
   assert.equal(ch(2).steps[1].t, 'AI 接單，事情掛到一張卡上', '第 2 章第 2 步標題跟導覽一致');
-  assert.deepEqual(zh.chapters.map(c => c.try?.go || ''), ['myai', 'messages', 'inbox', 'settings', '', 'kb'], '每章試試看（第 5 章沒有）');
+  assert.deepEqual(zh.chapters.map(c => c.try?.go || ''), ['myai', 'messages', 'inbox', 'settings', '', 'kb', 'skills'], '每章試試看（第 5 章沒有）');
   assert.deepEqual(ch(5).steps.map(s => s.id), ['1', '2', '3', '4', '5', '6'], '第 5 章每題有題號');
   // 2. 寫法
   const all = JSON.stringify(zh.chapters), allEn = JSON.stringify(en.chapters);

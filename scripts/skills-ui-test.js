@@ -49,7 +49,7 @@ try {
   assert.ok(js.includes("[['members', '成員'], ['roles', '角色'], ['skills', '技能']]"), 'leader 有技能分頁');
   assert.ok(js.includes('看過全文與差異，核准上架'), '核准按鈕寫明要看全文與差異');
   // 技能分頁照 UX 稿 v74（篩選、技能卡、黃條、抽屜、空專案）；清單只讀一支 API
-  for (const k of ['sk-chip', 'sk-card', 'sk-meter', 'sk-alert', '看腳本並核准', 'sk-empty', 'sk-drawer', '完整規則', '＋ 新增技能', '上傳新版本', '下架']) assert.ok(js.includes(k), 'UI 有 ' + k);
+  for (const k of ['sk-chip', 'sk-card', 'sk-meter', 'sk-alert', '看腳本並核准', 'sk-empty', 'sk-drawer', 'sk-intro', '＋ 新增技能', '上傳新版本', '下架']) assert.ok(js.includes(k), 'UI 有 ' + k);
   assert.ok(js.includes("api('/api/skills')") && !js.includes('/api/projects/${encodeURIComponent(pj)}/skills`)'), '清單一次拿，不再一個專案一支');
   const css = fs.readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   assert.match(css, /\.pm-tab-skills \.sk-view \{ padding: 22px; \}/, '22px 內距');

@@ -39,7 +39,7 @@ try {
 
   // 1. 一般成員：右上是「＋ 新增技能」；空專案卡沒有範本（不能套用）；新增視窗只能上傳自己的
   await openLib(wang);
-  await until(() => js("!!document.querySelector('.sk-view .sk-rule')"), 5000, '技能庫畫完');
+  await until(() => js("!!document.querySelector('.sk-view .sk-bar')"), 5000, '技能庫畫完');
   assert.equal(await txt('.sk-bar [data-sknew]'), '＋ 新增技能');
   assert.equal(await js("!!document.querySelector('.sk-view [data-sktpl]')"), false, '一般成員的空專案卡沒有範本');
   await click('.sk-bar [data-sknew]');

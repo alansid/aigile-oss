@@ -60,7 +60,7 @@ try {
   assert.ok(pos.hw > 0 && pos.right && pos.top, '桌機：說明在搜尋右邊、同一列：' + JSON.stringify(pos));
   assert.equal(pos.text, '？說明');
   await go('.topbar .help-btn');
-  await until(() => js("document.querySelectorAll('.help-toc li').length === 6"), 10000, '目錄');
+  await until(() => js("document.querySelectorAll('.help-toc li').length === 7"), 10000, '目錄');
   assert.equal(await path_(), '/help');
   assert.equal(await crumbs(), '說明', '目錄頁麵包屑');
   assert.equal(await js("document.querySelectorAll('.sidebar .hs-item.on, .sidebar [aria-current=\"page\"]').length"), 0, '說明頁時側欄不亮');
@@ -73,7 +73,7 @@ try {
   assert.ok(toc.order && toc.twoCol, '問句在標題下、清單上；桌機兩欄：' + JSON.stringify(toc));
   assert.deepEqual([toc.pressed, toc.meta, toc.dim], ['會', '第 1 章 · 5 分鐘 · 要帶自己的 AI 的人', 0], '預設選「會」、章首小字');
   await go('[data-help-mode="work"]');
-  assert.deepEqual(await J("[...document.querySelectorAll('.help-toc li')].map(li => li.classList.contains('dim'))"), [true, false, false, false, false, false], '不會：第 1 章變淡');
+  assert.deepEqual(await J("[...document.querySelectorAll('.help-toc li')].map(li => li.classList.contains('dim'))"), [true, false, false, false, false, false, false], '不會：第 1 章變淡');
   assert.equal(await js("document.querySelector('.help-toc li.dim .ht-skip')?.textContent"), '不帶 AI 可跳過');
   await go('[data-help-mode="ai"]');
   assert.equal(await js("localStorage.getItem('aigile-help-mode')"), 'ai', '選擇記在這台');
@@ -135,7 +135,7 @@ try {
   await until(() => js("!document.querySelector('#sheet').hidden"), 5000, '選單');
   assert.equal(await js("(() => { const h = document.querySelector('#sheet .sheet-help'); return h.getBoundingClientRect().height > 0 ? h.textContent.trim() : ''; })()"), '？說明與教學', '手機：選單有說明與教學');
   await go('#sheet .sheet-help');
-  await until(() => js("document.querySelectorAll('.help-toc li').length === 6 && document.querySelector('#sheet').hidden"), 8000, '手機目錄、選單收起');
+  await until(() => js("document.querySelectorAll('.help-toc li').length === 7 && document.querySelector('#sheet').hidden"), 8000, '手機目錄、選單收起');
   assert.ok(await noHScroll(), '375 目錄不橫向捲動');
   await go('.help-toc a[href="/help/2"]');
   await chIs(2);
@@ -190,7 +190,7 @@ try {
   assert.ok(!/[㐀-鿿]/.test(await js("document.querySelector('.ob').innerText")), '新手上路沒有中文：' + await js("document.querySelector('.ob').innerText"));
   assert.deepEqual(await J("[document.querySelector('.topbar .help-btn').textContent.trim(), document.querySelector('.topbar .help-btn').getAttribute('aria-label')]"), ['？Help', 'Help'], '英文「？ Help」（不是交接的 Notes）');
   await go('.topbar .help-btn');
-  await until(() => js("document.querySelectorAll('.help-toc li').length === 6"), 10000, '英文目錄');
+  await until(() => js("document.querySelectorAll('.help-toc li').length === 7"), 10000, '英文目錄');
   const etoc = await J(`({ h: document.querySelector('.help-index h2').textContent, q: document.querySelector('#help-ask-q').textContent, btns: [...document.querySelectorAll('[data-help-mode]')].map(b => b.textContent), meta: document.querySelector('.ht-n').textContent, t: document.querySelector('.ht-t').textContent, crumbs: document.querySelector('#crumbs').textContent.trim(), all: document.querySelector('.help-index').innerText })`);
   assert.deepEqual([etoc.h, etoc.q, etoc.btns, etoc.meta, etoc.t, etoc.crumbs], ['Help', 'Will you bring your own AI?', ['Yes', 'No'], 'Chapter 1 · 5 min · If you bring your own AI', 'Bring your AI on board', 'Help'], '英文目錄：' + JSON.stringify(etoc));
   assert.ok(!/[㐀-鿿]/.test(etoc.all), '英文目錄沒有中文');
@@ -208,7 +208,7 @@ try {
   assert.match(e2.tryT, /^Try it: Go to the message box/, '英文試試看：' + e2.tryT);
   assert.match(e2.note, /^Only people can do these: Verify or send back/, '英文冒號：' + e2.note);
   assert.ok(!/[㐀-鿿]/.test(e2.all), '英文第 2 章整頁沒有中文：' + (e2.all.match(/.{0,20}[㐀-鿿].{0,20}/) || [''])[0]);
-  for (const n of [1, 3, 4, 5]) { await login(sam.token, `/help/${n}`); await chIs(n); assert.ok(!/[㐀-鿿]/.test(await js("document.querySelector('.help-wrap').innerText")), `英文第 ${n} 章沒有中文`); }
+  for (const n of [1, 3, 4, 7, 5]) { await login(sam.token, `/help/${n}`); await chIs(n); assert.ok(!/[㐀-鿿]/.test(await js("document.querySelector('.help-wrap').innerText")), `英文第 ${n} 章沒有中文`); }
   await js("document.getElementById('6').querySelector('.help-copy').click(); true");
   await until(() => js("/Link to this question copied|\\/help\\/5#6/.test(document.querySelector('#toast')?.textContent || '')"), 3000, '英文複製連結提示');
   await size(375, 812);
@@ -218,6 +218,49 @@ try {
   await go('#menu-btn');
   await until(() => js("!document.querySelector('#sheet').hidden"), 5000, '英文選單');
   assert.equal(await js("document.querySelector('#sheet .sheet-help').textContent.trim()"), '？Help & tutorials');
+
+  // 8. 技能第 7 章圖與技能頁淡藍說明橫幅（英文／中文）
+  const shotDir = process.env.SHOT_DIR;
+  const shot = async name => {
+    if (!shotDir) return;
+    await sleep(300);
+    const { default: fs } = await import('node:fs');
+    const { default: path } = await import('node:path');
+    fs.mkdirSync(shotDir, { recursive: true });
+    const r = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    fs.writeFileSync(path.join(shotDir, name + '.png'), Buffer.from(r.result.data, 'base64'));
+  };
+  await size(1280, 900);
+  await login(lin.token, '/members');
+  await until(() => js("!!document.querySelector('[data-pm-tab=\"skills\"]')"), 10000, 'members');
+  await go('[data-pm-tab="skills"]');
+  await until(() => js("!!document.querySelector('.sk-view .sk-intro')"), 10000, 'EN skill intro');
+  assert.equal(await js("document.querySelectorAll('.sk-rule, .sk-rules, [data-skrule]').length"), 0, 'EN 不顯示舊灰字規則列');
+  const enIntro = await js("document.querySelector('.sk-view .sk-intro').innerText.replace(/\\s+/g, ' ').trim()");
+  assert.ok(!/[㐀-鿿]/.test(enIntro) && /Skills are how-tos for your AIs\./.test(enIntro) && /Learn more/.test(enIntro), 'EN 技能頁說明無中文：' + enIntro);
+  await shot('plat434-en-1280-skills');
+  await size(375, 812); await sleep(200);
+  assert.ok(await noHScroll(), '375 EN skills no h-scroll');
+  await shot('plat434-en-375');
+  await size(1280, 900);
+  await go('.sk-intro-link');
+  await chIs(7);
+  await js("[...document.querySelectorAll('.help-fig img')].forEach(i => i.scrollIntoView({ behavior: 'instant' })); true");
+  await until(() => js("[...document.querySelectorAll('.help-fig img')].every(i => i.complete && i.naturalWidth > 0)"), 8000, 'EN ch7 imgs');
+  await login(lin.token, '/my-ai');
+  await until(() => js("!!document.querySelector('#ai-list')"), 10000, 'my-ai');
+  if (!await js("!!document.querySelector('.ma-panel')")) await go('#ai-list [data-act="row"], #ai-list .ma-row');
+  await until(() => js("!!document.querySelector('.ma-panel [data-tab=\"skills\"]')"), 8000, 'ai skills tab');
+  await go('.ma-panel [data-tab="skills"]');
+  await until(() => js("!!document.querySelector('.ma-skills .sk-intro')"), 10000, 'My AI skill intro');
+  await go('.ma-skills [data-sk-intro-x]');
+  assert.equal(await js("document.querySelectorAll('.sk-intro').length"), 0, '按 X 收起說明');
+  assert.equal(await js("localStorage.getItem('aigile-skill-intro-dismissed')"), '1', 'localStorage 記住收起');
+  await login(lin.token, '/members');
+  await until(() => js("!!document.querySelector('[data-pm-tab=\"skills\"]')"), 10000, 'members reload');
+  await go('[data-pm-tab="skills"]');
+  await until(() => js("!!document.querySelector('.sk-view .sk-bar')"), 10000, 'skills view reloaded');
+  assert.equal(await js("document.querySelectorAll('.sk-intro').length"), 0, '重整後不再顯示');
   console.log('help-ui-test：全部通過');
 } catch (e) {
   console.error('help-ui-test 失敗：', e.message, (e.stack || '').split('\n').find(l => l.includes('help-ui-test.js')) || ''); process.exitCode = 1;
