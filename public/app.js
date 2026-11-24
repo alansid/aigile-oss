@@ -7319,7 +7319,7 @@
       const baseFlag = location.origin === LAUNCH_DEFAULT_ORIGIN ? '' : ` --base ${location.origin}`;
       const pairCmd = `npx aigile-launcher pair ${code}${baseFlag}`;
       const sampleAgent = items[0] ? `${items[0].roleKey && items[0].roleKey !== 'custom' ? items[0].roleKey : 'AI'}_${items[0].shortCode || 'ABCD'}` : 'PG_ABCD';
-      const allowCmd = `npx aigile-launcher allow ${sampleAgent} ~/work/demo --tool claude`;
+      const allowCmd = `npx aigile-launcher allow ${sampleAgent} . --tool claude`;
       const comps = launchData?.launchers || [];
       box.innerHTML = `
         <div class="ln-safe-banner" role="note">🔒 啟動器只做一件事：在登記過的資料夾，用 Claude Code／Codex／Antigravity 開登記過的 AI。平台傳來其他任何指令，一律拒絕。</div>
@@ -7329,7 +7329,7 @@
             <li>在那台電腦的終端機貼上（需要 Node 22 以上）：
               <div class="ln-cmd-row"><pre class="ln-cmd">${esc(pairCmd)}</pre><button type="button" class="btn small" data-ln-copy="${esc(pairCmd)}">複製</button></div>
               <span class="ma-small">配對碼 10 分鐘內有效，用過就失效，不含 Token。</span></li>
-            <li>登記 AI 和資料夾（每隻 AI 一次）：
+            <li>在要讓 AI 工作的資料夾開啟終端機，再貼上這行（每隻 AI 一次）：
               <div class="ln-cmd-row"><pre class="ln-cmd">${esc(allowCmd)}</pre><button type="button" class="btn small" data-ln-copy="${esc(allowCmd)}">複製</button></div></li>
             <li>完成後這裡會出現那台電腦，狀態「在線」。</li>
           </ol>

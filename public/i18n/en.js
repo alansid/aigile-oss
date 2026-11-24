@@ -3795,7 +3795,7 @@ window.AIGILE_EN = {
     "裝到一台新電腦": "Add a computer",
     "在那台電腦的終端機貼上（需要 Node 22 以上）：": "On that computer, paste into a terminal (Node 22+):",
     "配對碼 10 分鐘內有效，用過就失效，不含 Token。": "Pairing code valid 10 minutes, single use, no token inside.",
-    "登記 AI 和資料夾（每隻 AI 一次）：": "Register each AI with its folder (once per AI):",
+    "在要讓 AI 工作的資料夾開啟終端機，再貼上這行（每隻 AI 一次）：": "Open a terminal in the folder where this AI should work, then paste this command (once per AI):",
     "完成後這裡會出現那台電腦，狀態「在線」。": "The computer then shows here as \"Online\".",
     "產生新的配對碼": "New pairing code",
     "我的電腦": "My computers",

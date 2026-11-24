@@ -277,8 +277,8 @@ export async function main(argv, { env = process.env, fetchFn = fetch, spawnTerm
     installAutostart({ home, env });
     if (!opts['no-daemon']) startDaemonBg(home);
     console.log(`✓ 已配對「${d.name}」（開機自動啟動已設定）。`);
-    console.log('下一步：在這裡為每隻 AI 登記工作資料夾，例如：');
-    console.log('  npx aigile-launcher allow PG_ABCD ~/work/demo --tool claude');
+    console.log('下一步：在要讓 AI 工作的資料夾開啟終端機，將範例代號換成你的 AI 代號：');
+    console.log('  npx aigile-launcher allow PG_ABCD . --tool claude');
     return 0;
   }
 
