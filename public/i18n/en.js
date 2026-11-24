@@ -3023,6 +3023,8 @@ window.AIGILE_EN = {
     "換章": "Chapters",
     "本章段落": "On this page",
     "回到頂端": "Back to top",
+    "收起選單": "Collapse menu",
+    "展開選單": "Expand menu",
     "說明目錄": "Help contents",
     "‹ 說明目錄": "‹ Help contents",
     "章節": "Chapters",

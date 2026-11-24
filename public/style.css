@@ -4000,3 +4000,25 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .hub-status[data-status="進行中"] {color:#164b92;background:#dceaff}
 .overview-columns .overview-chart {border:0;padding:10px 0 0;background:transparent}
 .overview-chart i.zero {background:#97a4b5;width:min(65%,30px);min-height:3px;border-radius:2px}
+
+.side-brand-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+#side-toggle { flex: none; width: 28px; height: 28px; padding: 0; border: 1px solid var(--sb-line); border-radius: 6px; background: var(--sb-card); color: var(--sb-text); font: inherit; cursor: pointer; }
+.ph-swap .pico { display: none; }
+.side-hint { position: fixed; z-index: 90; padding: 5px 9px; border-radius: 5px; color: white; background: #202938; font-size: 13px; pointer-events: none; }
+@media (min-width: 900px) {
+  .sidebar { transition: width 150ms ease; }
+  .sidebar.narrow { width: 64px; padding-inline: 8px; overflow: visible; }
+  .narrow .side-brand-row { flex-direction: column; }
+  .narrow .sb-text, .narrow .hs-head, .narrow .hs-empty, .narrow .ph-name,
+  .narrow .ph-card:has(.ph-swap) > .pico, .narrow .swap-arrow { display: none; }
+  .narrow .ph-swap .pico { display: inline-flex; }
+  .narrow .ph-card { flex-direction: column; align-items: center; padding: 4px; gap: 2px; }
+  .narrow .ph-swap { order: -1; }
+  .narrow .ps-list { left: calc(100% + 6px); right: auto; top: 0; width: 200px; z-index: 30; }
+  .narrow .hs-item, .narrow .side-nav button { position: relative; justify-content: center; gap: 0; padding-inline: 0; font-size: 0; }
+  .narrow .hs-ico { font-size: 18px; }
+  .narrow .hs-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .narrow .hs-n, .narrow .inbox-badge:not([hidden]) { position: absolute; right: 5px; top: 3px; width: 9px; height: 9px; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: #dc3545; font-size: 0; }
+  .sidebar.narrow [aria-current="page"] { background: var(--human-bg); color: var(--human-text); }
+}
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }

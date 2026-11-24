@@ -1746,7 +1746,7 @@
           <div class="hs-head">我的專案</div>
           ${myProjects().map(p => `<button type="button" class="hs-item" data-proj="${esc(p)}" title="${esc(projName(p))}">${projIcon(p, 22)}<span class="hs-name">${esc(projName(p))}</span>${n(p)}</button>`).join('') || '<p class="muted small hs-empty">還沒有加入任何專案</p>'}
           <button type="button" class="hs-item hs-muted" data-proj="cross">${projIcon('cross', 22)}<span class="hs-name">跨專案頻道</span>${n('cross')}</button>
-          <button type="button" class="hs-item hs-add" data-join-open><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">申請加入專案</span></button>
+          <button type="button" class="hs-item hs-add" data-join-open><span class="hs-ico" aria-hidden="true">↪</span><span class="hs-name">申請加入專案</span></button>
           ${isAdmin() ? '<button type="button" class="hs-item hs-add" data-hub-newproj><span class="hs-ico" aria-hidden="true">＋</span><span class="hs-name">新增專案</span></button>' : ''}
         </nav>`;
         return;
@@ -1756,7 +1756,7 @@
       el.innerHTML = `
         <div class="ph-card">${projIcon(v)}<span class="ph-name">${hasHub() ? '<button type="button" class="ph-back in-card" data-proj="hub">‹ 總覽</button>' : ''}<b>${esc(viewLabel(v))}</b>${hasHub() ? '' : `<span class="small">${esc(sub)}</span>`}</span>
           ${canSetProj(v) ? `<button type="button" class="ph-gear" data-pset="${esc(v)}" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(viewLabel(v))} 專案設定" title="專案設定">⚙</button>` : ''}
-          ${hasHub() ? `<button type="button" class="ps-btn ph-swap" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}" aria-label="切換專案" title="切換專案">⇅</button>
+          ${hasHub() ? `<button type="button" class="ps-btn ph-swap" aria-haspopup="listbox" aria-expanded="false" aria-controls="ps-list-${i}" aria-label="切換專案" title="切換專案"><span class="swap-arrow">⇅</span>${projIcon(v, 32)}</button>
           <ul class="ps-list" id="ps-list-${i}" role="listbox" aria-label="切換專案" hidden>${opts.map(k => `<li role="option" tabindex="-1" data-proj="${esc(k)}" aria-selected="${k === v}"><span>${esc(viewLabel(k))}</span>${k === 'hub' ? '' : badge(k)}</li>`).join('')}${isAdmin() ? '<li class="ps-sep" role="separator"></li><li role="option" tabindex="-1" class="ps-act" data-ps-act="newproj">＋ 新增專案</li><li role="option" tabindex="-1" class="ps-act" data-ps-act="manage">管理專案…</li>' : ''}</ul>` : ''}</div>`;
     });
     drawChrome();
@@ -5510,6 +5510,59 @@
   $('#menu-btn').addEventListener('click', openSheet);
   sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
   sheet.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+  const sidebar = $('.sidebar');
+  const sideToggle = $('#side-toggle');
+  const desktopSidebar = matchMedia('(min-width: 900px)');
+  const sidebarKey = 'aigile-sidebar-collapsed';
+  const sideHint = document.createElement('div');
+  sideHint.className = 'side-hint';
+  sideHint.hidden = true;
+  sideHint.setAttribute('aria-hidden', 'true');
+  document.body.append(sideHint);
+
+  function setSidebar(collapsed) {
+    sidebar.classList.toggle('narrow', collapsed);
+    sideToggle.textContent = collapsed ? '»' : '«';
+    sideToggle.title = collapsed ? L('展開選單', 'Expand menu') : L('收起選單', 'Collapse menu');
+    sideToggle.setAttribute('aria-label', sideToggle.title);
+    sideToggle.setAttribute('aria-expanded', String(!collapsed));
+    sideHint.hidden = true;
+  }
+  function toggleSidebar() {
+    const collapsed = !sidebar.classList.contains('narrow');
+    setSidebar(collapsed);
+    store.set(sidebarKey, collapsed ? '1' : '0');
+  }
+  setSidebar(store.get(sidebarKey) === '1');
+  sideToggle.addEventListener('click', toggleSidebar);
+  document.addEventListener('keydown', e => {
+    if (e.key !== '[' || e.repeat || e.isComposing || e.ctrlKey || e.altKey || e.metaKey || e.defaultPrevented ||
+        !desktopSidebar.matches || !sideToggle.getClientRects().length ||
+        e.target.isContentEditable || e.target.closest?.('input, textarea, select, [role="textbox"]')) return;
+    e.preventDefault();
+    toggleSidebar();
+  });
+
+  function showSideHint(e) {
+    const btn = e.target.closest('button');
+    if (!btn || !sidebar.classList.contains('narrow') || !desktopSidebar.matches) return;
+    const badge = btn.querySelector('.hs-n, .inbox-badge:not([hidden])');
+    let label = btn.querySelector('.hs-name')?.textContent || btn.getAttribute('aria-label') ||
+      [...btn.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join('').trim();
+    if (btn.matches('[data-nav="inbox"], [data-hub-todo-open]')) label = L('要你處理', 'Needs you');
+    if (!label) return;
+    sideHint.textContent = badge?.textContent ? `${label} · ${badge.textContent}` : label;
+    sideHint.hidden = false;
+    const rect = btn.getBoundingClientRect();
+    sideHint.style.left = sidebar.getBoundingClientRect().right + 6 + 'px';
+    sideHint.style.top = Math.max(0, rect.top + (rect.height - sideHint.offsetHeight) / 2) + 'px';
+  }
+  sidebar.addEventListener('pointerover', showSideHint);
+  sidebar.addEventListener('focusin', showSideHint);
+  for (const event of ['pointerout', 'focusout', 'click', 'scroll']) {
+    sidebar.addEventListener(event, () => { sideHint.hidden = true; }, true);
+  }
+  window.addEventListener('resize', () => { sideHint.hidden = true; });
   $('#side-brand').addEventListener('click', () => { if (hasHub()) { closeSheet(false); setProjectView('hub'); } else showPage('messages'); }); // 整列回我的專案
 
   // 工作記憶裡的讀取位置 →「讀到：第 N 則・卡片到 10/17 20:30」
