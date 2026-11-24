@@ -491,7 +491,7 @@ CREATE TABLE IF NOT EXISTS card_attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_card_attachments_card ON card_attachments(card_seq);
 
--- PLAT-436 AI 啟動器（migrations/012_launcher.sql）
+-- PLAT-436 AI 啟動器（migrations/013_launcher.sql）
 CREATE TABLE IF NOT EXISTS launchers (
   id TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL,
