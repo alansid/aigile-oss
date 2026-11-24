@@ -78,7 +78,7 @@ try {
   await go('[data-help-mode="ai"]');
   assert.equal(await js("localStorage.getItem('aigile-help-mode')"), 'ai', '選擇記在這台');
 
-  // 3. 第 2 章：左邊章節清單、內文最寬 720、四步四圖（先留位置）、圖下只寫畫面編號；看到最後就記走完
+  // 3. 第 2 章：左邊章節清單、圖比文字寬、四步四圖（先留位置）、圖下只寫畫面編號；看到最後就記走完
   assert.equal((await call(wang.token, '/api/me')).body.onboard.steps.walk, false);
   await go('.help-toc a[href="/help/2"]');
   await chIs(2);
@@ -92,7 +92,8 @@ try {
       step3: document.querySelectorAll('.help-step')[2].innerText, src: document.querySelector('.help-fig img').getAttribute('src'), href: document.querySelector('.help-fig a').getAttribute('href'), target: document.querySelector('.help-fig a').target,
       pager: [...document.querySelectorAll('.help-pager a')].map(a => [a.className, a.querySelector('.hp-dir').textContent]) }; })()`);
   assert.ok(c2.side === 200 && c2.sideLeft && c2.cur.endsWith('跟著走一遍：從交辦到驗收'), '左邊 200px 章節清單、目前這章亮：' + JSON.stringify(c2));
-  assert.ok(c2.art <= 720 && Math.abs(c2.img - c2.art) <= 1, '內文最寬 720、圖跟內文同寬：' + JSON.stringify([c2.art, c2.img]));
+  assert.ok(await js("document.querySelector('.help-lead').getBoundingClientRect().width <= 720 && document.querySelector('.help-rail').offsetWidth === 180"), '1280 文字上限與段落右欄');
+  assert.ok(c2.art > 720 && c2.art <= 960 && Math.abs(c2.img - c2.art) <= 1, '示意圖填滿放寬的內容欄：' + JSON.stringify([c2.art, c2.img]));
   assert.deepEqual(c2.caps, ['畫面 2-1', '畫面 2-2', '畫面 2-3', '畫面 2-4'], '圖下只寫畫面編號');
   assert.deepEqual([c2.note, c2.tryBtn], ['只有人能做的事', '去訊息']);
   assert.deepEqual([c2.src, c2.href, c2.target], ['/help-img/zh/2-1.webp', '/help-img/zh/2-1.webp', '_blank'], '中文圖；點圖在新分頁開原尺寸');
@@ -125,7 +126,7 @@ try {
   assert.equal(await js("!!document.querySelector('[data-help-try]')"), false, '第 5 章沒有試試看');
   await size(1000, 900); await sleep(200);
   const mid = await J("(() => { const a = document.querySelector('.help-ch').getBoundingClientRect(), w = document.querySelector('.help-wrap').getBoundingClientRect(); return { side: getComputedStyle(document.querySelector('.help-side')).display, gap: Math.abs((a.left - w.left) - (w.right - a.right)) }; })()");
-  assert.ok(mid.side === 'none' && mid.gap <= 2, '不到 1100 只有內文、置中：' + JSON.stringify(mid));
+  assert.ok(mid.side !== 'none' && mid.gap >= 200, '1000px 保留左欄：' + JSON.stringify(mid));
 
   // 6. 手機 375：選單裡「說明與教學」；手機寫法；只有桌機圖的格子不顯示
   await size(375, 812);
@@ -138,6 +139,15 @@ try {
   assert.ok(await noHScroll(), '375 目錄不橫向捲動');
   await go('.help-toc a[href="/help/2"]');
   await chIs(2);
+  assert.ok(await js("document.querySelector('.help-switch').offsetWidth > 0 && document.querySelector('.help-chips').offsetWidth > 0 && !document.querySelector('.help-rail').offsetWidth"), '手機換章與段落標籤');
+  const chips = await J(`(() => {
+    const row = document.querySelector('.help-chips');
+    row.scrollLeft = 50;
+    const result = [getComputedStyle(row).scrollbarWidth, row.scrollLeft > 0];
+    row.scrollLeft = 0;
+    return result;
+  })()`);
+  assert.deepEqual(chips, ['none', true], '手機段落標籤隱藏捲軸且可橫滑');
   const m2 = await J(`({ step3: document.querySelectorAll('.help-step')[2].innerText, step4: document.querySelectorAll('.help-step')[3].innerText, title: document.querySelector('#m-title').textContent,
     figs: [...document.querySelectorAll('.help-fig')].map(f => getComputedStyle(f).display), side: getComputedStyle(document.querySelector('.help-side')).display, tour: document.querySelector('.help-tour').getClientRects().length })`);
   assert.ok(/右上角「選單」出現紅色數字/.test(m2.step3) && !/左邊「要你處理」/.test(m2.step3), '手機寫法：' + m2.step3);
@@ -190,7 +200,7 @@ try {
   const e2 = await J(`({ crumbs: document.querySelector('#crumbs').textContent.replace(/\\s+/g, ''), title: document.querySelector('.help-head h2').textContent, meta: document.querySelector('.help-meta').textContent, caps: [...document.querySelectorAll('.help-fig figcaption')].map(x => x.textContent),
     src: document.querySelector('.help-fig img').getAttribute('src'), step3: document.querySelectorAll('.help-step')[2].innerText, pager: [...document.querySelectorAll('.help-pager .hp-dir')].map(x => x.textContent), side: document.querySelector('.help-side .hsd-top').textContent,
     tour: document.querySelector('.help-tour').innerText.replace(/\\s+/g, ' ').trim(), tryT: document.querySelector('.help-try').innerText.replace(/\\s+/g, ' ').trim(), note: document.querySelector('.help-note').innerText.replace(/\\s+/g, ' ').trim(), lang: document.querySelector('.help-ch').lang, all: document.querySelector('.help-wrap').innerText })`);
-  assert.deepEqual([e2.crumbs, e2.title, e2.meta, e2.src, e2.side, e2.lang], ['Help▸Chapter2', 'Walk through it: from request to verification', 'Chapter 2 · 3 min · Everyone', '/help-img/en/2-1.webp', 'Help contents', 'en'], '英文第 2 章：' + JSON.stringify(e2));
+  assert.deepEqual([e2.crumbs, e2.title, e2.meta, e2.src, e2.side, e2.lang], ['Help▸Chapter2', 'Walk through it: from request to verification', 'Chapter 2 · 3 min · Everyone', '/help-img/en/2-1.webp', 'Chapters', 'en'], '英文第 2 章：' + JSON.stringify(e2));
   assert.deepEqual(e2.caps, ['Screen 2-1', 'Screen 2-2', 'Screen 2-3', 'Screen 2-4']);
   assert.deepEqual(e2.pager, ['‹ Previous chapter', 'Next chapter ›']);
   assert.match(e2.step3, /red number appears on "Needs your attention" on the left/, '英文桌機寫法');

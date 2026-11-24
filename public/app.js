@@ -3481,7 +3481,7 @@
         box.innerHTML = projectOverview(project, t);
         return;
       }
-      box.innerHTML = `<div class="project-page"><header class="work-title"><h2>${pageText('團隊', 'Team')}</h2><span>${esc(projName(project))} · ${pageText('只列這個專案的人', 'Only people in this project')}</span>
+      box.innerHTML = `<div class="project-page project-team"><header class="work-title"><h2>${pageText('團隊', 'Team')}</h2><span>${esc(projName(project))} · ${pageText('只列這個專案的人', 'Only people in this project')}</span>
         <input type="search" data-team-search placeholder="${pageText('搜尋名字、角色或代號', 'Search name, role or code')}"></header>
         <div class="project-summary">${t.totals}${todoByView()[project] ? `<button class="link" data-nav="inbox">${pageText('要你處理', 'Needs you')} ${todoByView()[project]} ›</button>` : `<small>${pageText('沒有要你處理的事', 'Nothing needs you')}</small>`}</div>
         <h3>${pageText('需要注意', 'Needs attention')} <small>${pageText('最近 7 天、這個專案', 'Last 7 days, this project')}</small></h3>
@@ -3557,6 +3557,7 @@
     drawChrome();
     document.body.classList.toggle('at-hub', state.page === 'hub');
     $('#page-messages').hidden = state.page !== 'messages';
+    if (state.page !== 'help') help.sectionEvents?.abort();
     $('#page-work').hidden = state.page === 'messages'; // 收件匣與工作共用同一個容器
     document.querySelectorAll('[data-nav]').forEach(b => {
       if (b.dataset.nav === state.page) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
@@ -6336,6 +6337,7 @@
   function drawHelp() {
     const box = $('#page-work');
     if (state.page !== 'help') return;
+    help.sectionEvents?.abort();
     help.obs?.disconnect(); help.obs = null;
     drawChrome(); // 麵包屑跟著章節變
     const d = helpDoc();
@@ -6362,19 +6364,55 @@
     const steps = c.steps.map((s, i) => `<li class="help-step"${s.id ? ` id="${esc(s.id)}"` : ''}>
         <h3>${c.faq ? '' : `<span class="help-sn">${i + 1}.</span>`}<span>${helpText(s.t)}</span>${c.faq ? `<button type="button" class="help-copy link small" data-help-copy="${c.n}#${esc(s.id)}">複製連結</button>` : ''}</h3>
         ${s.d ? `<p>${helpText(s.d)}</p>` : ''}${s.list ? `<ul>${s.list.map(x => `<li>${helpText(x)}</li>`).join('')}</ul>` : ''}${helpFig(s)}</li>`).join('');
-    // 桌機 ≥1100 左邊章節清單（目前這章亮、跟著捲），右邊內文；不到 1100 只有內文、置中
-    const side = `<nav class="help-side" aria-label="章節"><a href="/help" class="hsd-top">說明目錄</a><ol>${chs.map(x => `<li><a href="/help/${x.n}"${x.n === c.n ? ' aria-current="page"' : ''}><span class="hsd-n">${x.n}</span><span>${esc(x.title)}</span></a></li>`).join('')}</ol></nav>`;
+    const side = `<nav class="help-side" aria-label="章節"><a href="/help" class="hsd-top">${L('說明目錄', 'Chapters')}</a><ol>${chs.map(x => `<li><a href="/help/${x.n}"${x.n === c.n ? ' aria-current="page"' : ''}><span class="hsd-n">${x.n}</span><span>${esc(x.title)}</span></a></li>`).join('')}</ol></nav>`;
+    const chapterLabel = L(`第 ${c.n} 章`, `Ch. ${c.n}`);
+    const switchLabel = L('換章', 'Chapters');
+    const tryLabel = L('試試看', 'Try it');
+    const onPage = L('本章段落', 'On this page');
+    const backLabel = L('回到頂端', 'Back to top');
+    const chapterMenu = `<details class="help-switch"><summary><span>${chapterLabel} · ${esc(c.title)}</span><b>${switchLabel} ▾</b></summary>
+      <a href="/help">說明目錄</a>${chs.map(x => `<a href="/help/${x.n}"${x.n === c.n ? ' aria-current="page"' : ''}>${x.n}. ${esc(x.title)}</a>`).join('')}</details>`;
+    const sections = c.steps.map((step, i) => `<button type="button" data-help-section="${i}">${i + 1}. ${helpText(step.t)}</button>`);
+    if (c.note) sections.push(`<button type="button" data-help-section="${sections.length}">⚠ ${helpText(c.note.t)}</button>`);
+    if (c.try) sections.push(`<button type="button" data-help-section="${sections.length}">${tryLabel}</button>`);
+    const sectionNav = cls => `<nav class="help-sections ${cls}" aria-label="${onPage}">
+      <strong>${onPage}</strong>${sections.join('')}<button type="button" data-help-section="top">↑ ${backLabel}</button></nav>`;
     const cell = (x, dir) => x ? `<a href="/help/${x.n}" class="hp-${dir}"><span class="hp-dir">${dir === 'prev' ? '‹ 上一章' : '下一章 ›'}</span><b>第 ${x.n} 章　${esc(x.title)}</b></a>` : '<span></span>';
     box.innerHTML = `<div class="help-wrap">${side}<article class="help-ch" data-help-ch="${c.n}" lang="${helpLang() === 'en' ? 'en' : 'zh-Hant'}">
-      <nav class="help-top"><a href="/help" class="link">‹ 說明目錄</a></nav>
+      ${chapterMenu}<nav class="help-top"><a href="/help" class="link">‹ 說明目錄</a></nav>
       <header class="help-head"><span class="help-meta">${helpMeta(c)}</span><h2>${esc(c.title)}</h2>${c.lead ? `<p class="help-lead">${helpText(c.lead)}</p>` : ''}${tourEntryHtml(c.n)}</header>
+      ${sectionNav('help-chips')}
       ${c.intro ? `<p>${helpText(c.intro)}</p>` : ''}
       <${c.faq ? 'div' : 'ol'} class="help-steps${c.faq ? ' faq' : ''}">${steps}</${c.faq ? 'div' : 'ol'}>
       ${c.note ? `<aside class="help-note"><b>${helpText(c.note.t)}</b><span class="help-colon">${L('：', ': ')}</span>${helpText(c.note.d)}</aside>${helpFig(c.note)}` : ''}
       ${c.after ? `<p class="help-after">${helpText(c.after)}</p>` : ''}
       ${c.try ? `<section class="help-try"><span><b>試試看</b><span class="help-colon">${L('：', ': ')}</span>${helpText(c.try.text)}</span><button type="button" class="btn primary" data-help-try="${esc(c.try.go)}">${esc(c.try.label)}</button></section>` : '<div class="help-end"></div>'}
       <nav class="help-pager" aria-label="上一章、下一章">${cell(prev, 'prev')}${cell(next, 'next')}</nav>
-    </article></div>`;
+    </article>${sectionNav('help-rail')}</div>`;
+    const targets = [...box.querySelectorAll('.help-step, .help-note, .help-try')];
+    const links = box.querySelectorAll('[data-help-section]');
+    let active = -1;
+    function highlight() {
+      const top = box.getBoundingClientRect().top + 18;
+      const last = targets.findLastIndex(el => el.getBoundingClientRect().top <= top);
+      const atEnd = box.scrollTop > 0 && box.scrollTop + box.clientHeight >= box.scrollHeight - 1;
+      const index = atEnd ? targets.length - 1 : Math.max(0, last);
+      if (active === index) return;
+      active = index;
+      for (const link of links) {
+        if (link.dataset.helpSection === String(index)) link.setAttribute('aria-current', 'location');
+        else link.removeAttribute('aria-current');
+      }
+    }
+    for (const link of links) link.onclick = () => {
+      const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
+      if (link.dataset.helpSection === 'top') box.scrollTo({ top: 0, behavior });
+      else targets[Number(link.dataset.helpSection)].scrollIntoView({ block: 'start', behavior });
+    };
+    help.sectionEvents = new AbortController();
+    box.addEventListener('scroll', highlight, { passive: true, signal: help.sectionEvents.signal });
+    window.addEventListener('resize', highlight, { signal: help.sectionEvents.signal });
+    highlight();
     const j = help.jump || (location.hash.length > 1 ? decodeURIComponent(location.hash.slice(1)) : '');
     help.jump = '';
     if (j) { if (decodeURIComponent(location.hash.slice(1)) !== j) history.replaceState(history.state, '', `${location.pathname}#${encodeURIComponent(j)}`); helpJump(j); }

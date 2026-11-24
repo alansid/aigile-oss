@@ -119,7 +119,7 @@ try {
         Buffer.from(result.result.data, 'base64')
       );
     };
-    for (const width of [1280, 375]) {
+    for (const width of [1920, 1280, 375]) {
       await ui.cdp('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile: false });
       await ui.cdp('Page.navigate', { url: kit.BASE + '/' });
       await waitFor('.project-entry');
@@ -127,7 +127,7 @@ try {
         await ui.js('document.querySelector(".ob-toggle").click()');
         await waitFor('.ob.collapsed');
       }
-      assert.equal(await ui.js('getComputedStyle(document.querySelector(".project-grid")).gridTemplateColumns.split(" ").length'), width === 375 ? 1 : 3);
+      assert.equal(await ui.js('getComputedStyle(document.querySelector(".project-grid")).gridTemplateColumns.split(" ").length'), width === 1920 ? 4 : width === 375 ? 1 : 3);
       assert.equal(await ui.js('document.querySelectorAll(".hub-metrics strong").length'), 3);
       await take('projects', width);
       const starredBefore = await ui.js('document.querySelector(".project-star").getAttribute("aria-pressed")');
@@ -152,6 +152,10 @@ try {
       for (const tab of ['needs', 'mine', 'projects']) {
         await ui.js('document.querySelector(\'[data-hub-choice="tab"][data-value="' + tab + '"]\').click()');
         if (tab === 'needs') {
+          if (width === 1920) {
+            await waitFor('.hub-columns > .hub-side');
+            assert.equal(await ui.js('document.querySelector(".hub-columns > .hub-side").offsetWidth'), 380);
+          }
           for (const label of ['要你決定', '要你回覆', '等你驗收'])
             await until(() => ui.js('Array.from(document.querySelectorAll(".hub-needs h3")).some(h=>h.textContent===' + JSON.stringify(label) + ')'), 8000, label);
         }
@@ -175,6 +179,7 @@ try {
           'document.querySelector(".project-page").scrollWidth <= document.querySelector(".project-page").clientWidth+1'
         )
       );
+      if (width === 1920) assert.equal(await ui.js('document.querySelector(".project-team").offsetWidth'), 1200);
       await take('team', width);
       const detail = '.project-member[data-tm-id="' + active + '"]';
       for (const [name, selector] of [['team-detail', detail], ['team-inactive', '.inactive-members']]) {
