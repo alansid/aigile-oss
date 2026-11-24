@@ -25,8 +25,9 @@ export function openNodeDb(file, { legacyProjects = true } = {}) { // legacyProj
     async batch(stmts) {
       db.exec('BEGIN');
       try {
-        for (const [sql, args] of stmts) db.prepare(sql).run(...args);
+        const changes = stmts.map(([sql, args]) => db.prepare(sql).run(...args).changes);
         db.exec('COMMIT');
+        return changes;
       } catch (e) { db.exec('ROLLBACK'); throw e; }
     },
     close() {

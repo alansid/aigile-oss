@@ -191,6 +191,42 @@ try {
   assert.match(web, /\/docs`/, '網頁有文件區'); assert.match(web, /multiple/, '可多選上傳'); assert.match(web, /專案文件/);
   const wr = fs.readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   assert.match(wr, /binding = "DOCS"/, 'wrangler 有 R2 綁定設定（開通前註解）');
+  for (const type of ['工作', '人類紀錄']) {
+    const project = decodeURIComponent(pj);
+    const card = await req(chen.token, '/api/cards', 'POST', { type, project, title: 'Attachments', requestId: 'files-' + type });
+    assert.equal(card.status, 201, JSON.stringify(card.body));
+    const key = card.body.cardId;
+    const extra = '&cardId=' + encodeURIComponent(key);
+    const upload = await up(chen.token, 'receipt.pdf', pdf, extra);
+    assert.equal(upload.status, 201, JSON.stringify(upload.body));
+    let noteFile;
+    if (type === '人類紀錄') {
+      const note = await req(chen.token, '/api/cards/' + key + '/notes', 'POST', { text: 'Test receipt' });
+      assert.ok(note.body.noteId, JSON.stringify(note.body));
+      const linked = await up(chen.token, 'note.pdf', pdf, extra + '&noteId=' + note.body.noteId);
+      assert.equal(linked.status, 201, JSON.stringify(linked.body));
+      noteFile = linked.body.doc;
+      const cardNotes = (await req(chen.token, '/api/cards/' + key)).body;
+      assert.ok(cardNotes.attachments.some(f => f.noteId === note.body.noteId));
+    }
+    const file = upload.body.doc;
+    const detail = async token => (await req(token, '/api/cards/' + key)).body.attachments;
+    assert.ok((await detail(chen.token)).some(f => f.docId === file.docId));
+    assert.equal((await detail(ai.token)).length, type === '工作' ? 1 : 0);
+    assert.equal((await req(ai.token, file.downloadUrl)).status, type === '工作' ? 200 : 404);
+    assert.equal((await req(ai.token, '/api/projects/' + pj + '/docs')).body.items.some(d => d.docId === file.docId), type === '工作');
+    assert.equal((await req(ro.token, file.downloadUrl)).status, 200);
+    assert.equal((await req(bank.token, file.downloadUrl)).status, 404);
+    assert.equal((await up(ro.token, 'receipt.pdf', pdf, extra)).status, 403);
+    assert.equal((await req(boss.token, file.downloadUrl, 'DELETE')).status, 403);
+    if (noteFile) {
+      const changed = await req(chen.token, '/api/cards/' + key, 'PATCH', { type: '工作', publishNotes: false });
+      assert.equal(changed.status, 200, JSON.stringify(changed.body));
+      assert.equal((await req(chen.token, noteFile.downloadUrl)).status, 404);
+      assert.equal((await req(ai.token, file.downloadUrl)).status, 404);
+      assert.equal((await detail(chen.token)).length, 1);
+    }
+  }
   console.log('project-docs-test：全部通過');
 } catch (e) {
   console.error('project-docs-test 失敗：', e.message);

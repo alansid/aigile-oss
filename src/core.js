@@ -2838,6 +2838,7 @@ ${ending}`;
       [`DELETE FROM message_recipients WHERE message_id IN (${PM})`, [id]],
       [`DELETE FROM decision_resolutions WHERE message_id IN (${PM})`, [id]],
       [`DELETE FROM card_msgs WHERE card_seq IN (${PC}) OR message_id IN (${PM})`, [id, id]],
+      [`DELETE FROM card_attachments WHERE card_seq IN (${PC}) OR doc_id IN (SELECT id FROM docs WHERE project = ?)`, [id, id]],
       [`DELETE FROM card_log WHERE card_seq IN (${PC})`, [id]],
       [`DELETE FROM suggestions WHERE card_seq IN (${PC}) OR (kind = 'create' AND state = 'pending' AND json_valid(payload) AND json_extract(payload, '$.project') = ?)`, [id, id]],
       [`DELETE FROM skill_allows WHERE skill_id IN (${PS})`, [id]],
@@ -3855,7 +3856,7 @@ ${ending}`;
   // 知識庫管理（補建索引、整理 AI 設定）：群組管理員或這個專案的 leader（人類）
   const kbHooks = {}; // 文件區抽字、上傳、刪除時通知知識頁模組（卡片模組建好後才填）
   const kbManager = async (ctx, me, pj) => me.kind === 'human' && (adminOf(await peopleMap(ctx))?.id === me.id || ((await loadLeaders())[pj] || []).includes(me.id));
-  registerDocs({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, identity, projectsOf, PROJECTS, assertWritable, loadReadOnly, roIn, audit, docStorage,
+  registerDocs({ route, db, cardSeqByKey, cardKey, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, identity, projectsOf, PROJECTS, assertWritable, loadReadOnly, roIn, audit, docStorage,
     findSecret, background, kbManager, kbHooks, kbMaxTotalChars: Number(config.kbMaxTotalChars) || undefined, kbMaxProjectChunks: Number(config.kbMaxProjectChunks) || undefined, // 知識庫上限（環境變數可調）
     maxFileBytes: (Number(config.docMaxFileMb) || 0) * 1048576 || undefined,
     maxTotalBytes: (Number(config.docMaxTotalMb) || 0) * 1048576 || DOC_MAX_TOTAL_BYTES });

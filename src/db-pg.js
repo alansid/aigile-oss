@@ -107,8 +107,10 @@ export async function openPgDb(url, { legacyProjects = true, max, schema } = {})
       const c = await pool.connect();
       try {
         await c.query('BEGIN');
-        for (const [sql, args] of stmts) await q(c, sql, args);
+        const changes = [];
+        for (const [sql, args] of stmts) changes.push((await q(c, sql, args)).rowCount);
         await c.query('COMMIT');
+        return changes;
       } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; }
       finally { c.release(); }
     },

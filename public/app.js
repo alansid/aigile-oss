@@ -5051,6 +5051,145 @@
           ${filled.length ? `<dl class="dstack">${filled.map(([k, v]) => `<dt>${k}</dt><dd data-nt>${esc(v)}</dd>`).join('')}</dl>` : ''}
           ${blank.length ? `<div class="dblank"><span><span class="dblank-l">還沒填：</span>${blank.map(k => `<span class="dblank-k">${k}</span>`).join('')}</span>${meRO(d.project) ? '' : '<button type="button" class="link small" data-act="edit">＋ 補上</button>'}</div>` : ''}`;
   }
+  function cardFilesHtml(d) {
+    const files = d.attachments || [];
+    const writable = state.me?.projects?.includes(d.project) && !state.me?.readOnlyIn?.includes(d.project) && (d.type !== NOTE || state.me?.memberType === 'human');
+    if (!files.length && !writable) return '';
+    const images = files.filter(f => ['png','jpg','jpeg'].includes(f.ext));
+    const others = files.filter(f => !images.includes(f));
+    return `<section class="card-files" data-writable="${writable}">
+      <header><h3>📎 附件 ${files.length}</h3>${writable ? '<button class="link" type="button" data-add-file>＋ 附加檔案</button>' : ''}</header>
+      <div class="card-image-grid">${images.map((f,i) => `<button type="button" data-card-image="${i}" ${i > 3 ? 'hidden' : ''}>
+        <img alt="" loading="lazy"><span data-nt>${esc(f.name)}</span>${i === 3 && images.length > 4 ? `<b>+${images.length-3}</b>` : ''}</button>`).join('')}</div>
+      ${others.map(f => `<div class="card-file-row"><b>${esc(f.ext.toUpperCase())}</b>
+        <button class="link" data-card-download="${esc(f.docId)}" data-nt>${esc(f.name)}</button>
+        <small>${Math.ceil(f.size/1024)} KB · ${esc(f.uploader?.name || '')} · ${esc(shortTime(f.createdAt))}</small>
+        ${writable && isMeRef(f.uploader) ? `<button class="btn" data-file-actions="${esc(f.docId)}" aria-label="更多操作">⋯</button>` : ''}</div>`).join('')}
+      ${writable ? '<label class="card-file-drop"><span><span>拖檔案到這裡、直接貼上截圖，</span> <span class="card-file-choose">或選檔案</span></span><input type="file" multiple hidden><small>每個最大 10 MB · 會一直留在卡片上</small></label>' : ''}</section>`;
+  }
+  function bindCardFiles(host, d) {
+    const area = host.querySelector('.card-files');
+    if (!area) return;
+    const files = d.attachments || [], images = files.filter(f => ['png','jpg','jpeg'].includes(f.ext));
+    async function preview(img, file) {
+      const res = await fetch(file.downloadUrl, { headers: { Authorization: 'Bearer ' + state.token } });
+      if (!res.ok || !img.isConnected) return;
+      const url = URL.createObjectURL(await res.blob());
+      img.onload = img.onerror = () => URL.revokeObjectURL(url);
+      img.src = url;
+    }
+    const show = i => {
+      const f = images[i];
+      const body = openModal(f.name, '<img class="card-file-large" alt=""><div class="row"><button data-back>‹</button><button data-next>›</button><button data-download>下載</button></div>');
+      const meta = document.createElement('small');
+      meta.textContent = [f.uploader?.name, shortTime(f.createdAt)].filter(Boolean).join(' · ');
+      body.prepend(meta);
+      preview(body.querySelector('img'), f).catch(err => toast(err.message));
+      body.querySelector('[data-back]').onclick = () => show((i + images.length - 1) % images.length);
+      body.querySelector('[data-next]').onclick = () => show((i + 1) % images.length);
+      body.querySelector('[data-download]').onclick = () => downloadFrom(f.downloadUrl, f.name);
+      if (area.dataset.writable === 'true' && isMeRef(f.uploader)) addActions(body, f);
+    };
+    function addActions(body, f) {
+      const row = document.createElement('div');
+      row.innerHTML = '<button data-rename>改名</button> <button data-remove>移除</button>';
+      body.append(row);
+      row.onclick = async e => {
+        try {
+          if (e.target.hasAttribute('data-rename')) {
+            const name = await promptName('改名', f.name, { label: '檔名', max: 120 });
+            if (!name) return;
+            await api(f.downloadUrl, { method: 'PATCH', body: { name } });
+          } else if (e.target.hasAttribute('data-remove')) {
+            if (!window.confirm('移除附件？')) return;
+            await api(f.downloadUrl, { method: 'DELETE' });
+          } else return;
+          closeModal(); await openCard(d.cardId);
+        } catch (err) { toast(err.message); }
+      };
+    }
+    for (const btn of area.querySelectorAll('[data-card-image]')) {
+      const i = Number(btn.dataset.cardImage);
+      preview(btn.querySelector('img'), images[i]).catch(err => toast(err.message));
+      btn.onclick = () => {
+        if (btn.querySelector('b')) { area.querySelectorAll('[data-card-image]').forEach(b => b.hidden = false); btn.querySelector('b').remove(); }
+        else show(i);
+      };
+    }
+    for (const btn of area.querySelectorAll('[data-card-download]')) {
+      const f = files.find(item => item.docId === btn.dataset.cardDownload);
+      btn.onclick = () => downloadFrom(f.downloadUrl, f.name);
+    }
+    for (const btn of area.querySelectorAll('[data-file-actions]')) {
+      const f = files.find(item => item.docId === btn.dataset.fileActions);
+      btn.onclick = () => addActions(openModal(f.name, ''), f);
+    }
+    for (const btn of host.querySelectorAll('[data-note-file]')) {
+      const f = files.find(item => item.docId === btn.dataset.noteFile);
+      btn.onclick = () => images.includes(f) ? show(images.indexOf(f)) : downloadFrom(f.downloadUrl, f.name);
+    }
+    const picker = area.querySelector('input[type=file]');
+    if (!picker) return;
+    let attachToNote = false;
+    area.querySelector('[data-add-file]').onclick = () => { attachToNote = false; picker.click(); };
+    function confirmUpload(selection, forNote = false) {
+      const pending = Array.from(selection);
+      if (!pending.length) return;
+      if (pending.some(f => f.size > 10 * 1048576)) return toast('每個附件最大 10 MB');
+      const imageFile = f => ['image/png', 'image/jpeg'].includes(f.type);
+      const entries = pending.map((f, index) => imageFile(f)
+        ? `<figure data-pending="${index}"><img class="card-preview" alt=""><figcaption data-nt>${esc(f.name)}</figcaption></figure>`
+        : `<div class="upload-file" data-pending="${index}"><b>${esc(f.name.split('.').pop().toUpperCase())}</b><span data-nt>${esc(f.name)}</span></div>`);
+      const body = openModal(`附加 ${pending.length} 個檔案到 ${d.cardId}`, `<section class="card-upload">
+        <p class="muted"><span>會存在「文件 › 卡片附件 › ${esc(d.cardId)}」，一直留在卡片上。</span> ${d.type === NOTE ? '<span>這是人類紀錄，AI 看不到。</span>' : ''}</p>
+        <div class="upload-images">${entries.filter((_, i) => imageFile(pending[i])).join('')}</div>
+        ${entries.filter((_, i) => !imageFile(pending[i])).join('')}
+        <label class="upload-consent"><input type="checkbox"><span>我確認不含程式碼和客戶個資</span></label></section>`,
+        {foot:'<button class="btn" data-close>取消</button><button class="btn primary" data-upload disabled>上傳</button>'});
+      let noteId = null;
+      const rows = pending.map((_, i) => body.querySelector('[data-pending="'+i+'"]'));
+      for (const [i, file] of pending.entries()) {
+        const img = rows[i].querySelector('img');
+        if (!img) continue;
+        const url = URL.createObjectURL(file);
+        img.onload = img.onerror = () => URL.revokeObjectURL(url);
+        img.src = url;
+      }
+      const button = body.modal.querySelector('[data-upload]'), consent = body.querySelector('input');
+      consent.onchange = () => button.disabled = !consent.checked;
+      button.onclick = async () => {
+        button.disabled = true; consent.disabled = true;
+        try {
+          if (forNote && !noteId) {
+            const text = host.querySelector('#note-text')?.value.trim();
+            if (!text) throw Error('紀錄不能空白');
+            const result = await api('/api/cards/' + encodeURIComponent(d.cardId) + '/notes', { method: 'POST', body: { text } });
+            noteId = result.noteId;
+          }
+          while (pending.length) {
+            const f = pending[0], q = new URLSearchParams({ name:f.name, cardId:d.cardId, declared:'true' });
+            if (noteId) q.set('noteId', noteId);
+            const res = await fetch('/api/projects/' + encodeURIComponent(d.project) + '/docs?' + q, { method:'POST', headers:{Authorization:'Bearer ' + state.token}, body:f });
+            if (!res.ok) throw Error((await res.json()).error?.message || String(res.status));
+            pending.shift(); rows.shift().remove();
+          }
+          closeModal(); await openCard(d.cardId);
+        } catch (err) { toast(err.message); consent.disabled = false; button.disabled = false; }
+      };
+    }
+    picker.onchange = () => { confirmUpload(picker.files, attachToNote); picker.value = ''; attachToNote = false; };
+    const noteBox = host.querySelector('#note-text');
+    if (noteBox) {
+      const paperclip = document.createElement('button');
+      paperclip.type = 'button'; paperclip.className = 'btn'; paperclip.textContent = '📎'; paperclip.setAttribute('aria-label', '附加檔案');
+      noteBox.after(paperclip);
+      paperclip.onclick = () => { attachToNote = true; picker.click(); };
+      picker.oncancel = () => { attachToNote = false; };
+    }
+    area.ondragover = e => e.preventDefault();
+    area.ondrop = e => { e.preventDefault(); confirmUpload(e.dataTransfer.files); };
+    host.onpaste = e => { if (e.clipboardData.files.length && host.contains(e.target)) { e.preventDefault(); confirmUpload(e.clipboardData.files, e.target === noteBox); } };
+  }
   function renderDrawer(focus) {
     const d = work.detail;
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
@@ -5134,11 +5273,12 @@
           ${handHtml(d.handover)}
           ${reviewHtml(d)}
           ${cardFieldsHtml(d)}`}
+          ${cardFilesHtml(d)}
           ${(d.messageIds || []).length ? `<div class="group-title">相關訊息 · ${(d.messageIds || []).length}${(d.messageIds || []).length ? ` <button type="button" class="link small" data-ver-report="${esc(d.report?.messageId || d.messageIds[d.messageIds.length - 1])}">${d.report ? '看回報' : '看訊息串'}</button>` : ''}</div>
           ${msgs}` : ''}
           ${d.type === NOTE ? `<div class="group-title">紀錄</div>
             <div class="note-add"><textarea autocomplete="off" autocorrect="on" id="note-text" rows="2" maxlength="1000" placeholder="寫一筆紀錄（只存卡上，不發群組）" aria-label="寫一筆紀錄"></textarea><button type="button" class="btn primary" data-act="add-note">記下</button></div>
-            <div class="note-list">${(d.notes || []).map(n => `<div class="note-entry"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${esc(shortTime(n.at))}</span><div data-nt>${esc(n.text)}</div></div>`).join('') || `<p class="muted small">${(d.messageIds || []).length ? '還沒有紀錄。' : '還沒有紀錄，也沒有相關訊息。'}</p>`}</div>`
+            <div class="note-list">${(d.notes || []).map(n => `<div class="note-entry"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${esc(shortTime(n.at))}</span><div data-nt>${esc(n.text)}</div>${(d.attachments || []).filter(f => f.noteId && f.noteId === n.noteId).map(f => `<button class="link" data-note-file="${esc(f.docId)}">${['png','jpg','jpeg'].includes(f.ext) ? '🖼' : '📎'} ${esc(f.name)}</button>`).join('')}</div>`).join('') || `<p class="muted small">${(d.messageIds || []).length ? '還沒有紀錄。' : '還沒有紀錄，也沒有相關訊息。'}</p>`}</div>`
           : !narrowMq.matches && !meRO(d.project) && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
           ${d.type === NOTE ? `<details class="dlog-box"><summary>變更紀錄（${(d.log || []).length}）</summary>
           <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol></details>` : happenedHtml(d)}
@@ -5148,6 +5288,8 @@
       </aside>`;
     const humanOnlySel = isNote => host.querySelectorAll('#card-edit select[name="ownerId"], #card-edit select[name="waitForId"]').forEach(sel => { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai && !o.selected; } });
     humanOnlySel(d.type === NOTE);
+    host.onpaste = null;
+    bindCardFiles(host, d);
     host.querySelector('#card-edit select[name="type"]')?.addEventListener('change', ev => humanOnlySel(ev.target.value === NOTE));
     host.querySelector('#card-edit')?.addEventListener('submit', async e => {
       e.preventDefault();

@@ -10,7 +10,7 @@ export const DOC_MAX_FILE_BYTES = 20 * 1024 * 1024;          // 單檔 20 MB
 export const DOC_MAX_TOTAL_BYTES = 9 * 1024 * 1024 * 1024;   // 全部專案合計 9 GB（R2 免費 10 GB，留一點空間）
 export const FOLDER_DEPTH = 2;                               // 資料夾最多兩層
 
-export function registerDocs({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, identity, projectsOf, PROJECTS, assertWritable, loadReadOnly, roIn, audit, docStorage, maxFileBytes = DOC_MAX_FILE_BYTES, maxTotalBytes = DOC_MAX_TOTAL_BYTES,
+export function registerDocs({ route, db, cardSeqByKey, cardKey, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, identity, projectsOf, PROJECTS, assertWritable, loadReadOnly, roIn, audit, docStorage, maxFileBytes = DOC_MAX_FILE_BYTES, maxTotalBytes = DOC_MAX_TOTAL_BYTES,
   findSecret = async () => null, background = p => p, kbManager = async () => false, kbHooks = {}, kbMaxTotalChars = KB_MAX_TOTAL_CHARS, kbMaxProjectChunks = KB_MAX_PROJECT_CHUNKS }) {
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這個專案的文件區');
   // 不是這個專案的成員：當作不存在（不透露有這個專案或檔案）
@@ -29,10 +29,17 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     if (!f) throw new ApiError(404, 'FOLDER_NOT_FOUND', '找不到這個資料夾（可能已刪除，或不在這個專案）');
     return f;
   }
-  async function docOf(pj, id) {
-    const d = await db.get('SELECT * FROM docs WHERE id = ? AND project = ? AND deleted_at IS NULL', id, pj);
+  // Card attachments follow the card's visibility even when opened by document ID.
+  const visibleDocs = me => ` AND NOT EXISTS (SELECT 1 FROM card_attachments a JOIN cards c ON c.seq = a.card_seq WHERE a.doc_id = docs.id AND (c.project <> docs.project${me.kind === 'human' ? '' : " OR a.human_only = 1 OR c.type = '人類紀錄'"}))`;
+  async function docOf(pj, id, me) {
+    const d = await db.get('SELECT * FROM docs WHERE id = ? AND project = ? AND deleted_at IS NULL' + visibleDocs(me), id, pj);
     if (!d) throw new ApiError(404, 'NOT_FOUND', '找不到這個文件（可能已刪除，或不在這個專案）');
     return d;
+  }
+  async function attachmentOwner(me, doc) {
+    const attached = await db.get('SELECT human_only FROM card_attachments WHERE doc_id = ?', doc.id);
+    if (attached && doc.uploader_id !== me.id) throw new ApiError(403, 'FORBIDDEN', '只有上傳者可以修改附件');
+    return attached;
   }
   // folderId：空字串／null＝最上層
   const readFolderId = v => (v === undefined ? undefined : v === null || v === '' ? null : String(v));
@@ -112,11 +119,11 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     await loadReadOnly();
     const people = await peopleMap(ctx);
     const folders = await db.all('SELECT * FROM doc_folders WHERE project = ? AND deleted_at IS NULL ORDER BY name', pj);
-    const docs = await db.all('SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL ORDER BY name', pj);
+    const docs = await db.all('SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL' + visibleDocs(me) + ' ORDER BY name', pj);
     const used = (await db.get('SELECT COALESCE(SUM(size), 0) AS s FROM docs WHERE deleted_at IS NULL')).s;
     const marks = (await kbHooks.docMarks?.(pj, docs)) || new Map(); // 已整理／可能過時／排在整理卡
     return {
-      project: pj, folders: folders.map(folderView), items: docs.map(d => { const v = docView(d, people), m = marks.get(d.id); if (m) Object.assign(v.kb, m); return v; }),
+      project: pj, folders: folders.filter(f => me.kind === 'human' || !f.parent_id?.startsWith('card-files:') || docs.some(d => d.folder_id === f.id)).map(folderView), items: docs.map(d => { const v = docView(d, people), m = marks.get(d.id); if (m) Object.assign(v.kb, m); return v; }),
       projectBytes: docs.reduce((n, d) => n + d.size, 0), usedBytes: used, limitBytes: maxTotalBytes, maxFileBytes,
       maxFolderDepth: FOLDER_DEPTH, enabled: !!docStorage, canWrite: !roIn(me, pj),
       canManageKb: await kbManager(ctx, me, pj), // 補建索引
@@ -126,6 +133,24 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
   // 上傳一個檔（原始位元組）：?name=檔名&folderId=&declared=true&kb=1。多選上傳＝前端一個一個送，各自回成功或失敗原因
   // kb=1＝上傳到知識庫（leader／管理員才能），會抽字、自動排整理卡；沒帶＝一般專案文件，只存原檔
   // kb=1&curate=0＝照樣抽字、搜得到原文，但不排整理卡（kb_org＝off）
+  async function readUpload(req, me, pj, q, byteLimit) {
+    const name = cleanFileName(q.get('name'));
+    const declared = ['true', '1', 'yes'].includes(String(q.get('declared')).toLowerCase());
+    let bytes = new Uint8Array(0);
+    const reject = async (status, code, message, size = bytes.length) => {
+      await audit('reject', me, null, { name: name || null, size, declared: declared ? 1 : 0, detail: `${code}（專案文件 ${pj}）` });
+      return new ApiError(status, code, message);
+    };
+    try { bytes = await readBody(req, byteLimit, `檔案超過 ${byteLimit / 1048576} MB 上限`, 'FILE_TOO_LARGE'); }
+    catch (e) { if (e instanceof ApiError && e.status === 413) throw await reject(413, e.code, e.message, Number(req.headers.get('content-length')) || byteLimit + 1); throw e; }
+    if (!name) throw await reject(400, 'INVALID_REQUEST', '請用 ?name= 提供檔名（含副檔名）');
+    if (!declared) throw await reject(400, 'DECLARATION_REQUIRED', '上傳前必須聲明檔案不含程式碼與客戶個資（declared=true）');
+    let info;
+    try { info = inspectFile(name, bytes, byteLimit); }
+    catch (e) { if (e instanceof FileRejected) throw await reject(e.status, e.code, e.message); throw e; }
+    return { name, bytes, info, reject };
+  }
+
   route('POST', '/api/projects/:id/docs', async ({ ctx, me, req, url, params }) => {
     const pj = params.id;
     await writable(me, pj);
@@ -134,41 +159,54 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const toKb = ['true', '1', 'yes'].includes(String(q.get('kb')).toLowerCase());
     if (toKb) await kbOnly(ctx, me, pj, '把文件放進知識庫（不帶 kb 會上傳成一般專案文件，再請 leader 加入）');
     const noCurate = toKb && ['false', '0', 'no'].includes(String(q.get('curate')).toLowerCase());
-    const name = cleanFileName(q.get('name'));
-    const declared = ['true', '1', 'yes'].includes(String(q.get('declared')).toLowerCase());
-    let bytes = new Uint8Array(0);
-    const reject = async (status, code, message, size = bytes.length) => {
-      await audit('reject', me, null, { name: name || null, size, declared: declared ? 1 : 0, detail: `${code}（專案文件 ${pj}）` });
-      return new ApiError(status, code, message);
-    };
-    try { bytes = await readBody(req, maxFileBytes, `檔案超過 ${maxFileBytes / 1048576} MB 上限`, 'FILE_TOO_LARGE'); }
-    catch (e) { if (e instanceof ApiError && e.status === 413) throw await reject(413, e.code, e.message, Number(req.headers.get('content-length')) || maxFileBytes + 1); throw e; }
-    if (!name) throw await reject(400, 'INVALID_REQUEST', '請用 ?name= 提供檔名（含副檔名）');
-    if (!declared) throw await reject(400, 'DECLARATION_REQUIRED', '上傳前必須聲明檔案不含程式碼與客戶個資（declared=true）');
-    let info;
-    try { info = inspectFile(name, bytes, maxFileBytes); }
-    catch (e) { if (e instanceof FileRejected) throw await reject(e.status, e.code, e.message); throw e; }
-    const folderId = readFolderId(q.get('folderId')) || null;
+    let card = null, noteId = null;
+    if (q.has('cardId')) {
+      const key = q.get('cardId').trim();
+      const seq = /^C-\d+$/i.test(key) ? Number(key.slice(2)) - 100 : await cardSeqByKey(key);
+      card = await db.get('SELECT seq, project, proj_no, type FROM cards WHERE seq = ? AND project = ?', seq ?? -1, pj);
+      if (!card || (card.type === '人類紀錄' && me.kind !== 'human')) throw notFound();
+      if (q.has('noteId')) {
+        const note = await db.get('SELECT id FROM card_log WHERE id = ? AND card_seq = ? AND by_id = ? AND via = ?', Number(q.get('noteId')) || -1, card.seq, me.id, '紀錄');
+        if (!note || card.type !== '人類紀錄') throw notFound();
+        noteId = note.id;
+      }
+      if (toKb || q.has('folderId')) throw invalid('附件由卡片指定保存位置');
+    }
+    const byteLimit = card ? Math.min(maxFileBytes, 10 * 1048576) : maxFileBytes;
+    const { name, bytes, info, reject } = await readUpload(req, me, pj, q, byteLimit);
+    let folderId = readFolderId(q.get('folderId')) || null;
+    if (folderId?.startsWith('card-files:')) throw invalid('附件由卡片指定保存位置');
     if (folderId) await folderOf(pj, folderId);
     const used = (await db.get('SELECT COALESCE(SUM(size), 0) AS s FROM docs WHERE deleted_at IS NULL')).s;
     if (used + bytes.length > maxTotalBytes) throw await reject(507, 'STORAGE_FULL', `文件區總容量已達 ${formatBytes(maxTotalBytes)} 上限（已用 ${formatBytes(used)}），請先刪掉不用的文件`);
     const id = randId('doc'), at = nowIso();
     const hash = await sha256(bytes);
     await docStorage.put(`docs/${id}`, bytes, { mime: info.mime, name });
-    await db.run('INSERT INTO docs (id, project, folder_id, name, ext, mime, size, sha256, uploader_id, created_at, updated_at, in_kb, kb_org) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      id, pj, folderId, name, info.ext, info.mime, bytes.length, hash, me.id, at, at, toKb ? 1 : 0, noCurate ? 'off' : null);
+    const changes = [];
+    if (card) {
+      const rootId = 'card-files:' + pj;
+      folderId = 'card-files:' + card.seq + ':' + pj;
+      const addFolder = 'INSERT INTO doc_folders (id, project, parent_id, name, created_by, created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING';
+      changes.push([addFolder, [rootId, pj, null, '卡片附件', me.id, at]],
+        [addFolder, [folderId, pj, rootId, cardKey(card) || `C-${card.seq + 100}`, me.id, at]]);
+    }
+    changes.push(['INSERT INTO docs (id, project, folder_id, name, ext, mime, size, sha256, uploader_id, created_at, updated_at, in_kb, kb_org) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [id, pj, folderId, name, info.ext, info.mime, bytes.length, hash, me.id, at, at, toKb ? 1 : 0, noCurate ? 'off' : null]]);
+    if (card) changes.push(['INSERT INTO card_attachments (doc_id, card_seq, note_id, human_only) VALUES (?,?,?,?)', [id, card.seq, noteId, card.type === '人類紀錄' ? 1 : 0]]);
+    try { await db.batch(changes); }
+    catch (error) { await docStorage.delete(`docs/${id}`).catch(() => {}); throw error; }
     if (toKb) await startIndex({ id, project: pj, ext: info.ext, sha256: hash }, bytes, me); // 背景抽字，不擋上傳
     const d = await db.get('SELECT * FROM docs WHERE id = ?', id);
     await audit('upload', me, { ...d, declared: 1 }, {});
-    await kbHooks.afterUpload?.(d, me); // 同名新文件取代舊的 → 引用舊文件的知識頁標可能過時
-    await event(pj, me, `${me.name} 上傳文件「${name}」到 ${await pathOf(pj, folderId)}（${formatBytes(bytes.length)}${toKb ? (noCurate ? '，放進知識庫、不整理' : '，放進知識庫') : ''}）`);
+    if (!card) await kbHooks.afterUpload?.(d, me); // 同名新文件取代舊的 → 引用舊文件的知識頁標可能過時
+    if (!card || card.type !== '人類紀錄') await event(pj, me, `${me.name} 上傳文件「${name}」到 ${await pathOf(pj, folderId)}（${formatBytes(bytes.length)}${toKb ? (noCurate ? '，放進知識庫、不整理' : '，放進知識庫') : ''}）`);
     return { __status: 201, doc: docView(d, await peopleMap(ctx)) };
   });
 
   route('GET', '/api/projects/:id/docs/:docId', async ({ me, params }) => {
     memberOf(me, params.id);
     requireStore();
-    const d = await docOf(params.id, params.docId);
+    const d = await docOf(params.id, params.docId, me);
     const bytes = await docStorage.get(`docs/${d.id}`);
     if (!bytes) throw new ApiError(404, 'NOT_FOUND', '文件內容不存在');
     await audit('download', me, { ...d, declared: 1 });
@@ -187,8 +225,10 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
   route('PATCH', '/api/projects/:id/docs/:docId', async ({ ctx, me, req, params }) => {
     const pj = params.id;
     await writable(me, pj);
-    const d = await docOf(pj, params.docId);
+    const d = await docOf(pj, params.docId, me);
+    const attachment = await attachmentOwner(me, d);
     const body = await readJson(req);
+    if (attachment && body.folderId !== undefined) throw invalid('卡片附件由卡片指定保存位置');
     const sets = [], args = [], notes = [];
     if (body.name !== undefined) {
       let name = cleanFileName(body.name);
@@ -198,6 +238,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
       if (name !== d.name) { sets.push('name = ?'); args.push(name); notes.push(`改名「${d.name}」→「${name}」`); await audit('rename', me, { ...d, declared: 1 }, { detail: name }); }
     }
     const to = readFolderId(body.folderId);
+    if (to?.startsWith('card-files:')) throw invalid('附件由卡片指定保存位置');
     if (to !== undefined && (to || null) !== (d.folder_id || null)) {
       if (to) await folderOf(pj, to);
       sets.push('folder_id = ?'); args.push(to);
@@ -206,7 +247,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     }
     if (sets.length) {
       await db.run(`UPDATE docs SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`, ...args, nowIso(), d.id);
-      await event(pj, me, `${me.name} ${notes.join('；')}`);
+      if (!attachment) await event(pj, me, `${me.name} ${notes.join('；')}`);
     }
     return { doc: docView(await db.get('SELECT * FROM docs WHERE id = ?', d.id), await peopleMap(ctx)) };
   });
@@ -215,13 +256,14 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const pj = params.id;
     await writable(me, pj);
     requireStore();
-    const d = await docOf(pj, params.docId);
+    const d = await docOf(pj, params.docId, me);
+    const attachment = await attachmentOwner(me, d);
     await docStorage.delete(`docs/${d.id}`);
     await db.run('UPDATE docs SET deleted_at = ?, deleted_by = ? WHERE id = ?', nowIso(), me.id, d.id);
     await db.run('DELETE FROM kb_chunks WHERE doc_id = ?', d.id); 
     await kbHooks.afterDelete?.(d, me); // 引用它的知識頁標可能過時
     await audit('delete', me, { ...d, declared: 1 });
-    await event(pj, me, `${me.name} 刪除文件「${d.name}」（${await pathOf(pj, d.folder_id)}）`);
+    if (!attachment) await event(pj, me, `${me.name} 刪除文件「${d.name}」（${await pathOf(pj, d.folder_id)}）`);
     return { ok: true, docId: d.id };
   });
 
@@ -232,6 +274,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const body = await readJson(req);
     const name = readFolderName(body.name);
     const parentId = readFolderId(body.parentId) || null;
+    if (parentId?.startsWith('card-files:')) throw invalid('附件由卡片指定保存位置');
     if (parentId) {
       const p = await folderOf(pj, parentId);
       if (p.parent_id) throw new ApiError(400, 'FOLDER_TOO_DEEP', `資料夾最多 ${FOLDER_DEPTH} 層，「${p.name}」底下不能再建資料夾`);
@@ -248,9 +291,11 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const pj = params.id;
     await writable(me, pj);
     const f = await folderOf(pj, params.folderId);
+    if (f.id.startsWith('card-files:')) throw invalid('附件由卡片指定保存位置');
     const body = await readJson(req);
     const name = body.name === undefined ? f.name : readFolderName(body.name);
     const to = readFolderId(body.parentId);
+    if (to?.startsWith('card-files:')) throw invalid('附件由卡片指定保存位置');
     const parentId = to === undefined ? f.parent_id || null : to;
     if (parentId) {
       if (parentId === f.id) throw new ApiError(400, 'FOLDER_TOO_DEEP', '資料夾不能放進自己');
@@ -271,6 +316,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const pj = params.id;
     await writable(me, pj);
     const f = await folderOf(pj, params.folderId);
+    if (f.id.startsWith('card-files:')) throw invalid('附件由卡片指定保存位置');
     const docs = (await db.get('SELECT COUNT(*) AS n FROM docs WHERE folder_id = ? AND deleted_at IS NULL', f.id)).n;
     const subs = (await db.get('SELECT COUNT(*) AS n FROM doc_folders WHERE parent_id = ? AND deleted_at IS NULL', f.id)).n;
     if (docs || subs) throw new ApiError(409, 'FOLDER_NOT_EMPTY', `「${f.name}」裡面還有${docs ? ` ${docs} 個文件` : ''}${subs ? ` ${subs} 個資料夾` : ''}，請先搬走或刪除`);
@@ -319,7 +365,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
   route('GET', '/api/projects/:id/docs/:docId/text', async ({ me, url, params }) => {
     const pj = params.id;
     memberOf(me, pj);
-    const d = await docOf(pj, params.docId);
+    const d = await docOf(pj, params.docId, me);
     const st = kbState(d), base = { docId: d.id, name: d.name, ext: d.ext, status: st, totalChunks: d.kb_chunks || 0 };
     if (st !== 'indexed') return { ...base, items: [], note: st === 'original' && d.kb_status === 'pdf_package_missing' ? pdfPackageNote : st === 'original' && d.ext === 'pdf' ? '這份 PDF 抽不到字，要讓 AI 整理才搜得到' : KB_NOTE[st] || KB_NOTE.none, ...(['original', 'off'].includes(st) ? { original: true, downloadUrl: docView(d, new Map()).downloadUrl } : {}) };
     const from = Math.max(Number.parseInt(url.searchParams.get('from'), 10) || 0, 0);
@@ -336,7 +382,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     requireStore();
     await kbOnly(ctx, me, pj, '補建索引');
     const body = await readJson(req).catch(() => ({}));
-    const one = body.docId ? await docOf(pj, String(body.docId)) : null;
+    const one = body.docId ? await docOf(pj, String(body.docId), me) : null;
     if (one && !one.in_kb) throw new ApiError(409, 'KB_NOT_IN', `「${one.name}」不在知識庫，不抽字；要搜得到請先加入知識庫`);
     const all = one ? [one] : (await db.all('SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL AND in_kb = 1 ORDER BY created_at', pj)).filter(d => ['none', 'failed'].includes(kbState(d)));
     const batch = all.slice(0, 10);
@@ -366,7 +412,7 @@ export function registerDocs({ route, db, ApiError, invalid, readJson, readBody,
     const ids = [...new Set(Array.isArray(body.docIds) ? body.docIds.map(String) : [])];
     if (!ids.length || ids.length > 20) throw invalid('docIds 要 1～20 份文件');
     const add = body.action === 'add', stop = body.action === 'stop';
-    const docs = (await db.all('SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?)) ORDER BY created_at', pj, JSON.stringify(ids)))
+    const docs = (await db.all('SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?)) AND id NOT IN (SELECT a.doc_id FROM card_attachments a JOIN cards c ON c.seq = a.card_seq WHERE a.human_only = 1 OR c.type = \'人類紀錄\') ORDER BY created_at', pj, JSON.stringify(ids)))
       .filter(d => (stop ? d.in_kb && d.kb_org !== 'off' : !!d.in_kb !== add)); // 照上傳順序排整理卡
     const done = docs.map(d => d.id), skipped = ids.filter(id => !done.includes(id));
     if (!docs.length) return { action: body.action, done, skipped };
