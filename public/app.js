@@ -1,7 +1,7 @@
 // Aigile-Switch 網頁端
 (() => {
   const $ = sel => document.querySelector(sel);
-  const APP_VERSION = '1.0.7'; // 要跟 package.json 一樣（version-test 會檢查）
+  const APP_VERSION = '1.0.8'; // 要跟 package.json 一樣（version-test 會檢查）
   const TOKEN_KEY = 'aigile-switch-token';
   const THEME_KEY = 'aigile-switch-theme';
   const FILTER_KEY = 'aigile-switch-only-mine';
@@ -4521,7 +4521,7 @@
   }
 
   const wide = () => matchMedia('(min-width: 900px)').matches;
-  // 「已完成」列表上方：全選、已選 N 張、驗收通過（N）（照 PLAT-346）；每列：勾選框、原本那列、驗收通過
+  // 「已完成」列表上方：全選、已選 N 張、驗收通過（N）；每列：勾選框、原本那列、驗收通過
   function doneBar(listed) {
     if (work.filter !== '已完成') return '';
     const can = listed.filter(canVerifyDone);
@@ -5697,7 +5697,7 @@
   }
 
   const ansOpen = new Set(); // 已處理的 [需確認]，按「還是要回答」才展開選項與回答框
-  // PLAT-438：區分 commit／push 請求；請 commit 時附的基底 SHA 不誤判成 push（C-140：[需確認] 以外不畫授權列）
+  // 區分 commit／push 請求；請 commit 時附的基底 SHA 不誤判成 push（[需確認] 以外不畫授權列）
   const PUSH_NEG_RE = /(?:不要|先不|暫不|還不|不需|不用|無需|不會|勿|未|不|don\x27t|do\s+not|not\s+to|without)\s*(?:直接|一起|順便)?(?:push(?:es|ed|ing)?|推送)/gi;
   const PUSH_ASK_RE = /(?:^|[^a-z])push(?:es|ed|ing)?(?=$|[^a-z])|推送/i;
   const PUSH_TARGET_RE = /(?:要\s*push\s*的\s*SHA|push\s*(?:的\s*)?SHA|推送\s*(?:的\s*)?SHA|SHA\s*to\s*push)\s*[:：]?\s*\b([0-9a-f]{40})\b/gi;
@@ -10843,7 +10843,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   async function loadJoins() {
     const reviews = loadMyReviews(); // 請你審查：跟申請、技能一起抓，不多等一輪
     if (!joinReviewer()) { work.joins = []; await reviews; return; }
-    const [j, k] = await Promise.all([api('/api/join-requests').catch(() => null), api('/api/skills').catch(() => null), reviews]); // PLAT-381：申請、技能一起到，畫面不會先少一件
+    const [j, k] = await Promise.all([api('/api/join-requests').catch(() => null), api('/api/skills').catch(() => null), reviews]); // 申請、技能一起到，畫面不會先少一件
     work.joins = j?.items || []; work.skillRev = (k?.items || []).filter(x => x.canReview);
   }
   // PLAT-381：「要你處理」裡直接拒絕加入申請、看技能、核准技能

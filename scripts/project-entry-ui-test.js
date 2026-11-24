@@ -113,7 +113,7 @@ try {
   // 7. leader：預設專案有 ⚙（只有成員與本專案角色）、第二專案沒有；清單沒有新增；頭像只有成員管理；管理頁沒有切換鈕
   await login(wang.token, '/p/main/messages');
   await openGear();
-  assert.equal(await menuItems(), 'rename,repo,members,kbai,review', 'leader 跟管理員一樣：改名、程式庫、成員與本專案角色（PLAT-381）');
+  assert.equal(await menuItems(), 'rename,repo,members,kbai,review', 'leader 跟管理員一樣：改名、程式庫、成員與本專案角色');
   await click('#pset-menu [data-pset-act="members"]');
   await until(() => js("!!document.querySelector('.pm-tabs')"), 8000, 'leader 成員管理');
   assert.ok(!(await js("!!document.querySelector('.work-title [data-adm]')")), 'leader 沒有管理員設定連結');
