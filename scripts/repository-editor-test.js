@@ -39,6 +39,19 @@ try {
       await cdp('Emulation.setDeviceMetricsOverride', { width, height: 850, deviceScaleFactor: 1, mobile: false });
       assert.ok(await js("document.querySelector('#repo-form').scrollWidth <= document.querySelector('#repo-form').clientWidth + 1"));
       if (width === 1280) assert.equal(await js("document.querySelector('.modal:has(#repo-form)').offsetWidth"), 640);
+      if (width === 375) {
+        const layout = await js(`(() => {
+          const row = document.querySelector('.repo-row');
+          const input = name => row.querySelector('input[name=' + name + ']');
+          return {
+            clipped: [...row.querySelectorAll('.field > span')].every(label => getComputedStyle(label).clipPath === 'inset(50%)'),
+            placeholders: ['name', 'url', 'branch'].map(name => input(name).placeholder),
+            sameLine: input('url').getBoundingClientRect().top === input('branch').getBoundingClientRect().top
+          };
+        })()`);
+        assert.ok(layout.clipped && layout.sameLine);
+        assert.deepEqual(layout.placeholders, [lang === 'en' ? 'Name' : '名稱', 'https://github.com/org/repo', 'main']);
+      }
       await screenshot(lang + '-' + width);
     }
     await cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 850, deviceScaleFactor: 1, mobile: false });

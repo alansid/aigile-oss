@@ -8269,7 +8269,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     function drawRows() {
       form.querySelector('.repo-list').innerHTML = items.map((item, i) => `<div data-row="${i}" class="repo-row">
         <button type="button" class="repo-grip" aria-label="拖曳或用上下鍵排序" ${items.length < 2 ? 'disabled' : ''}>⋮⋮</button>
-        <label class="field repo-name"><span>名稱</span><input name="name" value="${esc(item.name)}" ${items.length > 1 ? 'required' : ''}></label>
+        <label class="field repo-name"><span>名稱</span><input name="name" placeholder="名稱" value="${esc(item.name)}" ${items.length > 1 ? 'required' : ''}></label>
         <label class="field repo-url"><span>連結</span><input name="url" type="url" required maxlength="300" value="${esc(item.url)}" placeholder="https://github.com/org/repo"></label>
         <label class="field repo-branch"><span>分支</span><input name="branch" maxlength="100" value="${esc(item.branch)}" placeholder="main"></label>
         <label class="repo-primary"><input type="radio" name="primary" data-primary ${item.primary ? 'checked' : ''}><span>主要</span></label>

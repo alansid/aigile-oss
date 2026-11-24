@@ -4111,7 +4111,6 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
   .repo-remove { grid-area: remove; }
   .repo-url { grid-area: url; }
   .repo-branch { grid-area: branch; }
-  .repo-row .field > span { position: static; clip-path: none; width: auto; height: auto; font-size: 12px; color: var(--muted); }
 }
 .repo-compare { display: inline-block; vertical-align: top; }
 .repo-compare summary { cursor: pointer; color: var(--primary); }
