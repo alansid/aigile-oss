@@ -112,8 +112,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const keys = new Map(old.length ? (await db.all('SELECT seq, project, proj_no FROM cards WHERE seq IN (SELECT value FROM json_each(?))', JSON.stringify(old))).map(c => [cardNo(c.seq), pub(c)]) : []);
     return rows.map(c => (m.get(c.seq) ? { ...c, merged_into: keys.get(m.get(c.seq)) || m.get(c.seq) } : c));
   }
-  const notesOf = async seq => (await db.all('SELECT at, by_id, text FROM card_log WHERE card_seq = ? AND via = ? ORDER BY id', seq, NOTE_LOG));
-  const noteView = (people, l) => ({ at: l.at, by: ref(people, l.by_id), text: l.text });
+  const notesOf = async seq => (await db.all('SELECT id, at, by_id, text FROM card_log WHERE card_seq = ? AND via = ? ORDER BY id', seq, NOTE_LOG));
+  const noteView = (people, l) => ({ ...(l.id ? { noteId: l.id } : {}), at: l.at, by: ref(people, l.by_id), text: l.text });
   const CLOSED_ST = ['已完成', '已封存'];
   const handoverView = (people, l) => { let d = {}; try { d = JSON.parse(l.text); } catch {} return { from: ref(people, l.by_id), to: ref(people, d.to), at: l.at, ...Object.fromEntries([...HANDOVER_FIELDS, 'note'].filter(k => d[k]).map(k => [k, d[k]])) }; };
   const aiNoteForbidden = () => new ApiError(403, 'HUMAN_NOTE_READONLY', '這是人類紀錄卡：AI 只能讀。整理完請另建一張卡，並可把這張標「已完成」同時帶 mergedInto（例如 MAIN-12），其他都不能改。');
@@ -205,11 +205,27 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (to === '已完成' && me.kind === 'human' && c.type !== '決策' && (leaving || !c.verified_by)) { Object.assign(sets, { verified_by: me.id, verified_at: at }); logs.push('人類完成即驗收'); }
     return { sets, logs };
   }
-  async function save(c, sets, logs, me, at) {
+  async function save(c, sets, logs, me, at, dropNotes = false) {
     const keys = Object.keys(sets);
     const sql = `UPDATE cards SET ${keys.map(k => `${k} = ?`).join(', ')}${keys.length ? ', ' : ''}updated_at = ?, version = version + 1 WHERE seq = ? AND version = ?`;
     // 版本相符才更新；D1／SQLite 都用同一條語句，失敗（0 筆）代表同時有人改過
-    const r = await db.run(sql, ...keys.map(k => sets[k]), at, c.seq, c.version);
+    const args = [...keys.map(k => sets[k]), at, c.seq, c.version];
+    let r;
+    if (dropNotes) {
+      // Lock the matching card before cleanup. A stale version skips every write.
+      const guard = 'EXISTS (SELECT 1 FROM cards WHERE seq = ? AND version = ?)';
+      const version = [c.seq, c.version];
+      const results = await db.batch([
+        ['UPDATE cards SET version = version WHERE seq = ? AND version = ?', version],
+        ['UPDATE docs SET deleted_at = ?, deleted_by = ? WHERE deleted_at IS NULL AND id IN (SELECT doc_id FROM card_attachments WHERE card_seq = ? AND note_id IS NOT NULL) AND ' + guard, [at, me.id, c.seq, ...version]],
+        ['DELETE FROM card_attachments WHERE card_seq = ? AND note_id IS NOT NULL AND ' + guard, [c.seq, ...version]],
+        ['DELETE FROM card_log WHERE card_seq = ? AND via = ? AND ' + guard, [c.seq, NOTE_LOG, ...version]],
+        [sql, args],
+      ]);
+      r = { changes: results.at(-1) };
+    } else {
+      r = await db.run(sql, ...args);
+    }
     if (!r.changes) throw new ApiError(409, 'CONFLICT', '這張卡片剛被別人修改過，請重新讀取後再試。');
     if (logs.length) await db.batch(logStmt(c.seq, me, logs, at));
   }
@@ -343,6 +359,14 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     return {
       cardId: v.cardId, title: v.title, status: v.status, owner: v.owner,
       ...(cl ? { claim: mark(people, cl.by, cl.at) } : {}), ...(ho ? { handover: handoverView(people, ho) } : {}),
+      attachments: !projectsOf(me).includes(c.project) || (c.type === NOTE && me.kind !== 'human') ? [] : (await db.all(
+        'SELECT d.id, d.name, d.ext, d.size, d.created_at, d.uploader_id, a.note_id FROM card_attachments a JOIN docs d ON d.id = a.doc_id WHERE a.card_seq = ? AND d.project = ? AND d.deleted_at IS NULL AND (a.human_only = 0 OR ? = 1) ORDER BY d.created_at, d.id',
+        c.seq, c.project, me.kind === 'human' ? 1 : 0
+      )).map(d => ({
+        docId: d.id, name: d.name, ext: d.ext, size: d.size, createdAt: d.created_at,
+        uploader: ref(people, d.uploader_id), noteId: d.note_id,
+        downloadUrl: `/api/projects/${encodeURIComponent(c.project)}/docs/${encodeURIComponent(d.id)}`,
+      })),
       ...v, messageIds: msgs.map(m => m.message_id), ...await reportsOf([c]).then(r => (r.has(c.seq) ? { report: r.get(c.seq) } : {})),
       log: log.filter(l => l.via !== NOTE_LOG && l.via !== HANDOVER_LOG).map(l => ({ at: l.at, by: l.by_id === 'system' ? { participantId: 'system', name: '系統', memberType: 'system' } : ref(people, l.by_id), via: l.via, text: l.text })),
       ...(c.type === NOTE ? { notes: (await notesOf(c.seq)).map(l => noteView(people, l)) } : {}),
@@ -518,13 +542,13 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (c.type !== '決策' && (sets.wait_for_id !== undefined || sets.project !== undefined)) sameProject(people, sets.wait_for_id !== undefined ? sets.wait_for_id : c.wait_for_id, sets.project || c.project, '等誰');
     if (Object.keys(sets).length) {
       invalidatePeople(); // 團隊狀態快取一起失效
-      await save(c, sets, logs, me, nowIso());
+      await save(c, sets, logs, me, nowIso(), dropNotes);
       if (moved) await db.batch([ // 移走的號記成別名（舊訊息照樣查得到），並記下原專案用過的最大號（不回收）
         ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [`cardmoved:${moved.project}:${moved.proj_no}`, String(moved.seq)]],
         ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = CASE WHEN CAST(excluded.value AS INTEGER) > CAST(app_settings.value AS INTEGER) THEN excluded.value ELSE app_settings.value END", [`pnomax:${moved.project}`, String(moved.proj_no)]],
       ]);
       if (sets.project !== undefined) await assignProjNo(c.uid);
-      if (dropNotes) await db.run('DELETE FROM card_log WHERE card_seq = ? AND via = ?', c.seq, NOTE_LOG);
+
       const parts = [], to = [];
       if (sets.owner_id) { parts.push(claiming ? `${people.get(sets.owner_id)?.name} 認領` : `負責人改為 ${people.get(sets.owner_id)?.name}`); to.push(sets.owner_id); }
       if (sets.wait_for_id) {
@@ -766,10 +790,10 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (!t) throw invalid('紀錄不能空白');
     if (t.length > CARD_LIMITS.record) throw invalid(`紀錄上限 ${CARD_LIMITS.record} 字`);
     const at = nowIso();
-    await db.run('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', c.seq, at, me.id, NOTE_LOG, t);
+    const note = await db.get('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?) RETURNING id', c.seq, at, me.id, NOTE_LOG, t);
     await db.run('UPDATE cards SET updated_at = ?, version = version + 1 WHERE seq = ?', at, c.seq);
     const people = await peopleMap(ctx);
-    return { cardId: pub(c), notes: (await notesOf(c.seq)).map(l => noteView(people, l)) };
+    return { cardId: pub(c), noteId: note.id, notes: (await notesOf(c.seq)).map(l => noteView(people, l)) };
   });
   route('POST', '/api/cards/:id/messages', async ({ ctx, me, req, params }) => {
     const c = await load(params.id, me);

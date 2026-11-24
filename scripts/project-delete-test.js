@@ -56,6 +56,7 @@ try {
   await db.run("INSERT INTO file_chunks (file_id, idx, data) VALUES ('fil_del', 0, X'616263')");
   await db.run("INSERT INTO files (id, uploader_id, name, ext, mime, size, sha256, declared, message_id, created_at, expires_at) VALUES ('fil_keep', ?, 'b.txt', 'txt', 'text/plain', 3, 'x', 1, ?, ?, ?)", id(liu), keepPlat.messageId, at, Date.now() + 864e5);
   await db.run("INSERT INTO docs (id, project, name, ext, mime, size, sha256, uploader_id, created_at, updated_at) VALUES ('doc_del', ?, '規格', 'md', 'text/markdown', 3, 'x', ?, ?, ?)", pid, id(liu), at, at);
+  await db.run("INSERT INTO card_attachments (doc_id, card_seq, human_only) VALUES ('doc_del', ?, 1)", cardSeq);
   await db.run("INSERT INTO doc_folders (id, project, name, created_at) VALUES ('fd_del', ?, '資料夾', ?)", pid, at);
   await docs.put('docs/doc_del', new Uint8Array([1, 2, 3])); await docs.put('docs/doc_keep', new Uint8Array([4]));
   await db.run("INSERT INTO skills (id, project, name, version, files, sha256, size, status, uploaded_by, uploaded_at) VALUES ('sk_del', ?, 'del-skill', 1, '[]', 'x', 1, 'published', ?, ?)", pid, id(liu), at);

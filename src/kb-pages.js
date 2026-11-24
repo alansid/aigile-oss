@@ -104,7 +104,7 @@ export function registerKbPages({ route, db, ApiError, invalid, readJson, randId
     }
     return { cards: out, queued: docs.length, ai: { participantId: ai.id, name: ai.name } };
   }
-  const docsOf = (pj, ids) => db.all(`SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))`, pj, JSON.stringify(ids));
+  const docsOf = (pj, ids) => db.all(`SELECT * FROM docs WHERE project = ? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM card_attachments a JOIN cards c ON c.seq = a.card_seq WHERE a.doc_id = docs.id AND (a.human_only = 1 OR c.type = '人類紀錄' OR c.project <> docs.project))`, pj, JSON.stringify(ids));
   // 手動「請 AI 整理」（leader／管理員）：勾選的文件，已整理過的也重整；含密鑰、抽字失敗、還沒抽完的跳過
   route('POST', '/api/projects/:id/kb/organize', async ({ ctx, me, req, params }) => {
     const pj = params.id;
