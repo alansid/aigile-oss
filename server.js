@@ -178,9 +178,14 @@ http.createServer(async (req, res) => {
 }).on('error', e => {
   console.error(e.code === 'EADDRINUSE' ? `埠號 ${PORT} 已經有程式在用，換一個：npm start -- -p 8080` : e.code === 'EADDRNOTAVAIL' ? `這台電腦沒有 ${HOST} 這個位址，--host 請填這台的 IP 或 0.0.0.0` : `啟動失敗：${e.message}`);
   process.exit(1);
-}).listen(PORT, ...(HOST ? [HOST] : []), () => {
+}).listen(PORT, ...(HOST ? [HOST] : []), async () => {
   for (const l of startupLines(PORT, HOST)) console.log(l);
   if (process.env.ROOM_CODE) console.log('已啟用群組密碼 (ROOM_CODE)');
-  if (!process.env.ADMIN_PASSWORD && process.env.AIGILE_TEST_PROJECTS !== '1') console.warn('⚠ 沒有設 ADMIN_PASSWORD：新站的管理員帳號密碼是 admin／admin。放到網路上之前一定要先設（例：.env 寫 ADMIN_PASSWORD=你的密碼），否則誰先打開網址誰就拿到管理員。');
+  if (!process.env.ADMIN_PASSWORD && process.env.AIGILE_TEST_PROJECTS !== '1') {
+    // 只有空站（尚未建立任何人類成員）或預設管理員還沒改帳密時才提醒，已改過帳密的舊站升級重開不再重複警告
+    const hasHuman = !!(await db.get("SELECT 1 AS x FROM participants WHERE kind = 'human' AND status != 'deleted' LIMIT 1").catch(() => null));
+    const stillDefault = !!(await db.get("SELECT 1 AS x FROM app_settings WHERE key >= 'must_change_cred:' AND key < 'must_change_cred;' LIMIT 1").catch(() => null));
+    if (!hasHuman || stillDefault) console.warn('⚠ 沒有設 ADMIN_PASSWORD：新站的管理員帳號密碼是 admin／admin。放到網路上之前一定要先設（例：.env 寫 ADMIN_PASSWORD=你的密碼），否則誰先打開網址誰就拿到管理員。');
+  }
   if (!TRUST_PROXY && !process.env.APP_URL) console.log('提示：放在反向代理（nginx、Caddy、Cloudflare Tunnel…）後面時，請設 TRUST_PROXY=1 與 APP_URL=https://你的網址');
 });
