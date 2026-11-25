@@ -58,7 +58,7 @@ try {
 
   // ---------- B 左側 7 區 ----------
   const nav = await J("[...document.querySelectorAll('.adm-nav [data-adm]')].map(b => b.dataset.adm + ':' + b.querySelector('.adm-t b').textContent)");
-  assert.deepEqual(nav, ['todo:待處理', 'group:群組設定', 'projects:專案', 'invites:邀請', 'accounts:帳號與救援', 'audit:稽核與儲存', 'system:系統與備份'], 'B 七區照順序');
+  assert.deepEqual(nav, ['todo:待處理', 'group:群組設定', 'models:模型設定', 'projects:專案', 'invites:邀請', 'accounts:帳號與救援', 'audit:稽核與儲存', 'system:系統與備份'], 'B 八區照順序（含模型設定）');
   assert.match(await js("document.querySelector('#crumbs').textContent"), /管理員設定/, '麵包屑：管理員設定');
   assert.equal(await js("document.querySelector('.adm-nav [data-adm=\"todo\"] .adm-n')?.textContent"), '2', 'B 待處理 2');
   const todo = await J("[...document.querySelectorAll('.adm-todo .adm-row')].map(r => r.innerText.replace(/\\s+/g, ' '))");
@@ -157,7 +157,7 @@ try {
   await login(liu.token, '/admin');
   await until(() => js("!!document.querySelector('.adm-list')"), 10000, '手機清單');
   const list = await J("[...document.querySelectorAll('.adm-list .adm-li')].map(b => ({ t: b.querySelector('.adm-t b').textContent, sub: getComputedStyle(b.querySelector('.adm-sub')).display !== 'none', go: getComputedStyle(b.querySelector('.adm-go')).display !== 'none' }))");
-  assert.equal(list.length, 7, '手機 7 項'); assert.ok(list.every(x => x.sub && x.go), '手機每項有說明和 ›');
+  assert.equal(list.length, 8, '手機 8 項'); assert.ok(list.every(x => x.sub && x.go), '手機每項有說明和 ›');
   assert.ok(!(await js("!!document.querySelector('.adm-main')")), '手機清單頁還沒有內容');
   assert.ok(!(await hscroll()), '375 清單沒有橫向捲動');
   await shot('8-手機-清單');

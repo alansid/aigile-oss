@@ -1,5 +1,6 @@
 // Cloudflare Workers 入口：/api/* 交給 core，其餘由靜態資源（public/）提供。
 import { createApp } from './src/core.js';
+import { dohGuard } from './src/cloud-ai.js'; // 雲端 AI：連線前查 DNS，指到內網或 metadata 就不連
 import { PAGE_HEADERS } from './src/security-headers.js';
 import { wrapD1 } from './src/db-d1.js';
 import { dbStorage } from './src/storage-db.js';
@@ -32,6 +33,12 @@ const app = env => {
       turnstileSiteKey: env.TURNSTILE_SITE_KEY, turnstileSecret: env.TURNSTILE_SECRET, // 人機驗證：兩個都設才啟用
       turnstileAfterFails: env.TURNSTILE_AFTER_FAILS,
       aiTokenTtlHours: env.AI_TOKEN_TTL_HOURS,
+      // 雲端 AI：Cloudflare 連不到內網，只接公網 https；主密鑰有設 AIGILE_MASTER_KEY 就用，沒有就自動產生存在 R2（DOCS）。
+      // 想讓每一步各用一個請求（避開單一請求的 CPU 與時間限制），在 wrangler.toml 加一個指向自己的服務綁定 SELF
+      hosted: true,
+      masterKey: env.AIGILE_MASTER_KEY,
+      cloudGuard: dohGuard({ hosted: true }),
+      cloudKick: () => (env.SELF ? env.SELF.fetch(new Request('https://self/api/cloud-ai/kick', { method: 'POST' })).then(r => r.text()) : null),
       humanTokenTtlHours: env.HUMAN_TOKEN_TTL_HOURS,
       fileTtlHours: env.FILE_TTL_HOURS,
       docMaxTotalMb: env.DOC_MAX_TOTAL_MB,

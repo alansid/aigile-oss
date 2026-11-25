@@ -21,6 +21,7 @@ import { wakeHintWarnings } from './wake-hint.js';
 import { parseMentions } from './mentions.js';
 import { formatProblems, dbBlockCounter, blockMessage, passWarning } from './post-format.js';
 import { mcpDispatch } from './mcp.js'; // 平台 MCP
+import { registerCloudAi, isOfficial as isOfficialModel } from './cloud-ai.js'; // 雲端 AI
 import { hashPassword, verifyPassword, normUsername } from './password.js';
 import { API_HEADERS } from './security-headers.js';
 import { inspectFile, cleanFileName, formatBytes, FileRejected, MAX_FILE_BYTES, MAX_TOTAL_BYTES } from './files.js';
@@ -177,8 +178,10 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     return Array.from(mac.slice(0, 16), b => b.toString(16).padStart(2, '0')).join('');
   };
   let lastRealtimeAt = null, lastRealtimeFailed = false;
-  function ringDoorbell(ids, at) {
+  let cloudApi = null;
+  function ringDoorbell(ids, at, info = {}) {
     ids = [...new Set(ids)];
+    if (cloudApi && ids.length) background(cloudApi.wake(ids, info)); // 雲端 AI 不用門鈴，伺服器直接跑一輪
     if (live && ids.length) live.toPeople(ids, 'doorbell', { at }); // 內建即時通道：連著的 watcher 幾秒內醒（只推 ID 與時間）
     if (!SB_URL || !SB_KEY || !ids.length) return;
     const p = (async () => {
@@ -247,9 +250,15 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
   const invalidateTeam = () => { teamCache = { at: 0, data: null }; }; // 卡片變動只影響團隊狀態，不用讓每份程式重讀成員表
   const peopleVer = async () => (await db.get("SELECT value FROM app_settings WHERE key = 'people_ver'").catch(() => null))?.value || '';
   async function bumpPeopleVer() { peopleDirty = false; await db.run("INSERT INTO app_settings (key, value) VALUES ('people_ver', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(Date.now()) + Math.random().toString(36).slice(2, 6)).catch(() => {}); }
+  // 成員表標出雲端 AI（☁️／🏠 標籤、隨時可叫醒）；表還沒建就當沒有
+  const markCloud = async rows => {
+    const m = new Map((await db.all('SELECT c.ai_id, m.kind, m.url FROM cloud_agents c LEFT JOIN model_connections m ON m.id = c.connection_id').catch(() => [])).map(r => [r.ai_id, r]));
+    for (const p of rows) { const c = m.get(p.id); if (c) Object.assign(p, { cloud_conn: true, cloud_kind: c.kind || '', cloud_url: c.url || '' }); }
+  };
   const loadPeople = async ctx => {
     const now = Date.now();
-    const [ver, rows] = await Promise.all([peopleVer(), db.all('SELECT * FROM participants ORDER BY rowid')]); // 依加入順序（SQLite 不寫也是這個順序；Postgres 改過的列會跑到後面，要寫明）
+    const [ver, rows] = await Promise.all([peopleVer(), db.all('SELECT * FROM participants ORDER BY rowid')]);
+    await markCloud(rows); // 雲端 AI // 依加入順序（SQLite 不寫也是這個順序；Postgres 改過的列會跑到後面，要寫明）
     peopleCache = { at: now, loadedAt: now, seenAt: now, ver, map: new Map(rows.map(p => [p.id, p])) };
     ctx.people = peopleCache.map;
     ctx.peopleFresh = true;
@@ -282,7 +291,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
   let teamCache = { at: 0, data: null };
   let login; // 登入（src/login.js），註冊路由時建立
 
-  const isOnline = (p, now = Date.now()) => p.status === 'active' && now - p.last_seen_at < (p.kind === 'ai' ? AI_ACTIVE_WINDOW_MS : ACTIVE_WINDOW_MS);
+  const isOnline = (p, now = Date.now()) => p.status === 'active' && (!!p.cloud_conn || now - p.last_seen_at < (p.kind === 'ai' ? AI_ACTIVE_WINDOW_MS : ACTIVE_WINDOW_MS)); // 雲端 AI 隨時可叫醒
 
   // 專案：成員可屬於一或兩個；訊息 project 為空＝全部專案（人人可見）；卡片必填
   // 專案清單存在資料表；PROJECTS 是「未封存專案 id」的陣列，原地更新（cards.js 拿的是同一個陣列）
@@ -396,6 +405,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     if (p.kind === 'human' && p.status === 'disabled') out.disabled = true;
     if (Number(p.is_admin) === 1 && p.kind === 'human') out.isAdmin = true;
     if (p.kind === 'ai') {
+      if (p.cloud_conn) out.cloud = { private: !isOfficialModel(p.cloud_kind, p.cloud_url || '') }; // 雲端 AI：☁️ 雲端／🏠 私人模型
       out.ownerParticipantId = p.owner_id;
       out.ownerName = people.get(p.owner_id)?.name ?? null;
       if (people.get(p.owner_id)?.status === 'disabled') out.ownerDisabled = true; // 主人被停用：這隻 AI 也不能用
@@ -777,7 +787,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       if (again) return { message: await serializeMessage(ctx, again), duplicate: true };
       throw e;
     }
-    ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai' && needsWake(ask ? ask.includes(rid) : null, reasons.get(rid) || [], text)), createdAt); // B
+    ringDoorbell([...recipientIds].filter(rid => people.get(rid)?.kind === 'ai' && needsWake(ask ? ask.includes(rid) : null, reasons.get(rid) || [], text)), createdAt, { messageId: id, authorId: me.id }); // B
     if (live) await liveMessage(people, { id, project, created_at: createdAt }, [...recipientIds]).catch(e => console.error('live push failed:', e.message));
     if (inferState(text) === 'waiting') teamCache = { at: 0, data: null }; // 新的 [需確認] 馬上出現在收件匣與「要你處理」（不等 60 秒快取）
     if (replyTo && me.kind === 'human') {
@@ -3324,9 +3334,15 @@ ${ending}`;
     const now = Date.now();
     const items = mine.map(p => ({ ...aiView(p, people), grants: grantsView(raws[p.id], p), grantable: grantable(p),
       lastSeenAt: iso(p.last_seen_at), standby: !!p.standby_at && now - p.standby_at <= 20 * 60_000, skillsWaiting: waiting.get(p.id) || 0, tool: lastTool.get(p.id) || null }));
+    await cloudApi.decorate(items); // 雲端 AI 的模型、每輪上限、今天用量、最近幾輪
     return { items, toolsOff: await aiToolsOff() };
   });
-  route('POST', '/api/my-ais', async ({ me, req, ctx }) => { requireHuman(me); return { __status: 201, ...(await createAi(ctx, me, await readJson(req))) }; });
+  route('POST', '/api/my-ais', async ({ me, req, ctx }) => {
+    requireHuman(me);
+    const body = await readJson(req);
+    if (body.runtime === 'cloud') return { __status: 201, ...(await cloudApi.createCloudAi(ctx, me, body)) }; // 雲端 AI
+    return { __status: 201, ...(await createAi(ctx, me, body)) };
+  });
   route('PATCH', '/api/my-ais/:id', async ({ me, req, params, ctx }) => { requireHuman(me); return updateAi(ctx, me, params.id, await readJson(req)); });
   route('POST', '/api/my-ais/:id/reissue', ({ me, params, ctx }) => { requireHuman(me); return reissueToken(ctx, me, params.id); });
   route('POST', '/api/my-ais/:id/disable', ({ me, params, ctx }) => { requireHuman(me); return setAiStatus(ctx, me, params.id, 'disabled'); });
@@ -3913,6 +3929,9 @@ ${ending}`;
   registerDemo({ route, db, ApiError, randId, nowIso, requireAdmin, requireHuman, newCode, newToken,
     afterChange: async () => { invalidatePeople(); await bumpPeopleVer(); await loadProjects(true); } });
   const cardTemplatesApi = registerCardTemplates({ route, ApiError, invalid, readJson, randId, nowIso, PROJECTS, projectsOf, isManager: kbManager, getJson, setJson });
+  cloudApi = registerCloudAi({ db, route, ApiError, invalid, readJson, randId, nowIso, requireAdmin, requireHuman, peopleMap, adminOf, docStorage, config, background,
+    getJson, setJson, invalidatePeople, createAi, projectsOf, newToken, tokenKey, hosted: config.hosted === true || config.hosted === '1', inner: (req, base) => handleInner(req, base) }); // 雲端 AI
+  handle.cloudDrain = opts => cloudApi.drain({ maxSteps: 100, ...opts }); // 測試用：把排好的雲端 AI 跑完
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage, reviewOf: (c, ctx) => reviewsApi.reviewOf(c, ctx), cardTemplates: cardTemplatesApi, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours, boardLimit: BOARD_LIMIT });
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）
   const reviewsApi = registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager: kbManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, isolatedFrom,
@@ -4060,7 +4079,8 @@ ${ending}`;
   };
   handle.runScheduled = async () => ({ filesCleaned: await cleanupExpired(), cardsArchived: await autoArchive(db),
     proposalsExpired: (await db.run("UPDATE avatar_proposals SET status = 'expired', data = NULL WHERE status = 'pending' AND created_at < ?", Date.now() - 24 * 3600_000).catch(() => ({ changes: 0 }))).changes,
-    pendingAutoAcked: await autoAckPending().catch(() => 0) });
+    pendingAutoAcked: await autoAckPending().catch(() => 0),
+    cloudSteps: await cloudApi.drain({ maxSteps: 3 }).catch(e => { console.error('cloud drain failed:', e.message); return 0; }) }); // 卡住或排定重試的雲端 AI
   // 人寫欄位（說明見 markUntrusted）
   const UNTRUSTED_KEYS = ['text', 'preview', 'title', 'reason', 'next', 'note', 'why', 'detail', 'description', 'question', 'recommendation', 'options', 'impact', 'afterNext', 'progress', 'changes', 'nextStep', 'caution'];
   const UNTRUSTED_SET = new Set(UNTRUSTED_KEYS);

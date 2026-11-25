@@ -997,6 +997,7 @@
 
   // Token 到期提醒：只給所屬人類看，到期前 24 小時、2 小時兩段標示
   function tokenLevel(expiresAt, now = Date.now()) {
+    if (!expiresAt) return null; // 沒有到期時間（雲端 AI 的 Token 只在伺服器裡用、不會過期）
     const left = Date.parse(expiresAt) - now;
     if (!(left > 0)) return 'expired';
     if (left <= 2 * 3600_000) return '2h';
@@ -1305,6 +1306,31 @@
   }
   const dayDivHtml = iso => `<div class="day-div" role="separator"><span>${esc(dayLabel(iso))}</span></div>`;
   const isCheckin = m => tagOf(m.text) === 'AI 簽到' && authorKind(m) === 'ai' && !state.open.has(m.messageId) && !keepFull(m);
+  // 雲端 AI 的標籤（用私人模型的標 🏠 私人模型，取代 ☁️ 雲端）
+  const cloudChip = p => (p?.cloud ? `<span class="cloud-chip${p.cloud.private ? ' priv' : ''}">${p.cloud.private ? '🏠 私人模型' : '☁️ 雲端'}</span>` : '');
+  const tokUnit = () => (typeof L === 'function' ? L('token', 'tokens') : 'token'); // 英文要複數
+  const fmtK = n => (n >= 1000 ? `${Math.round(n / 100) / 10}k`.replace('.0k', 'k') : String(n || 0));
+  // 訊息區「☁️ 示範助理 正在處理…（用了 4 次工具）」：有雲端 AI 被叫醒才問，跑完就消失
+  let cloudBusyTimer = 0, cloudBusyUntil = 0, cloudBusyIds = new Set();
+  function pollCloudBusy() {
+    cloudBusyUntil = Date.now() + 3 * 60_000;
+    if (cloudBusyTimer) return;
+    const tick = async () => {
+      cloudBusyTimer = 0;
+      let items = [];
+      try { items = (await api('/api/cloud-ai/busy')).items || []; } catch {}
+      const ids = new Set(items.map(x => x.participantId));
+      if ([...ids].join() !== [...cloudBusyIds].join()) { cloudBusyIds = ids; drawAiNow(); }
+      const el = $('#cloud-busy');
+      if (el) {
+        el.hidden = !items.length;
+        el.innerHTML = items.map(x => `<p class="cloud-busy-line">☁️ ${esc(x.name)} 正在處理…${x.tools ? `（用了 ${x.tools} 次工具）` : ''}</p>`).join('');
+      }
+      if (items.length || Date.now() < cloudBusyUntil - 2 * 60_000) cloudBusyTimer = setTimeout(tick, 3000);
+      else if (el) el.hidden = true;
+    };
+    cloudBusyTimer = setTimeout(tick, 600);
+  }
   function roleChip(a, m) {
     const p = state.participants.get(a.participantId) || a;
     if (p.memberType === 'ai') return '<span class="msg-role ai">AI</span>';
@@ -1463,7 +1489,7 @@
         <div class="msg-head">
           ${avatar(ap, m.project || null)}
           <div class="msg-who">
-            <div class="msg-line1"><span class="msg-author" data-nt title="${esc(subLine(ap, m.project || null))}">${nameCodeHtml(ap, dups)}</span>${roleChip(a, m)}${toHtml(m, dups)}${m.project === projectView() ? '' : projTag(m.project)}${m.replyFrom ? '' : resolvedPill(m)}${timeHtml(m)}</div>
+            <div class="msg-line1"><span class="msg-author" data-nt title="${esc(subLine(ap, m.project || null))}">${nameCodeHtml(ap, dups)}</span>${cloudChip(ap.cloud ? ap : a)}${roleChip(a, m)}${toHtml(m, dups)}${m.project === projectView() ? '' : projTag(m.project)}${m.replyFrom ? '' : resolvedPill(m)}${timeHtml(m)}</div>
           </div>
         </div>
         ${statusTags(m, toMe, replyMe)}
@@ -2255,6 +2281,7 @@
   function clearNew() { markSeen(state.ctx ? 0 : state.messages[state.messages.length - 1]?.sequence); /* 看到最新了就記下來 */ if (!state.newCount) return; Object.assign(state, { newCount: 0, newMention: 0, firstNewId: null }); $('#new-line')?.remove(); drawNewPill(); }
 
   function onNewMessage(m) {
+    if ((m.recipients || []).some(r => state.participants.get(r.participantId)?.cloud)) pollCloudBusy();
     if (state.byId.has(m.messageId) && (state.ctx || state.messages.some(x => x.messageId === m.messageId))) return;
     if (state.ctx) { // 正在看舊訊息的前後文：新訊息先記數，回到最新時一起看
       state.byId.set(m.messageId, m);
@@ -2721,7 +2748,11 @@
     const v = projectView();
     return v === 'cross' || v === 'hub' ? 'all' : v;
   }
-  const postMsg = async body => api('/api/messages', { method: 'POST', body: { ...body, project: await msgProject(body) } });
+  const postMsg = async body => {
+    const r = await api('/api/messages', { method: 'POST', body: { ...body, project: await msgProject(body) } });
+    if ((body.recipientIds || []).some(id => state.participants.get(id)?.cloud)) pollCloudBusy(); // 找了雲端 AI，顯示「正在處理…」
+    return r;
+  };
   let sending = false;
   let pendingRequestId = null; // 失敗重送時沿用同一個 requestId，避免重複發文
   async function send() {
@@ -4482,8 +4513,8 @@
         ${asks.map(n => `<div class="sugg-row ask-row-item" id="fyi-${esc(n.notificationId)}">
           <label class="sugg-check"><input type="checkbox" id="askchk-${esc(n.notificationId)}" data-ask-check="${esc(n.notificationId)}" ${work.askSel.has(n.notificationId) ? 'checked' : ''} aria-label="${esc(L(`勾選 ${n.sender.name} 這則`, `Select the one from ${n.sender.name}`))}"></label>
           <div class="sugg-main"><label class="ask-head" for="askchk-${esc(n.notificationId)}"><b><span class="apill ask me">要你回覆</span> ${esc(n.sender.name)} <span class="muted small ask-when">· ${agoText(n.createdAt)}</span></b></label>${askPvHtml(n)}</div>
-          <div class="sugg-actions"><button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">到訊息回覆</button>
-            <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">不用回</button></div>
+          <div class="sugg-actions">${cloudLimitActs(n) || `<button type="button" class="btn small primary" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}">到訊息回覆</button>
+            <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">不用回</button>`}</div>
         </div>`).join('')}</section>` : '';
     for (const id of [...work.verSel]) if (!verifyMe.some(c => c.cardId === id)) work.verSel.delete(id); // 清單變了就丟掉不在的勾選
     const verN = work.verSel.size, verAll = verifyMe.length > 0 && verN === verifyMe.length;
@@ -4611,6 +4642,21 @@
     if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
     const pv = t.closest('[data-ask-pv]');
     if (pv) return toggleAskPv(pv);
+    const cr = t.closest('[data-cloud-rerun]'), cl = t.closest('[data-cloud-limit]'); // 雲端 AI 到上限：再跑一輪／改每輪上限
+    if (cr || cl) {
+      const id = (cr || cl).dataset.cloudRerun || (cl || cr).dataset.cloudLimit;
+      try {
+        if (cr) {
+          const d = await api(`/api/my-ais/${encodeURIComponent(id)}/cloud/run`, { method: 'POST' });
+          toast(d.started ? '已叫醒，再跑一輪' : '它正在跑，這輪結束會接著處理');
+          return ackNotesNow([cr.dataset.n]);
+        }
+        const ai = ((await api('/api/my-ais')).items || []).find(x => x.participantId === id);
+        if (!ai?.cloud) return toast('找不到這隻雲端 AI');
+        if (await cloudLimitDialog(ai)) toast('已儲存每輪上限');
+      } catch (err) { toast(err.message); }
+      return;
+    }
     const na = t.closest('[data-note-ack]');
     if (na) { // 點了這列先淡出再移除
       const row = document.getElementById('fyi-' + na.dataset.noteAck);
@@ -6550,6 +6596,7 @@
   const aiNowOn = () => store.get(AINOW_KEY) !== '0';
   const WORK_FRESH_MS = 2 * 3600_000;
   function aiNowOf(mb) {
+    if (cloudBusyIds.has(mb.participantId)) return { kind: 'work', label: '處理中' }; // 雲端 AI 正在跑一輪
     // Token 過期的連不上（就算留著舊的待命心跳）；從沒連線過的是「還沒接入」：兩種都不算在做事或待命，跟我的 AI、紅條同一個說法
     if (mb.tokenExpired) return { kind: 'off', why: 'expired' };
     if (!mb.lastSeenAt) return { kind: 'off', why: 'new' };
@@ -6571,7 +6618,7 @@
       .map(mb => ({ mb, now: aiNowOf(mb) }))
       .sort((a, b) => rank[a.now.kind] - rank[b.now.kind] || a.mb.name.localeCompare(b.mb.name, 'zh-Hant'));
   }
-  const aiNowText = x => (x.now.kind === 'work' ? L(`在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`, `Working on${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`) : x.now.kind === 'idle' ? '待命' : x.now.why === 'expired' ? 'Token 已過期' : x.now.why === 'new' ? '還沒接入' : '離線');
+  const aiNowText = x => x.now.label ? L('處理中', 'Working') : (x.now.kind === 'work' ? L(`在做${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`, `Working on${x.now.cardId ? ' ' + ckey(x.now.cardId) : ''}`) : x.now.kind === 'idle' ? '待命' : x.now.why === 'expired' ? 'Token 已過期' : x.now.why === 'new' ? '還沒接入' : '離線');
   const aiNowBtn = (x, dups = viewDups()) => `<button type="button" class="an-ai ${x.now.kind}" data-ainow="${esc(x.mb.participantId)}" title="${esc(x.now.title || '')}" aria-label="${esc(`${nameCodeText(x.mb, dups)} ${aiNowText(x)}${x.now.title ? '：' + x.now.title : ''}，看團隊狀態`)}"><span class="an-dot" aria-hidden="true"></span><span class="an-name" data-nt title="${esc(nameCodeText(x.mb, dups))}">${esc(x.mb.name)}</span>${isDupIn(x.mb, dups) && x.mb.shortCode ? `<span class="name-code" data-nt>${esc(x.mb.shortCode)}</span>` : ''} <span class="an-st">${x.now.kind === 'work' && x.now.cardId ? `在做 <span data-nt>${esc(ckey(x.now.cardId))}</span>` : esc(aiNowText(x))}</span></button>`; // 卡號另包不翻：「在做」才查得到字典
   function drawAiNow() {
     drawDmSide();
@@ -7654,7 +7701,8 @@
   // 自動待命、對話接續改成每個 AI 自己的選項（只影響這個 AI 接下來複製的設定；複製內容不變）
   const maWarn = ai => ai.status === 'active' && ['expired', '2h', '24h'].includes(tokenLevel(ai.expiresAt));
   const maNeedsYou = ai => maWarn(ai) || (ai.status === 'active' && ai.skillsWaiting > 0);
-  const maState = ai => ai.status !== 'active' ? ['off', '已停用']
+  const maState = ai => ai.cloud ? (ai.status !== 'active' ? ['off', '已停用'] : ai.cloud.state === 'error' ? ['bad', '叫不醒'] : ai.cloud.state === 'retry' ? ['idle', '等重試'] : ['on', '隨時可叫醒'])
+    : ai.status !== 'active' ? ['off', '已停用']
     : tokenLevel(ai.expiresAt) === 'expired' ? ['bad', 'Token 已過期'] // 過期的連不上，不能顯示在線
     : ai.isOnline ? ['on', '在線'] : ai.standby ? ['standby', '待命中']
     : ai.lastSeenAt && Date.now() - Date.parse(ai.lastSeenAt) < 24 * 3600_000 ? ['idle', '閒置'] : ['', '離線'];
@@ -7662,18 +7710,72 @@
   const maAvatar = ai => ai.avatar || ai.imgUrl || ai.avatarImg ? avatar(ai)
     : avatar({ ...ai, avatar: /^[A-Za-z]{2,4}$/.test(ai.roleKey || '') ? ai.roleKey.toUpperCase() : [...(ai.name || 'AI')][0] });
   const maRank = ai => ai.status !== 'active' ? 4 : maNeedsYou(ai) ? 0 : ai.isOnline || ai.standby ? 1 : 2;
+  // 雲端 AI 的副標與「雲端」分頁（今天用量、最近幾輪、每輪上限、再跑一輪）
+  const cloudModelLine = c => `<span class="ma-cloud">☁️ 雲端 · ${c.private ? `🏠 私人模型「${esc(c.connectionName || '')}」` : esc(c.kindLabel || '')} · ${esc(c.model)}</span>`;
+  const CLOUD_RESULT = { replied: '已回覆', idle: '沒有要做的', limit: '<span class="error">到上限停</span>', error: '<span class="error">出錯</span>', running: '處理中' };
+  function cloudPanelHtml(ai) {
+    const c = ai.cloud, id = esc(ai.participantId);
+    return `<div class="cl-panel">
+      ${c.state === 'error' ? `<p class="cl-alert" role="alert">⚠ ${esc(c.stateNote || '')}${isAdmin() ? ' <button type="button" class="link small" data-adm="models">到模型設定</button>' : '（已通知管理員）'}</p>`
+        : c.state === 'retry' ? `<p class="cl-wait" role="status">${esc(c.stateNote || '')}</p>` : ''}
+      <p class="cl-today"><b>今天</b> <span class="muted">叫醒 ${c.today.runs} 次 · 共 ${fmtK(c.today.tokens)} token</span></p>
+      <p class="muted small">每輪上限：最多 ${c.maxTools} 次工具、${fmtK(c.maxTokens)} token。用量只有主人和管理員看得到。</p>
+      ${c.runs.length ? `<div class="cl-runs"><table><thead><tr><th scope="col">時間</th><th scope="col">叫醒原因</th><th scope="col" class="num">工具</th><th scope="col" class="num">token</th><th scope="col">結果</th></tr></thead><tbody>${c.runs.map(r => `<tr>
+          <td>${esc(maWhen(r.startedAt))}</td><td>${esc(r.reason || '—')}</td><td class="num">${r.tools}</td><td class="num">${fmtK(r.tokens)}</td>
+          <td>${CLOUD_RESULT[r.result] || esc(r.result)}${r.result === 'error' && r.note ? `<span class="muted small cl-note">${esc(r.note)}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="muted small">還沒被叫醒過。在群組 @ 它試試。</p>'}
+      <div class="row"><button class="btn small" type="button" data-act="cloud-limit" data-id="${id}">每輪上限</button>
+        <button class="btn small" type="button" data-act="cloud-run" data-id="${id}"${c.state === 'error' ? ' disabled' : ''}>再跑一輪</button>
+        <button class="btn small" type="button" data-act="edit" data-id="${id}">編輯</button></div>
+    </div>`;
+  }
+  // 「要你處理」裡雲端 AI 到上限那筆（[受阻] 這輪用到上限…）換成這三顆
+  function cloudLimitActs(n) {
+    const p = n.sender?.cloud ? n.sender : state.participants.get(n.sender?.participantId), txt = state.byId.get(n.messageId)?.text || n.preview || '';
+    if (!p?.cloud || !txt.trimStart().startsWith('[受阻] 這輪用到上限')) return '';
+    return `<button type="button" class="btn small primary" data-cloud-rerun="${esc(p.participantId)}" data-n="${esc(n.notificationId)}">再跑一輪</button>
+      <button type="button" class="btn small" data-cloud-limit="${esc(p.participantId)}">改每輪上限</button>
+      <button type="button" class="link small" data-note-ack="${esc(n.notificationId)}">先不用</button>`;
+  }
+  function cloudLimitDialog(ai) {
+    return new Promise(resolve => {
+      const host = document.createElement('div');
+      host.className = 'confirm-root';
+      host.innerHTML = modalFrame({ title: `每輪上限 · ${ai.name}`, size: 'narrow',
+        body: `<p class="muted small">一輪是被叫醒一次到回覆完。到上限就停下來交代進度，主人可以再跑一輪。</p>
+          <div class="limit-row">最多 <input type="number" id="cl-tools" min="1" max="100" value="${ai.cloud.maxTools}" aria-label="每輪工具次數"> 次工具、
+            <input type="number" id="cl-tokens" min="1000" max="1000000" step="1000" value="${ai.cloud.maxTokens}" aria-label="每輪 token"> ${tokUnit()}</div>
+          <p class="error" id="cl-err" role="alert"></p>`,
+        foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-ok>儲存</button>' });
+      document.body.appendChild(host);
+      const done = v => { host.remove(); document.removeEventListener('keydown', esc_, true); resolve(v); };
+      const esc_ = e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+      document.addEventListener('keydown', esc_, true);
+      host.querySelector('#cl-tools').focus();
+      host.addEventListener('click', async e => {
+        if (e.target.closest('[data-close]')) return done(null);
+        if (!e.target.closest('[data-ok]')) return;
+        try {
+          const d = await api(`/api/my-ais/${encodeURIComponent(ai.participantId)}/cloud`, { method: 'PATCH', body: { maxTools: Number(host.querySelector('#cl-tools').value), maxTokens: Number(host.querySelector('#cl-tokens').value) } });
+          done(d.cloud);
+        } catch (err) { host.querySelector('#cl-err').textContent = err.message; }
+      });
+    });
+  }
   function myAiRowHtml(ai, tab, menu, q = '') {
     const id = esc(ai.participantId), active = ai.status === 'active', level = tokenLevel(ai.expiresAt);
     const [stCls, stText] = maState(ai), pjs = state.projMeta.crossRoleIds.includes(ai.participantId) ? null : (ai.projects || []).filter(p => PROJECTS.includes(p));
     const pjTags = pjs === null ? '<span class="ptag ptag-all">跨專案角色</span>' : pjs.slice(0, 2).map(projTag).join('') + (pjs.length > 2 ? `<span class="ptag">+${pjs.length - 2}</span>` : '');
-    const tokTxt = !active || level === 'expired' ? '' // 過期：狀態那裡已寫「Token 已過期」，旁邊是重發 Token
+    const tokTxt = ai.cloud || !active || level === 'expired' ? '' // 過期：狀態那裡已寫「Token 已過期」，旁邊是重發 Token
       : maWarn(ai) ? `<span class="pill-tag yellow">Token ${esc(maWhen(ai.expiresAt))} 到期</span>` : `<span class="muted small ma-tok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>`;
     const main = !active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
+      : ai.cloud ? `<button class="btn ma-copy" type="button" data-act="tab" data-tab="cloud" data-id="${id}">用量</button>` // 雲端 AI 不用接入
       : maWarn(ai) ? `<button class="btn warn" type="button" data-act="reissue" data-id="${id}">重發<span class="ma-long"> Token</span></button>`
       : `<button class="btn ma-copy" type="button" data-act="short" data-id="${id}">複製接入文字</button>`; // 短版接入是主要做法
     const menuHtml = menu ? `<div class="ma-menu" role="menu">
         <button type="button" role="menuitem" data-act="edit" data-id="${id}">✏️ 編輯名稱、角色、專案</button>
-        ${active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
+        ${active && ai.cloud ? `<button type="button" role="menuitem" data-act="cloud-limit" data-id="${id}">⚙️ 每輪上限</button>
+        <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
         <button type="button" role="menuitem" data-act="reissue" data-id="${id}">🔑 重發 Token</button>
         ${level !== 'expired' ? `<button type="button" role="menuitem" data-act="token" data-id="${id}">📋 只複製 Token</button>` : ''}
         <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : `<hr><button type="button" role="menuitem" data-act="enable" data-id="${id}">▶ 重新啟用</button>`}
@@ -7683,7 +7785,7 @@
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
         ${maAvatar(ai)}
         <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
-          <div class="ma-meta">${[markQ(ai.role || '', q)].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
+          <div class="ma-meta">${[markQ(ai.role || '', q), ai.cloud ? cloudModelLine(ai.cloud) : ''].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
         <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
       </div>
       ${tab ? myAiPanelHtml(ai, tab) : ''}
@@ -7694,7 +7796,8 @@
   const maOpt = ai => maOpts.get(ai.participantId) || { convo: '', auto: true };
   function myAiPanelHtml(ai, tab) {
     const id = esc(ai.participantId), active = ai.status === 'active', o = maOpt(ai);
-    const tabs = [['conn', '接入'], ['skills', `技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}`], ['set', '設定']].filter(([k]) => active || k === 'set');
+    const tabs = ai.cloud ? [['cloud', '雲端'], ['set', '設定']].filter(([k]) => active || k === 'set')
+      : [['conn', '接入'], ['skills', `技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}`], ['set', '設定']].filter(([k]) => active || k === 'set');
     const t = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
     const convoLabel = v => v ? CONVO_OPTS.find(x => x[0] === v)[1] : '太長才換新（建議）';
     const tool = maTool(ai), ask = maAskTool.has(ai.participantId), closed = maToolClosed(ai);
@@ -7713,6 +7816,7 @@
           : tool === 'copilot' ? '<p class="ma-hint">一行啟動：貼到這隻 AI 工作資料夾的終端機，會下載核對腳本、裝技能、把通用 MCP 加進 Copilot CLI 的 MCP 設定（不寫 Token、不動你原有的其他 MCP），最後開 Copilot CLI 帶入接入提示。第一次用 Copilot CLI 要先執行 copilot 登入 GitHub；第一次要在 15 分鐘內貼。</p><p class="ma-hint">目前要人開視窗叫它做事，自動叫醒之後支援（不會在背景開 watcher）。每叫它做一次事扣 1 次 premium 請求，免費版每月只有 50 次。</p>' : ''}
         <p class="ma-hint">接入文字很短、不含 Token：AI 會用一次性連結自己下載完整設定（15 分鐘內、只能讀一次），讀的那一刻拿到新 Token。第一次接入、Token 重發後重新接上都用它。AI 連不上網路時才用完整版（約 5,000 字，附一組新 Token）。</p>
         <p class="ma-hint">上面的選項會寫進你接下來複製的那份設定。接入設定與 Token 都是這隻 AI 的存取憑證，只貼到自己的 AI 對話。 <a href="/api/docs/ai-integration" target="_blank" rel="noopener">規格（規則版）</a> · <a href="/api/docs/api-reference" target="_blank" rel="noopener">API 參考</a></p>`
+      : t === 'cloud' ? cloudPanelHtml(ai)
       : t === 'skills' ? `<div class="ma-skills" data-ma-skills="${id}"><p class="muted small">載入中…</p></div>`
       : `<dl class="ma-dl">
           <dt>主要職責</dt><dd>${esc(ai.duties)}</dd><dt>溝通風格</dt><dd>${esc(ai.style)}</dd>
@@ -7760,7 +7864,7 @@
       const act = items.filter(a => a.status === 'active');
       // 過期、快到期分開寫；過期的不算在線
       const exp = act.filter(a => tokenLevel(a.expiresAt) === 'expired').length, soon = act.filter(maWarn).length - exp;
-      const on = act.filter(a => a.isOnline && tokenLevel(a.expiresAt) !== 'expired').length, sw = act.filter(a => a.skillsWaiting > 0).length;
+      const on = act.filter(a => a.isOnline && tokenLevel(a.expiresAt) !== 'expired' && a.cloud?.state !== 'error').length, sw = act.filter(a => a.skillsWaiting > 0).length;
       body.querySelector('#ma-sum').innerHTML = `${scope ? `<b>${esc(projName(scope))}</b> 的 AI · ` : ''}${items.length} 隻 · ${on} 在線${exp ? ` · <span class="error">Token 已過期 ${exp} 隻</span>` : ''}${soon ? ` · <span class="warn-text">Token 快到期 ${soon} 隻</span>` : ''}${sw ? ` · <span class="warn-text">${sw} 隻有技能等你允許</span>` : ''}`;
       body.querySelector('#ai-list').innerHTML = list.length ? list.map(ai => myAiRowHtml(ai, open.get(ai.participantId), menuFor === ai.participantId, q)).join('')
         : items.length ? findEmptyHtml('myai', true) : '<p class="muted">還沒有 AI。按「＋ 新增 AI」選一個角色範例開始。</p>';
@@ -7830,6 +7934,8 @@
         if (b.dataset.act === 'menu') { menuFor = menuFor === id ? null : id; row(id); maPlaceMenu(body); return body.querySelector('.ma-menu [role=menuitem]')?.focus(); }
         if (menuFor) { const m = menuFor; menuFor = null; row(m); }
         if (b.dataset.act === 'tab') { open.set(id, b.dataset.tab); return row(id); }
+        if (b.dataset.act === 'cloud-limit') { const c = await cloudLimitDialog(ai); if (c) { ai.cloud = c; toast('已儲存每輪上限'); row(id); } return; }
+        if (b.dataset.act === 'cloud-run') { const d = await api(`/api/my-ais/${encodeURIComponent(id)}/cloud/run`, { method: 'POST' }); ai.cloud = d.cloud; toast(d.started ? '已叫醒，再跑一輪' : '它正在跑，這輪結束會接著處理'); return row(id); }
         if (b.dataset.act === 'copy') { // 平台只存 Token 雜湊：完整接入設定一律附一組新 Token（舊的失效）
           if (ai.lastSeenAt && !await confirmDialog({ title: '換一組 Token 並複製接入設定？', confirmText: '換新並複製',
             message: `平台不保存 Token 原文，所以完整接入設定會附<b>一組新 Token</b>：<b>${esc(ai.name)}</b> 現在用的會立刻失效，要把這份新設定貼給它。` })) return;
@@ -8890,6 +8996,43 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <div class="proj-row new-ai-proj">${myProjects().length ? boxes : '<span class="muted small">你還沒有加入任何專案，請群組管理員把你加入專案。</span>'}</div>
       <span class="field-hint">${cross ? '這隻 AI 是跨專案角色，固定在所有專案（由管理員在「管理員設定 › 帳號與救援」設定）。' : '改了專案，這隻 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
   }
+  // 新增 AI 第一題「這隻 AI 在哪裡跑」；雲端 AI 多選模型與每輪上限，不用接入步驟
+  function aiWhereHtml() {
+    return `<div class="field ai-where"><span class="field-label" id="where-label">這隻 AI 在哪裡跑</span>
+      <div class="where-row" role="radiogroup" aria-labelledby="where-label">
+        <button type="button" class="where-card" data-where="cloud" role="radio" aria-checked="false" disabled><b>☁️ 在平台上（雲端 AI）</b><span>不用開電腦，伺服器幫它跑；只能讀寫群組、卡片、知識庫，不碰程式碼。</span><span class="where-why">載入中…</span></button>
+        <button type="button" class="where-card" data-where="local" role="radio" aria-checked="true"><b>💻 接我的電腦</b><span>Claude Code、Codex 等，在你電腦上跑，可以寫程式。</span></button>
+      </div>
+      <input type="hidden" name="runtime" value="local">
+      <div class="cloud-fields" hidden>
+        <label>模型<select name="cloudChoice"></select><span class="field-hint">只列管理員在「系統設定 → 模型設定」設好、可以用的設定和模型。</span></label>
+        <div class="field"><span class="field-label">每輪上限</span>
+          <div class="limit-row">最多 <input name="maxTools" type="number" min="1" max="100" value="20" aria-label="每輪工具次數"> 次工具、<input name="maxTokens" type="number" min="1000" max="1000000" step="1000" value="50000" aria-label="每輪 token"> ${tokUnit()}</div>
+          <span class="field-hint">到上限就停下來交代進度。建好後可以在「我的 AI」那列改。</span></div>
+      </div>
+    </div>`;
+  }
+  async function bindAiWhere(body, form) {
+    const box = body.querySelector('.ai-where');
+    if (!box) return null;
+    const cloudBtn = box.querySelector('[data-where="cloud"]'), why = box.querySelector('.where-why');
+    let opts = { canCreate: false, choices: [] };
+    try { opts = await api('/api/cloud-ai/options'); } catch {}
+    if (opts.canCreate) {
+      cloudBtn.disabled = false; why.remove();
+      form.cloudChoice.innerHTML = opts.choices.map((c, i) => `<option value="${i}">${esc(c.connectionName)} · ${esc(c.model)} · ${c.private ? '🏠 私人模型' : '官方'}</option>`).join('');
+    } else {
+      why.innerHTML = opts.reason === 'admin_only' ? '第一階段只有管理員能新增' : opts.isAdmin ? '還沒有可以用的模型設定 · <span class="link small" data-adm="models" role="link" tabindex="0">去設定</span>' : '管理員還沒設定模型';
+    }
+    const pick = where => {
+      form.runtime.value = where;
+      box.querySelectorAll('[data-where]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.where === where)));
+      box.querySelector('.cloud-fields').hidden = where !== 'cloud';
+      const envF = body.querySelector('.env-field'); if (envF) envF.hidden = where === 'cloud';
+    };
+    box.addEventListener('click', e => { const b = e.target.closest('[data-where]'); if (b && !b.disabled) pick(b.dataset.where); });
+    return opts;
+  }
   async function openAiForm(ai) {
     const { items: baseRoles, fields } = await loadRoles();
     const editing = !!ai;
@@ -8898,6 +9041,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const roles = [...baseRoles, ...myProjects().flatMap(pj => projRoleDefs(pj, true).filter(d => d.status !== 'disabled' || (editing && ai.roleKey === d.key)).map(d => pjRole(d, pj)))];
     const body = openModal(editing ? '編輯 AI' : '新增 AI', `
       <form id="ai-form" class="stack"${editing ? '' : ' data-new="1"'}>
+        ${editing ? '' : aiWhereHtml()}
         <label>角色範本
           <select name="roleKey">${roleOptionsHtml(roles)}</select>
           <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
@@ -8925,6 +9069,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
              <button class="btn primary" type="submit" form="ai-form">${editing ? '儲存變更' : '建立 AI'}</button>`,
     });
     const form = body.querySelector('#ai-form');
+    const whereOpts = editing ? null : bindAiWhere(body, form);
     const counts = () => { for (const f of fields) body.querySelector(`[data-count="${f.key}"]`).textContent = `${form[f.key].value.length}/1000`; };
     // 頭像圖片：existing＝沿用已上傳的、new＝這次新選的、none＝不用圖片
     const img = { state: editing && ai.avatarImg ? 'existing' : 'none', blob: null, url: null };
@@ -9026,6 +9171,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const data = Object.fromEntries(new FormData(form));
       delete data.proj;
       for (const [k, v] of Object.entries(data)) data[k] = v.trim();
+      if (data.runtime === 'cloud') {
+        const ch = (await whereOpts)?.choices?.[Number(data.cloudChoice)];
+        if (!ch) return showErr('請選一個模型', form.cloudChoice);
+        Object.assign(data, { connectionId: ch.connectionId, model: ch.model, maxTools: Number(data.maxTools), maxTokens: Number(data.maxTokens), environment: '' });
+      } else for (const k of ['runtime', 'maxTools', 'maxTokens']) delete data[k];
+      delete data.cloudChoice;
       const picked = [...form.querySelectorAll('input[name="proj"]:checked:not(:disabled)')].map(i => i.value);
       if (!editing) {
         data.projects = picked;
@@ -9058,7 +9209,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         loadParticipants().then(() => renderMessages(false)).catch(() => {});
         if (state.page === 'myai' || state.page === 'team') closeModal(); // 頁面模式：先關表單再重畫清單
         await openMyAi();
-        if (editing) toast('已儲存'); else openTokenOnly(saved, true); // Token 只有現在看得到
+        if (editing) toast('已儲存'); else if (data.runtime === 'cloud') toast('已建立。雲端 AI 建好就能用，在群組 @ 它試試'); else openTokenOnly(saved, true); // Token 只有現在看得到
         tourHold = false;
       } catch (err) { tourHold = false; showErr(err.message, errAt(err)); }
     });
@@ -10714,9 +10865,165 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   function permGo() { if (state.page === 'perm') { drawPerm(); drawChrome(); syncUrl(false); } else goTop('perm'); }
   // ---------- 管理員設定：只有管理員能做的事集中一處 ----------
   // 電腦：左側小目錄＋右邊內容；手機：一頁清單，點進去才看內容。後端權限不變，非管理員打 API 照樣擋
+  // 管理員設定 › 模型設定（UX v4）：一個站存好幾組；官方網址 vs 🏠 私人模型；網頁貼金鑰（加密存、只顯示末 4 碼）
+  const MC_STATUS = { ok: ['green', '✓ 可以用'], key_error: ['red', '⚠ 金鑰錯'], quota: ['red', '⚠ 額度用完'], unreachable: ['red', '⚠ 連不到'], model_error: ['red', '⚠ 模型不存在'], error: ['red', '⚠ 出錯'], untested: ['grey', '還沒測試'] };
+  function admModelsHtml() {
+    if (perm.models === undefined) {
+      perm.models = null;
+      api('/api/admin/model-connections').then(d => { perm.models = d; if (state.page === 'perm' && perm.adm === 'models') drawPerm(); })
+        .catch(err => { perm.models = { error: err.message }; if (state.page === 'perm' && perm.adm === 'models') drawPerm(); });
+    }
+    const d = perm.models;
+    if (!d) return '<p class="muted pm-pad">載入中…</p>';
+    if (d.error) return `<p class="error pm-pad">${esc(d.error)}</p>`;
+    const conns = d.connections.map(c => {
+      const [cls, label] = MC_STATUS[c.status] || MC_STATUS.untested;
+      return `<div class="pm-card mc-row" data-mc-id="${esc(c.id)}">
+        <div class="mc-top"><b>${esc(c.name)}</b>${c.official ? '<span class="pill-tag blue">官方</span>' : '<span class="pill-tag purple">🏠 私人模型</span>'}${c.insecure ? '<span class="pill-tag yellow">未加密</span>' : ''}<span class="pill-tag ${cls}">${label}</span><span class="grow"></span><span class="muted small">${c.usedBy} 隻 AI</span></div>
+        <p class="muted small mc-line">${esc(c.kindLabel)} · ${esc(c.url)} · ${c.hasKey ? `金鑰 ••••${esc(c.keyLast4)}` : '不需金鑰'} · ${c.models.length} 個模型</p>
+        ${c.lastTest ? `<p class="small mc-test ${c.status === 'ok' ? 'ok' : 'bad'}">${esc(fmtTime(c.lastTestAt))} 測試：${esc(c.lastTest)}</p>` : ''}
+        <div class="row"><button type="button" class="btn small" data-mc="test">測試連線</button><button type="button" class="btn small" data-mc="edit">編輯</button><button type="button" class="btn small danger-text" data-mc="delete">刪除</button></div>
+      </div>`;
+    }).join('');
+    return `<div class="mc-page">
+      ${d.masterKey !== 'ok' ? '<div class="cl-alert" role="alert">⚠ 還不能存 API 金鑰：伺服器沒有地方放主密鑰（金鑰要用它加密）。平台版要先開通專案文件區（R2）；或請負責部署的人設定 AIGILE_MASTER_KEY（32 個以上隨機字元），重開服務。設好重新整理這頁。</div>' : ''}
+      <div class="mc-where">
+        <div class="pm-card"><b>☁️ 平台版（Cloudflare）</b><p class="muted small">只能用 Gemini、OpenAI、Anthropic 的官方網址；自訂網址和私人模型之後再開放。要接公司地端模型請用開源版。</p></div>
+        <div class="pm-card"><b>🏢 開源版（架在公司內）</b><p class="muted small">可以接內網的 Ollama、vLLM（http 會標「未加密」），也能接公網服務。</p></div>
+      </div>
+      <p class="muted small">這裡${d.hosted ? '是平台版' : '是開源版'}。每隻雲端 AI 選「哪一組＋哪個模型」；新增 AI 的下拉只列「可以用」的設定和勾選的模型。只有管理員看得到這頁。</p>
+      <div class="row"><span class="grow"></span><button type="button" class="btn primary small" data-mc="new">＋ 新增</button></div>
+      ${conns || '<p class="muted pm-pad">還沒有模型設定。按「＋ 新增」，選 Gemini、OpenAI、Anthropic、Ollama 或自訂 OpenAI 相容。</p>'}
+      <div class="pm-card"><div class="pm-card-head"><strong>變更紀錄</strong></div>
+        ${d.log.length ? `<table class="pm-table mc-log"><thead><tr><th scope="col">時間</th><th scope="col">誰</th><th scope="col">做了什麼</th></tr></thead><tbody>${d.log.map(e => `<tr><td>${esc(fmtTime(e.at))}</td><td>${esc(e.byName || '')}</td><td>${esc(e.text)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted small pm-pad">還沒有紀錄。</p>'}</div>
+    </div>`;
+  }
+  const mcReload = async () => { try { perm.models = await api('/api/admin/model-connections'); } catch {} if (state.page === 'perm' && perm.adm === 'models') drawPerm(); };
+  function openModelForm(conn) {
+    const d = perm.models, editing = !!conn;
+    let kind = conn?.kind || 'gemini', found = null, replacing = !conn?.hasKey;
+    const kindOf = k => d.kinds.find(x => x.key === k);
+    const body = openModal(editing ? `編輯模型設定：${conn.name}` : '新增模型設定', `
+      <form id="mc-form" class="stack" autocomplete="off">
+        ${editing ? `<p class="muted small">種類：${esc(conn.kindLabel)}</p>` : `<div class="field"><span class="field-label">種類</span><div class="seg-scope mc-kinds" role="group">${d.kinds.map(k => `<button type="button" data-kind="${k.key}" aria-pressed="${k.key === kind}">${esc(k.key === 'ollama' ? 'Ollama（地端）' : k.label)}</button>`).join('')}</div></div>`}
+        <label>名稱（AI 選設定時看到的）<input name="name" maxlength="40" required value="${esc(conn?.name || '')}" placeholder="例如：Gemini 免費額度"></label>
+        <div class="field"><label for="mc-url" class="field-label">網址</label>
+          <div class="mc-urlrow"><input id="mc-url" name="url" value="${esc(conn?.url || kindOf(kind).url)}" spellcheck="false"${d.customUrl === false ? ' readonly' : ''}><span class="mc-urltag"></span></div>
+          <div class="mc-urlnote"></div></div>
+        <div class="field"><span class="field-label">API 金鑰</span><div class="mc-key"></div>
+          <span class="field-hint">只有管理員能貼。會加密後存在伺服器，之後只顯示末 4 碼，看不到也拿不回完整金鑰。</span></div>
+        <div class="field"><span class="field-label">可用模型</span><div class="mc-models"></div></div>
+        <p class="mc-result" role="status"></p>
+        <p class="error" id="mc-err" role="alert"></p>
+      </form>`, {
+      size: 'form',
+      foot: `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="mc-form">${editing ? '儲存並測試' : '儲存並測試'}</button>`,
+    });
+    const form = body.querySelector('#mc-form');
+    const err = m => { body.querySelector('#mc-err').textContent = m || ''; };
+    const drawKey = () => {
+      const k = body.querySelector('.mc-key');
+      k.innerHTML = d.masterKey !== 'ok' ? '<input type="password" disabled placeholder="設好主密鑰才能貼">'
+        : !replacing ? `<div class="mc-keyrow"><input value="••••${esc(conn.keyLast4)}" disabled aria-label="已存的金鑰末 4 碼"><button type="button" class="btn small" data-mck="replace">換金鑰</button><button type="button" class="btn small danger-text" data-mck="remove">刪除</button></div>`
+        : `<input type="password" name="key" placeholder="${kind === 'ollama' || kind === 'custom' ? '不需要金鑰可以留空' : '貼上 API 金鑰'}" autocomplete="new-password">`;
+    };
+    const drawModels = () => {
+      const have = new Set(conn?.models || []);
+      const list = found || [...have];
+      const m = body.querySelector('.mc-models');
+      m.innerHTML = `<div class="row"><span class="muted small">${found ? `從供應者讀到 ${found.length} 個` : found === null ? '' : ''}</span><span class="grow"></span><button type="button" class="link small" data-mck="discover">從供應者讀取 ↻</button></div>
+        ${found === false ? '<p class="muted small">這台沒有提供模型清單，請手動輸入，一行一個</p>' : ''}
+        ${list.length && found !== false ? `<div class="mc-checks">${list.map(x => `<label class="chk"><input type="checkbox" name="model" value="${esc(x)}"${have.has(x) || (!have.size && list[0] === x) ? ' checked' : ''}> ${esc(x)}</label>`).join('')}</div><span class="field-hint">勾的才給 AI 選。</span>`
+          : `<textarea name="modelsText" rows="3" placeholder="一行一個，例如 gemini-2.5-flash">${esc([...have].join('\n'))}</textarea>`}`;
+    };
+    let urlTimer = 0;
+    const checkUrl = () => {
+      clearTimeout(urlTimer);
+      urlTimer = setTimeout(async () => {
+        const r = await api('/api/admin/model-connections/check-url', { method: 'POST', body: { kind, url: form.url.value } }).catch(e => ({ ok: false, error: e.message }));
+        const tag = body.querySelector('.mc-urltag'), note = body.querySelector('.mc-urlnote');
+        const official = kindOf(kind).official;
+        tag.innerHTML = r.ok ? (r.official ? '<span class="pill-tag blue">官方</span>' : '<span class="pill-tag purple">🏠 私人模型</span>') + (r.insecure ? '<span class="pill-tag yellow">未加密</span>' : '') : '';
+        note.innerHTML = !r.ok ? `<p class="mc-bad">⛔ ${esc(r.error)}</p>`
+          : r.official ? (d.customUrl === false ? '<p class="field-hint">平台版只能用官方網址；要接公司代理或地端模型，請用開源版（架在公司內）。</p>' : '<p class="field-hint">不改就直接用官方服務。改成自己的網址，就當成「私人模型」。</p>')
+          : `<p class="mc-priv"><span>🏠 私人模型：對話內容會送到</span> <b>${esc(r.host)}</b> <span>（你們自己的機器），不會送到外部供應者。</span></p>${r.insecure ? '<p class="mc-warn"><span class="pill-tag yellow">未加密</span> <span>金鑰和內容會用明文傳送，只建議在公司內網用。</span></p>' : ''}${official ? '<button type="button" class="link small" data-mck="official">↺ 改回官方網址</button>' : ''}`;
+        form.url.setAttribute('aria-invalid', String(!r.ok));
+      }, 250);
+    };
+    drawKey(); drawModels(); checkUrl();
+    form.url.addEventListener('input', checkUrl);
+    body.addEventListener('click', async e => {
+      const kb = e.target.closest('[data-kind]');
+      if (kb) {
+        kind = kb.dataset.kind; found = null;
+        body.querySelectorAll('[data-kind]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.kind === kind)));
+        form.url.value = kindOf(kind).url; drawKey(); drawModels(); checkUrl();
+        return;
+      }
+      const a = e.target.closest('[data-mck]')?.dataset.mck;
+      if (a === 'official') { form.url.value = kindOf(kind).url; return checkUrl(); }
+      if (a === 'replace') { replacing = true; drawKey(); return form.key?.focus(); }
+      if (a === 'remove') {
+        if (!await confirmDialog({ title: '刪除金鑰？', danger: true, confirmText: '刪除', message: `刪除後用這組設定的 <b>${conn.usedBy} 隻 AI</b> 會叫不醒，直到重貼金鑰。` })) return;
+        try { await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}`, { method: 'PATCH', body: { removeKey: true } }); conn.hasKey = false; replacing = true; drawKey(); mcReload(); toast('已刪除金鑰'); } catch (x) { err(x.message); }
+        return;
+      }
+      if (a === 'discover') {
+        err('');
+        const r = await api('/api/admin/model-connections/discover', { method: 'POST', body: { id: conn?.id, kind, url: form.url.value, key: form.key?.value || undefined } }).catch(x => ({ models: null, error: x.message }));
+        found = r.models && r.models.length ? r.models : false;
+        drawModels();
+        if (r.error) err(r.error);
+      }
+    });
+    form.addEventListener('submit', async e => {
+      e.preventDefault(); err('');
+      const models = form.modelsText ? form.modelsText.value.split('\n').map(x => x.trim()).filter(Boolean) : [...form.querySelectorAll('input[name="model"]:checked')].map(i => i.value);
+      if (!models.length) return err('至少勾選或輸入一個模型');
+      const payload = { name: form.name.value.trim(), url: form.url.value.trim(), models, ...(form.key && form.key.value.trim() ? { key: form.key.value.trim() } : {}) };
+      const btn = body.closest('.modal')?.querySelector('button[type="submit"]'); if (btn) btn.disabled = true;
+      try {
+        const saved = editing ? await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}`, { method: 'PATCH', body: payload })
+          : await api('/api/admin/model-connections', { method: 'POST', body: { kind, ...payload } });
+        conn = { ...saved.connection, usedBy: conn?.usedBy || 0 };
+        if (form.key) form.key.value = '';
+        replacing = !conn.hasKey; drawKey();
+        const t = await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}/test`, { method: 'POST', body: {} });
+        const res = body.querySelector('.mc-result');
+        res.className = 'mc-result ' + (t.ok ? 'ok' : 'bad');
+        res.innerHTML = `<span>${t.ok ? '✓' : '⚠'}</span> <span>${conn.hasKey ? `已存好（••••${esc(conn.keyLast4)}）。` : '已存好。'}</span><span>${esc(t.message)}</span>`;
+        mcReload();
+      } catch (x) { err(x.message); }
+      finally { if (btn) btn.disabled = false; }
+    });
+  }
+  document.addEventListener('click', async e => {
+    const b = e.target.closest?.('[data-mc]');
+    if (!b || !perm.models?.connections) return;
+    const conn = perm.models.connections.find(c => c.id === b.closest('[data-mc-id]')?.dataset.mcId);
+    const a = b.dataset.mc;
+    try {
+      if (a === 'new') return openModelForm(null);
+      if (!conn) return;
+      if (a === 'edit') return openModelForm(conn);
+      if (a === 'test') {
+        b.disabled = true; b.textContent = '測試中…';
+        const t = await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}/test`, { method: 'POST', body: {} });
+        toast((t.ok ? '✓ ' : '⚠ ') + t.message);
+        return mcReload();
+      }
+      if (a === 'delete') {
+        if (!await confirmDialog({ title: `刪除「${conn.name}」？`, danger: true, confirmText: '刪除整組設定', message: conn.usedBy ? `刪除後用這組的 <b>${conn.usedBy} 隻 AI</b> 會叫不醒。` : '還沒有 AI 用這組設定。' })) return;
+        await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}`, { method: 'DELETE' });
+        toast('已刪除'); return mcReload();
+      }
+    } catch (x) { toast(x.message); mcReload(); }
+  });
+
   const ADM_SECS = [
     ['todo', '📋', '待處理', '加入申請、技能核准、邀請到期'],
     ['group', '🏷️', '群組設定', '群組名稱、開放註冊、群組密碼'],
+    ['models', '☁️', '模型設定', '雲端 AI 用的模型與 API 金鑰'],
     ['projects', '📁', L('專案', 'Projects'), '新增、改名、程式庫、封存、永久刪除'], // 字典的「專案」是單數，目錄要複數
     ['invites', '✉️', '邀請', '邀請新的人、重發、作廢'],
     ['accounts', '🔑', '帳號與救援', '跨專案角色、重設登入、停用、救援指令'],
@@ -10837,7 +11144,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const narrow = narrowPerm();
     if (narrow && !perm.adm) return admNavHtml(null, true);
     const cur = perm.adm || 'todo', [, ico, t] = ADM_SECS.find(x => x[0] === cur);
-    const body = cur === 'todo' ? admTodoHtml() : cur === 'group' ? permGroupHtml() : cur === 'projects' ? permProjectsHtml() : cur === 'invites' ? permInvitesHtml() : cur === 'accounts' ? admAccountsHtml() : cur === 'system' ? permSystemHtml() : admAuditHtml();
+    const body = cur === 'todo' ? admTodoHtml() : cur === 'group' ? permGroupHtml() : cur === 'models' ? admModelsHtml() : cur === 'projects' ? permProjectsHtml() : cur === 'invites' ? permInvitesHtml() : cur === 'accounts' ? admAccountsHtml() : cur === 'system' ? permSystemHtml() : admAuditHtml();
     const main = `<section class="adm-main" aria-label="${t}">${narrow ? '<button type="button" class="ph-back pm-back" data-adm-back>‹ 管理員設定</button>' : ''}<h3 class="adm-h"><span aria-hidden="true">${ico}</span> ${t}${cur === 'todo' && admTodoN() ? ` · ${admTodoN()}` : ''}</h3>${body}</section>`;
     return narrow ? `<div class="adm-split m-detail">${main}</div>` : `<div class="adm-split">${admNavHtml(cur, false)}${main}</div>`;
   }

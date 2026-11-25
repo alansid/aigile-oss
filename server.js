@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './src/core.js';
+import { nodeModelFetch } from './src/cloud-fetch-node.js'; // 雲端 AI：連線那一層擋雲端 metadata 位址
 import { openNodeDb } from './src/db-node.js';
 import { PAGE_HEADERS } from './src/security-headers.js';
 import { createStaticCache, staticResponse, bufferEntry } from './src/static-files.js';
@@ -73,6 +74,8 @@ const handle = createApp({
     authFailLimit: process.env.AUTH_FAIL_LIMIT,
     rateLimitPerMin: process.env.RATE_LIMIT_PER_MIN, // 只給本機測試用；正式環境固定每分鐘 120
     aiTokenTtlHours: process.env.AI_TOKEN_TTL_HOURS,
+    cloudFetch: nodeModelFetch({ hosted: false }),
+    masterKey: process.env.AIGILE_MASTER_KEY, // 雲端 AI 的金鑰加密用；沒設就自動產生，存在 DATA_DIR/docs/_secrets（不在資料庫裡）
     humanTokenTtlHours: process.env.HUMAN_TOKEN_TTL_HOURS,
     fileTtlHours: process.env.FILE_TTL_HOURS,
     fileMaxTotalMb: process.env.FILE_MAX_TOTAL_MB,

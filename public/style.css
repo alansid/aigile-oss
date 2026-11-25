@@ -4226,3 +4226,60 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .drawer-status > .cst-pill, .drawer-status > .st-menu, .drawer-status > .more-acts { flex: none; }
 .drawer-status > .muted.small { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timeline .tl-file { display: block; } /* 附件一則寫成一句：📎 誰 附加 檔名 時間 */
+
+/* 雲端 AI */
+.cloud-chip { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 12px; line-height: 18px; background: #e6f0ff; color: #1d4ed8; white-space: nowrap; }
+.cloud-chip.priv { background: #ede9fe; color: #5b21b6; }
+.cloud-busy { padding: 4px 16px 8px; }
+.cloud-busy-line { margin: 0; font-style: italic; color: var(--muted); font-size: 13px; }
+.where-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.where-card { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
+.where-card span { font-size: 13px; color: var(--muted); }
+.where-card[aria-checked="true"] { border: 2px solid var(--accent, #2563eb); padding: 9px 11px; background: var(--human-bg, #eef4ff); }
+.where-card:disabled { opacity: .55; cursor: not-allowed; }
+.where-card .where-why { font-size: 12px; }
+.cloud-fields { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.limit-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.limit-row input { width: 96px; }
+.cl-panel { display: flex; flex-direction: column; gap: 8px; }
+.cl-panel p { margin: 0; }
+.cl-alert { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 8px 10px; }
+.cl-wait { background: #fef3c7; color: #92400e; border-radius: 8px; padding: 8px 10px; }
+.cl-runs { overflow-x: auto; }
+.cl-runs table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cl-runs th, .cl-runs td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.cl-runs .num { text-align: right; white-space: nowrap; }
+.cl-note { display: block; }
+.mc-page { display: flex; flex-direction: column; gap: 10px; }
+.mc-where { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mc-where p { margin: 4px 0 0; }
+.mc-row { padding: 10px 12px; }
+.mc-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mc-line { margin: 4px 0; overflow-wrap: anywhere; }
+.mc-test { margin: 0 0 6px; }
+.mc-test.ok, .mc-result.ok { color: #166534; }
+.mc-test.bad, .mc-result.bad { color: #991b1b; }
+.mc-urlrow { display: flex; gap: 6px; align-items: center; }
+.mc-urlrow input { flex: 1; min-width: 0; }
+.mc-urltag { display: inline-flex; gap: 4px; }
+.mc-priv { background: #ede9fe; color: #5b21b6; border-radius: 8px; padding: 6px 10px; margin: 6px 0 0; }
+.mc-bad { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 6px 10px; margin: 6px 0 0; }
+.mc-keyrow { display: flex; gap: 6px; }
+.mc-keyrow input { flex: 1; min-width: 0; }
+.mc-checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.mc-kinds { flex-wrap: wrap; }
+.mc-log td { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .where-row, .mc-where { grid-template-columns: 1fr; } }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cloud-chip { background: #172554; color: #bfdbfe; }
+  :root:not([data-theme="light"]) .cloud-chip.priv, :root:not([data-theme="light"]) .mc-priv { background: #2e1065; color: #ddd6fe; }
+  :root:not([data-theme="light"]) .cl-alert, :root:not([data-theme="light"]) .mc-bad { background: #450a0a; color: #fecaca; }
+  :root:not([data-theme="light"]) .cl-wait { background: #451a03; color: #fde68a; }
+}
+:root[data-theme="dark"] .cloud-chip { background: #172554; color: #bfdbfe; }
+:root[data-theme="dark"] .cloud-chip.priv, :root[data-theme="dark"] .mc-priv { background: #2e1065; color: #ddd6fe; }
+:root[data-theme="dark"] .cl-alert, :root[data-theme="dark"] .mc-bad { background: #450a0a; color: #fecaca; }
+:root[data-theme="dark"] .cl-wait { background: #451a03; color: #fde68a; }
+.mc-warn { margin: 4px 0 0; color: #92400e; font-size: 13px; }
+.mc-where .pm-card { padding: 10px 12px; }
+.mc-log th, .mc-log td { text-align: left; }

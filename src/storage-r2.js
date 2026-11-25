@@ -7,6 +7,8 @@ export function r2Storage(bucket) {
     async put(key, bytes, { mime } = {}) { await bucket.put(key, bytes, mime ? { httpMetadata: { contentType: mime } } : undefined); },
     async get(key) { const o = await bucket.get(key); return o ? new Uint8Array(await o.arrayBuffer()) : null; },
     async delete(key) { await bucket.delete(key); },
+    async read(key) { const o = await bucket.get(key); return o ? new Uint8Array(await o.arrayBuffer()) : null; }, // R2 讀取出錯會丟例外，不會當成沒有
+    async create(key, bytes) { return !!(await bucket.put(key, bytes, { onlyIf: { etagDoesNotMatch: '*' } })); }, // 已經有就不覆寫（R2 條件寫入，回 null）
   };
 }
 
@@ -20,5 +22,7 @@ export function memStorage() {
     async put(key, bytes) { m.set(safeKey(key), new Uint8Array(bytes)); },
     async get(key) { return m.get(key) ?? null; },
     async delete(key) { m.delete(key); },
+    async read(key) { return m.get(key) ?? null; },
+    async create(key, bytes) { if (m.has(safeKey(key))) return false; m.set(key, new Uint8Array(bytes)); return true; },
   };
 }
