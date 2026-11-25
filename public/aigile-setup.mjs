@@ -44,6 +44,7 @@ const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 // Codex 預設沙盒（workspace-write）不准連網；只要開網路，不用完全權限（官方設定名稱，2026-10 查證）
 const CODEX_FIX = "Codex 沙盒預設不能連網：請所屬人類在 ~/.codex/config.toml 加 sandbox_mode = \"workspace-write\" 與 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限（danger-full-access）；改完重開 Codex 再跑一次";
 const inCodexSandbox = process.env.CODEX_SANDBOX_NETWORK_DISABLED === '1';
+const restMode = args.includes('--no-mcp');
 const SKILLS_ONLY = args.includes('--skills-only');
 // 工具：這次有帶 --tool 就用它（並記進 watcher.env 的 SKILL_TOOL）；沒帶就用上次記的；都沒有才自己判斷
 const envTool = (() => { try { return /^SKILL_TOOL=(.*)$/m.exec(fs.readFileSync(path.join('.aigile', AGENT || '_', 'watcher.env'), 'utf8'))?.[1].trim() || ''; } catch { return ''; } })();
@@ -63,8 +64,8 @@ out(`✓ Node ${process.versions.node}`);
 let fileTok = ''; try { fileTok = fs.readFileSync(path.join(DIR, '.token'), 'utf8').trim(); } catch {}
 const envName = [`AIGILE_TOKEN_${AGENT}`, 'AIGILE_TOKEN'].find(k => process.env[k]?.trim());
 const envTok = envName ? process.env[envName].trim() : '';
-const TOKEN = fileTok || envTok;
-const head = t => t.slice(0, 4) + '…';
+const TOKEN = restMode ? fileTok : fileTok || envTok;
+const head = t => restMode ? '[redacted]' : t.slice(0, 4) + '…';
 if (TOKEN) out(`✓ Token 來源：${fileTok ? `${DIR}/.token` : envName}（開頭 ${head(TOKEN)}）`);
 if (fileTok && envTok && envTok !== fileTok) out(`! 環境變數 ${envName}（開頭 ${head(envTok)}）跟 .token 不一樣，已用 .token；請清掉舊的環境變數（它會蓋掉 watcher 與等待腳本讀的檔案）`);
 if (!TOKEN) fail('Token', `找不到 ${DIR}/.token，也沒有 AIGILE_TOKEN_${AGENT}`, `先把接入設定裡的 Token 存成 ${DIR}/.token`);
@@ -197,7 +198,30 @@ async function syncSkills() {
 if (SKILLS_ONLY) { await syncSkills(); out('完成：技能已同步。'); } else {
 fs.mkdirSync(path.join('.aigile', 'watcher'), { recursive: true });
 let changed = false;
-for (const [f, want] of Object.entries(cfg.files)) {
+const files = { ...cfg.files };
+if (restMode) {
+  if (!fileTok || !cfg.poll) fail('REST', '缺少本機身分檔或輪詢工具雜湊。', 'Check the agent token file and platform version.');
+  files['poll.mjs'] = cfg.poll;
+  delete files['aigile-mcp.mjs'];
+  for (const doc of ['ai-integration', 'api-reference']) {
+    const response = await get('/api/docs/' + doc);
+    const content = await response.text();
+    if (!content.trim()) fail('REST', 'Empty integration document: ' + doc, '請確認平台規格文件。');
+    fs.writeFileSync(path.join(DIR, doc + '.md'), content);
+  }
+} else if (files['aigile-mcp.mjs'] && ['claude', 'codex', 'antigravity'].includes(TOOL)) {
+  const res = await fetch(BASE + '/api/mcp', { method: 'POST', redirect: 'error',
+    headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    signal: AbortSignal.timeout(20000) });
+  if (!res.ok) fail('MCP', 'HTTP ' + res.status, '請核對 MCP 服務。Check MCP service availability.');
+  const list = (await res.json()).result?.tools;
+  if (!Array.isArray(list)) fail('MCP', 'Invalid tools/list response', '請核對 MCP 服務。');
+  if (!list.some(t => t.name?.startsWith('aigile_'))) fail('MCP',
+    '這台電腦沒有可用的 Aigile MCP 工具，請確認公司政策。No Aigile MCP tools available; check company policy.',
+    '若貴單位允許平台 API，請由管理者指定 --no-mcp。Administrators may select --no-mcp where REST is permitted.');
+}
+for (const [f, want] of Object.entries(files)) {
   const dest = path.join('.aigile', 'watcher', f);
   let have = null; try { have = sha(fs.readFileSync(dest)); } catch {}
   if (have === want) { out(`✓ ${f} 已是最新`); continue; }
@@ -275,7 +299,7 @@ else if (TOOL === 'antigravity') out(`Antigravity CLI 一律走前景（開著�
 // 通用 MCP（aigile，整台電腦裝一次）：轉接腳本複製到家目錄 ~/.aigile/aigile-mcp.mjs，Claude Code 裝在使用者範圍（-s user）。
 // 從哪個資料夾開都用同一個；身分由轉接腳本看環境變數 AIGILE_AGENT 或資料夾裡唯一的 Token 決定，新增 AI、換角色、加專案不用重裝。
 // 舊的 aigile-<代號>不動、照樣能用。Token 由轉接腳本每次讀 .token，不寫進設定。
-if (cfg.files['aigile-mcp.mjs']) {
+if (!restMode && cfg.files['aigile-mcp.mjs']) {
   const home = path.join(process.env.AIGILE_HOME || os.homedir(), '.aigile');
   const mcp = path.join(home, 'aigile-mcp.mjs');
   const src = path.join('.aigile', 'watcher', 'aigile-mcp.mjs');
@@ -306,41 +330,46 @@ if (cfg.files['aigile-mcp.mjs']) {
     const old = `aigile-${AGENT.toLowerCase()}`;
     if (claude(['mcp', 'get', old]).status === 0) out(`! 舊的 ${old} 也還在：同一個對話會看到 mcp__aigile__* 和 mcp__${old}__* 兩套，兩套都是你、功能一樣。從現在起用 mcp__aigile__*（新的）；舊的先不移除，要不要移除之後由所屬人類決定`);
     // Claude Code hook：寫在這個資料夾的 .claude/settings.local.json（不進 git、不動全機設定）
-    if (cfg.files['aigile-hook.mjs']) {
-      const sp = path.join('.claude', 'settings.local.json');
-      let j = {}, ok = true;
-      try { j = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') ok = false; }
-      if (!ok || typeof j !== 'object' || Array.isArray(j)) out(`! ${sp.replace(/\\/g, '/')} 不是合法的 JSON，沒有加 hook（/clear 後要自己貼接入設定）`);
-      else {
-        const hooks = j.hooks && typeof j.hooks === 'object' ? j.hooks : (j.hooks = {});
-        let add = 0;
-        const ensure = (event, matcher, mode) => {
-          const list = Array.isArray(hooks[event]) ? hooks[event] : (hooks[event] = []);
-          // 絕對路徑＋引號：從子資料夾開對話也找得到（不靠 $CLAUDE_PROJECT_DIR，Windows 的 hook 不一定經過 bash）；這個設定檔只在這台電腦、不進 git
-          const cmd = `node "${path.resolve('.aigile', 'watcher', 'aigile-hook.mjs').replace(/\\/g, '/')}" ${mode}`;
-          const mine = h => new RegExp(`aigile-hook\\.mjs"?\\s+${mode}\\b`).test(String(h.command || ''));
-          const same = list.filter(g => (g.matcher || '') === (matcher || '') && (g.hooks || []).some(mine));
-          if (same.length) { for (const g of same) for (const h of g.hooks) if (mine(h) && h.command !== cmd) { h.command = cmd; add++; } return; } // 舊的相對路徑換成絕對路徑
-          list.push({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
-          add++;
-        };
-        ensure('SessionStart', 'clear', 'session');
-        ensure('SessionStart', 'compact', 'session');
-        ensure('Stop', '', 'stop');
-        if (add) { fs.mkdirSync('.claude', { recursive: true }); fs.writeFileSync(sp, JSON.stringify(j, null, 2) + '\n'); }
-        out(`✓ hook：${sp.replace(/\\/g, '/')}${add ? ` 加了 ${add} 個` : ' 已有'}（/clear 後自動帶入重新接上；回合結束等待腳本不在會提醒一次）`);
-      }
-    }
   } else out(`  Claude Code → claude ${addArgs.join(' ')}`);
   // Codex 預設不把環境變數傳給 MCP 子程序，要 env_vars 才帶得到 AIGILE_AGENT（喚醒腳本會設）
   const codexManual = `  Codex → ~/.codex/config.toml 加 [mcp_servers.aigile]，command = "node"，args = ["${mcpPath}"]，env_vars = ["AIGILE_AGENT"]（整台電腦一個；env_vars 那行一定要有，Codex 預設不傳環境變數給 MCP；資料夾有多隻 AI 又沒帶 AIGILE_AGENT 時先呼叫 aigile_use）`;
   if (TOOL === 'codex') await codexMcp(mcpPath, codexManual); else out(codexManual);
   if (TOOL === 'copilot') copilotMcp(mcpPath);
-  if (TOOL === 'antigravity') { antigravityMcp(mcpPath); antigravityWorkspace(); }
+  if (TOOL === 'antigravity') antigravityMcp(mcpPath);
 }
 
 // Antigravity CLI 的全域 MCP 設定在 ~/.gemini/config/mcp_config.json（AIGILE_GEMINI_HOME 可隔離測試）。
 // 先備份、已有 aigile 就不改、其他 MCP 原樣保留、壞 JSON 不碰；不寫 Token（agy 會把環境變數 AIGILE_AGENT／AIGILE_WAKE_AGENT 傳給 stdio MCP）。
+if (TOOL === 'claude') {
+  if (cfg.files['aigile-hook.mjs']) {
+    const sp = path.join('.claude', 'settings.local.json');
+    let j = {}, ok = true;
+    try { j = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') ok = false; }
+    if (!ok || typeof j !== 'object' || Array.isArray(j)) out(`! ${sp.replace(/\\/g, '/')} 不是合法的 JSON，沒有加 hook（/clear 後要自己貼接入設定）`);
+    else {
+      const hooks = j.hooks && typeof j.hooks === 'object' ? j.hooks : (j.hooks = {});
+      let add = 0;
+      const ensure = (event, matcher, mode) => {
+        const list = Array.isArray(hooks[event]) ? hooks[event] : (hooks[event] = []);
+        // 絕對路徑＋引號：從子資料夾開對話也找得到（不靠 $CLAUDE_PROJECT_DIR，Windows 的 hook 不一定經過 bash）；這個設定檔只在這台電腦、不進 git
+        const cmd = `node "${path.resolve('.aigile', 'watcher', 'aigile-hook.mjs').replace(/\\/g, '/')}" ${mode}`;
+        const mine = h => new RegExp(`aigile-hook\\.mjs"?\\s+${mode}\\b`).test(String(h.command || ''));
+        const same = list.filter(g => (g.matcher || '') === (matcher || '') && (g.hooks || []).some(mine));
+        if (same.length) { for (const g of same) for (const h of g.hooks) if (mine(h) && h.command !== cmd) { h.command = cmd; add++; } return; } // 舊的相對路徑換成絕對路徑
+        list.push({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: 30 }] });
+        add++;
+      };
+      ensure('SessionStart', 'clear', 'session');
+      ensure('SessionStart', 'compact', 'session');
+      ensure('Stop', '', 'stop');
+      if (add) { fs.mkdirSync('.claude', { recursive: true }); fs.writeFileSync(sp, JSON.stringify(j, null, 2) + '\n'); }
+      out(`✓ hook：${sp.replace(/\\/g, '/')}${add ? ` 加了 ${add} 個` : ' 已有'}（/clear 後自動帶入重新接上；回合結束等待腳本不在會提醒一次）`);
+    }
+  }
+}
+if (TOOL === 'antigravity') antigravityWorkspace();
+fs.writeFileSync(path.join(DIR, 'transport.txt'), restMode ? 'rest' : 'mcp');
+
 function antigravityMcp(mcpPath) {
   const dir = path.join(process.env.AIGILE_GEMINI_HOME || process.env.AIGILE_TEST_GEMINI_HOME || path.join(os.homedir(), '.gemini'), 'config');
   const file = path.join(dir, 'mcp_config.json'), shown = file.replace(/\\/g, '/');
@@ -368,7 +397,9 @@ function antigravityMcp(mcpPath) {
 function antigravityWorkspace() {
   const ruleFile = path.join('.agents', 'rules', 'aigile.md');
   const marker = '<!-- aigile-managed -->';
-  const ruleText = `${marker}\n# Aigile Collaboration Rules\n\n- Use the \`aigile\` MCP tools (\`aigile_me\`, \`aigile_inbox\`, \`aigile_read\`, \`aigile_card_get\`, \`aigile_post\`, \`aigile_ack\`, \`aigile_memory\`) for Aigile group collaboration.\n- Read your agent onboarding notes under \`.aigile/<AGENT>/onboarding.md\` and \`.aigile/<AGENT>/skills/*/SKILL.md\`. Never print or commit \`.aigile/\` tokens.\n- Never run \`git commit\`, \`git push\`, \`git merge\`, production DB migrations, deployments without owner approval, or delete data without explicit local owner consent.\n`;
+  const ruleText = restMode
+    ? marker + '\nRead .aigile/<AGENT>/ai-integration.md and api-reference.md. Use the configured REST API with this agent’s identity. Preserve approval requirements.\n'
+    : `${marker}\n# Aigile Collaboration Rules\n\n- Use the \`aigile\` MCP tools (\`aigile_me\`, \`aigile_inbox\`, \`aigile_read\`, \`aigile_card_get\`, \`aigile_post\`, \`aigile_ack\`, \`aigile_memory\`) for Aigile group collaboration.\n- Read your agent onboarding notes under \`.aigile/<AGENT>/onboarding.md\` and \`.aigile/<AGENT>/skills/*/SKILL.md\`. Never print or commit \`.aigile/\` tokens.\n- Never run \`git commit\`, \`git push\`, \`git merge\`, production DB migrations, deployments without owner approval, or delete data without explicit local owner consent.\n`;
   let curRule = null; try { curRule = fs.readFileSync(ruleFile, 'utf8'); } catch {}
   if (curRule === null || curRule.startsWith(marker)) {
     fs.mkdirSync(path.dirname(ruleFile), { recursive: true });

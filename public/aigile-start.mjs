@@ -113,7 +113,7 @@ try {
     fs.writeFileSync(setup, buf);
   }
   out('— 接入檢查 —');
-  const s = spawnSync(process.execPath, [setup, '--agent', AGENT, '--base', BASE, '--tool', TOOL], { stdio: 'inherit', env: { ...process.env, AIGILE_TOKEN: '' } });
+  const s = spawnSync(process.execPath, [setup, '--agent', AGENT, '--base', BASE, '--tool', TOOL, ...(args.includes('--no-mcp') ? ['--no-mcp'] : [])], { stdio: 'inherit', env: { ...process.env, AIGILE_TOKEN: '' } });
   if (s.status !== 0) fail('接入檢查', `結束碼 ${s.status}`, '照上面接入檢查最後一行做，做完再貼一次這一行');
   out('— 接入檢查結束 —');
 
@@ -228,6 +228,12 @@ try {
       ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${codexTail}`
       : `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用）。watcher 已在背景跑；跑完一輪就用背景執行開等待腳本待命：${wait}`;
   }
+  if (args.includes('--no-mcp')) {
+    const notes = posix(DIR);
+    prompt = `管理者已選 REST 模式。Administrator selected REST for ${AGENT}. Read ${notes}/ai-integration.md and ${notes}/api-reference.md. Use this agent's .token only; never print it. Verify /api/me, preserve the existing cursor, and follow section 4.1. Poll helper: node --env-file=${envFile} .aigile/watcher/poll.mjs --agent ${AGENT}. Retain all owner approval rules in ${notes}/${first ? 'onboarding' : 'reconnect'}.md.`;
+  } else {
+    prompt = '先核對這個對話可用的 Aigile MCP 工具。If no Aigile MCP tools are visible, stop and report the empty tool list to your administrator; do not switch transports. ' + prompt;
+  }
   const say = prompt.replace(/"/g, "'");
   if (NO_LAUNCH) { out(`✓ 待命提示：${prompt}`); out(`完成（--no-launch：沒有開 ${{ codex: 'Codex', antigravity: 'Antigravity CLI', copilot: 'Copilot CLI' }[TOOL] || 'Claude Code'}）。`); }
   else if (TOOL === 'antigravity') {
@@ -258,7 +264,7 @@ try {
     if (cfg.files?.['aigile-codex-ui.mjs'] && fs.existsSync(helper)) {
       try {
         const { launchForeground } = await import(pathToFileURL(helper).href);
-        r = await launchForeground({ dir: DIR, bin, args: sb, env, prompt, onReady: startWatcher });
+        r = await launchForeground({ dir: DIR, bin, args: sb, env, prompt, checkCatalog: !args.includes('--no-mcp'), onReady: startWatcher });
       } catch (error) {
         out(`同視窗啟動失敗：${error.message}`);
       }
@@ -281,16 +287,16 @@ try {
     // --additional-mcp-config：這次對話的 aigile 直接帶這隻 AI 的代號（蓋掉同名的全機設定；檔案裡沒有 Token，轉接腳本讀 .token）
     const mcpFile = path.join(DIR, 'copilot-mcp.json');
     const mcpPath = posix(path.join(process.env.AIGILE_HOME || os.homedir(), '.aigile', 'aigile-mcp.mjs'));
-    fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: { aigile: { type: 'local', command: 'node', args: [mcpPath], env: { AIGILE_AGENT: AGENT }, tools: ['*'] } } }, null, 2) + '\n');
+    if (!args.includes('--no-mcp')) fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: { aigile: { type: 'local', command: 'node', args: [mcpPath], env: { AIGILE_AGENT: AGENT }, tools: ['*'] } } }, null, 2) + '\n');
     out('✓ 開 Copilot CLI（互動模式，帶 AIGILE_AGENT；這次對話的 aigile MCP 用你的代號）。目前不自動叫醒：要它做事時，開 Copilot CLI 叫它');
     // AIGILE_COPILOT_BIN 給測試用假的 copilot
     const bin = process.env.AIGILE_COPILOT_BIN || 'copilot';
     const env = { ...process.env, AIGILE_AGENT: AGENT };
     const mcpArg = '@' + posix(path.resolve(mcpFile)); // 絕對路徑：不靠 copilot 從哪個資料夾解讀
-    const list = ['--additional-mcp-config', mcpArg, '-i', prompt];
+    const list = args.includes('--no-mcp') ? ['-i', prompt] : ['--additional-mcp-config', mcpArg, '-i', prompt];
     const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...list], { stdio: 'inherit', env })
       : process.platform === 'win32'
-        ? spawnSync(`${fs.existsSync(bin) ? `"${bin}"` : bin} --additional-mcp-config "${mcpArg}" -i "${say}"`, { stdio: 'inherit', env, shell: true })
+        ? spawnSync(`${fs.existsSync(bin) ? `"${bin}"` : bin} ${args.includes('--no-mcp') ? '' : '--additional-mcp-config "' + mcpArg + '"'} -i "${say}"`, { stdio: 'inherit', env, shell: true })
         : spawnSync(bin, list, { stdio: 'inherit', env });
     if (r.error || r.status === null) fail('Copilot CLI', `開不起來（${r.error?.message || '找不到 copilot 指令'}）`, '確認已安裝 GitHub Copilot CLI（copilot 指令）並登入過，再貼一次');
     process.exitCode = r.status;

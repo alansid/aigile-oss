@@ -22,14 +22,21 @@ const pub = f => fileURLToPath(new URL('../public/' + f, import.meta.url));
 const sha = f => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-setup-'));
 const db = await openTestDb(path.join(dataDir, 'switch.db'));
-const app = createApp({ db, storage: dbStorage(db), docText: '', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '10000', supabaseUrl: 'https://sb.example', supabaseKey: 'anon-key' } });
+const app = createApp({ db, storage: dbStorage(db), docText: 'Aigile integration rules', apiRefText: 'Aigile REST reference', scriptHashes: scriptHashes(), config: { openJoin: '1', rateLimitPerMin: '10000', supabaseUrl: 'https://sb.example', supabaseKey: 'anon-key' } });
 const call = async (token, p, method = 'GET', body) => {
   const r = await app(new Request('http://localhost' + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined }), 'http://localhost');
   return { status: r.status, body: await r.json().catch(() => ({})) };
 };
 // 腳本是獨立程序：開本機埠，靜態檔（watcher.mjs 等）直接回 public 裡的檔
+let emptyTools = false;
+let probes = 0;
 const server = http.createServer(async (req, res) => {
-  const f = /^\/(watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-antigravity|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
+  if (emptyTools && req.url === '/api/mcp') {
+    probes++;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { tools: [] } }));
+  }
+  const f = /^\/(poll|watcher|aigile-wait|aigile-setup|aigile-opencode|aigile-mcp|aigile-codex|aigile-codex-ui|aigile-antigravity|aigile-start|aigile-hook)\.mjs$/.exec(req.url);
   if (f) { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(pub(f[0].slice(1)))); }
   const chunks = []; for await (const c of req) chunks.push(c);
   const base = `http://${req.headers.host}`;
@@ -53,6 +60,64 @@ try {
   const putToken = d => { fs.mkdirSync(path.join(d, `.aigile/${AG}`), { recursive: true }); fs.writeFileSync(path.join(d, `.aigile/${AG}/.token`), tok); };
 
   // 10/20：代號＝角色_短代碼，同一個人兩個 PG 不會共用 .aigile/PG/（修正前都叫 PG，Token 互相蓋掉）
+  emptyTools = true;
+  for (const tool of ['codex', 'claude', 'antigravity']) {
+    const dir = work(); putToken(dir);
+    const args = ['--agent', AG, '--base', BASE, '--tool', tool];
+    const blocked = await run(dir, pub('aigile-setup.mjs'), args);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.out, /No Aigile MCP tools/);
+    const before = probes;
+    const explicit = await run(dir, pub('aigile-setup.mjs'), [...args, '--no-mcp']);
+    assert.equal(explicit.code, 0, explicit.out);
+    assert.equal(probes, before);
+    assert.equal(sha(path.join(dir, '.aigile/watcher/poll.mjs')), sha(pub('poll.mjs')));
+    assert.equal(fs.readFileSync(path.join(dir, '.aigile', AG, 'api-reference.md'), 'utf8'), 'Aigile REST reference');
+    if (tool === 'codex') {
+      const helper = path.join(dir, '.aigile/watcher/poll.mjs');
+      const poll = async () => JSON.parse((await run(dir, helper, ['--agent', AG], { AIGILE_BASE: BASE, ['AIGILE_TOKEN_' + AG]: 'stale-env-token' })).out);
+      assert.equal((await poll()).ok, true);
+      const request = async (route, method, body) => {
+        const res = await fetch(BASE + route, { method, headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const result = await res.json();
+        assert.ok(res.ok, JSON.stringify(result));
+        return result;
+      };
+      const project = '預設專案';
+      const source = await call(boss.token, '/api/messages', 'POST', { project, requestId: 'rest-incoming', recipientIds: [ai.participantId], text: '[通知] Check local REST mode' });
+      const inbox = await poll();
+      const notice = inbox.notifications.find(n => n.messageId === source.body.messageId);
+      assert.ok(notice && inbox.newMessages.some(m => m.messageId === notice.messageId), JSON.stringify({ source, inbox }));
+      await request('/api/messages', 'POST', { project, requestId: 'rest-outgoing', audience: 'all', text: '[進度] Local REST verified' });
+      const card = await request('/api/cards', 'POST', { project, requestId: 'rest-own-card', title: 'REST fixture', ownerId: ai.participantId });
+      const updated = await request('/api/cards/' + card.cardId, 'PATCH', { next: 'Reviewed', version: card.version });
+      assert.equal(updated.next, 'Reviewed');
+      const ack = await request('/api/notifications/ack', 'POST', { notificationIds: [notice.notificationId], cursor: inbox.newCursor });
+      assert.deepEqual(ack.confirmedIds, [notice.notificationId]);
+    }
+  }
+  // Use the exact JavaScript generated for the web copy button, without user-supplied arguments.
+  assert.equal((await call(boss.token, '/api/ai-tools')).body.transport, 'mcp');
+  assert.equal((await call(boss.token, '/api/ai-tools/transport', 'PUT', { transport: 'auto' })).status, 400);
+  assert.equal((await call(boss.token, '/api/ai-tools/transport', 'PUT', { transport: 'rest' })).body.transport, 'rest');
+  assert.equal((await call(tok, '/api/ai-tools/transport', 'PUT', { transport: 'mcp' })).status, 403);
+  const linkResponse = await fetch(BASE + '/api/my-ais/' + ai.participantId + '/onboarding-link', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + boss.token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tool: 'copilot', autoStandby: true, start: true }),
+  });
+  const { startLine } = await linkResponse.json();
+  const lineCode = /^node -e "([^"]+)"$/.exec(startLine)[1];
+  const lineDir = work(); putToken(lineDir);
+  const cli = path.join(lineDir, 'fake-copilot.mjs');
+  fs.writeFileSync(cli, "process.exit(process.argv.includes('--additional-mcp-config') || !process.argv.some(arg => arg.includes('Administrator selected REST')) ? 1 : 0)");
+  const watcherDir = path.join(lineDir, '.aigile/watcher');
+  fs.mkdirSync(watcherDir, { recursive: true });
+  fs.writeFileSync(path.join(watcherDir, 'aigile-start.mjs'), 'process.exit(73)'); // cached pre-REST launcher
+  const started = await run(lineDir, '-e', [lineCode], { AIGILE_COPILOT_BIN: cli });
+  assert.equal(started.code, 0, started.out);
+  assert.equal(fs.readFileSync(path.join(lineDir, '.aigile', AG, 'transport.txt'), 'utf8'), 'rest');
+  assert.equal((await call(boss.token, '/api/ai-tools/transport', 'PUT', { transport: 'mcp' })).body.transport, 'mcp');
+  emptyTools = false;
   const ai2 = (await call(boss.token, '/api/my-ais', 'POST', { projects: ['預設專案'], roleKey: 'PG', role: 'PG', name: '第二個程式助手', duties: 'x', style: 'x', autonomy: 'x', mustConfirm: 'x', handoff: 'x' })).body;
   const tok2 = (await testToken(db, ai2.participantId));
   const AG2 = (await call(tok2, '/api/me/watcher-env')).body.agent;

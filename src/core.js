@@ -2203,7 +2203,15 @@ ${ending}`;
     return { items: rows.map(r => ({ at: r.at, actorId: r.actor_id, text: r.text })) };
   });
   // AI 工具開關（全站一份）：人類都能讀；只有管理員能改，至少留一個開著
-  const toolsOut = off => ({ tools: TOOLS.map(key => ({ key, name: TOOL_LABEL[key], on: !off.includes(key) })), off });
+  const launchTransport = async () => (await getJson('launch_transport')) === 'rest' ? 'rest' : 'mcp';
+  route('PUT', '/api/ai-tools/transport', async ({ ctx, me, req }) => {
+    await requireAdmin(ctx, me, '設定 AI 接入模式');
+    const { transport } = await readJson(req);
+    if (!['mcp', 'rest'].includes(transport)) throw invalid('transport 只接受 mcp 或 rest');
+    await setJson('launch_transport', transport);
+    return { transport };
+  });
+  const toolsOut = async off => ({ transport: await launchTransport(), tools: TOOLS.map(key => ({ key, name: TOOL_LABEL[key], on: !off.includes(key) })), off });
   route('GET', '/api/ai-tools', async ({ me }) => { requireHuman(me); return toolsOut(await aiToolsOff()); });
   route('PUT', '/api/ai-tools', async ({ ctx, me, req }) => {
     await requireAdmin(ctx, me, '設定 AI 工具開關');
@@ -3000,7 +3008,7 @@ ${ending}`;
   route('PATCH', '/api/me/state', saveState(true));
   route('GET', '/api/me/watcher-env', async ({ me, base }) => {
     if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', '只有 AI 需要 watcher 設定。');
-    return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256, 'aigile-opencode.mjs': OPENCODE_SHA256, ...(MCP_SHA256 ? { 'aigile-mcp.mjs': MCP_SHA256 } : {}), ...(CODEX_SHA256 ? { 'aigile-codex.mjs': CODEX_SHA256 } : {}), ...(scriptHashes['aigile-codex-ui.mjs'] ? { 'aigile-codex-ui.mjs': scriptHashes['aigile-codex-ui.mjs'] } : {}), ...(ANTIGRAVITY_SHA256 ? { 'aigile-antigravity.mjs': ANTIGRAVITY_SHA256 } : {}), ...(START_SHA256 ? { 'aigile-start.mjs': START_SHA256 } : {}), ...(HOOK_SHA256 ? { 'aigile-hook.mjs': HOOK_SHA256 } : {}) }, setup: SETUP_SHA256 }; // setup＝接入檢查自己的雜湊（不同就自己更新）
+    return { agent: agentDir(me), env: watcherEnvText(base, me), files: { 'watcher.mjs': WATCHER_SHA256, 'aigile-wait.mjs': WAIT_SHA256, 'aigile-opencode.mjs': OPENCODE_SHA256, ...(MCP_SHA256 ? { 'aigile-mcp.mjs': MCP_SHA256 } : {}), ...(CODEX_SHA256 ? { 'aigile-codex.mjs': CODEX_SHA256 } : {}), ...(scriptHashes['aigile-codex-ui.mjs'] ? { 'aigile-codex-ui.mjs': scriptHashes['aigile-codex-ui.mjs'] } : {}), ...(ANTIGRAVITY_SHA256 ? { 'aigile-antigravity.mjs': ANTIGRAVITY_SHA256 } : {}), ...(START_SHA256 ? { 'aigile-start.mjs': START_SHA256 } : {}), ...(HOOK_SHA256 ? { 'aigile-hook.mjs': HOOK_SHA256 } : {}) }, setup: SETUP_SHA256, poll: scriptHashes['poll.mjs'] }; // setup＝接入檢查自己的雜湊（不同就自己更新）
   });
   // AI 自己拿「重新接上」設定（一行啟動、/clear 的 hook 用）：不含 Token；start=1（用一行啟動接的）＝所屬人類同意待命
   route('GET', '/api/me/reconnect', async ({ me, base, url }) => {
@@ -3381,15 +3389,15 @@ ${ending}`;
     await setJson('olink:' + ai.id, { h: await sha256(secret), exp, consent: body.autoStandby === true, convo: convoOf(body.convo), tool: toolOf(body.tool), start: body.start === true }); // start：網頁「複製一行啟動」產的
     const link = `${base}/api/setup/${ai.id}.${secret}`;
     const tl = toolOf(body.tool);
-    return { url: link, expiresAt: iso(exp), agent: agentDir(ai), ...(START_SHA256 && (tl === 'claude' || tl === 'codex' || tl === 'antigravity' || tl === 'copilot') ? { startLine: startLine(base, agentDir(ai), link, tl) } : {}) }; // 短版存 .aigile/<代號>/setup.md
+    return { url: link, expiresAt: iso(exp), agent: agentDir(ai), ...(START_SHA256 && (tl === 'claude' || tl === 'codex' || tl === 'antigravity' || tl === 'copilot') ? { startLine: startLine(base, agentDir(ai), link, tl, await launchTransport()) } : {}) }; // 短版存 .aigile/<代號>/setup.md
   });
   // 貼到工作資料夾的終端機（PowerShell、cmd、bash 都能貼：裡面沒有雙引號、$、%、反引號、驚嘆號）。
   // 本機已有 aigile-start.mjs 就直接跑（它由接入檢查用 Token 核對更新）；沒有才下載、核對這行寫的 SHA-256。
   // 一次性連結只在沒有 .token 時用；重開機貼同一行就接回（連結過期也沒關係）
-  function startLine(base, agent, link, tool) {
+  function startLine(base, agent, link, tool, transport) {
     const f = '.aigile/watcher/aigile-start.mjs';
     const a = [f, '--agent', agent, '--base', base, '--setup', link, '--tool', tool].map(s => `'${s}'`).join(',');
-    return `node -e "const f='${f}',h='${START_SHA256}',a=[${a}],fs=require('fs'),go=()=>process.exit(require('child_process').spawnSync(process.execPath,a,{stdio:'inherit'}).status);fs.existsSync(f)?go():fetch('${base}/aigile-start.mjs').then(r=>r.arrayBuffer()).then(b=>{b=Buffer.from(b);if(require('crypto').createHash('sha256').update(b).digest('hex')!=h){console.error('aigile-start.mjs 的 SHA-256 不符，沒有執行：請所屬人類重新複製一行啟動');process.exit(1)}fs.mkdirSync('.aigile/watcher',{recursive:true});fs.writeFileSync(f,b);go()})"`;
+    return `node -e "const f='${f}',h='${START_SHA256}',rest=${transport === 'rest'},a=[${a}].concat(rest?['--no-mcp']:[]),fs=require('fs'),go=()=>process.exit(require('child_process').spawnSync(process.execPath,a,{stdio:'inherit'}).status);fs.existsSync(f)&&(rest===false||require('crypto').createHash('sha256').update(fs.readFileSync(f)).digest('hex')===h)?go():fetch('${base}/aigile-start.mjs').then(r=>r.arrayBuffer()).then(b=>{b=Buffer.from(b);if(require('crypto').createHash('sha256').update(b).digest('hex')!=h){console.error('aigile-start.mjs 的 SHA-256 不符，沒有執行：請所屬人類重新複製一行啟動');process.exit(1)}fs.mkdirSync('.aigile/watcher',{recursive:true});fs.writeFileSync(f,b);go()})"`;
   }
   route('GET', '/api/setup/:key', async ({ params, base }) => {
     const gone = () => new Response('這個接入連結已失效（15 分鐘內、只能讀一次）。請告訴所屬人類，請他在網頁「我的 AI」重按「複製接入文字」。', { status: 410, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });

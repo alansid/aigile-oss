@@ -158,7 +158,17 @@ function launch(bin, args, options) {
   return spawn(command, { ...options, shell: true });
 }
 
-export async function launchForeground({ dir, bin, args, env, prompt, onReady }) {
+// Check the inventory seen by the client, which can differ from the server's catalog.
+async function hasEmptyAigileCatalog(ui) {
+  const rpc = await connect(ui);
+  try {
+    const page = await rpc.request('mcpServerStatus/list', { serverName: 'aigile' });
+    const server = page?.data?.find(entry => entry.name === 'aigile');
+    return server && !server.toolsError && server.tools && !Object.keys(server.tools).some(name => name.startsWith('aigile_'));
+  } finally { rpc.close(); }
+}
+
+export async function launchForeground({ dir, bin, args, env, prompt, onReady, checkCatalog = false }) {
   const key = randomBytes(32).toString('hex');
   const digest = createHash('sha256').update(key).digest('hex');
   const marker = '[Aigile ' + randomUUID() + ']';
@@ -202,6 +212,10 @@ export async function launchForeground({ dir, bin, args, env, prompt, onReady })
       server.once('exit', () => { clearTimeout(timer); resolve(null); });
     });
     if (!url) return null; // Older CLI: caller uses its ordinary interactive launch.
+    if (checkCatalog && await hasEmptyAigileCatalog({ url, key }).catch(() => false)) {
+      console.error('這台電腦沒有可用的 Aigile MCP 工具，請核對公司政策。No Aigile MCP tools available. If company policy permits REST, an administrator may restart with --no-mcp.');
+      return { status: 1 };
+    }
     const stage = descriptor(dir) + '.' + process.pid;
     fs.writeFileSync(stage, JSON.stringify({ pid: process.pid, marker, key, url, createdAt: Date.now() }), { mode: 0o600 });
     fs.renameSync(stage, descriptor(dir));

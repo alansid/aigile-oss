@@ -11,8 +11,11 @@ const DIR = path.join(process.cwd(), '.aigile', AGENT);
 const STATE = path.join(DIR, 'state.json');
 const BASE = (process.env.AIGILE_BASE || process.env.AIGILE_BASE_URL || '').replace(/\/+$/, ''); // 平台網址，例：AIGILE_BASE=https://…
 const tokenFile = path.join(DIR, '.token');
-const TOKEN = (AGENT === 'DEFAULT' ? process.env.AIGILE_TOKEN : process.env['AIGILE_TOKEN_' + AGENT])
-  || (fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, 'utf8').trim() : ''); // 不要把 Token 寫死在程式裡
+const savedToken = fs.existsSync(tokenFile) ? fs.readFileSync(tokenFile, 'utf8').trim() : '';
+const transport = path.join(DIR, 'transport.txt');
+const restMode = fs.existsSync(transport) && fs.readFileSync(transport, 'utf8').trim() === 'rest';
+const envToken = AGENT === 'DEFAULT' ? process.env.AIGILE_TOKEN : process.env['AIGILE_TOKEN_' + AGENT];
+const TOKEN = restMode ? savedToken : envToken || savedToken;
 fs.mkdirSync(DIR, { recursive: true });
 const state = fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : {};
 const save = () => fs.writeFileSync(STATE, JSON.stringify(state, null, 2));

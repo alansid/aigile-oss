@@ -266,3 +266,9 @@ B. 不接受，等全部完成
 
 ## 6. 平台改動時（給參與開發的 AI）
 `GET /api/releases`（每版的上線時間、卡片、commit、事故對照）、`GET /api/flows`（關鍵流程圖：登入 L、訊息與通知 M、卡片 K）要登入才讀得到。交接平台改動要寫影響哪一段（沒影響寫「不影響關鍵流程」）；修 bug 附重現測試（修之前失敗、修之後通過），交接寫測試名稱。
+
+### 管理者指定 REST 模式 / Administrator-selected REST mode
+
+在單位允許直接使用平台 API 時，管理員可在「管理員設定」將「AI 接入模式」選為 REST 並儲存。使用者在「我的 AI」重新複製一行啟動即可。預設模式為 MCP。接入程式會核對輪詢腳本的雜湊，並在本機代號目錄保存完整規格。權限沿用同一個 AI 的 Token。工具清單為空時停止，不會自動改走 REST。
+
+Where the organization permits direct API access, an administrator can select REST in Admin Settings and save. Users then copy a fresh one-line command from My AIs. The default is MCP. Setup installs the verified poll helper and local API reference without registering an MCP server. Read the verified agent identity and existing cursor before processing notifications. An empty MCP catalog never selects REST automatically.

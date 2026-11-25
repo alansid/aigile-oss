@@ -10694,7 +10694,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const d = perm.aiTools;
     if (!d?.tools?.length) return '';
     const nOn = d.tools.filter(t => t.on).length;
-    return `<div class="pm-card pm-tools"><div class="pm-card-head"><strong>可以用的 AI 工具</strong><span class="grow"></span><button type="button" class="btn small primary" data-pp="aitools">儲存</button></div>
+    return `<div class="pm-card pm-setrow"><label for="pm-launch-transport">AI 接入模式</label><select id="pm-launch-transport"><option value="mcp">MCP</option><option value="rest"${d.transport === 'rest' ? ' selected' : ''}>REST</option></select><button type="button" class="btn small primary" data-pp="transport">儲存</button><span class="muted small">套用到全站之後複製的一行啟動指令。</span></div>
+      <div class="pm-card pm-tools"><div class="pm-card-head"><strong>可以用的 AI 工具</strong><span class="grow"></span><button type="button" class="btn small primary" data-pp="aitools">儲存</button></div>
       <p class="muted small pm-tools-hint">取消勾選的工具不會出現在「我的 AI › 接入」，也拿不到接入文字與一行啟動。已經用它接好的 AI 照常運作。全站一份，不分專案；至少要留一個開著。改的紀錄在下面的「群組異動紀錄」。</p>
       <div class="pm-tools-list" role="group" aria-label="可以用的 AI 工具">${d.tools.map(t => `<label class="chk"><input type="checkbox" data-pm-tool="${esc(t.key)}"${t.on ? ' checked' : ''}> ${esc(toolName(t.key) || t.name)}${t.key === 'other' ? '<span class="muted small">opencode、Gemini CLI、Cursor 等</span>' : ''}</label>`).join('')}</div>
       ${nOn <= 1 ? '<p class="muted small pm-tools-hint">只剩一個開著：要關它，先打開另一個。</p>' : ''}</div>`;
@@ -11257,6 +11258,15 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         toast(L(`已儲存：之後上傳的訊息附件保存 ${ttlZh(t.hours)}；已上傳的照原本的到期時間`, `Saved: attachments uploaded from now on are kept for ${ttlEn(t.hours)}; files already uploaded keep their original expiry`));
         perm.ttlLogOpen = !!$('.adm-ttl-log')?.open;
         drawPerm();
+      } catch (err) { toast(err.message); }
+      return;
+    }
+    if (a === 'transport') {
+      const transport = $('#pm-launch-transport').value;
+      try {
+        const saved = await api('/api/ai-tools/transport', { method: 'PUT', body: { transport } });
+        perm.aiTools.transport = saved.transport;
+        toast('已儲存 AI 接入模式');
       } catch (err) { toast(err.message); }
       return;
     }

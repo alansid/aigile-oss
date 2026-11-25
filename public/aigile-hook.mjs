@@ -54,6 +54,9 @@ async function main() {
   const rel = p => path.relative(WORK, p).replace(/\\/g, '/');
   const wait = `node --env-file=${rel(path.join(DIR, 'watcher.env'))} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;
 
+  if (MODE === 'session' && read(path.join(DIR, 'transport.txt')).trim() === 'rest') {
+    return write(`[Aigile] ${AGENT}: resume using ${rel(DIR)}/ai-integration.md and api-reference.md in REST mode. Preserve your cursor and owner approval rules. Wait command: ${wait}\n`);
+  }
   if (MODE === 'session' && input.source === 'compact') {
     // 壓縮時不帶整份設定（約 5,600 字，每次壓縮都多吃一次），只印一句；不打網路
     return write(`[Aigile] 對話剛壓縮：你是 ${AGENT}。照 ${rel(path.join(DIR, 'reconnect.md'))} 與工作記憶（aigile_memory、.aigile/${AGENT}/state.json）接續，不要重新簽到、游標沿用；等待腳本要開著（不在就在 ${WORK.split(path.sep).join('/')} 用背景執行：${wait}）。\n`);

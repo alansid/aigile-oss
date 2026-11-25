@@ -31,16 +31,18 @@ try {
     prompt: 'initial prompt', onReady: ready });
   await Promise.race([started, launcher.then(() => { throw Error('test launcher exited early'); })]);
   const ui = foregroundUI(dir);
+  let checkingEmptyCatalog = false;
   globalThis.WebSocket = class {
     constructor(url, options) {
       assert.equal(url, ui.url);
-      assert.equal(options.headers.Authorization, 'Bearer ' + ui.key);
+      if (!checkingEmptyCatalog) assert.equal(options.headers.Authorization, 'Bearer ' + ui.key);
       queueMicrotask(() => this.onopen());
     }
     send(data) {
       const { id, method, params } = JSON.parse(data);
       if (!id) return;
       let result = {};
+      if (method === 'mcpServerStatus/list') result = { data: [{ name: 'aigile', tools: {} }] };
       if (method === 'thread/loaded/list') result = { data: ['other', 'foreground'] };
       if (method === 'thread/read') {
         const mine = params.threadId === 'foreground';
@@ -74,6 +76,10 @@ try {
   assert.equal((await launcher).status, 0);
   assert.equal(await inspectForeground(dir), 'closed');
   assert.equal(await deliverForeground(dir, 'next doorbell'), false);
+  checkingEmptyCatalog = true;
+  const blocked = await launchForeground({ dir, bin, args: [], env: { ...process.env, TEST_CLOSE_FILE: exitFile },
+    prompt: 'blocked catalog', checkCatalog: true, onReady: () => assert.fail('watcher started with empty client catalog') });
+  assert.equal(blocked.status, 1);
   console.log('codex-foreground: bound thread, busy queue, close and fallback passed');
 } finally {
   fs.writeFileSync(exitFile, '');

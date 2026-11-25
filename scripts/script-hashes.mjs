@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-export const HASHED_SCRIPTS = ['watcher.mjs', 'aigile-wait.mjs', 'aigile-setup.mjs', 'aigile-opencode.mjs', 'aigile-mcp.mjs', 'aigile-codex.mjs', 'aigile-codex-ui.mjs', 'aigile-antigravity.mjs', 'aigile-start.mjs', 'aigile-hook.mjs']; // aigile-mcp：MCP 轉接；codex／codex-ui：Codex 喚醒與同視窗；antigravity：Antigravity CLI 喚醒；start：一行啟動；hook：Claude Code /clear 接回
+export const HASHED_SCRIPTS = ['watcher.mjs', 'aigile-wait.mjs', 'aigile-setup.mjs', 'aigile-opencode.mjs', 'aigile-mcp.mjs', 'aigile-codex.mjs', 'aigile-codex-ui.mjs', 'aigile-antigravity.mjs', 'aigile-start.mjs', 'aigile-hook.mjs', 'poll.mjs']; // aigile-mcp：MCP 轉接；codex／codex-ui：Codex 喚醒與同視窗；antigravity：Antigravity CLI 喚醒；start：一行啟動；hook：Claude Code /clear 接回
 const pub = new URL('../public/', import.meta.url);
 
 export function scriptHashes() {
