@@ -37,7 +37,7 @@ try {
   // 1. 管理員：專案卡 ⚙ 四項
   await login(liu.token, '/p/main/messages');
   await openGear();
-  assert.equal(await menuItems(), 'rename,repo,members,kbai,review', '管理員五項（封存只在專案管理頁；知識庫整理 AI、審查）');
+  assert.equal(await menuItems(), 'rename,repo,members,kbai,review,templates', '管理員六項（封存只在專案管理頁；知識庫整理 AI、審查、卡片範本）');
   assert.match(await text('#pset-menu .pset-head'), /預設專案 · 專案設定/);
   // 成員與本專案角色 → 成員管理、選好預設專案
   await click('#pset-menu [data-pset-act="members"]');
@@ -113,7 +113,7 @@ try {
   // 7. leader：預設專案有 ⚙（只有成員與本專案角色）、第二專案沒有；清單沒有新增；頭像只有成員管理；管理頁沒有切換鈕
   await login(wang.token, '/p/main/messages');
   await openGear();
-  assert.equal(await menuItems(), 'rename,repo,members,kbai,review', 'leader 跟管理員一樣：改名、程式庫、成員與本專案角色');
+  assert.equal(await menuItems(), 'rename,repo,members,kbai,review,templates', 'leader 跟管理員一樣：改名、程式庫、成員與本專案角色');
   await click('#pset-menu [data-pset-act="members"]');
   await until(() => js("!!document.querySelector('.pm-tabs')"), 8000, 'leader 成員管理');
   assert.ok(!(await js("!!document.querySelector('.work-title [data-adm]')")), 'leader 沒有管理員設定連結');
