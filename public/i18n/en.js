@@ -2352,6 +2352,7 @@ window.AIGILE_EN = {
     "溫暖柔和": "Warm & soft",
     "群組介紹": "About this group",
     "transport 只接受 mcp 或 rest": "transport must be mcp or rest",
+    "交接訊息已送出。請在 replyFrom 指定接手的 AI，讓它收到叫醒通知。": "Handoff sent. Set replyFrom to the AI taking over so it receives a wake notification.",
     "AI 接入模式": "AI connection mode",
     "已儲存 AI 接入模式": "AI connection mode saved",
     "套用到全站之後複製的一行啟動指令。": "Applies site-wide to newly copied launch commands.",

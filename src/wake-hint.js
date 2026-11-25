@@ -18,6 +18,15 @@ function calls(line, label) {
     || new RegExp(`(?:請|麻煩)\\s*@?${L}`).test(line)
     || new RegExp(`@${L}[^\\n]*?${ACT}`).test(line);
 }
+export function handoffWarning(text, rawAsk, people, senderId, projectMembers) {
+  if (!/^\s*\[交接\]/.test(text)) return [];
+  const asksHuman = rawAsk?.some(id => people.get(id)?.kind === 'human');
+  const mentionsAI = !rawAsk?.length && text.includes('@') && projectMembers.some(p =>
+    p.kind === 'ai' && p.status === 'active' && p.id !== senderId &&
+    labelsOf({ ...p, roleKey: p.role_key }).some(label =>
+      new RegExp('(?:^|[^A-Za-z0-9_])@' + esc(label) + (/[A-Za-z0-9_]$/.test(label) ? '(?![A-Za-z0-9_])' : '')).test(text)));
+  return asksHuman || mentionsAI ? ['交接訊息已送出。請在 replyFrom 指定接手的 AI，讓它收到叫醒通知。'] : [];
+}
 // members：同專案、不含發文者本人的成員 [{ id, name, code, roleKey, role }]；ask：最後要回覆的人（可能 null）
 export function wakeHintWarnings(text, members, ask) {
   text = String(text || '');

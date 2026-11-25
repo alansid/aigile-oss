@@ -74,6 +74,9 @@
       if (state.me && (err.code === 'INVALID_TOKEN' || err.code === 'TOKEN_EXPIRED')) logout(false);
       throw err;
     }
+    if (method === 'POST' && path === '/api/messages' && data.warnings?.length) {
+      toast(data.warnings.join('\n'), 8000);
+    }
     return data;
   }
 

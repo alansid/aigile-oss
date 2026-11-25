@@ -17,7 +17,7 @@ import { registerBackup } from './backup.js'; // 備份匯出與匯入
 import { registerUpdateCheck } from './update.js'; // 管理頁「有新版本」
 import { registerDemo } from './demo.js'; // 示範資料
 import { optionWarnings } from './questions.js';
-import { wakeHintWarnings } from './wake-hint.js';
+import { handoffWarning, wakeHintWarnings } from './wake-hint.js';
 import { parseMentions } from './mentions.js';
 import { formatProblems, dbBlockCounter, blockMessage, passWarning } from './post-format.js';
 import { mcpDispatch } from './mcp.js'; // 平台 MCP
@@ -794,6 +794,10 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       teamCache = { at: 0, data: null }; // 人類回覆 [需確認] 後，收件匣立即更新
       // 人類回覆某則訊息＝處理了它：把他在那則訊息上的待處理通知標為已讀（AI 照規則自己 ACK，不替 AI 自動 ACK）
       await db.run("UPDATE notifications SET status = 'acked', acked_at = COALESCE(acked_at, ?) WHERE recipient_id = ? AND message_id = ? AND status = 'pending'", createdAt, me.id, replyTo.id);
+    }
+    if (/^\s*\[交接\]/.test(text)) {
+      const members = [...people.values()].filter(p => !project || projectsOf(p).includes(project));
+      warnings.push(...handoffWarning(text, rawAsk, people, me.id, members));
     }
     warnings.push(...fmt.warnings);
     if (me.kind === 'ai' && !fmt.passed) warnings.push(...optionWarnings(text)); // 擋過 2 次照送的不再叫它重發；[需確認] 的選項沒變成按鈕就提醒發文的 AI
