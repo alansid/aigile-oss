@@ -6,6 +6,7 @@
 export function createLiveHub({ maxConnections = 500, maxPerMember = 5, heartbeatMs = 25_000, maxAgeMs = 3600_000 } = {}) {
   const conns = new Map(); // id → { pid, kind, write, close, at }
   let seq = 0;
+  let lastEventAt = null;
   const enc = new TextEncoder();
   const byMember = pid => [...conns.values()].filter(c => c.pid === pid);
 
@@ -43,9 +44,10 @@ export function createLiveHub({ maxConnections = 500, maxPerMember = 5, heartbea
     const line = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
     let n = 0;
     for (const c of [...conns.values()]) if (want.has(c.pid) && c.write(line)) n++;
+    if (n > 0) lastEventAt = new Date().toISOString();
     return n;
   }
   const connectedIds = () => [...new Set([...conns.values()].map(c => c.pid))];
   const closeAll = () => { for (const c of [...conns.values()]) c.close(); };
-  return { open, toPeople, connectedIds, closeAll, size: () => conns.size, limits: { maxConnections, maxPerMember, heartbeatMs, maxAgeMs } };
+  return { open, toPeople, connectedIds, closeAll, size: () => conns.size, lastEventAt: () => lastEventAt, limits: { maxConnections, maxPerMember, heartbeatMs, maxAgeMs } };
 }

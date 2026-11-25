@@ -1055,7 +1055,7 @@
   let pollGen = 0; // 每次重新連線換一代，舊的計時鏈自動結束，不會越疊越多
   // 內建即時通道（本機／Docker 版的 /api/live）：連著時，新訊息、通知、私訊、卡片一有變就更新，輪詢放慢到 60 秒；
   // 這個環境沒有（Cloudflare 版回 404）或斷線時，照舊每 5 秒輪詢；斷線 3～15 秒後自己重連
-  const liveConn = { on: false, ctl: null, retry: null, gen: 0, kinds: new Set(), timer: null };
+  const liveConn = { on: false, ctl: null, retry: null, gen: 0, kinds: new Set(), timer: null, lastEventAt: null };
   async function connectLive() {
     clearTimeout(liveConn.retry); liveConn.retry = null;
     liveConn.ctl?.abort();
@@ -1087,6 +1087,8 @@
   // 同一陣子來的多個事件合成一次更新
   function liveEvent(kind, raw) {
     if (!kind || kind === 'hello' || kind === 'bye') return;
+    liveConn.lastEventAt = new Date().toISOString();
+    if (state.page === 'perm' && perm.tab === 'admin' && perm.adm === 'system') drawPerm();
     if (kind === 'join') { let x = {}; try { x = JSON.parse(raw || '{}'); } catch {} return onJoinDecided(x).catch(() => {}); }
     liveConn.kinds.add(kind);
     clearTimeout(liveConn.timer);
@@ -10336,11 +10338,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   // 管理員設定的連結：頁面裡、彈窗裡（個人設定、文件）都能點；在彈窗裡先關掉
   document.addEventListener('click', e => {
     const t = e.target, a = t.closest?.('[data-adm]'), go = t.closest?.('[data-adm-go]');
-    if (!a && !go && !t.closest?.('[data-adm-back], [data-adm-audit-reload]')) return;
+    if (!a && !go && !t.closest?.('[data-adm-back], [data-adm-audit-reload], [data-adm-rt-reload]')) return;
     if (t.closest('#modal-root .modal')) closeModal();
     if (a) return openAdmin(a.dataset.adm || null);
     if (t.closest('[data-adm-back]')) return openAdmin(null);
     if (t.closest('[data-adm-audit-reload]')) { perm.admAudit = undefined; return drawPerm(); }
+    if (t.closest('[data-adm-rt-reload]')) { perm.admRt = undefined; return drawPerm(); }
     const k = go.dataset.admGo;
     if (k === 'join') return openJoinReview('');
     if (k === 'skill') { skv.data = null; return openPermTab('members', { tab: 'skills' }); }
@@ -11905,6 +11908,51 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   };
   const bkSay = msg => { bk.msg = msg; const el = $('#bk-msg'); if (el) el.textContent = msg; };
   const bkMsgHtml = where => (bk.where === where && bk.msg ? `<p class="small bk-msg" id="bk-msg" role="status" aria-live="polite">${esc(bk.msg)}</p>` : '');
+  // 系統設定顯示即時通道模式（SSE／Supabase Realtime／輪詢）、最後一次即時事件時間與輪詢間隔（只有管理員看得到）
+  const RT_MODE_PILL = { sse: 'green', supabase: 'blue', polling: 'yellow' };
+  function fmtRtTime(iso) {
+    if (!iso) return L('尚未送出', 'None sent yet');
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return L('尚未送出', 'None sent yet');
+    const hm = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+    const sec = Math.max(0, Math.round((Date.now() - dt.getTime()) / 1000));
+    const ago = sec < 10 ? L('剛剛', 'just now') : sec < 60 ? L(`${sec} 秒前`, `${sec}s ago`) : sec < 3600 ? L(`${Math.floor(sec / 60)} 分鐘前`, `${Math.floor(sec / 60)}m ago`) : sec < 86400 ? L(`${Math.floor(sec / 3600)} 小時前`, `${Math.floor(sec / 3600)}h ago`) : L(`${Math.floor(sec / 86400)} 天前`, `${Math.floor(sec / 86400)}d ago`);
+    return L(`${hm}（${ago}）`, `${hm} (${ago})`);
+  }
+  function realtimeCardHtml() {
+    if (perm.admRt === undefined) {
+      perm.admRt = null;
+      const redraw = () => { if (state.page === 'perm' && perm.tab === 'admin' && perm.adm === 'system') drawPerm(); };
+      api('/api/admin/realtime').then(d => { perm.admRt = d; redraw(); }).catch(err => { perm.admRt = { err: err.message }; redraw(); });
+    }
+    const d = perm.admRt;
+    if (!d) return `<div class="pm-card adm-rt-card"><div class="pm-card-head"><strong>${L('即時通道', 'Realtime channel')}</strong></div><p class="muted small pm-pad">載入中…</p></div>`;
+    if (d.err) return `<div class="pm-card adm-rt-card"><div class="pm-card-head"><strong>${L('即時通道', 'Realtime channel')}</strong></div><p class="error pm-pad">${esc(d.err)}</p></div>`;
+    const modeLabel = d.mode === 'sse' ? 'SSE' : d.mode === 'supabase' ? 'Supabase Realtime' : L('輪詢', 'Polling');
+    const pill = RT_MODE_PILL[d.mode] || 'grey';
+    const reason = d.mode === 'polling'
+      ? (d.reason === 'supabase_unreachable' ? L('Supabase Realtime 連不上，暫時改用輪詢', 'Supabase Realtime is unreachable; using polling for now') : L('沒有設定 Supabase Realtime，改用輪詢', 'Supabase Realtime is not configured; using polling'))
+      : '';
+    const lastAt = [d.lastEventAt, liveConn.lastEventAt].filter(Boolean).sort().pop() || null;
+    const pollText = d.mode === 'sse'
+      ? (liveConn.on ? L(`${d.pollIntervalSec || 60} 秒（即時通道連線中，斷線改 ${d.fallbackPollIntervalSec || 5} 秒）`, `${d.pollIntervalSec || 60}s (connected; falls back to ${d.fallbackPollIntervalSec || 5}s if disconnected)`)
+        : L(`${d.fallbackPollIntervalSec || 5} 秒（即時通道重連中）`, `${d.fallbackPollIntervalSec || 5}s (reconnecting)`))
+      : L(`前景 ${d.pollIntervalSec || 5} 秒／背景 ${d.backgroundPollIntervalSec || 60} 秒`, `${d.pollIntervalSec || 5}s foreground / ${d.backgroundPollIntervalSec || 60}s background`);
+    const impact = d.mode === 'polling'
+      ? L('新訊息最慢 5 秒才出現；切到別的分頁時最慢 60 秒。', 'New messages can take up to 5 seconds to appear, or up to 60 seconds while this tab is in the background.')
+      : L('新訊息約 1 秒內出現。', 'New messages show up within about 1 second.');
+    const sep = window.aigileI18n?.lang === 'en' ? ' ' : '　';
+    const row = (k, v, sub = '') => `<div class="adm-row"><div class="adm-rt"><div><span class="muted">${esc(k)}</span>${sep}<b>${esc(v)}</b></div>${sub ? `<span class="muted small">${esc(sub)}</span>` : ''}</div></div>`;
+    const sentLabel = d.mode === 'supabase' ? L('這台伺服器最後一次送出即時事件', 'Last realtime event sent by this server') : L('最後一次送出即時事件', 'Last realtime event sent');
+    const sentSub = d.mode === 'supabase' ? L('平台有多台伺服器，可能顯示尚未送出', 'Multiple servers handle requests, so this may show none sent yet') : '';
+    return `<div class="pm-card adm-rt-card">
+      <div class="pm-card-head"><strong>${L('即時通道', 'Realtime channel')}</strong><span class="pill-tag ${pill}">${esc(modeLabel)}</span><span class="grow"></span><button type="button" class="link small" data-adm-rt-reload>重新整理</button></div>
+      ${row(L('目前通道', 'Current channel'), modeLabel, reason)}
+      ${d.mode !== 'polling' ? row(sentLabel, fmtRtTime(lastAt), sentSub) : ''}
+      ${row(L('輪詢間隔', 'Polling interval'), pollText)}
+      <p class="muted small pm-note">${esc(impact)}</p>
+    </div>`;
+  }
   function permSystemHtml() {
     if (!bk.status) { api('/api/admin/backup/status').then(s => { bk.status = s; if (state.page === 'perm' && perm.tab === 'admin' && perm.adm === 'system') drawPerm(); }).catch(err => toast(err.message)); }
     const st = bk.status;
@@ -11914,6 +11962,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       : '<p class="small">這個站已經有資料，不能匯入；要搬家請在新架的空站匯入</p>';
     return `<div class="pm-projs">
       ${updCardHtml()}
+      ${realtimeCardHtml()}
       ${demoCardHtml()}
       <div class="pm-card"><div class="pm-card-head"><strong>下載備份</strong><span class="muted small">整個群組的資料（成員、專案、訊息、卡片、決策、技能、設定）存成一個檔。不含 Token、密碼與登入連結：匯入後其他人要你在「成員」按「重設登入」，AI 要主人重發 Token。</span></div>
         <div class="pm-pad bk-row"><label class="bk-check"><input type="checkbox" id="bk-files" checked> 含附件與專案文件</label><button type="button" class="btn primary" data-bk="export"${bk.busy ? ' disabled' : ''}>下載備份</button></div>${bkMsgHtml('export')}</div>

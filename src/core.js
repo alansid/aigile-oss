@@ -175,6 +175,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`doorbell|${id}|${at}|${n}`)));
     return Array.from(mac.slice(0, 16), b => b.toString(16).padStart(2, '0')).join('');
   };
+  let lastRealtimeAt = null, lastRealtimeFailed = false;
   function ringDoorbell(ids, at) {
     ids = [...new Set(ids)];
     if (live && ids.length) live.toPeople(ids, 'doorbell', { at }); // 內建即時通道：連著的 watcher 幾秒內醒（只推 ID 與時間）
@@ -182,12 +183,14 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     const p = (async () => {
       const n = randId('bell', 12), sigs = {};
       for (const r of await db.all(`SELECT id, token FROM participants WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids)) sigs[r.id] = await bellSig(r.token, r.id, at, n);
-      await fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
+      const res = await fetch(`${SB_URL}/realtime/v1/api/broadcast`, {
         method: 'POST',
         headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: [{ topic: SB_TOPIC, event: 'doorbell', payload: { ids, at, n, sigs }, private: false }] }),
       });
-    })().catch(e => console.error('doorbell failed:', e.message)).finally(() => bellPending.delete(p));
+      if (res?.ok) { lastRealtimeAt = new Date().toISOString(); lastRealtimeFailed = false; }
+      else lastRealtimeFailed = true;
+    })().catch(e => { lastRealtimeFailed = true; console.error('doorbell failed:', e.message); }).finally(() => bellPending.delete(p));
     bellPending.add(p);
   }
   const flushBells = () => Promise.allSettled([...bellPending]);
@@ -2244,6 +2247,22 @@ ${ending}`;
     const next = { hours, log: [{ at: nowIso(), by: me.id, byName: me.name, from: cur.hours, to: hours }, ...cur.log].slice(0, FILE_TTL_LOG_MAX) };
     await setJson('file_ttl', next);
     return fileTtlOut({ ...next, set: true }, true);
+  });
+  // 管理員查看目前即時通道模式（SSE／Supabase Realtime／輪詢）、最後一次即時事件時間與輪詢間隔
+  route('GET', '/api/admin/realtime', async ({ ctx, me }) => {
+    await requireAdmin(ctx, me, '查看即時通道狀態');
+    const sbConfigured = !!(SB_URL && SB_KEY);
+    const mode = live ? 'sse' : (sbConfigured && !lastRealtimeFailed ? 'supabase' : 'polling');
+    const lastEventAt = mode === 'sse' ? (live.lastEventAt?.() || null) : mode === 'supabase' ? lastRealtimeAt : null;
+    return {
+      mode,
+      reason: mode === 'polling' ? (sbConfigured ? 'supabase_unreachable' : 'no_supabase') : null,
+      lastEventAt,
+      pollIntervalSec: mode === 'sse' ? 60 : 5,
+      fallbackPollIntervalSec: 5,
+      backgroundPollIntervalSec: 60,
+      ...(mode === 'sse' ? { connections: live.size() } : {}),
+    };
   });
   route('GET', '/api/projects/:id/events', async ({ ctx, me, params, url }) => {
     // 只有該專案成員或管理員看得到（含程式庫網址、成員異動）
