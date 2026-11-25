@@ -225,7 +225,7 @@ const post = (token, text, extra = {}) => call(token, '/api/messages', 'POST', {
     assert.ok(ob.includes('新工作開新卡'), '接入設定提醒新工作開新卡');
     assert.ok(ob.includes('POST /api/avatar-proposals') && ob.includes('不要假裝'), '接入設定有頭像提案');
     // 本機跳不出選項的 AI 改用 [需確認]＋選項：或決策卡；授權仍在本機問
-    assert.ok(ob.includes('不論你的本機介面跳不跳得出選項') && ob.includes('規格 3.9.1') && ob.includes('已發到網頁，請在網頁選') && ob.includes('照上面的規定仍在本機對話問'), '要人選擇一律發到網頁，授權仍在本機');
+    assert.ok(ob.includes('一律在群組發 [需確認]') && ob.includes('規格 3.9.1') && ob.includes('已發到網頁，請在網頁選') && ob.includes('照上面的規定仍在本機對話問'), '要人選擇一律發到網頁，授權仍在本機');
     const obOut = (await call(boss.token, `/api/my-ais/${ba.participantId}/onboarding`, 'POST', { token: ba.token, autoStandby: true })).body.text;
     assert.ok(obOut.includes('已在網頁同意自動待命，換到新對話後直接啟動') && obOut.includes('做到第 9 步') && obOut.includes('（初次接入）'), '勾選 → 自動啟動待命（換新對話後啟動）');
     const obOutNo = (await call(boss.token, `/api/my-ais/${ba.participantId}/onboarding`, 'POST', { token: ba.token })).body.text;
