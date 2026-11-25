@@ -47,13 +47,14 @@ try {
   const tokFile = path.join(DIR, '.token');
   let token = ''; try { token = fs.readFileSync(tokFile, 'utf8').trim(); } catch {}
   let first = false;
+  let tokenSwapped = false;
   const pendingCheckin = path.join(DIR, TOOL === 'antigravity' ? 'antigravity-checkin.pending' : 'codex-checkin.pending');
   const NET_FIX = '公司網路多半要代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1 再貼一次';
   const RECOPY = '請所屬人類在網頁「我的 AI」重新複製一行啟動';
   // 用一次性連結拿 Token（連結會給目前有效的 Token）；接入設定去掉 Token 存成 onboarding.md
   async function fromLink() {
     const r = await fetch(SETUP_URL, { signal: AbortSignal.timeout(20_000) }).catch(e => fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, NET_FIX));
-    if (r.status === 410) fail('接入連結', '已失效（15 分鐘內、只能用一次）', RECOPY);
+    if (r.status === 410 || r.status === 409) fail('接入連結', '已失效或已用過（15 分鐘內、只能用一次）', RECOPY);
     if (!r.ok) fail('接入連結', `HTTP ${r.status}`, '把這行告訴所屬人類');
     const text = await r.text();
     const lines = text.split(/\r?\n/);
@@ -81,6 +82,7 @@ try {
       fs.copyFileSync(tokFile, bak);
       out(`! 本機的 Token 平台不認得了（401，多半是重發過或到期），改用這一行的一次性連結拿新的；舊檔備份成 ${posix(bak)}`);
       token = await fromLink();
+      tokenSwapped = true;
       out(`✓ 新的 Token 已存好（${posix(tokFile)}），接入設定存成 ${posix(path.join(DIR, 'onboarding.md'))}`);
     } else if (r.status === 401) fail('Token', '平台不認得本機的 Token（401）', RECOPY + '（一行裡的連結會換新的 Token）');
     else out(`✓ Token：${posix(tokFile)}`);
@@ -90,6 +92,10 @@ try {
   const get = async p => {
     const r = await fetch(BASE + p, { headers: auth, signal: AbortSignal.timeout(20_000) }).catch(e => fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, NET_FIX));
     if (r.status === 401) fail('Token', '平台不認得這組 Token（401）', RECOPY);
+    if (r.status === 409) {
+      const msg = (await r.json().catch(() => null))?.error?.message || '狀態衝突（409）';
+      fail('連線', `${p} 回 409：${msg}`, RECOPY);
+    }
     if (!r.ok) fail('連線', `${p} 回 HTTP ${r.status}`, '把這行告訴所屬人類');
     return r;
   };
@@ -127,7 +133,7 @@ try {
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       const prior = Number(fs.readFileSync(lock, 'utf8').trim());
-      if (!prior || alive(prior)) fail(toolTitle, '同代號已有前景視窗或正在啟動', '先使用或關閉原視窗再重新啟動');
+      if (prior && alive(prior)) fail(toolTitle, '同代號已有前景視窗或正在啟動', '先使用或關閉原視窗再重新啟動');
       fs.unlinkSync(lock);
       fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
     }
@@ -138,12 +144,18 @@ try {
       const stateFile = path.join(DIR, 'state.json');
       const local = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
       const { state } = await (await get('/api/me/state')).json();
-      const write = async (route, method, body) => {
+      const write = async (route, method, body, { allow409 = false } = {}) => {
         const r = await fetch(BASE + route, { method, headers: { ...auth, 'Content-Type': 'application/json' },
           body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+        if (r.status === 409 && allow409) return { status: 409 };
+        if (r.status === 409) {
+          const msg = (await r.json().catch(() => null))?.error?.message || '狀態衝突（409）';
+          fail('簽到', `${method} ${route} 回 409：${msg}`, RECOPY);
+        }
         if (!r.ok) fail('簽到', `${method} ${route} 回 HTTP ${r.status}`, '確認平台狀態後重貼同一行');
+        return { status: r.status };
       };
-      // 先存基準，再以固定 requestId 簽到。中斷後重貼同一行仍用原游標。
+      // 先存基準，再以固定 requestId 簽到。已簽到過的 AI 走重新接上、不因重複簽到失敗。
       const messagesCursor = state?.messagesCursor || local.messagesCursor || (await (await get('/api/messages?limit=1&brief=1')).json()).nextCursor;
       if (!messagesCursor) fail('簽到', '平台沒有回傳初次游標', '確認平台狀態後重貼同一行');
       const cardsSince = state?.cardsSince || local.cardsSince || new Date().toISOString();
@@ -151,20 +163,31 @@ try {
       const stage = stateFile + '.' + process.pid;
       fs.writeFileSync(stage, JSON.stringify({ ...local, ...state, messagesCursor, cardsSince }, null, 2));
       fs.renameSync(stage, stateFile);
-      await write('/api/messages', 'POST', { project: me.projects.find(p => !me.readOnlyIn?.includes(p)) || me.projects[0] || 'all',
-        requestId: 'req_checkin_' + me.participantId, text: `[AI 簽到] ${AGENT} 已用 ${toolTitle} 一行啟動連上平台。` });
+      const res = await write('/api/messages', 'POST', { project: me.projects.find(p => !me.readOnlyIn?.includes(p)) || me.projects[0] || 'all',
+        requestId: 'req_checkin_' + me.participantId, text: `[AI 簽到] ${AGENT} 已用 ${toolTitle} 一行啟動連上平台。` }, { allow409: true });
       fs.unlinkSync(pendingCheckin);
-      first = true;
-      out('✓ 首次簽到已送達，已保存收件游標');
+      if (res.status === 409) {
+        first = false;
+        out('✓ 平台已有你的簽到紀錄，直接沿用原游標重新接上');
+      } else {
+        first = true;
+        out('✓ 首次簽到已送達，已保存收件游標');
+      }
     }
   }
   const envFile = posix(path.join(DIR, 'watcher.env'));
   let watcherReady = false;
   const startWatcher = () => {
     if (watcherReady) return;
-    let wpid = 0; try { wpid = Number(fs.readFileSync(path.join(DIR, 'watcher.pid'), 'utf8').trim()); } catch {}
-    if (alive(wpid)) out(`✓ watcher 已在執行（程序 ${wpid}）`);
+    const pidFile = path.join(DIR, 'watcher.pid');
+    let wpid = 0; try { wpid = Number(fs.readFileSync(pidFile, 'utf8').trim()); } catch {}
+    if (alive(wpid) && !tokenSwapped) out(`✓ watcher 已在執行（程序 ${wpid}）`);
     else {
+      if (alive(wpid) && tokenSwapped) {
+        try { process.kill(wpid); } catch {}
+        try { fs.rmSync(pidFile, { force: true }); } catch {}
+        out(`✓ 已換新 Token，停止舊 watcher（程序 ${wpid}）並重新啟動`);
+      }
       const logFd = fs.openSync(path.join(DIR, 'watcher.log'), 'a');
       // --env-file 不蓋掉已經有的環境變數：watcher.env 裡有的鍵先從環境拿掉（舊的 AIGILE_TOKEN、空的 AIGILE_BASE 會讓 watcher 讀錯）
       const wenv = { ...process.env };
@@ -177,7 +200,7 @@ try {
     }
     watcherReady = true;
   };
-  if (TOOL === 'claude' || (TOOL === 'codex' && NO_LAUNCH)) startWatcher(); // Copilot CLI 不開 watcher
+  if (TOOL === 'claude' || TOOL === 'antigravity' || (TOOL === 'codex' && NO_LAUNCH)) startWatcher(); // Copilot CLI 不開 watcher
 
   // 4. 待命提示
   const wait = `node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;

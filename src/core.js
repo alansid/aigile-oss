@@ -639,6 +639,9 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     const payloadHash = await sha256(JSON.stringify(hashParts));
     const dup = await db.get('SELECT * FROM messages WHERE author_id = ? AND request_id = ?', me.id, requestId);
     if (dup) {
+      if (me.kind === 'ai' && requestId === 'req_checkin_' + me.id) {
+        return { message: await serializeMessage(ctx, dup), duplicate: true };
+      }
       if (dup.payload_hash && dup.payload_hash !== payloadHash) {
         throw new ApiError(409, 'IDEMPOTENCY_CONFLICT', '相同 requestId 已用於不同內容');
       }
