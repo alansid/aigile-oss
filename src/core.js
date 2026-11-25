@@ -3239,9 +3239,35 @@ ${ending}`;
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
       if (n < 50) { await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', cardSeq, r.message.messageId); cardLinked = true; } else cardLinked = false;
     }
+    // [接單]／[進度] 帶 cardId＝認領。沒人在做就記你；別人正在做就不改，回 cardClaim 提示先接手（不是鎖定，訊息照發）
+    // AI 對沒有負責人的卡發 [接單]（非決策、非人類紀錄、未結案、未被別人認領）→ 自動把負責人設成自己（等同 PATCH ownerId=自己）
+    const isClaimTag = /^\s*\[(接單|進度)\]/.test(body.text || '');
+    const isAcceptTag = /^\s*\[接單\]/.test(body.text || '');
+    let cardClaim = null;
+    if (card && !r.duplicate && card.type !== '決策' && card.type !== '人類紀錄' && !cardClosed && isClaimTag) {
+      const cl = (await claimsOf(db, [card.seq])).get(card.seq);
+      if (cl && cl.by !== me.id) {
+        const who = (await peopleMap(ctx, [cl.by])).get(cl.by);
+        cardClaim = { participantId: cl.by, name: who?.name || cl.by, since: cl.at, hint: `${who?.name || cl.by} 從 ${cl.at} 起在做 ${body.cardId}；要改程式或狀態請先 POST /api/cards/${body.cardId}/takeover 帶 reason 接手（會留紀錄並通知對方），或先在群組跟對方協調` };
+      } else {
+        if (!cl) {
+          // 不動 updated_at：卡片本身沒改，「可能過時」（卡沒更新、訊息有新進度）要照樣判斷得出來
+          await db.run('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', card.seq, nowIso(), me.id, CLAIM_LOG, `${me.name} 發了 ${/\[進度\]/.test(body.text) ? '[進度]' : '[接單]'}，開始做`);
+        }
+        if (isAcceptTag && me.kind === 'ai' && !card.owner_id && (!card.project || projectsOf(me).includes(card.project))) {
+          const at = nowIso();
+          const upd = await db.run('UPDATE cards SET owner_id = ?, version = version + 1, updated_at = ? WHERE seq = ? AND owner_id IS NULL', me.id, at, card.seq);
+          if (upd.changes) {
+            await db.run('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', card.seq, at, me.id, 'API', `${me.name} 發了 [接單]，自動認領為負責人`);
+            card.owner_id = me.id;
+            teamCache = { at: 0, data: null };
+          }
+        }
+      }
+    }
     // 卡片負責人發 [接單]／[進度] 並帶 cardId → 卡還在「待整理／待處理」就自動改「進行中」，看得出有人在做
     let cardStarted = false;
-    if (card && !r.duplicate && card.owner_id === me.id && ['待整理', '待處理'].includes(card.status) && card.type !== '決策' && /^\s*\[(接單|進度)\]/.test(body.text || '')) {
+    if (card && !r.duplicate && card.owner_id === me.id && ['待整理', '待處理'].includes(card.status) && card.type !== '決策' && isClaimTag) {
       const at = nowIso();
       await db.batch([
         ["UPDATE cards SET status = '進行中', version = version + 1, updated_at = ? WHERE seq = ? AND status IN ('待整理', '待處理')", [at, card.seq]],
@@ -3249,18 +3275,6 @@ ${ending}`;
       ]);
       teamCache = { at: 0, data: null };
       cardStarted = true;
-    }
-    // [接單]／[進度] 帶 cardId＝認領。沒人在做就記你；別人正在做就不改，回 cardClaim 提示先接手（不是鎖定，訊息照發）
-    let cardClaim = null;
-    if (card && !r.duplicate && card.type !== '決策' && card.type !== '人類紀錄' && !cardClosed && /^\s*\[(接單|進度)\]/.test(body.text || '')) {
-      const cl = (await claimsOf(db, [card.seq])).get(card.seq);
-      if (cl && cl.by !== me.id) {
-        const who = (await peopleMap(ctx, [cl.by])).get(cl.by);
-        cardClaim = { participantId: cl.by, name: who?.name || cl.by, since: cl.at, hint: `${who?.name || cl.by} 從 ${cl.at} 起在做 ${body.cardId}；要改程式或狀態請先 POST /api/cards/${body.cardId}/takeover 帶 reason 接手（會留紀錄並通知對方），或先在群組跟對方協調` };
-      } else if (!cl) {
-        // 不動 updated_at：卡片本身沒改，「可能過時」（卡沒更新、訊息有新進度）要照樣判斷得出來
-        await db.run('INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', card.seq, nowIso(), me.id, CLAIM_LOG, `${me.name} 發了 ${/\[進度\]/.test(body.text) ? '[進度]' : '[接單]'}，開始做`);
-      }
     }
     const warnings = [...(r.warnings || []), ...(cardMismatch ? [cardMismatch] : [])];
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`);
