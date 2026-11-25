@@ -104,6 +104,7 @@ export const MCP_TOOLS = [
       ownerId: str('負責人 participantId，或 me（AI 只能自己或留空）'), status: str('待整理（預設）、待處理、進行中、受阻、待確認'), reason: str('原因', { maxLength: 500 }), next: str('下一步', { maxLength: 300 }),
       criteria: str('完成條件', { maxLength: 500 }), blocker: str('阻塞', { maxLength: 300 }), waitForId: str('等誰（participantId）', { pattern: '^p_' }), messageIds: { ...ids('關聯訊息（最多 10 則）', '^msg_'), maxItems: 10 },
       question: str('決策問題（決策卡）'), options: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 200 }, description: '決策選項（決策卡，2～6 個）' }, recommendation: str('建議方案（決策卡）'), impact: str('影響（決策卡）'), afterNext: str('決定後做什麼（決策卡）'),
+      template: str('卡片範本名稱（選填，例如 Bug 回報、功能；套用預設類型、標題前綴與未填的預填內容，並回報檢核結果）', { maxLength: 60 }),
       requestId: str('冪等鍵（選填）', { maxLength: 128 }) }, ['project', 'title']) },
   { name: 'aigile_doc_upload', description: '上傳文件到專案文件區（≤20 MB、不過期）。禁止上傳程式碼（原始碼、打包檔、設定檔）與客戶個資；declared 一定要 true＝確認不含這些，不確定先問所屬人類。只收 pdf、docx、xlsx、pptx、md、txt、png、jpg。本機檔案給 path（本機轉接腳本讀檔直接上傳）；短的 md／txt 也可以直接給 content。kb=true＝放進知識庫（只有專案 leader／管理員能放，AI 上傳的請 leader 在專案文件勾選加入），預設 false＝一般專案文件，只存原檔。',
     inputSchema: obj({ project: str('專案代號（例：平台）'), name: str('檔名（含副檔名）', { minLength: 1, maxLength: 200 }), path: str('本機檔案路徑（經本機轉接腳本）'), content: str('文字內容（md／txt 用，最多 100 KB）', { maxLength: 100_000 }),
@@ -279,7 +280,13 @@ async function runTool(name, a, { api, me }) {
       body.requestId = requestId || 'mcp_card_' + (await sha(JSON.stringify([a.project, a.title, a.type || '工作', new Date().toISOString().slice(0, 10)]))).slice(0, 24);
       const r = await api('POST', '/api/cards', body);
       const c = ok(r);
-      return { cardId: c.cardId, title: c.title, status: c.status, owner: c.owner?.name || null, ...(c.duplicate ? { duplicate: true } : {}), ...(c.warnings?.length ? { warnings: c.warnings } : {}) };
+      return {
+        cardId: c.cardId, title: c.title, status: c.status, owner: c.owner?.name || null,
+        ...(c.template ? { template: c.template } : {}),
+        ...(c.templateCheck?.failed?.length ? { failedChecks: c.templateCheck.failed.map(f => f.detail) } : {}),
+        ...(c.duplicate ? { duplicate: true } : {}),
+        ...(c.warnings?.length ? { warnings: c.warnings } : {}),
+      };
     }
     case 'aigile_doc_upload': {
       if (a.path) throw Object.assign(new Error('path 要經本機轉接腳本（aigile-mcp.mjs）才讀得到檔案；沒有轉接就改用 content（md／txt）'), { tool: true });

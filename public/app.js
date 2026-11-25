@@ -4945,7 +4945,7 @@
       const l = { ...l0, text: String(l0.text).replace(/\bC-\d{3,}\b/g, cardIdNorm) }; // 舊紀錄的 C-xxx 顯示成專案卡號
       const k = (l.by?.participantId || l.by?.name || '') + '|' + String(l.at).slice(0, 19);
       const g = groups[groups.length - 1];
-      if (g && g.k === k && !/^建立卡片/.test(l.text) && !g.items.some(t => /^建立卡片/.test(t))) g.items.push(l.text); else groups.push({ k, by: l.by, at: l.at, items: [l.text] }); // 建卡永遠單獨一句
+      if (g && g.k === k && !/^(?:建立卡片|用「)/.test(l.text) && !g.items.some(t => /^(?:建立卡片|用「)/.test(t))) g.items.push(l.text); else groups.push({ k, by: l.by, at: l.at, items: [l.text] }); // 建卡永遠單獨一句
     }
     const line = g => {
       const ho = g.items.map(t => /^交接 (.+?) → (.+?)：([\s\S]*)$/.exec(t)).find(Boolean);
@@ -4957,6 +4957,7 @@
         ver = (note.match(/v\d+\.\d+\.\d+/) || [''])[0];
         body = `把這張交給 <b>${esc(shortOf(ho[2]))}</b> ${/等 .+ 驗收/.test(ho[3]) ? '驗收' : '做'}`;
       }
+      else if (g.items.some(t => /^用「/.test(t))) { icon = '＋'; body = esc(g.items.find(t => /^用「/.test(t))); }
       else if (g.items.some(t => /^建立卡片/.test(t))) { icon = '＋'; body = '建了這張卡'; }
       else if (g.items.some(t => /^退回/.test(t))) { icon = '↩'; cls = 'bad'; body = esc(g.items.find(t => /^退回/.test(t))); }
       else if (g.items.some(t => /^標為已完成/.test(t))) { icon = '✓'; body = '標為已完成'; }
@@ -5359,6 +5360,278 @@
     }
   }
 
+  // ---------- 專案級卡片範本與檢核 ----------
+  const ctplCounts = {};
+  const CTPL_EN_BUILTIN = {
+    builtin_bug: {
+      zhName: '🐞 Bug 回報', enName: '🐞 Bug report',
+      zhReason: '重現步驟：\n1. \n預期：\n實際：\n環境：', enReason: 'Steps to reproduce:\n1. \nExpected:\nActual:\nEnvironment:',
+      zhCriteria: '照重現步驟做不再出錯\n補一個測試', enCriteria: 'Following the steps no longer fails\nAdd a test',
+    },
+    builtin_feature: {
+      zhName: '✨ 功能', enName: '✨ Feature',
+      zhReason: '要解決的問題：\n誰會用：', enReason: 'Problem to solve:\nWho uses it:',
+      zhCriteria: '驗收條件：\n1. ', enCriteria: 'Acceptance criteria:\n1. ',
+    },
+  };
+  function ctplLocalized(t) {
+    if (!t || window.aigileI18n?.lang !== 'en') return t;
+    const b = CTPL_EN_BUILTIN[t.id];
+    if (!b) return t;
+    return {
+      ...t,
+      name: t.name === b.zhName ? b.enName : t.name,
+      reason: t.reason === b.zhReason ? b.enReason : t.reason,
+      criteria: t.criteria === b.zhCriteria ? b.enCriteria : t.criteria,
+    };
+  }
+  const CTPL_SEC_ALIASES = {
+    '重現步驟': ['重現步驟', 'steps to reproduce'], '預期': ['預期', 'expected'], '實際': ['實際', 'actual'],
+    '環境': ['環境', 'environment'], '要解決的問題': ['要解決的問題', 'problem to solve'],
+    '誰會用': ['誰會用', 'who uses it'], '驗收條件': ['驗收條件', 'acceptance criteria'],
+  };
+  function parseTplSections(txt) {
+    const lines = String(txt || '').split(/\r?\n/), out = [];
+    let cur = null;
+    for (let i = 0; i < lines.length; i++) {
+      const m = /^\s*([^：:\n]{1,30})[：:]\s*(.*)$/.exec(lines[i]);
+      if (m && !/^\d+$/.test(m[1].trim())) { cur = { name: m[1].trim(), lineIndex: i, lines: [m[2]] }; out.push(cur); }
+      else if (cur) cur.lines.push(lines[i]);
+    }
+    return out.length ? out.map(s => ({ name: s.name, lineIndex: s.lineIndex, content: s.lines.join('\n').trim() }))
+      : [{ name: '', lineIndex: 0, content: String(txt || '').trim() }];
+  }
+  function ctplFindSec(secs, name) {
+    if (!name) return secs[0] || { name: '', lineIndex: 0, content: '' };
+    const low = name.trim().toLowerCase(), al = CTPL_SEC_ALIASES[name] || [low];
+    return secs.find(s => { const sn = s.name.trim().toLowerCase(); return sn === low || al.includes(sn); }) || null;
+  }
+  const ctplClean = s => String(s || '').split(/\r?\n/).map(l => l.replace(/^\s*(?:\d+\s*[.、)）]|[-*•])\s*/, '').trim()).filter(Boolean).join('\n').trim();
+  const ctplSteps = s => String(s || '').split(/\r?\n/).filter(l => /^\s*(?:\d+\s*[.、)）]|[-*•])\s*\S/.test(l)).length;
+  function evalTplChecks(tpl, vals) {
+    const items = [];
+    const pfx = String(tpl.titlePrefix || '').trim();
+    let after = String(vals.title || '').trim();
+    if (pfx && after.startsWith(pfx)) after = after.slice(pfx.length).trim();
+    const titleOk = after.length >= 5;
+    items.push({ field: 'title', section: '標題', ok: titleOk, lineIndex: 0, label: titleOk ? '標題前綴後有寫內容' : '標題前綴後至少 5 個字', reasonText: '前綴後至少要 5 個字' });
+    const parsed = { reason: parseTplSections(vals.reason), criteria: parseTplSections(vals.criteria) };
+    for (const c of (tpl.checks || [])) {
+      if (!c || c.rule === 'none') continue;
+      const field = c.field === 'criteria' ? 'criteria' : 'reason';
+      const secName = String(c.section || '').trim();
+      const disp = secName || (field === 'criteria' ? '完成條件' : '原因');
+      const sec = ctplFindSec(parsed[field], secName);
+      const raw = sec ? sec.content : '', clean = ctplClean(raw), lineIndex = sec ? sec.lineIndex : 0;
+      if (c.rule === 'not_empty') {
+        const ok = clean.length > 0;
+        const eg = disp === '環境' ? '（例如：Chrome 131、正式站）' : '';
+        items.push({ field, section: disp, ok, lineIndex, label: ok ? `${disp}不能空白` : L(`${disp}不能空白`, `${window.aigileI18n?.tr?.(disp) || disp} is empty`), reasonText: `還是空的${eg}` });
+      } else if (c.rule === 'min_chars') {
+        const n = Math.max(1, Number(c.value) || 1), len = clean.length, ok = len >= n;
+        items.push({ field, section: disp, ok, lineIndex, label: ok ? `${disp}至少 ${n} 字` : `${disp}至少 ${n} 字（現在 ${len} 字）`, reasonText: `至少要 ${n} 字，現在 ${len} 字` });
+      } else if (c.rule === 'min_steps') {
+        const n = Math.max(1, Number(c.value) || 1), cnt = ctplSteps(raw), ok = cnt >= n;
+        items.push({ field, section: disp, ok, lineIndex, label: ok ? `${disp}至少 ${n} 步` : `${disp}至少 ${n} 步（現在 ${cnt} 步）`, reasonText: `至少要 ${n} 步，現在 ${cnt} 步` });
+      } else if (c.rule === 'not_same_as') {
+        const other = String(c.value || '').trim(), oSec = ctplFindSec(parsed[field], other), oClean = oSec ? ctplClean(oSec.content) : '';
+        if (c.notEmpty !== false) {
+          const neOk = clean.length > 0;
+          items.push({ field, section: disp, ok: neOk, lineIndex, label: neOk ? `${disp}不能空白` : L(`${disp}不能空白`, `${window.aigileI18n?.tr?.(disp) || disp} is empty`), reasonText: '還是空的' });
+        }
+        const same = clean.length > 0 && oClean.length > 0 && clean === oClean;
+        items.push({ field, section: disp, ok: !same, lineIndex, label: same ? `${disp}跟${other}一樣` : `${disp}與${other}不同`, reasonText: `跟${other}寫得一樣，請寫實際看到什麼` });
+      }
+    }
+    const passed = items.filter(i => i.ok).length;
+    return { passed, total: items.length, items, failed: items.filter(i => !i.ok) };
+  }
+  function jumpToTplItem(form, item) {
+    if (!item) return;
+    if (item.field === 'title') { form.title.focus(); form.title.setSelectionRange(form.title.value.length, form.title.value.length); return; }
+    const more = form.querySelector('#nc-more'); if (more) more.open = true;
+    const el = form[item.field]; if (!el) return;
+    el.focus();
+    const lines = el.value.split('\n');
+    const idx = Math.min(Math.max(0, item.lineIndex || 0), Math.max(0, lines.length - 1));
+    let pos = 0; for (let i = 0; i < idx; i++) pos += lines[i].length + 1;
+    pos += (lines[idx] || '').length;
+    el.setSelectionRange(pos, pos);
+  }
+  async function openCardTemplates(pj) {
+    let data;
+    try { data = await api(`/api/projects/${encodeURIComponent(pj)}/card-templates`); } catch (err) { return toast(err.message); }
+    let list = data.templates || [];
+    ctplCounts[pj] = list.filter(x => x.enabled !== false).length;
+    const body = openModal(`${projName(pj)} · 卡片範本`, '<div id="ctpl-mgr" class="stack"></div>', {
+      size: 'form',
+      foot: '<button class="btn" type="button" data-close>關閉</button>',
+    });
+    const host = body.querySelector('#ctpl-mgr');
+    const draw = () => {
+      ctplCounts[pj] = list.filter(x => x.enabled !== false).length;
+      host.innerHTML = `
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <p class="muted small" style="margin:0">內建範本不能刪除，可以改文字、停用或回復預設；自訂範本停用後才可刪除。</p>
+          <button type="button" class="btn primary small" id="ctpl-add">＋ 新增範本</button>
+        </div>
+        <div class="ctpl-list">${list.map(raw => {
+          const t = ctplLocalized(raw), off = t.enabled === false;
+          const meta = [t.createdByName ? `${esc(t.createdByName)} 建的` : '', `用過 ${t.usedCount || 0} 次`].filter(Boolean).join(' · ');
+          return `<div class="ctpl-row${off ? ' off' : ''}">
+            <button type="button" class="ctpl-row-main" data-ctpl-edit="${esc(t.id)}">
+              <b>${esc(t.name)}</b>
+              ${t.builtin ? '<span class="pill-tag blue">內建</span>' : ''}
+              ${off ? '<span class="pill-tag">已停用</span>' : ''}
+            </button>
+            <div class="ctpl-row-meta">
+              <span class="muted small">${meta}</span>
+              <button type="button" class="btn small" data-ctpl-edit="${esc(t.id)}">編輯</button>
+              <button type="button" class="btn small" data-ctpl-toggle="${esc(t.id)}">${off ? '啟用' : '停用'}</button>
+              ${!t.builtin && off ? `<button type="button" class="btn small danger-outline" data-ctpl-del="${esc(t.id)}">✕ 刪除</button>` : ''}
+            </div>
+          </div>`;
+        }).join('')}</div>`;
+      host.querySelector('#ctpl-add').onclick = () => openCardTemplateEditor(pj, null, list, updated => { list = updated; openCardTemplates(pj); });
+      host.querySelectorAll('[data-ctpl-edit]').forEach(b => b.addEventListener('click', () => {
+        const t = list.find(x => x.id === b.dataset.ctplEdit);
+        if (t) openCardTemplateEditor(pj, t, list, updated => { list = updated; openCardTemplates(pj); });
+      }));
+      host.querySelectorAll('[data-ctpl-toggle]').forEach(b => b.addEventListener('click', async () => {
+        const t = list.find(x => x.id === b.dataset.ctplToggle); if (!t) return;
+        try {
+          const r = await api(`/api/projects/${encodeURIComponent(pj)}/card-templates/${encodeURIComponent(t.id)}`, { method: 'PATCH', body: { enabled: t.enabled === false } });
+          list = r.templates; draw();
+        } catch (err) { toast(err.message); }
+      }));
+      host.querySelectorAll('[data-ctpl-del]').forEach(b => b.addEventListener('click', async () => {
+        const t = list.find(x => x.id === b.dataset.ctplDel); if (!t) return;
+        const ok = await confirmDialog({ title: '刪除卡片範本', confirmText: '刪除', danger: true, message: `確定要刪除「${esc(t.name)}」？已建立的卡片不受影響。` });
+        if (!ok) return openCardTemplates(pj);
+        try {
+          await api(`/api/projects/${encodeURIComponent(pj)}/card-templates/${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+          toast(`已刪除範本「${t.name}」`);
+          openCardTemplates(pj);
+        } catch (err) { toast(err.message); }
+      }));
+    };
+    draw();
+  }
+  function openCardTemplateEditor(pj, tpl, allList, onDone) {
+    const isNew = !tpl;
+    const init = tpl ? JSON.parse(JSON.stringify(tpl)) : { name: '', type: '工作', titlePrefix: '', reason: '', criteria: '', checks: [] };
+    const checkMap = new Map();
+    for (const c of (init.checks || [])) checkMap.set(`${c.field}:${c.section || ''}`, { ...c });
+    const body = openModal(isNew ? '新增範本' : `編輯範本：${ctplLocalized(tpl).name}`, `
+      <form id="ctpl-ed-form" class="stack">
+        <label>名稱<input name="name" required maxlength="40" value="${esc(init.name)}" placeholder="例如：客戶需求"></label>
+        <div class="field"><span class="field-label" id="ctpl-t-lbl">預設類型</span>
+          <div class="seg-scope full" role="group" aria-labelledby="ctpl-t-lbl">
+            ${['工作', '阻塞', '決策'].map(t => `<button type="button" data-ctpl-type="${t}" aria-pressed="${init.type === t}">${t}</button>`).join('')}
+          </div><input type="hidden" name="type" value="${esc(init.type || '工作')}"></div>
+        <label>標題前綴<input name="titlePrefix" maxlength="30" value="${esc(init.titlePrefix || '')}" placeholder="例如：[Bug] "></label>
+        <label>原因預填<textarea name="reason" rows="4" maxlength="500" placeholder="每段用「段落名：」開頭，平台會自動列出檢核">${esc(init.reason || '')}</textarea></label>
+        <label>完成條件預填<textarea name="criteria" rows="3" maxlength="500">${esc(init.criteria || '')}</textarea></label>
+        <div class="ctpl-ed-checks">
+          <b>檢核</b>
+          <div class="ctpl-ed-chk-row"><span>標題</span><span class="muted small">前綴後至少 5 個字（固定）</span></div>
+          <div id="ctpl-ed-sec-list" class="stack"></div>
+          <p class="muted small" style="margin:0">不檢查／不能空白／至少 N 字／至少 N 步（數 1. 2. 或 - 開頭的行）／不能跟某段一樣</p>
+        </div>
+        <p class="error" id="ctpl-ed-err" role="alert"></p>
+      </form>`, {
+      size: 'form',
+      foot: `<div class="ctpl-foot-split">
+        ${tpl?.builtin ? '<button type="button" class="btn" id="ctpl-restore">回復預設</button>' : '<span></span>'}
+        <div class="ctpl-foot-right">
+          <button type="button" class="btn" id="ctpl-ed-cancel">取消</button>
+          <button type="submit" class="btn primary" form="ctpl-ed-form">儲存</button>
+        </div>
+      </div>`,
+    });
+    const form = body.querySelector('#ctpl-ed-form');
+    const secHost = body.querySelector('#ctpl-ed-sec-list');
+    form.querySelectorAll('[data-ctpl-type]').forEach(b => b.addEventListener('click', () => {
+      form.type.value = b.dataset.ctplType;
+      form.querySelectorAll('[data-ctpl-type]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    }));
+    const syncMapFromDom = () => {
+      secHost.querySelectorAll('[data-chk-key]').forEach(row => {
+        const key = row.dataset.chkKey, [field, ...rest] = key.split(':'), section = rest.join(':');
+        const rule = row.querySelector('[data-chk-rule]').value;
+        const item = { field, section, rule };
+        if (rule === 'min_chars' || rule === 'min_steps') item.value = Math.max(1, Number(row.querySelector('[data-chk-num]')?.value) || 1);
+        else if (rule === 'not_same_as') { item.value = row.querySelector('[data-chk-target]')?.value || ''; item.notEmpty = true; }
+        checkMap.set(key, item);
+      });
+    };
+    const renderChecksEditor = () => {
+      const rSecs = parseTplSections(form.reason.value);
+      const cSecs = parseTplSections(form.criteria.value);
+      const renderGroup = (title, field, secs) => {
+        const named = secs.map(s => s.name).filter(Boolean);
+        return `<div class="muted small" style="font-weight:700">${title}</div>` + secs.map(s => {
+          const key = `${field}:${s.name}`, cur = checkMap.get(key) || { field, section: s.name, rule: 'none' };
+          const others = named.filter(n => n !== s.name);
+          const lbl = s.name || '（整欄）';
+          const numVal = cur.value || (cur.rule === 'min_chars' ? 10 : 2);
+          const tgtVal = cur.value || others[0] || '';
+          return `<div class="ctpl-ed-chk-row" data-chk-key="${esc(key)}">
+            <span>${esc(lbl)}</span>
+            <div class="ctpl-ed-chk-ctl">
+              <select data-chk-rule>
+                <option value="none" ${cur.rule === 'none' ? 'selected' : ''}>不檢查</option>
+                <option value="not_empty" ${cur.rule === 'not_empty' ? 'selected' : ''}>不能空白</option>
+                <option value="min_chars" ${cur.rule === 'min_chars' ? 'selected' : ''}>至少 N 字</option>
+                <option value="min_steps" ${cur.rule === 'min_steps' ? 'selected' : ''}>至少 N 步</option>
+                ${others.length ? `<option value="not_same_as" ${cur.rule === 'not_same_as' ? 'selected' : ''}>不能跟某段一樣</option>` : ''}
+              </select>
+              ${cur.rule === 'min_chars' || cur.rule === 'min_steps' ? `<input type="number" min="1" max="500" data-chk-num value="${esc(numVal)}">` : ''}
+              ${cur.rule === 'not_same_as' && others.length ? `<select data-chk-target>${others.map(o => `<option value="${esc(o)}" ${o === tgtVal ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>` : ''}
+            </div>
+          </div>`;
+        }).join('');
+      };
+      secHost.innerHTML = renderGroup('原因的段落', 'reason', rSecs) + renderGroup('完成條件的段落', 'criteria', cSecs);
+      secHost.querySelectorAll('[data-chk-rule]').forEach(sel => sel.addEventListener('change', () => { syncMapFromDom(); renderChecksEditor(); }));
+    };
+    renderChecksEditor();
+    form.reason.addEventListener('input', () => { syncMapFromDom(); renderChecksEditor(); });
+    form.criteria.addEventListener('input', () => { syncMapFromDom(); renderChecksEditor(); });
+    body.modal.querySelector('#ctpl-ed-cancel').onclick = () => openCardTemplates(pj);
+    body.modal.querySelector('#ctpl-restore')?.addEventListener('click', async () => {
+      try {
+        const r = await api(`/api/projects/${encodeURIComponent(pj)}/card-templates/${encodeURIComponent(tpl.id)}/restore`, { method: 'POST' });
+        toast('已回復預設內容與檢核');
+        onDone(r.templates);
+      } catch (err) { body.querySelector('#ctpl-ed-err').textContent = err.message; }
+    });
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      syncMapFromDom();
+      const checks = [];
+      secHost.querySelectorAll('[data-chk-key]').forEach(row => {
+        const c = checkMap.get(row.dataset.chkKey);
+        if (c && c.rule && c.rule !== 'none') checks.push(c);
+      });
+      const payload = {
+        name: form.name.value.trim(),
+        type: form.type.value,
+        titlePrefix: form.titlePrefix.value,
+        reason: form.reason.value,
+        criteria: form.criteria.value,
+        checks,
+      };
+      try {
+        const r = isNew
+          ? await api(`/api/projects/${encodeURIComponent(pj)}/card-templates`, { method: 'POST', body: payload })
+          : await api(`/api/projects/${encodeURIComponent(pj)}/card-templates/${encodeURIComponent(tpl.id)}`, { method: 'PATCH', body: payload });
+        toast(isNew ? `已新增範本「${payload.name}」` : `已儲存範本「${payload.name}」`);
+        onDone(r.templates);
+      } catch (err) { body.querySelector('#ctpl-ed-err').textContent = err.message; }
+    });
+  }
+
   // 新增卡片
   function openNewCard(sg, srcMsg) {
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
@@ -5369,6 +5642,11 @@
       <form id="card-new-form" class="stack">
         ${srcMsg ? `<div class="info-box">來源訊息「${esc(srcMsg.author.name)} · ${shortTime(srcMsg.createdAt)}」會自動關聯到這張卡，無法移除。</div>` : ''}
         ${sg ? `<div class="warn-box">${esc(sg.from?.name || 'AI')} 的建議：${esc(sg.why)}</div>` : ''}
+        <div id="nc-tpl-wrap" class="field" hidden>
+          <span class="field-label">範本</span>
+          <div id="nc-tpl-bar" class="ctpl-bar" role="group" aria-label="範本"></div>
+          <span class="field-hint">範本由專案管理；選了會帶出下面的欄位，可以再改。</span>
+        </div>
         <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
         ${inProjNew ? `<p class="muted small nc-proj">建在「${esc(projName(p0))}」</p>` : ''}
         <label ${inProjNew ? 'hidden' : ''}>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${esc(p)}" ${(inProjNew ? p0 : srcMsg?.project || projectView()) === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
@@ -5396,6 +5674,8 @@
         <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500"></textarea></label>
         <label>等誰<select name="waitForId">${opts('不用等人')}</select></label>
         </div></details>
+        <div id="nc-tpl-checks" class="ctpl-checks" hidden></div>
+        <div id="nc-tpl-warn" class="ctpl-warn" hidden></div>
         <p class="muted small">卡片內容所有成員都看得到，請勿填入內部路徑、程式碼或客戶個資。</p>
         <p class="error" id="card-new-error" role="alert"></p>
       </form>`, {
@@ -5403,8 +5683,63 @@
       foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="card-new-form">建立卡片</button>',
     });
     const form = body.querySelector('#card-new-form');
+    const footEl = body.modal.querySelector('.modal-foot');
+    const defaultFoot = footEl.innerHTML;
+    const dirty = { title: !!(sg || srcMsg), reason: !!(sg || srcMsg), criteria: !!sg, type: !!sg };
+    let tplList = [], selectedTpl = null, warnedOnce = false, lastEval = null;
+    const tplWrap = body.querySelector('#nc-tpl-wrap'), tplBar = body.querySelector('#nc-tpl-bar');
+    const chkBox = body.querySelector('#nc-tpl-checks'), warnBox = body.querySelector('#nc-tpl-warn');
+    const clearWarn = () => { warnedOnce = false; warnBox.hidden = true; warnBox.innerHTML = ''; footEl.innerHTML = defaultFoot; };
+    const updateLiveChecks = () => {
+      if (!selectedTpl) { chkBox.hidden = true; chkBox.innerHTML = ''; lastEval = null; return; }
+      lastEval = evalTplChecks(selectedTpl, { title: form.title.value, reason: form.reason.value, criteria: form.criteria.value });
+      chkBox.hidden = false;
+      chkBox.innerHTML = `<div class="ctpl-checks-head">檢核 ${lastEval.passed}/${lastEval.total}</div><ul class="ctpl-check-list">${
+        lastEval.items.map(i => `<li class="ctpl-check-item ${i.ok ? 'ok' : 'bad'}"><span>${i.ok ? '✓' : '✕'}</span><span>${esc(i.label)}</span></li>`).join('')
+      }</ul>`;
+    };
+    const applyTemplate = tpl => {
+      selectedTpl = tpl;
+      clearWarn();
+      tplBar.querySelectorAll('[data-nc-tpl]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ncTpl === (tpl?.id || ''))));
+      if (!tpl) { updateLiveChecks(); return; }
+      const loc = ctplLocalized(tpl);
+      if (!dirty.title) {
+        form.title.value = loc.titlePrefix || '';
+        form.title.focus();
+        form.title.setSelectionRange(form.title.value.length, form.title.value.length);
+      }
+      if (!dirty.type && loc.type) {
+        const tb = body.querySelector(`[data-nt="${CSS.escape(loc.type)}"]`);
+        if (tb && !tb.hidden) tb.click();
+      }
+      if (!dirty.reason) form.reason.value = loc.reason || '';
+      if (!dirty.criteria) form.criteria.value = loc.criteria || '';
+      body.querySelector('#nc-more').open = true;
+      updateLiveChecks();
+    };
+    const loadProjTemplates = async pj => {
+      if (!pj) { tplList = []; tplWrap.hidden = true; applyTemplate(null); return; }
+      try {
+        const r = await api(`/api/projects/${encodeURIComponent(pj)}/card-templates`);
+        tplList = (r.templates || []).filter(t => t.enabled !== false);
+        ctplCounts[pj] = tplList.length;
+        if (!tplList.length) { tplWrap.hidden = true; applyTemplate(null); return; }
+        tplWrap.hidden = false;
+        tplBar.innerHTML = `<button type="button" class="ctpl-pill" data-nc-tpl="" aria-pressed="true">空白</button>` +
+          tplList.map(t => `<button type="button" class="ctpl-pill" data-nc-tpl="${esc(t.id)}" aria-pressed="false">${esc(ctplLocalized(t).name)}</button>`).join('');
+        tplBar.querySelectorAll('[data-nc-tpl]').forEach(b => b.addEventListener('click', () => {
+          const id = b.dataset.ncTpl;
+          applyTemplate(id ? tplList.find(x => x.id === id) || null : null);
+        }));
+      } catch { tplWrap.hidden = true; }
+    };
+    for (const f of ['title', 'reason', 'criteria']) form[f].addEventListener('input', () => { dirty[f] = true; updateLiveChecks(); });
+    form.project.addEventListener('change', () => { selectedTpl = null; clearWarn(); loadProjTemplates(form.project.value); });
+    loadProjTemplates(form.project.value);
     body.querySelector('#nc-more').addEventListener('toggle', e => store.set('aigile-switch-nc-more', e.target.open ? '1' : '0')); // 展開狀態記在瀏覽器
-    body.querySelectorAll('[data-nt]').forEach(b => b.addEventListener('click', () => {
+    body.querySelectorAll('[data-nt]').forEach(b => b.addEventListener('click', ev => {
+      if (ev.isTrusted) dirty.type = true;
       form.type.value = b.dataset.nt;
       body.querySelectorAll('[data-nt]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
       const t = b.dataset.nt;
@@ -5416,7 +5751,8 @@
       if (isNote) { body.querySelector('#nc-more').open = true; form.status.value = '進行中'; }
       form.status.closest('label').hidden = isNote; // 人類紀錄建立時一律「收集中」
       for (const sel of [form.ownerId, form.waitForId]) { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai; o.disabled = isNote && ai; } if (sel.selectedOptions[0]?.disabled) sel.value = ''; }
-      body.modal.querySelector('button[type="submit"]').textContent = isNote ? '建立人類紀錄' : '建立卡片';
+      const subBtn = body.modal.querySelector('button[type="submit"]');
+      if (subBtn && !warnedOnce) subBtn.textContent = isNote ? '建立人類紀錄' : '建立卡片';
       body.querySelector('#nc-decision').hidden = t !== '決策';
       if (t === '決策') body.querySelector('#nc-more').open = true; // 選「決策」自動展開決策欄位
       form.waitForId.closest('label').hidden = t === '決策'; // 決策卡固定等決策者
@@ -5439,6 +5775,22 @@
     const requestId = 'web_' + (crypto.randomUUID?.() || Date.now() + Math.random());
     form.addEventListener('submit', async e => {
       e.preventDefault();
+      if (selectedTpl && !warnedOnce) {
+        updateLiveChecks();
+        if (lastEval && lastEval.failed.length) {
+          warnedOnce = true;
+          const isBug = selectedTpl.id === 'builtin_bug' || /bug/i.test(selectedTpl.name);
+          warnBox.hidden = false;
+          warnBox.innerHTML = `<div class="ctpl-warn-title">⚠️ 還有 ${lastEval.failed.length} 項沒過，${isBug ? 'AI 修 Bug 常需要這些' : 'AI 通常需要這些資訊'}：</div><ul>${
+            lastEval.failed.map((f, idx) => `<li><button type="button" class="ctpl-jump" data-jump-idx="${idx}">${esc(f.section)}</button> ${esc(f.reasonText)}</li>`).join('')
+          }</ul>`;
+          warnBox.querySelectorAll('[data-jump-idx]').forEach(b => b.addEventListener('click', () => jumpToTplItem(form, lastEval.failed[Number(b.dataset.jumpIdx)])));
+          footEl.innerHTML = '<button class="btn primary" type="button" id="nc-tpl-fix">回去補</button><button class="btn" type="submit" form="card-new-form">照樣建立</button>';
+          footEl.querySelector('#nc-tpl-fix').onclick = () => jumpToTplItem(form, lastEval.failed[0]);
+          warnBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          return;
+        }
+      }
       const data = Object.fromEntries(new FormData(form));
       for (const k of Object.keys(data)) data[k] = data[k].trim();
       data.project = form.project.value; // 單一專案成員的欄位是 disabled，FormData 不會帶
@@ -5447,6 +5799,7 @@
       else { delete data.waitForId; if (!data.options) data.options = []; else data.options = data.options.split('\n'); }
       if (!data.ownerId) delete data.ownerId;
       if (!data.waitForId) delete data.waitForId;
+      if (selectedTpl) data.templateId = selectedTpl.id;
       try {
         const c = sg ? await api(`/api/suggestions/${encodeURIComponent(sg.suggestionId)}/apply`, { method: 'POST', body: { title: data.title, reason: data.reason, ownerId: data.ownerId ?? null, next: data.next, criteria: data.criteria, type: data.type, project: data.project, waitForId: data.waitForId ?? null } })
           : await api('/api/cards', { method: 'POST', body: { ...data, requestId, ...(srcMsg ? { messageIds: [srcMsg.messageId] } : {}) } });
@@ -10357,6 +10710,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     it.push(['members', '👥', '成員與本專案角色']);
     if (admin || lead) it.push(['kbai', '📚', '知識庫整理 AI', esc(kbAiNames[pj] || '')]); 
     if (admin || lead) it.push(['review', '🔍', '審查']);
+    if (admin || lead) it.push(['templates', '📋', '卡片範本', ctplCounts[pj] !== undefined ? `${ctplCounts[pj]} 個` : '']);
     return it;
   }
   function psetOpen(btn, open) {
@@ -10376,11 +10730,14 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     m.querySelector('button')?.focus();
     const kb = m.querySelector('[data-pset-act="kbai"]'); // 選單下面小字顯示目前選誰
     if (kb && kbAiNames[pj] === undefined) api(`/api/projects/${encodeURIComponent(pj)}/kb/settings`).then(r => { kbAiNames[pj] = r.candidates.find(c => c.participantId === r.aiId)?.name || '不自動整理'; if (!m.hidden && m.dataset.pj === pj) kb.insertAdjacentHTML('beforeend', `<span class="muted small">${esc(kbAiNames[pj])}</span>`); }).catch(() => {});
+    const tp = m.querySelector('[data-pset-act="templates"]');
+    if (tp && ctplCounts[pj] === undefined) api(`/api/projects/${encodeURIComponent(pj)}/card-templates`).then(r => { ctplCounts[pj] = (r.templates || []).filter(x => x.enabled !== false).length; if (!m.hidden && m.dataset.pj === pj && !tp.querySelector('.muted')) tp.insertAdjacentHTML('beforeend', `<span class="muted small">${ctplCounts[pj]} 個</span>`); }).catch(() => {});
   }
   async function psetAct(k, pj) {
     try {
       if (k === 'kbai') return kbAiSetting(pj);
       if (k === 'review') return openReviewSettings(pj);
+      if (k === 'templates') return openCardTemplates(pj);
       if (k === 'members') return openPermTab('members', { tab: 'members', memView: 'byProject', selProj: pj, mobileDetail: true, pq: '' });
       if (k === 'repo') return openRepoEditor(pj);
       if (k === 'rename') {

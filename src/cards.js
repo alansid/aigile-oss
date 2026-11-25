@@ -71,7 +71,7 @@ export async function teamCards(db, keyOf = c => cardNo(c.seq)) {
   return { work, open, decisions: decisions.map(d => ({ cardId: keyOf(d), title: d.question || d.title, createdAt: d.created_at, proposerId: d.proposer_id, deciderId: d.decider_id, project: d.project })) };
 }
 
-export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, readCardReturn, storeCardReturnFile, checkFiles = async () => { throw new Error('checkFiles 未提供'); }, filesText = (note, files) => note, reviewOf = async () => null, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours, boardLimit = 200 }) {
+export function registerCards({ route, searchQuota = () => {}, cardKey = () => null, cardSeqByKey = async () => null, createMessage, readCardReturn, storeCardReturnFile, checkFiles = async () => { throw new Error('checkFiles 未提供'); }, filesText = (note, files) => note, reviewOf = async () => null, cardTemplates = null, isolatedFrom, canSeeMessage = async () => true, projectName = id => id, archiveEveryMs = 10 * 60_000, PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople, cardStaleHours, boardLimit = 200 }) {
   const STALE_CARD_MS = (cardStaleHours !== undefined && cardStaleHours !== '' && Number.isFinite(Number(cardStaleHours)) ? Number(cardStaleHours) : 24) * 3600_000; // 卡片多久沒更新才可能過時
   const BOARD_LIMIT = boardLimit;
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
@@ -355,9 +355,11 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     // 正在做的人與最近一次結構化交接放最前面，下一位讀卡最先看到
     const cl = CLOSED_ST.includes(c.status) || c.type === '決策' ? null : (await claimsOf(db, [c.seq])).get(c.seq);
     const ho = log.find(l => l.via === HANDOVER_LOG);
+    const tplName = log.map(l => /用「([^」]+)」建立/.exec(l.text || '')?.[1]).find(Boolean) || null;
     const v = withStale(view(c, people), c, await staleHints());
     return {
       cardId: v.cardId, title: v.title, status: v.status, owner: v.owner,
+      ...(tplName ? { template: tplName } : {}),
       ...(cl ? { claim: mark(people, cl.by, cl.at) } : {}), ...(ho ? { handover: handoverView(people, ho) } : {}),
       attachments: !projectsOf(me).includes(c.project) || (c.type === NOTE && me.kind !== 'human') ? [] : (await db.all(
         'SELECT d.id, d.name, d.ext, d.size, d.created_at, d.uploader_id, a.note_id FROM card_attachments a JOIN docs d ON d.id = a.doc_id WHERE a.card_seq = ? AND d.project = ? AND d.deleted_at IS NULL AND (a.human_only = 0 OR ? = 1) ORDER BY d.created_at, d.id',
@@ -383,10 +385,44 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const dup = await db.get('SELECT * FROM cards WHERE created_by = ? AND request_id = ?', me.id, requestId);
     if (dup) return { __status: 200, ...view(dup, people), duplicate: true };
 
-    const type = checkType(body.type ?? '工作');
+    const mine = projectsOf(me);
+    let project = body.project;
+    if (project === undefined || project === null || project === '') {
+      if (mine.length !== 1) throw invalid(`project 為必填：${PROJECTS.join('、')}`);
+      project = mine[0];
+    }
+    if (!PROJECTS.includes(project)) throw invalid(`project 需為：${PROJECTS.join('、')}`);
+    if (!mine.includes(project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，不能在這個專案建卡。');
+
+    // 套用專案級卡片範本（不擋建卡；AI 沒給的欄位由範本補，並回傳未通過的檢核）
+    let tpl = null, tplCheck = null;
+    const tplWarnings = [];
+    const tplQuery = typeof body.templateId === 'string' && body.templateId.trim() ? body.templateId.trim() : typeof body.template === 'string' && body.template.trim() ? body.template.trim() : '';
+    if (cardTemplates && tplQuery) {
+      const resolved = await cardTemplates.resolveForCardCreate(project, tplQuery);
+      tpl = resolved.tpl;
+      if (!tpl) {
+        const names = resolved.list.filter(t => t.enabled !== false).map(t => t.name.replace(/^[\p{Extended_Pictographic}\uFE0F\u200D\s]+/u, '').trim() || t.name);
+        tplWarnings.push(`找不到範本「${tplQuery}」，這個專案有：${names.join('、') || '目前沒有啟用的範本'}`);
+      }
+    }
+
+    const type = checkType(body.type ?? tpl?.type ?? '工作');
     if (type === NOTE && me.kind !== 'human') throw new ApiError(403, 'HUMAN_ONLY', '人類紀錄只有人類能建立。');
-    const title = text(body, 'title', { required: true });
+    let title = text(body, 'title', { required: true });
     if (title === undefined) throw invalid('title 為必填');
+    if (tpl?.titlePrefix) {
+      const pfx = tpl.titlePrefix.trim();
+      if (pfx && !title.startsWith(pfx)) title = (tpl.titlePrefix + title).slice(0, CARD_LIMITS.title);
+    }
+    const reasonVal = (body.reason !== undefined ? text(body, 'reason') : tpl?.reason) ?? '';
+    const criteriaVal = (body.criteria !== undefined ? text(body, 'criteria') : tpl?.criteria) ?? '';
+    if (tpl) {
+      tplCheck = cardTemplates.evaluateTemplateChecks(tpl, { title, reason: reasonVal, criteria: criteriaVal });
+      if (tplCheck.failed.length && me.kind === 'ai') {
+        tplWarnings.push('檢核沒過（請補上再開工）：\n' + tplCheck.failed.map(f => `・ ${f.detail}`).join('\n'));
+      }
+    }
     const owner = await validPerson(people, body.ownerId, '負責人');
     if (me.kind === 'ai' && owner && owner !== me.id) {
       throw new ApiError(403, 'ASSIGN_OTHERS', 'AI 不能直接把卡片指派給別人；負責人請留空或填自己，並在 next 寫清楚要誰接手。');
@@ -410,14 +446,6 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     } else if (body.deciderId !== undefined || body.question !== undefined || body.options !== undefined) {
       throw invalid('只有決策卡片可以填決策者、問題或選項');
     }
-    const mine = projectsOf(me);
-    let project = body.project;
-    if (project === undefined || project === null || project === '') {
-      if (mine.length !== 1) throw invalid(`project 為必填：${PROJECTS.join('、')}`);
-      project = mine[0];
-    }
-    if (!PROJECTS.includes(project)) throw invalid(`project 需為：${PROJECTS.join('、')}`);
-    if (!mine.includes(project)) throw new ApiError(403, 'PROJECT_FORBIDDEN', '你不屬於這個專案，不能在這個專案建卡。');
     sameProject(people, owner, project, '負責人');
     if (type !== '決策') sameProject(people, waitFor, project, '等誰');
     if (type === NOTE) humansOnly(people, [owner, waitFor]);
@@ -435,22 +463,33 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const at = nowIso(), uid = randId('card');
     // 建卡、專案內編號、紀錄、關聯訊息放同一個交易；中途失敗不會留下沒有編號的卡
     const seqOf = '(SELECT seq FROM cards WHERE uid = ?)';
+    const createLogText = tpl
+      ? (tplCheck?.failed?.length
+        ? `用「${tpl.name}」建立，略過 ${tplCheck.failed.length} 項檢核：${[...new Set(tplCheck.failed.map(f => f.section))].join('、')}`
+        : `用「${tpl.name}」建立`)
+      : `建立卡片（類型：${type}）`;
     await db.batch([
       [`INSERT INTO cards (uid, type, title, reason, owner_id, status, next, blocker, wait_for_id, criteria, created_by, request_id, created_at, updated_at,
       decider_id, proposer_id, question, recommendation, options, impact, after_next, project)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [uid, type, title, text(body, 'reason') ?? '', owner, status, text(body, 'next') ?? '', text(body, 'blocker') ?? '',
-        waitFor, text(body, 'criteria') ?? '', me.id, requestId, at, at,
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [uid, type, title, reasonVal, owner, status, text(body, 'next') ?? '', text(body, 'blocker') ?? '',
+        waitFor, criteriaVal, me.id, requestId, at, at,
         dec.decider_id, dec.proposer_id, dec.question, dec.recommendation, dec.options, dec.impact, dec.after_next, project]],
       [ASSIGN_PROJ_NO_SQL, [uid]],
-      ...[`建立卡片（類型：${type}）`, ...(type === '決策' ? [`等 ${people.get(dec.decider_id)?.name} 決定`] : [])]
+      ...[createLogText, ...(type === '決策' ? [`等 ${people.get(dec.decider_id)?.name} 決定`] : [])]
         .map(t => [`INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (${seqOf},?,?,?,?)`, [uid, at, me.id, me.kind === 'human' ? '網頁' : 'API', t]]),
       ...messageIds.map(m => [`INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (${seqOf},?)`, [uid, m]]),
     ]);
+    if (tpl) await cardTemplates.bumpUsed(project, tpl.id);
     const c = await db.get('SELECT * FROM cards WHERE uid = ?', uid);
     // 建卡時指定了別人（負責人、等誰、決策者）就通知對方，和交接一樣會叫醒 AI
     const who = [owner && `負責人 ${people.get(owner)?.name}`, waitFor && (type === '決策' ? `等 ${people.get(waitFor)?.name} 決定` : `等 ${people.get(waitFor)?.name}`)].filter(Boolean).join('；');
     if (type !== NOTE) await notifyCard(ctx, me, c, [owner, waitFor], `建立卡片${who ? '，' + who : ''}`, 'create'); // 人類紀錄不發群組訊息
-    return { __status: 201, ...view(await load(cardNo(c.seq)), people) };
+    return {
+      __status: 201, ...view(await load(cardNo(c.seq)), people),
+      ...(tpl ? { template: tpl.name } : {}),
+      ...(tplCheck ? { templateCheck: { passed: tplCheck.passed, total: tplCheck.total, failed: tplCheck.failed.map(f => ({ section: f.section, label: f.label, detail: f.detail })) } } : {}),
+      ...(tplWarnings.length ? { warnings: tplWarnings } : {}),
+    };
   });
 
   route('PATCH', '/api/cards/:id', async ({ ctx, me, req, params }) => {

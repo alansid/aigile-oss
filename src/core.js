@@ -12,6 +12,7 @@ import { registerJoin, joinOpen } from './join.js'; // 申請加入專案
 import { registerDocs, DOC_MAX_TOTAL_BYTES } from './docs.js'; // 專案文件區
 import { registerKbPages } from './kb-pages.js'; // 知識頁、整理卡
 import { registerReviews } from './reviews.js'; // 審查者
+import { registerCardTemplates } from './card-templates.js'; // 專案級卡片範本
 import { registerBackup } from './backup.js'; // 備份匯出與匯入
 import { registerUpdateCheck } from './update.js'; // 管理頁「有新版本」
 import { registerDemo } from './demo.js'; // 示範資料
@@ -3911,7 +3912,8 @@ ${ending}`;
   registerUpdateCheck({ route, db, requireAdmin, requireHuman, config });
   registerDemo({ route, db, ApiError, randId, nowIso, requireAdmin, requireHuman, newCode, newToken,
     afterChange: async () => { invalidatePeople(); await bumpPeopleVer(); await loadProjects(true); } });
-  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage, reviewOf: (c, ctx) => reviewsApi.reviewOf(c, ctx), archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours, boardLimit: BOARD_LIMIT });
+  const cardTemplatesApi = registerCardTemplates({ route, ApiError, invalid, readJson, randId, nowIso, PROJECTS, projectsOf, isManager: kbManager, getJson, setJson });
+  const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage, reviewOf: (c, ctx) => reviewsApi.reviewOf(c, ctx), cardTemplates: cardTemplatesApi, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours, boardLimit: BOARD_LIMIT });
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）
   const reviewsApi = registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager: kbManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, isolatedFrom,
     roleNamesIn: (p, pj) => (p.kind === 'ai' ? [p.role_key, p.role] : [projRoles[p.id]?.[pj]]).filter(Boolean), repoOf: async pj => (await reposMap())[pj] || null, docStorage, audit });
