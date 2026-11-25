@@ -26,35 +26,32 @@ try {
       const target = JSON.stringify('[data-card="'+card.cardId+'"]');
       await until(()=>js(`!!document.querySelector(${target})`),15000,'fixture card');
       await js(`document.querySelector(${target}).click(); true`);
-      await until(()=>js("!!document.querySelector('.card-files [data-add-file]')"),8000,'attachment picker');
+      await until(()=>js("!!document.querySelector('.drawer .dcompose')"),8000,'composer'); // 上傳改在底部輸入區的 📎（附件區只看）
       if (width === 1280) {
+        await js("document.querySelector('.dcompose [data-cmode=\"note\"]')?.click(); true");
+        await until(()=>js("!!document.querySelector('#note-text')"),5000,'note mode');
         await js(`(()=>{
-          const picker=document.querySelector('.card-files input[type=file]');
           const data=new DataTransfer();
           const canvas=document.createElement('canvas');canvas.width=240;canvas.height=120;
           const ctx=canvas.getContext('2d');ctx.fillStyle='#35614d';ctx.fillRect(0,0,240,120);ctx.fillStyle='white';ctx.font='20px sans-serif';ctx.fillText('Review sample',28,66);
           const bytes=Uint8Array.from(atob(canvas.toDataURL().split(',')[1]),c=>c.charCodeAt(0));
           data.items.add(new File([bytes],'sample.png',{type:'image/png'}));
           data.items.add(new File(['sample meeting agenda'],'agenda.txt',{type:'text/plain'}));
-          const note=document.querySelector('#note-text');
-          if(note){note.value='Meeting screenshot and agenda attached.';note.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true}));return true;}
-          picker.files=data.files;picker.dispatchEvent(new Event('change'));return true;
+          const note=document.querySelector('#note-text');note.value='Meeting screenshot and agenda attached.';note.dispatchEvent(new Event('input',{bubbles:true}));
+          note.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:data}));return true;
         })()`);
-        assert.ok(await js("document.querySelector('[data-upload]')?.disabled"));
-        await js("document.querySelector('.modal-body input[type=checkbox]').click(); true");
-        if(type === '人類紀錄'){
-          await until(()=>js("document.querySelector('.modal-body .card-preview')?.naturalWidth > 0"),5000,'confirmation preview');
-          await saveShot(language+'-1280-confirm');
-        }
-        await js("document.querySelector('[data-upload]').click(); true");
+        await until(()=>js("!!document.querySelector('.dcompose [data-att-declare]')"),5000,'declare');
+        await js("document.querySelector('.dcompose [data-att-declare]').click(); true");
+        await saveShot(language+'-1280-'+(type==='工作'?'work':'note')+'-compose');
+        await js("document.querySelector('.dcompose [data-act=\"add-note\"]').click(); true");
       }
       await until(()=>js("!!document.querySelector('.card-file-row') && document.querySelector('.card-image-grid img')?.naturalWidth > 0"),12000,'uploaded attachments');
       await js("document.querySelector('.card-files').scrollIntoView({block:'center'}); true");
       assert.ok(await js("document.documentElement.scrollWidth <= innerWidth+1"));
       await saveShot([language,width,type==='工作'?'work':'note'].join('-'));
-      if(type === '人類紀錄'){
-        assert.match(await js("document.querySelector('.note-entry [data-note-file]')?.parentElement.textContent || ''"),/🖼 sample.png/);
-        await js("document.querySelector('.note-entry').scrollIntoView({block:'center'});true");
+      {
+        assert.match(await js("document.querySelector('.tl-note [data-note-file]')?.parentElement.textContent || ''"),/🖼 sample.png/);
+        await js("document.querySelector('.tl-note').scrollIntoView({block:'center'});true");
         await saveShot(language+'-'+width+'-note-tag');
       }
       await js("document.querySelector('[data-card-image]').click(); true");

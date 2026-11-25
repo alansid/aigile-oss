@@ -371,7 +371,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       })),
       ...v, messageIds: msgs.map(m => m.message_id), ...await reportsOf([c]).then(r => (r.has(c.seq) ? { report: r.get(c.seq) } : {})),
       log: log.filter(l => l.via !== NOTE_LOG && l.via !== HANDOVER_LOG).map(l => ({ at: l.at, by: l.by_id === 'system' ? { participantId: 'system', name: '系統', memberType: 'system' } : ref(people, l.by_id), via: l.via, text: l.text })),
-      ...(c.type === NOTE ? { notes: (await notesOf(c.seq)).map(l => noteView(people, l)) } : {}),
+      ...(c.type !== '決策' ? { notes: (await notesOf(c.seq)).map(l => noteView(people, l)) } : {}),
       ...(mergedFrom.length ? { mergedFrom } : {}),
       ...await reviewOf(c, ctx).then(rv => (rv ? { review: rv } : {})), // 審查欄
     };
@@ -822,9 +822,10 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     }
   }
   route('POST', '/api/cards/:id/notes', async ({ ctx, me, req, params }) => {
-    if (me.kind !== 'human') throw aiNoteForbidden();
     const c = await load(params.id, me);
-    if (c.type !== NOTE) throw invalid('只有人類紀錄卡用「紀錄」；其他卡片請用想法與回覆（會發到群組）。');
+    // 工作、阻塞卡也能記一筆「只存卡上、不通知」的紀錄；決策卡沒有紀錄；紀錄只給人寫
+    if (me.kind !== 'human') throw c.type === NOTE ? aiNoteForbidden() : new ApiError(403, 'HUMAN_ONLY', '紀錄只給人寫；AI 請用想法與回覆（會發到群組）。');
+    if (c.type === '決策') throw invalid('決策卡沒有紀錄；請用想法與回覆（會發到群組）。');
     const t = String((await readJson(req)).text ?? '').trim();
     if (!t) throw invalid('紀錄不能空白');
     if (t.length > CARD_LIMITS.record) throw invalid(`紀錄上限 ${CARD_LIMITS.record} 字`);

@@ -2,7 +2,7 @@
 // A. 編輯在右上角、跟關閉並排（⋯ 其他動作不再有編輯）
 // B. 人類紀錄：鎖頭縮成一行小字，點「說明」才展開原本的句子
 // C. 專案、負責、阻塞收成一列；空的欄位收成一行「還沒填：…　＋ 補上」，點補上開編輯；有填的小標題在上
-// D. 相關訊息 0 則不顯示；紀錄輸入框一直在，都沒有時寫一行；變更紀錄預設收起
+// D. 相關訊息 0 則不顯示；紀錄輸入框一直在（在底部輸入區）；變更紀錄併進時間軸
 // E. 1280、375 不橫向捲動
 // G. 唯讀成員：右上角沒有編輯、空欄那行沒有「補上」
 // F. 英文介面
@@ -56,16 +56,14 @@ try {
     assert.equal(await js(`document.querySelector('${D} .lock-more').getClientRects().length`), 1, `B ${tag} 「說明 ▾」不拆成兩行`);
     assert.equal(await js(`document.querySelectorAll('${D} .lockbar').length`), 0, `B ${tag} 不再有大框`);
     // C 一列＋還沒填
-    assert.equal(await text(`${D} .dmeta`), '專案 預設專案 負責 林志明 阻塞 沒有', `C ${tag} 專案、負責、阻塞一列`);
+    assert.equal(await text(`${D} .dmeta`), '專案 預設專案 阻塞 沒有', `C ${tag} 人類紀錄卡負責人只放在狀態那行，一列不重複`);
     assert.equal(await blankText(), '還沒填：內容、下一步、完成條件 ＋ 補上', `C ${tag} 空的欄位收成一行`);
     assert.equal(await js(`document.querySelectorAll('${D} .dstack').length`), 0, `C ${tag} 沒有填的就沒有欄位`);
-    // D 相關訊息 0 不顯示；紀錄輸入框在；都沒有時一行；變更紀錄收起
+    // D 相關訊息 0 不顯示；紀錄輸入框在底部輸入區；建卡等變更在時間軸
     assert.ok(!(await js(`[...document.querySelectorAll('${D} .group-title')].some(g => g.textContent.includes('相關訊息'))`)), `D ${tag} 相關訊息 0 則不顯示`);
-    assert.ok(await js(`!!document.querySelector('${D} .note-add #note-text')`), `D ${tag} 紀錄輸入框一直在`);
-    assert.equal(await text(`${D} .note-list`), '還沒有紀錄，也沒有相關訊息。', `D ${tag} 都沒有時寫一行`);
-    assert.ok(await js(`document.querySelector('${D} .note-add').compareDocumentPosition(document.querySelector('${D} .note-list')) & Node.DOCUMENT_POSITION_FOLLOWING`), `D ${tag} 輸入框在紀錄上面`);
-    assert.match(await text(`${D} .dlog-box > summary`), /^變更紀錄（1）$/, `D ${tag} 變更紀錄寫筆數`);
-    assert.equal(await js(`document.querySelector('${D} .dlog-box').open`), false, `D ${tag} 變更紀錄預設收起`);
+    assert.ok(await js(`!!document.querySelector('${D} .dcompose #note-text')`), `D ${tag} 紀錄輸入框一直在`);
+    assert.match(await text(`${D} .timeline`), /建了這張卡/, `D ${tag} 建卡寫在時間軸`);
+    assert.ok(await js(`(() => { const c = document.querySelector('${D} .dcompose'), b = document.querySelector('${D} .drawer-body'); return !b.contains(c); })()`), `D ${tag} 輸入區固定在底部（不在捲動區裡）`);
     assert.ok(!(await hscroll()), `E ${tag} 不橫向捲動`);
     await shot(`01-${tag}-還沒填內容的卡`);
     await js(`document.querySelector('${D} .lock-line summary').click(); true`);
@@ -82,8 +80,8 @@ try {
     assert.equal(await js(`document.querySelectorAll('${D} .dblank').length`), 0, `C ${tag} 都填了就沒有「還沒填」`);
     assert.deepEqual(await js(`[...document.querySelectorAll('${D} .dstack dt')].map(x => x.textContent)`), ['內容', '下一步', '完成條件'], `C ${tag} 有填的小標題在上`);
     assert.ok(await js(`(() => { const dt = document.querySelector('${D} .dstack dt'), dd = dt.nextElementSibling; return dd.getBoundingClientRect().top >= dt.getBoundingClientRect().bottom - 1; })()`), `C ${tag} 內容在小標題下面`);
-    assert.match(await text(`${D} .note-list`), /先看行動版能不能貼上/, `D ${tag} 有紀錄就列出來`);
-    assert.ok(!(await text(`${D} .note-list`)).includes('還沒有紀錄'), `D ${tag} 有紀錄就不寫還沒有`);
+    assert.match(await text(`${D} .timeline`), /先看行動版能不能貼上/, `D ${tag} 有紀錄就列出來`);
+    assert.match(await text(`${D} .timeline`), /紀錄（只存卡上）/, `D ${tag} 紀錄在時間軸標類型`);
     assert.ok(!(await hscroll()), `E ${tag} 不橫向捲動`);
     await js(`document.querySelector('${D} .dmeta').scrollIntoView({ block: 'start' }); true`);
     await shot(`02-${tag}-填好的卡`);
@@ -121,10 +119,10 @@ try {
   await until(() => js("document.documentElement.lang === 'en'"), 15000, 'F 英文介面');
   await sleep(300);
   assert.equal(await text(`${D} .lock-line summary`), "🔒 AIs can't see this card unless you give them its number.More ▾", 'F 鎖頭一行');
-  assert.equal(await text(`${D} .dmeta`), 'Project Default project Owner 林志明 Blocked None', 'F 一列');
+  assert.equal(await text(`${D} .dmeta`), 'Project Default project Blocked None', 'F 一列（負責人在狀態那行）');
   assert.equal(await blankText(), 'Not filled in yet: Details, Next step, Done when ＋ Add', 'F 還沒填');
-  assert.equal(await text(`${D} .note-list`), 'No notes or related messages yet.', 'F 都沒有');
-  assert.equal(await text(`${D} .dlog-box > summary`), 'Change history (1)', 'F 變更紀錄');
+  assert.match(await text(`${D} .timeline`), /created this card/, 'F 時間軸英文');
+  assert.match(await text(`${D} .group-title`), /^Timeline/, 'F 時間軸標題英文');
   assert.equal(await js(`document.querySelector('${D} .drawer-acts [data-act="edit"]').title`), 'Edit', 'F 編輯提示');
   await shot('04-1280-英文-還沒填內容的卡');
 

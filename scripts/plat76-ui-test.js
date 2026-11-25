@@ -56,8 +56,8 @@ try {
   await login(boss.token, '/p/main/work');
   await until(() => js(`!!document.querySelector('[data-card="${workCard.cardId}"]')`), 15000, '工作頁卡片載入');
   await js(`document.querySelector('[data-card="${workCard.cardId}"]').click(); true`);
-  await until(() => js("!!document.querySelector('#d-status')"), 10000, '打開卡片抽屜');
-  await js("const s = document.querySelector('#d-status'); s.value = '受阻'; s.dispatchEvent(new Event('change', { bubbles: true })); true");
+  await until(() => js("!!document.querySelector('.drawer-status .st-menu')"), 10000, '打開卡片抽屜'); // 改狀態移到標題下「改狀態 ▾」
+  await js("document.querySelector('.st-list [data-act=set-st][data-st=受阻]').click(); true");
   await until(() => js("!!document.querySelector('#card-edit [name=blocker]') && document.activeElement === document.querySelector('#card-edit [name=blocker]')"), 10000, '改受阻後展開並聚焦受阻原因');
   const labelText = await js("document.querySelector('#card-edit [name=blocker]')?.closest('label')?.childNodes[0]?.textContent?.trim()");
   assert.equal(labelText, '受阻原因', '欄位名稱為「受阻原因」');

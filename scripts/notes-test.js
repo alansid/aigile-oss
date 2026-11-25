@@ -52,7 +52,9 @@ const call = async (token, p, method = 'GET', body) => {
     assert.equal((await call(boss.token, `/api/cards/${n1.cardId}/notes`, 'POST', { text: '先問 PO 能不能改名' })).body.notes.length, 1);
     await call(mate.token, `/api/cards/${n1.cardId}/notes`, 'POST', { text: '叫「公告」比較好懂' });
     assert.equal((await call(ai.token, `/api/cards/${n1.cardId}/notes`, 'POST', { text: 'AI 寫' })).status, 403, 'AI 不能寫紀錄');
-    assert.equal((await call(boss.token, `/api/cards/${w1.cardId}/notes`, 'POST', { text: 'x' })).status, 400, '一般卡不用紀錄');
+    // 工作卡也能記「只存卡上、不通知」的紀錄（人才能寫）；AI 對工作卡寫紀錄回 HUMAN_ONLY
+    assert.equal((await call(boss.token, `/api/cards/${w1.cardId}/notes`, 'POST', { text: 'x' })).status, 200, '工作卡也能記紀錄');
+    assert.equal((await call(ai.token, `/api/cards/${w1.cardId}/notes`, 'POST', { text: 'x' })).body.error?.code, 'HUMAN_ONLY', 'AI 不能對工作卡寫紀錄');
     assert.equal(await msgCount(), m1, '紀錄不發群組訊息');
 
     // 2. AI 平常的列表、增量都不含
@@ -113,7 +115,7 @@ const call = async (token, p, method = 'GET', body) => {
     const back = (await call(boss.token, `/api/cards/${aiOwned.cardId}`, 'PATCH', { type: '工作', publishNotes: false })).body;
     assert.equal(back.type, '工作');
     const backOne = (await call(ai.token, `/api/cards/${aiOwned.cardId}`)).body;
-    assert.equal(backOne.notes, undefined, '一般卡沒有 notes');
+    assert.deepEqual(backOne.notes, [], '改回一般卡又不公開紀錄：紀錄清空（一般卡現在也帶 notes 欄位）');
     assert.ok(!JSON.stringify(backOne).includes('私下的紀錄'), '不勾公開＝紀錄刪掉');
     assert.ok((await call(ai.token, '/api/cards')).body.items.some(c => c.cardId === aiOwned.cardId), '改回工作卡後 AI 看得到');
     // 團隊狀態不算人類紀錄（AI 也看團隊狀態）

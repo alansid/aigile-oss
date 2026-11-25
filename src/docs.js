@@ -167,7 +167,7 @@ export function registerDocs({ route, db, cardSeqByKey, cardKey, ApiError, inval
       if (!card || (card.type === '人類紀錄' && me.kind !== 'human')) throw notFound();
       if (q.has('noteId')) {
         const note = await db.get('SELECT id FROM card_log WHERE id = ? AND card_seq = ? AND by_id = ? AND via = ?', Number(q.get('noteId')) || -1, card.seq, me.id, '紀錄');
-        if (!note || card.type !== '人類紀錄') throw notFound();
+        if (!note || card.type === '決策') throw notFound(); // 工作、阻塞卡的紀錄也能附檔
         noteId = note.id;
       }
       if (toKb || q.has('folderId')) throw invalid('附件由卡片指定保存位置');

@@ -78,8 +78,8 @@ try {
   await js(`document.querySelector('[data-card="${c.cardId}"]').click(); true`);
   await until(() => js("!!document.querySelector('.drawer-titles')"), 8000, '卡片抽屜');
   await js("[...document.querySelectorAll('button')].find(b => /^交接/.test(b.textContent.trim()))?.click(); true");
-  await until(() => js("!!document.querySelector('#handover-form')"), 8000, '交接表單');
-  const opts = await js("[...document.querySelectorAll('#handover-form option, #handover-form [data-to]')].map(o => o.textContent)");
+  await until(() => js("!!document.querySelector('.dcompose [data-ho-to]')"), 8000, '交接表單');
+  const opts = await js("[...document.querySelectorAll('.dcompose [data-ho-to] option')].map(o => o.textContent)");
   assert.ok(opts.some(t => t.includes('王小明')) && !opts.some(t => t.includes('林志明')), '交接對象不列管理員：' + opts.join('｜'));
 
   await login(mate.token);

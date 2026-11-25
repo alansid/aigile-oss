@@ -95,8 +95,9 @@ try {
     await js(`document.querySelector('[data-card="${cardId}"]').click(); true`);
     await until(() => js("!!document.querySelector('[data-act=handover]')"), 10000, '交接鈕');
     await js("document.querySelector('[data-act=handover]').click(); true");
-    await until(() => js("!!document.querySelector('#ho-note')"), 5000, '交接框');
+    await until(() => js(`!!document.querySelector('.dcompose [data-cdraft^="h:"]')`), 5000, '交接框'); // 交接在抽屜底部輸入區的「交接」分頁
   };
+  const hoTa = cardId => `[data-cdraft="h:${cardId}"]`;
   const openReject = async cardId => {
     await until(() => js(`!!document.querySelector('[data-ver-no="${cardId}"]')`), 15000, '退回按鈕');
     await js(`document.querySelector('[data-ver-no="${cardId}"]').click(); true`);
@@ -116,9 +117,9 @@ try {
   await cells(kk, 2);
   b = await box(kk);
   assert.ok(/^1\. 截圖-\d{8}-\d{6}\.png$/.test(b.cells[0]) && /^2\. 截圖-\d{8}-\d{6}-2\.png$/.test(b.cells[1]), 'A 序號＋檔名（貼上的取有時間的檔名、同名自動加 -2）：' + JSON.stringify(b.cells));
-  assert.equal(b.cols, 4, 'A 電腦 4 欄');
-  assert.equal(b.count, '2 張（最多 4 張，每張 2 MB 以內）', 'A 上方張數：' + b.count);
-  assert.equal(b.add, '＋ 再加一張 或直接 Ctrl+V 貼上', 'A 再加一張：' + b.add);
+  // 卡片抽屜底部輸入區的附件縮成小標籤（不顯示大縮圖與「再加一張」）
+  assert.equal(await js(`getComputedStyle(document.querySelector('[data-att-grid="${kk}"] .up-th')).display`), 'none', 'A 輸入區附件是小標籤，沒有大縮圖');
+  assert.equal(await js(`getComputedStyle(document.querySelector('[data-att-grid="${kk}"] .up-add')).display`), 'none', 'A 輸入區不顯示再加一張');
   assert.equal(b.declare, '我已逐張看過，這 2 張截圖都不含任何程式碼與客戶個資', 'A 聲明');
   assert.deepEqual(b.order, ['att-grid', 'inl-field', 'att-decl', 'att-bar'], 'A 版面：附件格在上、文字框、聲明、底列：' + b.order);
   assert.equal(await js(`document.querySelector('[data-inl-root="${kk}"] [data-inl-act=send]').disabled`), false, 'A 只有附圖也能送');
@@ -140,8 +141,10 @@ try {
   await press(false, true);
   await until(async () => (await msgs()).some(m => m.text.startsWith(`[回覆] ${kReply.cardId}：`)), 10000, 'A Enter 送出');
   let m = (await msgs()).find(x => x.text.startsWith(`[回覆] ${kReply.cardId}：`));
-  assert.match(m.text, /修改後\n請再看一次。\n\[文件\] 2 個檔案/, 'A 文字在前、[文件] 在後：' + m.text);
-  assert.deepEqual((await msg(m.messageId)).files.map(f => f.name), b.cells.map(c => c.replace(/^\d\. /, '')), 'A 那則掛 2 張、照順序');
+  // 卡片回覆的附件存成卡片附件（永久），不掛在訊息上
+  assert.match(m.text, /修改後\n請再看一次。$/, 'A 回覆只有文字：' + m.text);
+  await until(async () => ((await call(lin.token, `/api/cards/${kReply.cardId}`)).body.attachments || []).length === 2, 8000, 'A 兩張存成卡片附件');
+  assert.deepEqual((await call(lin.token, `/api/cards/${kReply.cardId}`)).body.attachments.map(f => f.name), b.cells.map(c => c.replace(/^\d\. /, '')), 'A 卡片附件 2 張、照順序');
   await until(() => js(`!document.querySelector('[data-att-grid="${kk}"] .up-cell')`), 8000, 'A 送出後附件格清空');
 
   // ---------- B 決策回覆：Enter 只換行 ----------
@@ -218,23 +221,23 @@ try {
   assert.equal((await msg(m.messageId)).files.length, 3, 'D 掛 3 張');
 
   // ---------- E 交接 ----------
-  const hk = 'ho:' + hCard.cardId;
+  const hk = 'h:' + hCard.cardId, hta = hoTa(hCard.cardId);
   await go('/p/main/work');
   await openHandover(hCard.cardId);
-  await js(`(() => { const s = document.querySelector('#handover-form [name=toId]'); s.value = ${JSON.stringify(CHEN)}; return true; })()`);
-  await js(`__type('#ho-note', '做到一半，看圖')`);
+  await js(`(() => { const s = document.querySelector('.dcompose [data-ho-to]'); s.value = ${JSON.stringify(CHEN)}; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await js(`__type('${hta}', '做到一半，看圖')`);
   await press();
-  assert.ok(await js("!!document.querySelector('#ho-note')"), 'E Enter 不送出');
-  assert.equal((await box(hk)).hint, 'Enter 換行 · 可直接貼上截圖', 'E 提示');
-  await js(`__paste('#ho-note', ['設定'])`);
+  assert.ok(await js(`!!document.querySelector('${hta}')`), 'E Enter 不送出');
+  assert.match(await js("document.querySelector('.dcompose .ho-hint').textContent"), /交接後負責人變/, 'E 提示交接後負責人換誰');
+  await js(`__paste('${hta}', ['設定'])`);
   await cells(hk, 1);
   await tick(hk);
   await shot('3-電腦1280-交接附一張截圖');
-  await js("document.querySelector('#modal-root [type=submit]').click(); true");
-  await until(() => js("!document.querySelector('#ho-note')"), 10000, 'E 交接成功');
+  await js("document.querySelector('.dcompose [data-act=ho-go]').click(); true");
+  await until(async () => (await msgs()).some(x => x.text.startsWith('[交接]') && x.text.includes(hCard.cardId)), 10000, 'E 交接成功');
   m = (await msgs()).filter(x => x.text.startsWith('[交接]') && x.text.includes(hCard.cardId)).at(-1);
   assert.match(m.text, /做到一半，看圖/, 'E 交接說明');
-  assert.equal((await msg(m.messageId)).file?.name.startsWith('截圖-'), true, 'E [交接] 那則掛檔');
+  await until(async () => ((await call(lin.token, `/api/cards/${hCard.cardId}`)).body.attachments || []).some(f => f.name.startsWith('截圖-')), 8000, 'E 截圖存成卡片附件');
 
   // ---------- F 手機 375 ----------
   const k2 = await card(lin.token, { title: '手機回覆', ownerId: AI, status: '進行中' }), mk = 'k:' + k2.cardId;
@@ -244,8 +247,7 @@ try {
   await js(`__paste('[data-inl-text="${mk}"]', ['搜尋結果', '搜尋框'])`);
   await cells(mk, 2);
   b = await box(mk);
-  assert.equal(b.cols, 2, 'F 手機 2 欄');
-  assert.equal(b.add, '＋ 再加一張 從相簿或檔案選', 'F 手機再加一張');
+  assert.equal(b.cells.length, 2, 'F 手機兩張都成小標籤'); // 抽屜輸入區附件是小標籤（不再是 2 欄縮圖）
   assert.equal(b.hint, '可附截圖', 'F 手機提示（📎 不重複、不擠兩行）');
   assert.equal(await js(`document.querySelector('[data-inl-root="${mk}"] .att-hint .k-mob').getClientRects().length`), 1, 'F 手機提示一行');
   await tick(mk);
@@ -279,10 +281,10 @@ try {
   const h2 = await card(lin.token, { title: '手機交接', ownerId: LIN, status: '進行中' });
   await go('/p/main/work', 375, 812, true);
   await openHandover(h2.cardId);
-  await js(`__type('#ho-note', '做到一半，看圖')`);
-  await js(`__paste('#ho-note', ['設定', '錯誤訊息'])`);
-  await cells('ho:' + h2.cardId, 2);
-  assert.equal((await box('ho:' + h2.cardId)).cols, 2, 'F 手機交接 2 欄');
+  await js(`__type('${hoTa(h2.cardId)}', '做到一半，看圖')`);
+  await js(`__paste('${hoTa(h2.cardId)}', ['設定', '錯誤訊息'])`);
+  await cells('h:' + h2.cardId, 2);
+  assert.equal((await box('h:' + h2.cardId)).cells.length, 2, 'F 手機交接兩張小標籤');
   assert.ok(await noHScroll(), 'F 手機交接不橫向捲動');
   await shot('8-手機375-交接附兩張截圖');
 

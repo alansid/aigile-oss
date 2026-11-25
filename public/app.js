@@ -3317,7 +3317,7 @@
       ? to.map(r => `<span class="to-chip"><b>${nameCodeHtml(r, dups)}</b><span class="muted small">${esc(r.why)}</span><button type="button" class="to-x" data-inl-rm="${esc(r.id)}" data-inl="${esc(key)}" aria-label="不通知 ${esc(r.name)}">×</button></span>`).join('')
       : `<span class="muted small">沒有人（${isMeRef(c.owner) ? '你是負責人' : c.owner ? '負責人已移除' : '沒有負責人'}，${c.waitFor ? '等誰已移除' : '也沒有等誰'}）</span>`}</div>`;
   }
-  const cardSendLabel = n => (n ? `送出並通知 ${n} 人` : '只留紀錄，不通知');
+  const cardSendLabel = n => (n ? `送出並通知 ${n} 人` : '送出（不通知人）');
   function refreshCardTo(key) {
     const c = work.cards.get(key.slice(2)), root = document.querySelector(`[data-inl-root="${CSS.escape(key)}"]`);
     if (!c || !root) return;
@@ -3379,8 +3379,10 @@
     const requestId = (st && (st.requestId ||= newRequestId())) || newRequestId(); // 重試沿用，避免附件已掛上又發一次
     let fileIds = null;
     const post = async body => postMsg({ requestId, ...body, ...(fileIds ? { fileIds } : {}) });
+    const cardFiles = act === 'send' && key.startsWith('k:'); // 卡片回覆的附件存成卡片附件（永久），送出回覆後再上傳
     try {
-      if (useAtt && attHas(key)) {
+      if (cardFiles && attHas(key)) { const bad = attProblem(key); if (bad) throw new Error(bad); }
+      if (useAtt && attHas(key) && !cardFiles) {
         const bad = attProblem(key);
         if (bad) throw new Error(bad);
         st.busy = true; attRefresh(key);
@@ -3395,6 +3397,10 @@
         const c = work.cards.get(id), to = c ? cardRecipients(key, c) : [];
         await post({ text: `[回覆] ${id}：${text}`, cardId: id, recipientIds: to.map(r => r.id) });
         delete work.inlRm[key];
+        if (attHas(key) && c) {
+          try { await attUploadCard(key, c, null, (k, n) => { btn.textContent = `上傳中 ${k} / ${n}…`; }); }
+          catch (e2) { attFailed(key, null, `回覆已送出，但附件沒存上：${e2.message}`); }
+        }
         work.sentTo = to.length ? `已送出，通知 ${to.map(r => r.name).join('、')}` : '已送出（只留紀錄，沒有通知任何人）';
       } else if (act === 'opinion') { // 決策卡只送意見：給提案人，卡片狀態不變
         const c = work.cards.get(id);
@@ -3416,7 +3422,7 @@
         if (act === 'sugg-skip') await api(`/api/suggestions/${encodeURIComponent(id)}/skip`, { method: 'POST', body: {} });
         await post({ text: `[回覆] ${act === 'sugg-skip' ? '略過了你的建議' : '關於你的建議'}（${what}）：${text}`, ...(g.card?.cardId ? { cardId: g.card.cardId } : {}), recipientIds: others([g.from?.participantId]) });
       }
-      delete work.drafts[key]; work.openInl = null; attClear(key);
+      delete work.drafts[key]; work.openInl = null; if (!work.cretry?.[key]) attClear(key);
       if (act !== 'decide' && act !== 'defer') toast(work.sentTo || '已送出');
       work.sentTo = null;
       await Promise.all([loadTeam().catch(() => {}), syncCards().catch(() => {})]);
@@ -4920,17 +4926,25 @@
   }
   const ownsOpen = d => d.type !== '決策' && isMeRef(d.owner) && !closedSt(d.status) && d.status !== '待確認';
   // 「⋯ 其他動作」：每項一句說明；人類畫面不再有「標為已驗證」（人類按驗收通過就同時完成＋驗證）
-  function moreActsHtml(d, mine) {
-    const items = [];
-    const own = !verifyingMe(d) && ownsOpen(d);
-    if (!own && !verifyingMe(d) && !closedSt(d.status) && d.type !== '決策') items.push(actBtn('done', '標為已完成', '你自己做完了'));
-    if (!own && canHandover(d)) items.push(actBtn('handover', '交接…', '換人負責（例如交給 PG 做、交給 UX 驗）'));
-    if (d.status === '已完成' && !d.verified && !mine && state.me?.memberType === 'human') items.push(actBtn('verify', '驗收通過', '確認做好了，這張卡結案'));
-    if (d.status === '已完成') items.push(actBtn('reopen', '重新打開', '還沒好，改回待處理再做'));
-    items.push(`<label class="act-btn act-sel"><b>改狀態</b><span>直接改成其他狀態</span><select id="d-status">${CARD_ST.map(s => `<option ${s === d.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>`);
-    items.push(actBtn('copy-id', '複製卡號', '貼到訊息裡'));
+  // 「⋯」只留不常用的（複製卡號、在工作頁開啟、封存）；改狀態、標為已完成、重新打開移到標題下「改狀態 ▾」
+  function moreActsHtml(d) {
+    const items = [actBtn('copy-id', '複製卡號', '貼到訊息裡')];
     if (state.page === 'messages') items.push(actBtn('open-work', '在工作頁開啟', '在看板上看這張卡'));
-    return `<details class="more-acts"><summary>⋯ 其他動作</summary><div class="more-list">${items.join('')}</div></details>`;
+    if (d.status !== '已封存' && !meRO(d.project) && d.type !== NOTE) items.push(`<button type="button" class="act-btn" data-act="set-st" data-st="已封存"><b>封存</b><span>收起來，不在看板與 AI 預設查詢裡</span></button>`);
+    return `<details class="more-acts"><summary aria-label="其他動作">⋯</summary><div class="more-list">${items.join('')}</div></details>`;
+  }
+  function stMenuHtml(d, mine) {
+    if (meRO(d.project) || work.editing) return '';
+    const it = (act, label, st = '') => `<button type="button" class="st-it" role="menuitem" data-act="${act}"${st ? ` data-st="${esc(st)}"` : ''}>${label}</button>`;
+    const items = [];
+    if (d.type === NOTE) for (const [v, t] of [['進行中', '收集中'], ['已完成', '已整理']]) { if ((d.status === '已完成') !== (v === '已完成')) items.push(it('note-st', t, v)); }
+    else {
+      if (!verifyingMe(d) && !closedSt(d.status) && d.type !== '決策' && !ownsOpen(d)) items.push(it('done', '標為已完成'));
+      if (d.status === '已完成' && !d.verified && !mine && !verifyingMe(d) && state.me?.memberType === 'human') items.push(it('verify', '驗收通過'));
+      if (d.status === '已完成') items.push(it('reopen', '重新打開'));
+      for (const s of CARD_ST) if (s !== d.status && s !== '已封存') items.push(it('set-st', s, s));
+    }
+    return items.length ? `<details class="st-menu"><summary>改狀態 ▾</summary><div class="st-list" role="menu">${items.join('')}</div></details>` : '';
   }
   // 「今天 14:46」「昨天 09:10」「10/16 14:46」
   function dayTime(iso) {
@@ -4939,7 +4953,7 @@
     return t.toDateString() === now.toDateString() ? '今天 ' + hm : t.toDateString() === y.toDateString() ? '昨天 ' + hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`;
   }
   // 「發生了什麼」：同人同秒的多筆合成一句；交接寫成「A 把這張交給 B 驗收／做」，備註收合、版號抽出放小字
-  function happenedHtml(d) {
+  function logGroups(d) {
     const groups = [];
     for (const l0 of d.log || []) {
       const l = { ...l0, text: String(l0.text).replace(/\bC-\d{3,}\b/g, cardIdNorm) }; // 舊紀錄的 C-xxx 顯示成專案卡號
@@ -4947,26 +4961,66 @@
       const g = groups[groups.length - 1];
       if (g && g.k === k && !/^(?:建立卡片|用「)/.test(l.text) && !g.items.some(t => /^(?:建立卡片|用「)/.test(t))) g.items.push(l.text); else groups.push({ k, by: l.by, at: l.at, items: [l.text] }); // 建卡永遠單獨一句
     }
-    const line = g => {
-      const ho = g.items.map(t => /^交接 (.+?) → (.+?)：([\s\S]*)$/.exec(t)).find(Boolean);
-      let icon = '•', cls = '', body, note = '', ver = '';
-      if (g.items.some(t => /人類完成即驗收|驗收通過/.test(t))) { icon = '✓'; cls = 'ok'; body = '驗收通過，這張卡結案了'; }
-      else if (ho) {
-        icon = '⇢'; cls = 'ho';
-        note = ho[3].replace(/（狀態[^（）]*）\s*$/, '').trim();
-        ver = (note.match(/v\d+\.\d+\.\d+/) || [''])[0];
-        body = `把這張交給 <b>${esc(shortOf(ho[2]))}</b> ${/等 .+ 驗收/.test(ho[3]) ? '驗收' : '做'}`;
+    return groups;
+  }
+  function logLine(g) {
+    const ho = g.items.map(t => /^交接 (.+?) → (.+?)：([\s\S]*)$/.exec(t)).find(Boolean);
+    let icon = '•', cls = '', body, note = '', ver = '';
+    if (g.items.some(t => /人類完成即驗收|驗收通過/.test(t))) { icon = '✓'; cls = 'ok'; body = '驗收通過，這張卡結案了'; }
+    else if (ho) {
+      icon = '⇢'; cls = 'ho';
+      note = ho[3].replace(/（狀態[^（）]*）\s*$/, '').trim();
+      ver = (note.match(/v\d+\.\d+\.\d+/) || [''])[0];
+      body = `把這張交給 <b>${esc(shortOf(ho[2]))}</b> ${/等 .+ 驗收/.test(ho[3]) ? '驗收' : '做'}`;
+    }
+    else if (g.items.some(t => /^用「/.test(t))) { icon = '＋'; body = esc(g.items.find(t => /^用「/.test(t))); } // 用範本建立
+    else if (g.items.some(t => /^建立卡片/.test(t))) { icon = '＋'; body = '建了這張卡'; }
+    else if (g.items.some(t => /^退回/.test(t))) { icon = '↩'; cls = 'bad'; body = esc(g.items.find(t => /^退回/.test(t))); }
+    else if (g.items.some(t => /^標為已完成/.test(t))) { icon = '✓'; body = '標為已完成'; }
+    else body = g.items.map(t => esc(t.replace(/^狀態 (.+?) → (.+)$/, '把狀態從「$1」改成「$2」').replace(/^.+? 認領了這張卡片$/, '認領了這張卡'))).join('，');
+    const who = g.by ? shortOf(g.by.name || '') : '系統';
+    return `<li class="tl tl-sys lg ${cls}"><span class="lg-ic" aria-hidden="true">${icon}</span><div class="lg-main"><span><b>${esc(who)}</b> ${body}</span><span class="muted small">${dayTime(g.at)} · <span>系統</span>${ver ? ' · ' + esc(ver) : ''}</span>${note ? `<details class="lg-note"><summary>看交接說明</summary><p>${esc(note)}</p></details>` : ''}</div></li>`;
+  }
+  // 相關訊息、紀錄、附件、系統變更合成一條時間軸（舊到新）；預設只顯示最近 TL_SHOW 則
+  const TL_SHOW = 20;
+  const isImgName = f => ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(String(f.ext || '').toLowerCase());
+  function tlMsgFiles(m) {
+    const fs = m.files?.length ? m.files : m.file ? [m.file] : [];
+    return fs.length ? `<div class="tl-files">${fs.map((f, i) => f.available
+      ? `<button type="button" class="link small" data-tl-file="${esc(m.messageId)}" data-i="${i}">${isImgName(f) ? '🖼' : '📎'} ${esc(f.name)}</button>`
+      : `<span class="muted small tl-gone">📎 ${esc(f.name || '檔案')}（已過期）</span>`).join('')}</div>` : '';
+  }
+  function timelineHtml(d) {
+    const items = [];
+    for (const mid of d.messageIds || []) { const m = state.byId.get(mid); items.push({ at: m?.createdAt || '', kind: 'msg', mid, m }); }
+    for (const n of d.notes || []) items.push({ at: n.at, kind: 'note', n });
+    for (const f of d.attachments || []) if (!f.noteId) items.push({ at: f.createdAt, kind: 'file', f });
+    for (const g of logGroups(d)) items.push({ at: g.at, kind: 'sys', g });
+    items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const all = work.logAll, list = all ? items : items.slice(-TL_SHOW);
+    const row = it => {
+      if (it.kind === 'sys') return logLine(it.g);
+      if (it.kind === 'msg') {
+        const m = it.m;
+        if (!m) return '<li class="tl tl-msg"><span class="muted small">訊息載入中…</span></li>';
+        const fi = m.file || m.files?.length ? m.text.indexOf('[文件] ') : -1, txt = (fi > 0 ? m.text.slice(0, fi).trim() : m.text).replace('[回覆] ' + d.cardId + '：', ''); // 帶檔的訊息：伺服器附的檔案說明不顯示（跟訊息列表一樣）
+        const open = work.openMsgs?.has(it.mid), long = txt.length > 160;
+        return `<li class="tl tl-msg"><div class="tl-head"><b>${esc(m.author.name)}</b> <span class="muted small">${dayTime(m.createdAt)} · <span>回覆</span></span></div>
+          <div class="tl-text" data-nt>${esc(open || !long ? txt : txt.slice(0, 160) + '…')}</div>${tlMsgFiles(m)}
+          <div class="tl-foot">${long ? `<button type="button" class="link small" data-dmsg-toggle="${esc(it.mid)}" aria-expanded="${!!open}">${open ? '收合' : '看全文'}</button>` : ''}<button type="button" class="link small" data-jump-msg="${esc(it.mid)}">到訊息 ›</button></div></li>`;
       }
-      else if (g.items.some(t => /^用「/.test(t))) { icon = '＋'; body = esc(g.items.find(t => /^用「/.test(t))); }
-      else if (g.items.some(t => /^建立卡片/.test(t))) { icon = '＋'; body = '建了這張卡'; }
-      else if (g.items.some(t => /^退回/.test(t))) { icon = '↩'; cls = 'bad'; body = esc(g.items.find(t => /^退回/.test(t))); }
-      else if (g.items.some(t => /^標為已完成/.test(t))) { icon = '✓'; body = '標為已完成'; }
-      else body = g.items.map(t => esc(t.replace(/^狀態 (.+?) → (.+)$/, '把狀態從「$1」改成「$2」').replace(/^.+? 認領了這張卡片$/, '認領了這張卡'))).join('，');
-      const who = g.by ? shortOf(g.by.name || '') : '系統';
-      return `<li class="lg ${cls}"><span class="lg-ic" aria-hidden="true">${icon}</span><div class="lg-main"><span><b>${esc(who)}</b> ${body}</span><span class="muted small">${dayTime(g.at)}${ver ? ' · ' + esc(ver) : ''}</span>${note ? `<details class="lg-note"><summary>看交接說明</summary><p>${esc(note)}</p></details>` : ''}</div></li>`;
+      if (it.kind === 'note') {
+        const n = it.n, files = (d.attachments || []).filter(f => f.noteId && f.noteId === n.noteId);
+        return `<li class="tl tl-note"><div class="tl-head"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${dayTime(n.at)} · <span>紀錄（只存卡上）</span></span></div>
+          <div class="tl-text" data-nt>${esc(n.text)}</div>${files.length ? `<div class="tl-files">${files.map(f => `<button type="button" class="link small" data-note-file="${esc(f.docId)}">${isImgName(f) ? '🖼' : '📎'} ${esc(f.name)}</button>`).join('')}</div>` : ''}</li>`;
+      }
+      const f = it.f;
+      return `<li class="tl tl-file"><span class="muted small">📎</span> <b>${esc(f.uploader?.name || '')}</b> 附加 <button type="button" class="link" data-note-file="${esc(f.docId)}">${esc(f.name)}</button> <span class="muted small">${dayTime(f.createdAt)}</span></li>`;
     };
-    const all = work.logAll, list = all ? groups : groups.slice(0, 5);
-    return `<div class="group-title">發生了什麼</div><ol class="happened">${list.map(line).join('')}</ol>${groups.length > 5 ? `<button type="button" class="link small" data-act="log-all">${all ? '只看最近 5 句' : `看全部 ${groups.length} 筆`}</button>` : ''}`;
+    const mids = d.messageIds || [];
+    return `<div class="group-title">時間軸${items.length ? ` · ${items.length}` : ''}${mids.length ? ` <button type="button" class="link small" data-ver-report="${esc(d.report?.messageId || mids[mids.length - 1])}">${d.report ? '看回報' : '看訊息串'}</button>` : ''}</div>
+      ${items.length > TL_SHOW ? `<button type="button" class="link small tl-more" data-act="log-all">${all ? `只看最近 ${TL_SHOW} 則` : `看更早的 ${items.length - TL_SHOW} 則`}</button>` : ''}
+      <ol class="timeline">${list.map(row).join('') || '<li class="muted small">還沒有任何動靜。</li>'}</ol>`;
   }
   function handoverChain(d) {
     const hs = [...(d.log || [])].reverse().map(l => /^交接 (.+?) → (.+?)：/.exec(l.text)).filter(Boolean);
@@ -5046,7 +5100,7 @@
   // 卡片欄位：專案、負責、阻塞收成一列；有填的欄位小標題在上、內容在下；空的收成一行「還沒填：…　＋ 補上」
   function cardFieldsHtml(d) {
     const note = d.type === NOTE, wait = waitText(d);
-    const meta = [['專案', esc(projName(d.project) || '')], ...(note ? [['負責', esc(d.owner?.name || '未指派')]] : []), // 一般卡的負責人已經在狀態那行
+    const meta = [['專案', esc(projName(d.project) || '')], // 一般卡的負責人已經在狀態那行
       ...(d.claim ? [['正在做', `${esc(d.claim.by?.name || '')} · ${esc(shortTime(d.claim.at))} 起`]] : []), ['阻塞', esc(wait || '沒有')]];
     const fields = [[note ? '內容' : '背景／緣由', d.reason], [L('下一步', 'Next step'), d.next], ['完成條件', d.criteria]];
     const filled = fields.filter(([, v]) => v), blank = fields.filter(([, v]) => !v).map(([k]) => k);
@@ -5057,18 +5111,17 @@
   function cardFilesHtml(d) {
     const files = d.attachments || [];
     const writable = state.me?.projects?.includes(d.project) && !state.me?.readOnlyIn?.includes(d.project) && (d.type !== NOTE || state.me?.memberType === 'human');
-    if (!files.length && !writable) return '';
+    if (!files.length) return ''; // 附件區只看；上傳改在底部輸入區的 📎
     const images = files.filter(f => ['png','jpg','jpeg'].includes(f.ext));
     const others = files.filter(f => !images.includes(f));
     return `<section class="card-files" data-writable="${writable}">
-      <header><h3>📎 附件 ${files.length}</h3>${writable ? '<button class="link" type="button" data-add-file>＋ 附加檔案</button>' : ''}</header>
+      <header><h3>📎 附件 ${files.length}</h3></header>
       <div class="card-image-grid">${images.map((f,i) => `<button type="button" data-card-image="${i}" ${i > 3 ? 'hidden' : ''}>
         <img alt="" loading="lazy"><span data-nt>${esc(f.name)}</span>${i === 3 && images.length > 4 ? `<b>+${images.length-3}</b>` : ''}</button>`).join('')}</div>
       ${others.map(f => `<div class="card-file-row"><b>${esc(f.ext.toUpperCase())}</b>
         <button class="link" data-card-download="${esc(f.docId)}" data-nt>${esc(f.name)}</button>
         <small>${Math.ceil(f.size/1024)} KB · ${esc(f.uploader?.name || '')} · ${esc(shortTime(f.createdAt))}</small>
-        ${writable && isMeRef(f.uploader) ? `<button class="btn" data-file-actions="${esc(f.docId)}" aria-label="更多操作">⋯</button>` : ''}</div>`).join('')}
-      ${writable ? '<label class="card-file-drop"><span><span>拖檔案到這裡、直接貼上截圖，</span> <span class="card-file-choose">或選檔案</span></span><input type="file" multiple hidden><small>每個最大 10 MB · 會一直留在卡片上</small></label>' : ''}</section>`;
+        ${writable && isMeRef(f.uploader) ? `<button class="btn" data-file-actions="${esc(f.docId)}" aria-label="更多操作">⋯</button>` : ''}</div>`).join('')}</section>`;
   }
   function bindCardFiles(host, d) {
     const area = host.querySelector('.card-files');
@@ -5131,67 +5184,144 @@
       const f = files.find(item => item.docId === btn.dataset.noteFile);
       btn.onclick = () => images.includes(f) ? show(images.indexOf(f)) : downloadFrom(f.downloadUrl, f.name);
     }
-    const picker = area.querySelector('input[type=file]');
-    if (!picker) return;
-    let attachToNote = false;
-    area.querySelector('[data-add-file]').onclick = () => { attachToNote = false; picker.click(); };
-    function confirmUpload(selection, forNote = false) {
-      const pending = Array.from(selection);
-      if (!pending.length) return;
-      if (pending.some(f => f.size > 10 * 1048576)) return toast('每個附件最大 10 MB');
-      const imageFile = f => ['image/png', 'image/jpeg'].includes(f.type);
-      const entries = pending.map((f, index) => imageFile(f)
-        ? `<figure data-pending="${index}"><img class="card-preview" alt=""><figcaption data-nt>${esc(f.name)}</figcaption></figure>`
-        : `<div class="upload-file" data-pending="${index}"><b>${esc(f.name.split('.').pop().toUpperCase())}</b><span data-nt>${esc(f.name)}</span></div>`);
-      const body = openModal(`附加 ${pending.length} 個檔案到 ${d.cardId}`, `<section class="card-upload">
-        <p class="muted"><span>會存在「文件 › 卡片附件 › ${esc(d.cardId)}」，一直留在卡片上。</span> ${d.type === NOTE ? '<span>這是人類紀錄，AI 看不到。</span>' : ''}</p>
-        <div class="upload-images">${entries.filter((_, i) => imageFile(pending[i])).join('')}</div>
-        ${entries.filter((_, i) => !imageFile(pending[i])).join('')}
-        <label class="upload-consent"><input type="checkbox"><span>我確認不含程式碼和客戶個資</span></label></section>`,
-        {foot:'<button class="btn" data-close>取消</button><button class="btn primary" data-upload disabled>上傳</button>'});
-      let noteId = null;
-      const rows = pending.map((_, i) => body.querySelector('[data-pending="'+i+'"]'));
-      for (const [i, file] of pending.entries()) {
-        const img = rows[i].querySelector('img');
-        if (!img) continue;
-        const url = URL.createObjectURL(file);
-        img.onload = img.onerror = () => URL.revokeObjectURL(url);
-        img.src = url;
+  }
+  // 抽屜底部固定的輸入區。先選回覆／紀錄／交接／退回再打字；只列你能做的，只剩一種就不顯示分段鈕；唯讀成員不顯示
+  const CMODE = { reply: L('回覆', 'Reply'), note: L('紀錄', 'Note'), handover: L('交接', 'Hand over'), back: L('退回', 'Send back') };
+  function cmodesOf(d) {
+    if (!d || meRO(d.project) || work.editing) return [];
+    const out = [];
+    if (d.type !== NOTE && !(d.type === '決策' && decidingMe(d) && !d.decision?.result)) out.push('reply');
+    if (d.type !== '決策' && state.me?.memberType === 'human') out.push('note');
+    if (canHandover(d)) out.push('handover');
+    if (verifyingMe(d)) out.push('back');
+    return out;
+  }
+  function cmodeOf(d, modes = cmodesOf(d)) {
+    work.cmode ||= {};
+    let m = work.cmode[d.cardId];
+    if (!modes.includes(m)) m = d.type === NOTE && modes.includes('note') ? 'note' : modes[0];
+    return (work.cmode[d.cardId] = m);
+  }
+  const cdraft = key => esc(work.drafts[key] || '');
+  const hoPeople = d => [...state.participants.values()].filter(p => p.status !== 'disabled' && p.participantId !== d.owner?.participantId && memberIn(p, d.project) && (d.type !== NOTE || p.memberType === 'human'));
+  function hoTarget(d) {
+    const list = hoPeople(d), cur = work.drafts['hto:' + d.cardId];
+    return list.find(p => p.participantId === cur) || list[0] || null;
+  }
+  const hoHint = p => (p ? `交接後負責人變 ${p.name}，${p.memberType === 'ai' ? '會叫醒它' : '會通知他'}` : '這個專案沒有可以交接的人');
+  function composerHtml(d) {
+    const modes = cmodesOf(d);
+    if (!modes.length) return '';
+    const mode = cmodeOf(d, modes), id = d.cardId;
+    const seg = modes.length > 1 ? `<div class="seg-scope cmode" role="tablist" aria-label="要做什麼">${modes.map(m => `<button type="button" role="tab" data-cmode="${m}" aria-selected="${m === mode}">${CMODE[m]}</button>`).join('')}</div>` : '';
+    const box = (key, ta, bar) => `<div class="att-box" data-cdrop="${esc(key)}">${attGridHtml(key)}${ta}${attDeclHtml(key)}<div class="att-bar">${attPickBtn(key)}${bar}</div></div>`;
+    let body;
+    if (mode === 'reply') { work.openInl = 'k:' + id; body = inlineHtml('k:' + id, 'card', d); }
+    else if (mode === 'note') {
+      const key = 'n:' + id;
+      body = box(key, `<textarea id="note-text" class="inl-text" rows="2" maxlength="1000" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="寫一筆紀錄（只存卡上，不通知）" aria-label="寫一筆紀錄">${cdraft(key)}</textarea>`,
+        `${attHint('可直接貼上或拖進截圖')}<button type="button" class="btn small primary" data-act="add-note">記下（不通知）</button>`);
+    } else if (mode === 'handover') {
+      const key = 'h:' + id, list = hoPeople(d), to = hoTarget(d), dups = dupNameSet(list);
+      body = `<label class="cfield">給 <select data-ho-to aria-label="交給誰">${list.map(p => `<option value="${esc(p.participantId)}" ${p === to ? 'selected' : ''}>${esc(nameCodeText(p, dups))}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>`
+        + box(key, `<textarea class="inl-text" rows="2" maxlength="200" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="做到哪：我做完了什麼（必填）" aria-label="做到哪">${cdraft(key)}</textarea>`
+          + `<textarea class="inl-text ho-next" rows="1" maxlength="90" data-cdraft="hn:${esc(id)}" placeholder="下一步：希望對方接著做什麼（選填）" aria-label="下一步">${cdraft('hn:' + id)}</textarea>`,
+          `<span class="muted small ho-hint">${esc(hoHint(to))}</span><button type="button" class="btn small primary" data-act="ho-go" ${to ? '' : 'disabled'}>交接給 ${esc(to?.name || '…')}</button>`);
+    } else {
+      const key = 'r:' + id, prev = prevHandName(d) || d.owner?.name;
+      body = box(key, `<textarea class="inl-text" rows="2" maxlength="300" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="原因：哪裡有問題、要怎麼改（必填）" aria-label="退回原因">${cdraft(key)}</textarea>`,
+        `${attHint('可直接貼上或拖進截圖')}<button type="button" class="btn small primary" data-act="back-go">退回給 ${esc(prev ? shortOf(prev) : '上一棒')}</button>`);
+    }
+    const rkey = Object.keys(work.cretry || {}).find(k => k.endsWith(':' + id)) || '', rt = work.cretry?.[rkey]; // 不管現在在哪個分頁（交接、退回後分頁可能不見）
+    if (rt && !attHas(rkey)) delete work.cretry[rkey]; // 附件都拿掉了就不用重試
+    const retry = work.cretry?.[rkey] ? `<div class="cretry" role="status"><span class="small">${esc(rt.msg)}</span><button type="button" class="btn small primary" data-act="att-retry">重試上傳附件</button></div>` : '';
+    if (retry && mode === 'note' && rkey.startsWith('n:')) body = body.replace(/<button type="button" class="btn small primary" data-act="add-note">[^<]*<\/button>/, '');
+    return `<div class="dcompose" aria-label="輸入區">${seg}${retry}${body}<p class="error small" id="cmp-err" role="alert"></p></div>`;
+  }
+  // 輸入區的附件一律存成卡片附件（永久，跟附件區同一套）；紀錄帶 noteId，跟著那筆紀錄顯示
+  async function attUploadCard(key, d, noteId = null, onStep = () => {}) {
+    const st = attMap.get(key);
+    if (!st?.items.length) return 0;
+    const list = attOk(st);
+    for (const [k, x] of list.entries()) {
+      if (x.docId) continue;
+      onStep(k + 1, list.length);
+      const q = new URLSearchParams({ name: x.file.name, cardId: d.cardId, declared: 'true' });
+      if (noteId) q.set('noteId', noteId);
+      const r = await fetch(`/api/projects/${encodeURIComponent(d.project)}/docs?${q}`, { method: 'POST', headers: { Authorization: `Bearer ${state.token}` }, body: x.file });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(`${x.file.name}：${data?.error?.message || `HTTP ${r.status}`}`);
+      x.docId = data?.doc?.docId || true;
+    }
+    return list.length;
+  }
+  // 主要動作已完成、附件沒全部存上：留著沒存上的（已存上的會跳過），記住 noteId，之後只重試附件
+  function attFailed(key, noteId, msg) {
+    work.cretry ||= {};
+    work.cretry[key] = { noteId, msg };
+    const st = attMap.get(key); if (st) { st.busy = false; st.declared = true; }
+    toast(msg);
+  }
+  async function retryAtt(btn) {
+    const d = work.detail;
+    const key = Object.keys(work.cretry || {}).find(k => k.endsWith(':' + d.cardId)) || '', r = work.cretry?.[key];
+    if (!r) return;
+    btn.disabled = true; btn.textContent = '上傳中…';
+    try {
+      await attUploadCard(key, d, r.noteId, (k, n) => { btn.textContent = `上傳中 ${k} / ${n}…`; });
+      delete work.cretry[key]; attClear(key);
+      toast('附件已存上');
+      await openCard(d.cardId);
+    } catch (e) {
+      r.msg = `附件還是沒存上：${e.message}`;
+      btn.disabled = false; btn.textContent = '重試上傳附件';
+      const err = $('#cmp-err'); if (err) err.textContent = r.msg;
+    }
+  }
+  // 送出紀錄／交接／退回：先做主要動作，再把附件存成卡片附件；失敗留在原地顯示原因
+  async function composeSubmit(kind, btn) {
+    const d = work.detail, id = d.cardId, err = $('#cmp-err');
+    const key = { note: 'n:', ho: 'h:', back: 'r:' }[kind] + id;
+    const text = (work.drafts[key] || '').trim();
+    err.textContent = '';
+    if (!text) { err.textContent = kind === 'note' ? '紀錄不能空白' : kind === 'ho' ? '請寫做到哪' : '請寫退回原因'; document.querySelector(`[data-cdraft="${CSS.escape(key)}"]`)?.focus(); return; }
+    const bad = attProblem(key);
+    if (bad) { err.textContent = bad; return; }
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = '送出中…';
+    const st = attMap.get(key); if (st) { st.busy = true; attRefresh(key); }
+    try {
+      let noteId = null, done = '';
+      if (kind === 'note') {
+        const r = await api(`/api/cards/${encodeURIComponent(id)}/notes`, { method: 'POST', body: { text } });
+        noteId = r.noteId; done = '已記下（只存卡上）';
+      } else if (kind === 'ho') {
+        const to = hoTarget(d), next = (work.drafts['hn:' + id] || '').trim();
+        if (!to) throw new Error('這個專案沒有可以交接的人');
+        const c = await api(`/api/cards/${encodeURIComponent(id)}/handover`, { method: 'POST', body: { toId: to.participantId, note: next ? `${text}\n${L('下一步：', 'Next step: ')}${next}` : text, version: d.version } });
+        work.cards.set(c.cardId, { ...c, log: undefined, messageIds: undefined });
+        delete work.drafts['hn:' + id]; delete work.drafts['hto:' + id];
+        done = `已交接給 ${c.owner?.name || to.name}`;
+      } else {
+        const c = await api(`/api/cards/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { reason: text, version: d.version } });
+        work.cards.set(c.cardId, c);
+        done = '已退回';
       }
-      const button = body.modal.querySelector('[data-upload]'), consent = body.querySelector('input');
-      consent.onchange = () => button.disabled = !consent.checked;
-      button.onclick = async () => {
-        button.disabled = true; consent.disabled = true;
-        try {
-          if (forNote && !noteId) {
-            const text = host.querySelector('#note-text')?.value.trim();
-            if (!text) throw Error('紀錄不能空白');
-            const result = await api('/api/cards/' + encodeURIComponent(d.cardId) + '/notes', { method: 'POST', body: { text } });
-            noteId = result.noteId;
-          }
-          while (pending.length) {
-            const f = pending[0], q = new URLSearchParams({ name:f.name, cardId:d.cardId, declared:'true' });
-            if (noteId) q.set('noteId', noteId);
-            const res = await fetch('/api/projects/' + encodeURIComponent(d.project) + '/docs?' + q, { method:'POST', headers:{Authorization:'Bearer ' + state.token}, body:f });
-            if (!res.ok) throw Error((await res.json()).error?.message || String(res.status));
-            pending.shift(); rows.shift().remove();
-          }
-          closeModal(); await openCard(d.cardId);
-        } catch (err) { toast(err.message); consent.disabled = false; button.disabled = false; }
-      };
+      delete work.drafts[key];
+      if (attHas(key)) {
+        try { await attUploadCard(key, d, noteId, (k, n) => { btn.textContent = `上傳中 ${k} / ${n}…`; }); }
+        catch (e2) { attFailed(key, noteId, `${done}，但附件沒存上：${e2.message}`); renderWork(); return openCard(id); }
+      }
+      attClear(key);
+      toast(done);
+      renderWork();
+      await openCard(id);
+      document.querySelector('.dcompose textarea')?.focus();
+    } catch (e) {
+      err.textContent = e.message;
+      btn.disabled = false; btn.textContent = label;
+      if (st) { st.busy = false; attRefresh(key); }
     }
-    picker.onchange = () => { confirmUpload(picker.files, attachToNote); picker.value = ''; attachToNote = false; };
-    const noteBox = host.querySelector('#note-text');
-    if (noteBox) {
-      const paperclip = document.createElement('button');
-      paperclip.type = 'button'; paperclip.className = 'btn'; paperclip.textContent = '📎'; paperclip.setAttribute('aria-label', '附加檔案');
-      noteBox.after(paperclip);
-      paperclip.onclick = () => { attachToNote = true; picker.click(); };
-      picker.oncancel = () => { attachToNote = false; };
-    }
-    area.ondragover = e => e.preventDefault();
-    area.ondrop = e => { e.preventDefault(); confirmUpload(e.dataTransfer.files); };
-    host.onpaste = e => { if (e.clipboardData.files.length && host.contains(e.target)) { e.preventDefault(); confirmUpload(e.clipboardData.files, e.target === noteBox); } };
   }
   function renderDrawer(focus) {
     const d = work.detail;
@@ -5212,6 +5342,25 @@
       document.body.append(host);
       host.addEventListener('click', e => { if (!decisionClick(e)) drawerClick(e); });
       host.addEventListener('input', decisionInput);
+      // 輸入區草稿（紀錄、交接、退回）跟著卡片留著；交接對象改了就更新按鈕和說明
+      host.addEventListener('input', e => { const k = e.target.dataset?.cdraft; if (k) work.drafts[k] = e.target.value; });
+      host.addEventListener('change', e => {
+        if (!e.target.matches?.('[data-ho-to]')) return;
+        const d = work.detail; work.drafts['hto:' + d.cardId] = e.target.value;
+        const to = hoTarget(d), root = e.target.closest('.dcompose');
+        root.querySelector('[data-act="ho-go"]').textContent = `交接給 ${to?.name || '…'}`;
+        root.querySelector('.ho-hint').textContent = hoHint(to);
+      });
+      // 拖檔案進輸入區＝加進附件格（存成卡片附件）
+      host.addEventListener('dragover', e => { if (e.target.closest?.('.dcompose') && e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+      host.addEventListener('drop', e => {
+        const root = e.target.closest?.('.dcompose');
+        if (!root || !e.dataTransfer?.files?.length) return;
+        e.preventDefault();
+        const key = root.querySelector('[data-att-key]')?.dataset.attKey;
+        if (!key || attMap.get(key)?.busy) return;
+        attAdd(attOf(key), [...e.dataTransfer.files]); attRefresh(key);
+      });
       host.addEventListener('keydown', inlineKey);
       host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
       host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
@@ -5232,12 +5381,10 @@
           ${d.type === NOTE ? `${d.mergedInto ? `<div class="merged-line">${mergedHtml(d)}</div>` : ''}` : ''}
           ${d.mergedFrom?.length ? `<div class="merged-line">整理自 ${d.mergedFrom.map(x => `<button type="button" class="merged-into" data-card="${esc(x)}">🔒${esc(x)}</button>`).join('、')}</div>` : ''}
           <div class="drawer-status">
-            ${d.type === NOTE ? `<span class="dst" id="note-st-l">狀態</span><div class="seg-scope note-st" role="group" aria-labelledby="note-st-l">${[['進行中', '收集中'], ['已完成', '已整理']].map(([v, t]) => `<button type="button" data-act="note-st" data-st="${v}" aria-pressed="${(d.status === '已完成') === (v === '已完成')}">${t}</button>`).join('')}</div>` : `
-            <span class="cst-pill" data-st="${esc(d.status)}">${esc(verifyingMe(d) ? '等你驗收' : d.status)}</span><span class="muted small">負責：${esc(d.owner?.name || '未指派')}${prevHandName(d) ? ` · ${esc(shortOf(prevHandName(d)))} 交來` : ''}</span>`}
-            ${d.type === NOTE && canHandover(d) ? '<button class="btn small" type="button" data-act="handover">交接</button>' : ''}
+            <span class="cst-pill" data-st="${esc(d.status)}">${esc(d.type === NOTE ? noteStText(d) : verifyingMe(d) ? '等你驗收' : d.status)}</span><span class="muted small">負責：${esc(d.owner?.name || '未指派')}${d.type !== NOTE && prevHandName(d) ? ` · ${esc(shortOf(prevHandName(d)))} 交來` : ''}</span>${stMenuHtml(d, mine)}${moreActsHtml(d)}
           </div>
           ${d.type === NOTE ? '' : `<div class="rel-line" data-rel-card="${esc(d.cardId)}"></div>`}
-          ${d.type === NOTE ? '' : nowActsHtml(d) + moreActsHtml(d, mine)}
+          ${d.type === NOTE ? '' : nowActsHtml(d)}
           ${d.status === '已封存' ? (() => {
             const sys = (d.log || []).find(l => /^系統自動封存/.test(l.text));
             const why = sys ? `${mmdd(sys.at)} 系統自動封存（${mmdd(d.verified?.at || d.done?.at || sys.at)} 驗證完成，滿 ${ARCHIVE_DAYS} 天）。` : `${mmdd(d.updatedAt)} 已封存。`;
@@ -5277,17 +5424,10 @@
           ${reviewHtml(d)}
           ${cardFieldsHtml(d)}`}
           ${cardFilesHtml(d)}
-          ${(d.messageIds || []).length ? `<div class="group-title">相關訊息 · ${(d.messageIds || []).length}${(d.messageIds || []).length ? ` <button type="button" class="link small" data-ver-report="${esc(d.report?.messageId || d.messageIds[d.messageIds.length - 1])}">${d.report ? '看回報' : '看訊息串'}</button>` : ''}</div>
-          ${msgs}` : ''}
-          ${d.type === NOTE ? `<div class="group-title">紀錄</div>
-            <div class="note-add"><textarea autocomplete="off" autocorrect="on" id="note-text" rows="2" maxlength="1000" placeholder="寫一筆紀錄（只存卡上，不發群組）" aria-label="寫一筆紀錄"></textarea><button type="button" class="btn primary" data-act="add-note">記下</button></div>
-            <div class="note-list">${(d.notes || []).map(n => `<div class="note-entry"><b>${esc(n.by?.name || '')}</b> <span class="muted small">${esc(shortTime(n.at))}</span><div data-nt>${esc(n.text)}</div>${(d.attachments || []).filter(f => f.noteId && f.noteId === n.noteId).map(f => `<button class="link" data-note-file="${esc(f.docId)}">${['png','jpg','jpeg'].includes(f.ext) ? '🖼' : '📎'} ${esc(f.name)}</button>`).join('')}</div>`).join('') || `<p class="muted small">${(d.messageIds || []).length ? '還沒有紀錄。' : '還沒有紀錄，也沒有相關訊息。'}</p>`}</div>`
-          : !narrowMq.matches && !meRO(d.project) && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="group-title">想法與回覆</div>${inlineHtml('k:' + d.cardId, 'card', d)}` : ''}
-          ${d.type === NOTE ? `<details class="dlog-box"><summary>變更紀錄（${(d.log || []).length}）</summary>
-          <ol class="dlog">${d.log.map(l => `<li><span class="ldot ${l.via === 'API' ? 'api' : ''}"></span><div><span>${esc(l.text)}</span><span class="muted small">${esc(l.by?.name || '')} · ${shortTime(l.at)} · ${esc(l.via)}</span></div></li>`).join('')}</ol></details>` : happenedHtml(d)}
+          ${timelineHtml(d)}
         </div>
         ${state.page === 'messages' && d.type === NOTE ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
-        ${narrowMq.matches && d.type !== NOTE && !meRO(d.project) && !(d.type === '決策' && decidingMe(d) && !d.decision?.result) ? `<div class="drawer-compose" aria-label="想法與回覆">${inlineHtml('k:' + d.cardId, 'card', d)}</div>` : ''}
+        ${composerHtml(d)}
       </aside>`;
     const humanOnlySel = isNote => host.querySelectorAll('#card-edit select[name="ownerId"], #card-edit select[name="waitForId"]').forEach(sel => { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai && !o.selected; } });
     humanOnlySel(d.type === NOTE);
@@ -5323,6 +5463,13 @@
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && work.openId && document.body.classList.contains('drawer-docked') && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root') && !document.querySelector('#tag-menu:not([hidden])')) closeCard();
   });
+  function switchCmode(m) {
+    const d = work.detail;
+    if (!d || !cmodesOf(d).includes(m)) return;
+    work.cmode ||= {}; work.cmode[d.cardId] = m;
+    renderDrawer(false);
+    document.querySelector('.dcompose textarea')?.focus();
+  }
   async function drawerClick(e) {
     if (e.target.closest('[data-close-drawer]')) return closeCard();
     const mg = e.target.closest('.merged-into[data-card]'); // 已整理到／整理自 的卡號
@@ -5331,19 +5478,25 @@
     if (tg) { work.openMsgs = work.openMsgs || new Set(); const id = tg.dataset.dmsgToggle; if (work.openMsgs.has(id)) work.openMsgs.delete(id); else work.openMsgs.add(id); return renderDrawer(false); }
     const j = e.target.closest('[data-jump-msg]');
     if (j) { const id = j.dataset.jumpMsg; if (!(state.page === 'messages' && dockedMode())) { closeCard(); showPage('messages'); } return jumpTo(id); }
+    // 底部輸入區切換「回覆／紀錄／交接／退回」
+    const cm = e.target.closest('[data-cmode]');
+    if (cm) return switchCmode(cm.dataset.cmode);
+    const tf = e.target.closest('[data-tl-file]');
+    if (tf) { const m = state.byId.get(tf.dataset.tlFile), fs = m?.files?.length ? m.files : m?.file ? [m.file] : [], f = fs[+tf.dataset.i]; if (f) downloadFrom(f.downloadUrl, f.name); return; }
     const a = e.target.closest('[data-act]');
     if (!a) return;
     const id = work.openId;
+    a.closest('details.st-menu, details.more-acts')?.removeAttribute('open');
     if (a.dataset.act === 'open-work') { work.returnFocus = null; closeCard(); showPage('work'); return openCard(id); }
     if (a.dataset.act === 'copy-id') return copyText(id).then(ok => toast(ok ? `已複製 ${id}` : '複製失敗'));
-    if (a.dataset.act === 'handover') return openHandover();
+    if (a.dataset.act === 'handover') return cmodesOf(work.detail).includes('handover') ? switchCmode('handover') : openHandover();
+    if (a.dataset.act === 'ver-no' && cmodesOf(work.detail).includes('back')) return switchCmode('back');
     if (a.dataset.act === 'log-all') { work.logAll = !work.logAll; return renderDrawer(false); }
-    if (a.dataset.act === 'add-note') {
-      const ta = $('#note-text'), t = ta?.value.trim();
-      if (!t) return ta?.focus();
-      try { const r = await api(`/api/cards/${encodeURIComponent(id)}/notes`, { method: 'POST', body: { text: t } }); work.detail.notes = r.notes; renderDrawer(false); $('#note-text')?.focus(); toast('已記下（只存卡上）'); } catch (err) { toast(err.message); }
-      return;
-    }
+    if (a.dataset.act === 'att-retry') return retryAtt(a);
+    if (a.dataset.act === 'add-note') return composeSubmit('note', a);
+    if (a.dataset.act === 'ho-go') return composeSubmit('ho', a);
+    if (a.dataset.act === 'back-go') return composeSubmit('back', a);
+    if (a.dataset.act === 'set-st') { await patchCard(id, { status: a.dataset.st }); if (a.dataset.st === '已封存') refreshArchivedCount().then(renderWork); return; }
     if (a.dataset.act === 'edit') { if (meRO(work.detail?.project)) return; work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); } // 唯讀成員不能改卡（依卡片所屬專案）
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'rv-request') openReviewRequest(work.detail);

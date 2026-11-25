@@ -4166,3 +4166,63 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
   .ctpl-row-meta { width: 100%; justify-content: flex-start; }
   .ctpl-ed-chk-row { grid-template-columns: 1fr; gap: 4px; }
 }
+/* 卡片抽屜 — 標題下「改狀態 ▾」與「⋯」、時間軸、底部固定輸入區（先選回覆／紀錄／交接／退回再打字） */
+.drawer-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.st-menu, .drawer-status .more-acts { position: relative; }
+.st-menu > summary { list-style: none; cursor: pointer; color: var(--primary); font-size: 13px; padding: 4px 6px; border-radius: 8px; }
+.st-menu > summary::-webkit-details-marker { display: none; }
+.st-menu > summary:hover { background: var(--surface-2); }
+.st-list { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; min-width: 160px; display: grid; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.st-it { text-align: left; padding: 8px 12px; border: 0; background: none; border-radius: 6px; font: inherit; font-size: 14px; color: var(--text); cursor: pointer; }
+.st-it:hover, .st-it:focus-visible { background: var(--surface-2); }
+.drawer-status .more-acts { margin-left: auto; }
+.drawer-status .more-acts > summary { list-style: none; cursor: pointer; padding: 2px 10px; border-radius: 8px; color: var(--muted); font-size: 16px; }
+.drawer-status .more-acts > summary::-webkit-details-marker { display: none; }
+.drawer-status .more-acts .more-list { position: absolute; z-index: 30; right: 0; top: calc(100% + 4px); width: 260px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); padding: 4px; }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.timeline .tl { display: grid; gap: 4px; min-width: 0; }
+.timeline .tl-head b { font-size: 14px; }
+.timeline .tl-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.timeline .tl-note { padding-left: 8px; border-left: 2px solid var(--border); }
+.timeline .tl-sys { display: flex; gap: 8px; font-size: 13px; color: var(--muted); }
+.timeline .tl-file { font-size: 13px; }
+.tl-files { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.tl-foot { display: flex; gap: 12px; }
+.tl-gone { color: var(--muted); }
+.tl-more { justify-self: start; }
+.dcompose { flex: none; display: grid; gap: 8px; border-top: 1px solid var(--border); background: var(--surface); padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); max-height: 50vh; overflow-y: auto; }
+.dcompose .cmode { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.dcompose .cfield { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.dcompose .cfield select { flex: 1; min-width: 0; }
+.dcompose .att-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dcompose .att-bar .btn.primary { margin-left: auto; }
+.dcompose .ho-hint { flex: 1; min-width: 0; }
+.dcompose .ho-next { width: 100%; }
+.dcompose #cmp-err:empty { display: none; }
+@media (max-width: 600px) {
+  .dcompose { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
+  .dcompose .ho-hint { flex-basis: 100%; order: 3; }
+}
+/* 輸入區裡的附件縮成小標籤「🖼 對照.png ×」（不用大縮圖格），分段鈕捲動時固定在上面 */
+.dcompose .cmode { position: sticky; top: -12px; z-index: 2; background: var(--surface); }
+.dcompose .up-multi { border: 0; padding: 0; }
+.dcompose .up-mh, .dcompose .up-add, .dcompose .up-th, .dcompose .up-limit { display: none; }
+.dcompose .up-grid { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.dcompose .up-cell { flex-direction: row; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); max-width: 100%; }
+.dcompose .up-cell figcaption { flex-direction: row; gap: 6px; font-size: 13px; min-width: 0; }
+.dcompose .up-cell figcaption::before { content: '📎'; }
+.dcompose .up-cell.bad { border-color: var(--danger); }
+.dcompose .up-rm { position: static; order: 2; width: 24px; height: 24px; flex: none; }
+.dcompose .declare-box { padding: 8px; font-size: 13px; }
+.dcompose .cmode button[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, .12); }
+.dcompose .ho-next { border-top: 1px dashed var(--border); }
+.timeline .tl-sys .lg-main { display: grid; gap: 2px; min-width: 0; }
+.timeline .tl-sys .lg-ic { flex: none; width: 16px; text-align: center; }
+.dcompose .cretry { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border: 1px solid var(--danger); border-radius: 8px; }
+.dcompose .cretry .small { flex: 1; min-width: 0; color: var(--danger); }
+.drawer > .drawer-body { flex: 1 1 auto; } /* 內容少時輸入區也貼在抽屜底部 */
+/* UX：「⋯」留在「改狀態 ▾」同一行，放不下就截斷負責人那段 */
+.drawer-status { flex-wrap: nowrap; }
+.drawer-status > .cst-pill, .drawer-status > .st-menu, .drawer-status > .more-acts { flex: none; }
+.drawer-status > .muted.small { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline .tl-file { display: block; } /* 附件一則寫成一句：📎 誰 附加 檔名 時間 */
