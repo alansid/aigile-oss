@@ -173,7 +173,9 @@ try {
   assert.ok(gBefore >= 150, 'G 畫面先載入很多張還沒驗收的舊卡：' + gBefore);
   const g1 = `[...document.querySelectorAll('.crow-line')].find(l => /G 舊卡 1(?!\\d)/.test(l.innerText))`;
   assert.match(await js(`${g1}?.innerText || ''`), /你完成的，要別人驗/, 'G 「G 舊卡 1」一開始就在畫面上、還沒驗收');
-  kit.sql(fs.readFileSync(new URL('../migrations/010_verify_human_done.sql', import.meta.url), 'utf8')); // 畫面開著時跑遷移
+  // 畫面開著時跑遷移；Postgres 模式用 pg/ 的同名取代檔（SQLite 的 strftime 在 Postgres 不能用）
+  const mig010 = process.env.AIGILE_TEST_PG_URL ? '../migrations/pg/010_verify_human_done.sql' : '../migrations/010_verify_human_done.sql';
+  kit.sql(fs.readFileSync(new URL(mig010, import.meta.url), 'utf8'));
   await js("(() => { const real = Date.now; Date.now = () => real() + 60_000; return true; })()"); // 讓下一輪輪詢就做增量同步
   await until(async () => (await gSelf()) === 0, 30000, 'G 看得到的舊卡都更新成已驗收');
   assert.ok(await js("[...document.querySelectorAll('.crow-line')].filter(l => /G 舊卡 \\d+/.test(l.innerText) && /已驗收/.test(l.innerText)).length") >= gBefore, 'G 原本待驗收的每一張都顯示已驗收（讀完所有頁，不漏；沒載入過的也會補進來）');

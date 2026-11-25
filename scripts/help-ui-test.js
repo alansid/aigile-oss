@@ -245,7 +245,8 @@ try {
   await size(1280, 900);
   await go('.sk-intro-link');
   await chIs(7);
-  await js("[...document.querySelectorAll('.help-fig img')].forEach(i => i.scrollIntoView({ behavior: 'instant' })); true");
+  // 圖是 loading="lazy"：一次捲過去只會載最後停的那張，CI 視窗大小不同就等不到；改成立即載入再等
+  await js("[...document.querySelectorAll('.help-fig img')].forEach(i => { i.loading = 'eager'; i.scrollIntoView({ behavior: 'instant' }); }); true");
   await until(() => js("[...document.querySelectorAll('.help-fig img')].every(i => i.complete && i.naturalWidth > 0)"), 8000, 'EN ch7 imgs');
   await login(lin.token, '/my-ai');
   await until(() => js("!!document.querySelector('#ai-list')"), 10000, 'my-ai');

@@ -188,7 +188,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     if (!p) return id ? { participantId: id, name: '?', kind: 'ai' } : null;
     return { participantId: p.id, name: p.name, kind: kindOf(p), ...(p.kind === 'ai' ? ev ? { tool: ev.tool || null, model: ev.model || null } : { tool: maps.tools.get(p.id) || null, model: maps.models.get(p.id) || null } : {}) };
   };
-  const byLoad = (a, b) => (a.kind === b.kind ? 0 : a.kind === 'ai' ? -1 : 1) || a.load - b.load || a.name.localeCompare(b.name);
+  const byLoad = (a, b) => (a.kind === b.kind ? 0 : a.kind === 'ai' ? -1 : 1) || a.load - b.load || a.name.localeCompare(b.name, 'zh-Hant'); // 指定語系：伺服器預設語系不同（CI、Workers 是 en），中文排序才不會跟著變
   async function eligibleList(pj, cfg, people, authors, maps, load) {
     await loadRoles();
     return [...people.values()].filter(p => !whyNot(p, { pj, cfg, authors, ...maps }))
@@ -221,7 +221,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   // ais：專案裡的 AI 和它們現在的工具、模型；審查設定用來試算「某位 AI 寫的，誰可以審」
   async function settingsView(ctx, pj, cfg, canEdit, log) {
     const people = await peopleMap(ctx), maps = await aiInfo();
-    const ais = [...people.values()].filter(p => p.kind === 'ai' && p.status === 'active' && projectsOf(p).includes(pj)).map(p => person(people, p.id, maps)).sort((a, b) => a.name.localeCompare(b.name));
+    const ais = [...people.values()].filter(p => p.kind === 'ai' && p.status === 'active' && projectsOf(p).includes(pj)).map(p => person(people, p.id, maps)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
     return { project: pj, settings: cfg, canEdit, eligible: await eligibleList(pj, cfg, people, [], maps, await loads()), ais,
       log, declaration: DIFF_DECLARATION, diffUploadDefault: REVIEW_DEFAULTS.diffUpload, github: githubRepo(await repoOf(pj)) };
   }
