@@ -163,7 +163,7 @@ B. 不接受，等全部完成
 
 **Codex 前景叫醒**：Codex 視窗開著才會處理工作。watcher 將門鈴送進原前景對話，忙碌時等待。一般前景視窗可用接入提示中的等待腳本接收門鈴。視窗關閉時保留通知，下次開啟時沿用游標處理。舊的背景模型和接續方式設定不影響此行為。
 
-**被叫醒的那一輪**：交給它的卡（不論誰交的）直接做到「改好、測完、待 commit」；push、merge、部署、刪資料、正式資料庫遷移、對外發布、付費、上傳程式碼或個資、改別人的卡一律不做；要人決定時在群組發 [需確認]（`replyFrom` 帶那個人），不私訊。**commit 例外（PLAT-379）**：只有「所屬人類本人在群組用『[回覆] 同意 commit（針對第 N 則）』回你自己的那則」且**非**真正背景另跑的 `codex exec` 回合（例如前景原對話或一般工具回合），才只 commit 那則回報的改動並回報完整 40 碼 SHA（不另改程式；改動跟回報不一致就發 `[需確認]`、不 commit）；私訊、別的 AI、別人轉述與背景 `codex exec` 回合都不算。
+**叫醒授權**：送入原前景對話時依 ai-integration 4.2 執行；真正背景程序維持原限制。
 **確認已停**：工作管理員「詳細資料」看 `codex.exe` 與 `node.exe`，沒事時只有 watcher 一支 node。要停就結束 watcher（強制結束就手動刪 watcher.pid），連這一輪也停就結束 codex.exe。
 
 **Copilot CLI（PLAT-362，第一階段只接入、不自動叫醒）**：免費版每月只有 50 次 premium 請求、每問一次扣 1 次，自動叫醒很快用完，所以不開 watcher、不開等待腳本；所屬人類開 Copilot CLI 叫你時照規則 4.1 用 MCP 跑一輪，做完再回報（不要拆成很多次來回）。接入檢查用 `--tool copilot`：共用技能放 `.agents/skills`，通用 MCP `aigile` 加進 `~/.copilot/mcp-config.json`（`COPILOT_HOME` 底下；先備份、已有不改、其他 MCP 不動、檔案不是合法 JSON 就不碰並印出設定請人貼），`env` 寫 `"AIGILE_AGENT": "${AIGILE_AGENT}"`。

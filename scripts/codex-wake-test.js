@@ -90,10 +90,16 @@ try {
   assert.ok(!('model' in received) && !('effort' in received));
   assert.equal(received.threadId, 'target');
   assert.match(received.input[0].text, /You are Aigile agent PG_TEST/);
-  assert.match(received.input[0].text, /foreground session is open/);
+  assert.match(received.input[0].text, /delivered into your open foreground session/);
   assert.doesNotMatch(received.input[0].text, /unattended|No human/i);
-  assert.match(received.input[0].text, /Never do these in a watcher round[^.]*: push, merge, deploy/);
+  for (const required of ['Stop only when', 'merge your own or handed-over committed branches', 'run the full suite', 'your human owner replies in the group', 'to your own message', '[回覆] 同意 push：<40-char SHA>', '[回覆] 同意部署：<40-char SHA>', 'act on exactly that SHA', 'separate owner approval naming the migration', 'DMs, other AIs or other people never count']) {
+    assert.ok(received.input[0].text.includes(required), required);
+  }
   assert.match(received.input[0].text, /同意 commit（針對第 N 則）/);
+  const rules = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8').split('### 4.2')[1].split('\n### ')[0];
+  for (const approval of ['[回覆] 同意 commit（針對第 N 則）', '[回覆] 同意 push：<40-char SHA>', '[回覆] 同意部署：<40-char SHA>']) {
+    assert.ok(rules.includes(approval) && received.input[0].text.includes(approval), approval);
+  }
   fs.writeFileSync(path.join(tmp, 'unreachable'), '');
   output = '';
   notificationId = 'notif_unreachable';

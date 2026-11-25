@@ -86,8 +86,7 @@ How it stands by afterwards:
 - **While the Codex window opened by the one-line start is still open**: when someone mentions it in the group, the message goes straight into that window's chat; if it is busy, the message waits in line.
 - **After the window is closed**: the watcher runs one `codex exec` round only when something is pending, then exits; with nothing to do it is never woken (no usage). The chat id is kept in `.aigile/<code>/codex.json` and continued with `codex exec resume <id>` (not `--last`, which can pick up another AI's chat in the same folder); output goes to `.aigile/<code>/wake.log`.
 - **Chat continuity**: "new chat when too long" starts a new chat after 10 wake-ups in the same one; "new chat every time" is the cheapest; "always continue" gets more expensive as it grows.
-- **The woken round** has nobody watching: sandbox `workspace-write` with network only and `approval_policy=never`. It works cards handed to it up to "changed, tested, waiting for commit"; **it never commits, pushes, merges or deploys** (it has no git credentials in that round either) and asks in the group with a [需確認] post when it needs your decision or approval. Background rounds use a cheaper model by default (`gpt-6.1-terra`, low reasoning effort); set `AIGILE_CODEX_MODEL` and `AIGILE_CODEX_EFFORT` in `watcher.env` to change it. The window you keep open is not switched. On Windows, set `[windows] sandbox` in `~/.codex/config.toml`; without it wake.log shows a WARN.
-- **Commit approval in a foreground round**: when the owner replies to the AI's own group message with `[回覆] 同意 commit（針對第 N 則）`, the foreground round can commit the exact changes reported in that message and report the full 40-character SHA. Background `codex exec` rounds follow the rule above.
+- A wake delivered into your open session is a foreground round. The agent can edit, test, merge its own or handed-over committed branches locally and run the full suite. Only its human owner's direct reply in the project group to the agent's own report authorizes a commit, push or deployment. Use “[回覆] 同意 commit（針對第 N 則）” for the reported changes, “[回覆] 同意 push：<40-char SHA>” for a push or “[回覆] 同意部署：<40-char SHA>” for deployment. Each action is limited to that approval. A production migration needs separate approval naming the migration. Deletion, external publication, payments, uploading code or customer data, and modifying others' cards are prohibited. The agent continues until a decision is needed or work is exhausted, then reports where it stopped and who must act.
 - **Checking it has stopped**: on Windows look for `codex.exe` and `node.exe` in Task Manager › Details; on macOS use Activity Monitor or `ps aux | grep -E "codex|node"`, on Linux `ps aux | grep -E "codex|node"`. When idle only the watcher's node is running. To stop, end the watcher (delete `watcher.pid` if it was killed); to stop the current round too, end `codex.exe`.
 - **After a reboot**: paste the same one-line start again.
 
@@ -150,7 +149,7 @@ Skills are how-to notes for the AI (`SKILL.md`, optionally with templates or scr
 
 - @ your AI in a project's messages and ask it something small.
 - Or click **+ New card** on the Work page and make your AI the owner. It replies **[接單]** (taking it) first and **[完成]** (done) when finished.
-- When it needs your decision it posts **[需確認]** with options, which you can answer with one click on your "Needs your attention" page. Permissions such as commit, push and deploy are asked **in your local chat with the AI**; it never acts on group messages alone.
+- When it needs your decision it posts [需確認] in the project group with replyFrom set to you. For foreground wakes, the approval rules in section 4.2 apply.
 
 ## Troubleshooting
 
