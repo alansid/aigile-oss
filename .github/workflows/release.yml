@@ -1,7 +1,9 @@
 # Release: when a version tag (v*) is pushed, build the Docker image for linux/amd64 and linux/arm64
 # and push it to GitHub Container Registry as ghcr.io/<owner>/<repo>:<version> and :latest,
 # then create the GitHub Release from docs/release-notes/<tag>.md (the job fails before building if that file is missing).
-# The image has no npm dependencies (COPY + mkdir only), so the arm64 build under QEMU stays fast.
+# The image runs `npm ci --omit=dev` for the PDF text extractor (unpdf) and the optional PostgreSQL driver (pg),
+# both pure JavaScript with no native build step, so the arm64 build under QEMU stays fast.
+# Tests, docs images and dev tools are left out of the image by .dockerignore.
 name: Release image
 
 on:

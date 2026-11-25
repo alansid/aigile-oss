@@ -15,3 +15,15 @@ state.json
 Dockerfile
 docker-compose.yml
 .dockerignore
+# PLAT-460 測試、說明圖與開發工具不進映像（scripts 約 2.8 MB、docs 約 1.4 MB）；執行時要用的留下
+.github/
+scripts/*
+!scripts/release-data.mjs
+!scripts/script-hashes.mjs
+!scripts/admin-rescue.js
+!scripts/sqlite-to-pg.js
+docs/*
+!docs/ai-integration.md
+!docs/api-reference.md
+!docs/flows.md
+!docs/releases-notes.json

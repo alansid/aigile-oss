@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './src/core.js';
 import { openNodeDb } from './src/db-node.js';
 import { PAGE_HEADERS } from './src/security-headers.js';
+import { createStaticCache, staticResponse, bufferEntry } from './src/static-files.js';
 import { dbStorage } from './src/storage-db.js';
 import { dirStorage } from './src/storage-dir.js'; // 本機的專案文件區（不需要 R2）
 import { releaseData } from './scripts/release-data.mjs';
@@ -102,7 +103,10 @@ setInterval(scheduled, 10 * 60_000).unref();
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8', '.webp': 'image/webp' }; // .json、.webp：說明頁的內容與畫面圖
 
-function serveStatic(res, pathname, origin) {
+const loadStatic = createStaticCache(); // PLAT-460：gzip＋ETag／304＋Cache-Control
+const sendStatic = (res, r) => { res.writeHead(r.status, r.headers); res.end(r.body || undefined); };
+
+function serveStatic(req, res, pathname, origin) {
   let rel;
   try { rel = pathname === '/' ? '/index.html' : decodeURIComponent(pathname); } catch { rel = '/'; }
   let file = path.normalize(path.join(PUBLIC_DIR, rel));
@@ -111,11 +115,12 @@ function serveStatic(res, pathname, origin) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     return res.end('Not found');
   }
-  if (path.extname(file) === '.html') { // 跟正式環境一樣：換上群組名與連結預覽
-    return handle.pageHtml(fs.readFileSync(file, 'utf8'), origin).then(html => { res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', ...PAGE_HEADERS }); res.end(html); });
+  const ext = path.extname(file).toLowerCase();
+  const base = { ext, reqHeaders: req.headers, method: req.method, extraHeaders: PAGE_HEADERS };
+  if (ext === '.html') { // 跟正式環境一樣：換上群組名與連結預覽
+    return handle.pageHtml(fs.readFileSync(file, 'utf8'), origin).then(html => sendStatic(res, staticResponse({ ...base, contentType: MIME['.html'], entry: bufferEntry(Buffer.from(html)) })));
   }
-  res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', ...PAGE_HEADERS });
-  fs.createReadStream(file).pipe(res);
+  sendStatic(res, staticResponse({ ...base, contentType: MIME[ext] || 'application/octet-stream', entry: loadStatic(file) }));
 }
 
 // 公開部署：
@@ -134,7 +139,7 @@ http.createServer(async (req, res) => {
     let url;
     try { url = new URL(req.url, `${proto}://${req.headers.host || 'localhost'}`); } catch { return sendJson(res, 400, 'BAD_REQUEST', '網址不合法'); }
     const base = APP_ORIGIN || url.origin;
-    if (!url.pathname.startsWith('/api/') && !['/docs/ai-integration.md', '/docs/api-reference.md'].includes(url.pathname)) return await serveStatic(res, url.pathname, base);
+    if (!url.pathname.startsWith('/api/') && !['/docs/ai-integration.md', '/docs/api-reference.md'].includes(url.pathname)) return await serveStatic(req, res, url.pathname, base);
 
     const len = Number(req.headers['content-length'] || 0);
     if (len > MAX_BODY) { req.resume(); return sendJson(res, 413, 'PAYLOAD_TOO_LARGE', '請求內容過大'); }

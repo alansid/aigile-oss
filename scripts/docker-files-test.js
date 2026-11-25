@@ -49,6 +49,22 @@ try {
 
   const di = read('.dockerignore').split(/\r?\n/).map(l => l.trim());
   for (const x of ['data/', '.aigile/', 'node_modules/', '.git/', '.env', '.dev.vars']) assert.ok(di.includes(x), '.dockerignore 排除 ' + x);
+  // PLAT-460：測試、說明圖不進映像；伺服器執行時讀的 scripts／docs 檔、README 寫的管理工具要留下
+  for (const x of ['scripts/*', 'docs/*', '.github/']) assert.ok(di.includes(x), '.dockerignore 排除 ' + x);
+  const server = read('server.js');
+  const needed = new Set([
+    ...[...server.matchAll(/from '\.\/(scripts\/[^']+)'/g)].map(m => m[1]),
+    ...[...server.matchAll(/path\.join\(ROOT, 'docs', '([^']+)'\)/g)].map(m => 'docs/' + m[1]),
+    ...[...server.matchAll(/path\.join\(ROOT, '(docs\/[^']+)'\)/g)].map(m => m[1]),
+    'scripts/admin-rescue.js', 'scripts/sqlite-to-pg.js', // README 教的管理員救援、SQLite 搬到 Postgres
+  ]);
+  assert.ok(needed.size >= 7, '找得到伺服器要讀的檔：' + [...needed]);
+  for (const f of needed) {
+    assert.ok(fs.existsSync(new URL('../' + f, import.meta.url)), f + ' 存在');
+    assert.ok(di.includes('!' + f), `.dockerignore 留下執行要用的 ${f}`);
+  }
+  for (const f of di.filter(l => l.startsWith('!'))) assert.ok(fs.existsSync(new URL('../' + f.slice(1), import.meta.url)), `.dockerignore 留下的 ${f.slice(1)} 要存在`);
+  assert.ok(!/no npm dependencies/.test(read('.github/workflows/release.yml')), 'release.yml 不再寫「映像沒有 npm 相依」');
 
   const readme = read('README.md');
   assert.match(readme, /## 快速開始（Docker）[\s\S]*docker compose up -d[\s\S]*## 本機啟動[\s\S]*## 進階：部署到 Cloudflare/, 'README：Docker 第一、本機第二、Cloudflare 放後面');
