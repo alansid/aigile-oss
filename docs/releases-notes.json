@@ -1,6 +1,11 @@
 {
   "releases": [
     {
+      "version": "1.0.9",
+      "at": "2026-11-25T15:23:55.000Z",
+      "title": "v1.0.8 緊急修正：單位鎖住 MCP 時可改用 REST 接入、重貼一行啟動不再出錯 · Hotfix for v1.0.8: REST connection when MCP is blocked, pasting the one-line start again is safe"
+    },
+    {
       "version": "1.0.8",
       "at": "2026-11-24T15:35:07.000Z",
       "title": "審查者、驗收一次通過、側欄可收起、一個專案多個程式庫、同名成員、卡片附件、commit 與 push 授權分開 · Reviewers, verify in bulk, collapsible sidebar, several repositories per project, members with the same name, card attachments, separate commit and push approvals"
