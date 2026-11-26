@@ -4253,5 +4253,12 @@ window.AIGILE_EN = {
     "平台版只能用官方網址（Gemini、OpenAI、Anthropic）；要接公司代理或地端模型請用開源版（架在公司內）。": "The hosted version only allows official URLs (Gemini, OpenAI, Anthropic); use the self-hosted version (inside your company) for a company proxy or on-premises model.",
     "金鑰被拒絕（{0}）：{1}": "The key was rejected ({0}): {1}",
     "金鑰被拒絕（{0}）：{1}。請按「換金鑰」重貼": "The key was rejected ({0}): {1}. Press \"Replace\" to paste it again",
+    "最近更新的卡 · {0}": "Recently updated cards · {0}",
+    "最近更新的卡 · 你的專案": "Recently updated cards · your projects",
+    "符合「{0}」": "Matching “{0}”",
+    "找不到符合「{0}」的卡。": "No cards match “{0}”.",
+    "試試卡號數字或標題的其他字；按 Esc 照打 #{0}。": "Try the card number or other words from the title. Press Esc to keep typing #{0}.",
+    "↑↓ 選 · Enter 插入 · Esc 關閉（照打 #）": "↑↓ to move · Enter to insert · Esc to close (type # as is)",
+    "選擇卡片": "Pick a card",
   },
 };

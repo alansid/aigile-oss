@@ -2902,7 +2902,6 @@
   const input = $('#input');
   const sendBtn = $('#send');
   const mentionList = $('#mention-list');
-  let mentionState = null;
 
   // 訊息區有捲軸時，輸入區右邊多留同寬度，兩者左右邊界才會對齊
   const syncScrollbar = () => { const m = $('#messages'); document.documentElement.style.setProperty('--sbw', (m.offsetWidth - m.clientWidth) + 'px'); };
@@ -2912,36 +2911,14 @@
     input.style.height = Math.max(44, Math.min(input.scrollHeight + 2, window.innerHeight * 0.4)) + 'px';
   }
 
-  function updateMention() {
-    const pos = input.selectionStart;
-    const m = input.value.slice(0, pos).match(/@([^\s@]*)$/);
-    if (!m) return closeMention();
-    const items = mentionCandidates(m[1]);
-    if (!items.length) return closeMention();
-    mentionState = { start: pos - m[0].length, end: pos, items, index: 0 };
-    renderMention();
-  }
-  function renderMention() {
-    mentionList.innerHTML = mentionItemsHtml(mentionState.items, mentionState.index, mentionScope() || projectView());
-    mentionList.hidden = false;
-    scrollPicked(mentionList);
-  }
-  function closeMention() { mentionState = null; mentionList.hidden = true; }
-  function pickMention(i) {
-    const p = mentionState.items[i];
-    noteRecentAt(p);
-    const scopeDups = dupNameSet(mentionState.items.filter(x => x.memberType !== 'all'));
-    const insert = (p.shortCode && (scopeDups.has(nameKey(p.name)) || viewDups(mentionScope() || 'cross').has(nameKey(p.name))) ? `@${p.name}·${p.shortCode}` : `@${p.name}`) + ' ';
-    input.value = input.value.slice(0, mentionState.start) + insert + input.value.slice(mentionState.end);
-    const caret = mentionState.start + insert.length;
-    input.setSelectionRange(caret, caret);
-    closeMention();
-    input.focus();
-    onInput();
-  }
-  mentionList.addEventListener('mousedown', e => {
-    const li = e.target.closest('li[data-i]');
-    if (li) { e.preventDefault(); pickMention(Number(li.dataset.i)); }
+  attachMention(input, mentionList, {
+    candidates: mentionCandidates,
+    project: () => mentionScope(),
+    allProjects: () => sendTarget() === 'all',
+    formatMention: (p, items) => {
+      const scopeDups = dupNameSet(items.filter(x => x.memberType !== 'all'));
+      return (p.shortCode && (scopeDups.has(nameKey(p.name)) || viewDups(mentionScope() || 'cross').has(nameKey(p.name))) ? `@${p.name}·${p.shortCode}` : `@${p.name}`) + ' ';
+    },
   });
 
   // 類型小膠囊顯示目前選的類型；一般＝灰框，選了別的才變藍
@@ -2956,27 +2933,14 @@
     sendBtn.disabled = !input.value.trim();
     drawTagChip();
     autoGrow();
-    updateMention();
     drawMentionWarn();
     drawAskRow();
   }
   input.addEventListener('input', onInput);
-  input.addEventListener('click', updateMention);
-  input.addEventListener('blur', () => setTimeout(closeMention, 150));
 
   const isDesktop = () => matchMedia('(hover: hover) and (pointer: fine)').matches;
   input.addEventListener('keydown', e => {
-    if (e.isComposing || e.keyCode === 229) return; // 中文組字中，不處理
-    if (mentionState) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        const n = mentionState.items.length;
-        mentionState.index = (mentionState.index + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
-        return renderMention();
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pickMention(mentionState.index); }
-      if (e.key === 'Escape') { e.preventDefault(); return closeMention(); }
-    }
+    if (e.isComposing || e.keyCode === 229 || e.defaultPrevented) return; // 中文組字中或已由選單處理
     if (e.key === 'Enter' && !e.shiftKey && isDesktop()) { e.preventDefault(); send(); }
   });
   sendBtn.addEventListener('click', send);
@@ -5405,12 +5369,13 @@
         <div class="info-box">${esc(ckeyOf(d))} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
         <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, hdups))}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
         <div class="field"><label for="ho-note">交接說明（必填）</label>
-          <div class="att-box">${attGridHtml(hoKey)}<textarea autocomplete="off" autocorrect="on" id="ho-note" class="inl-text" name="note" rows="3" required maxlength="300" data-att-key="${esc(hoKey)}" placeholder="我做完了什麼、希望對方接著做什麼"></textarea>
+          <div class="att-box">${attGridHtml(hoKey)}<div class="inl-field"><textarea autocomplete="off" autocorrect="on" id="ho-note" class="inl-text" name="note" rows="3" required maxlength="300" data-att-key="${esc(hoKey)}" placeholder="我做完了什麼、希望對方接著做什麼"></textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>
           ${attDeclHtml(hoKey)}<div class="att-bar">${attPickBtn(hoKey)}${attHint('Enter 換行 · 可直接貼上截圖')}</div></div></div>
         <p class="muted small">${d.type === '人類紀錄' ? '說明會公開在群組，請勿填入內部路徑、程式碼或客戶個資。' : '說明和截圖會公開在群組，請勿填入內部路徑、程式碼或客戶個資。'}</p>
         <p class="error" id="handover-error" role="alert"></p>
       </form>`, { size: 'form', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="handover-form">確認交接</button>' });
     if (d.type === '人類紀錄') body.querySelectorAll('.att-pick').forEach(b => { b.hidden = true; }); // 人類紀錄交接不發群組訊息，不能附圖
+    { const ta = body.querySelector('#ho-note'), list = ta?.parentElement?.querySelector('.mention-list'); if (ta && list) attachMention(ta, list, { candidates: null, project: d.project, selfId: d.cardId }); }
     let busy = false;
     body.querySelector('#handover-form').addEventListener('submit', async e => {
       e.preventDefault();
@@ -5586,17 +5551,17 @@
     if (mode === 'reply') { work.openInl = 'k:' + id; body = inlineHtml('k:' + id, 'card', d); }
     else if (mode === 'note') {
       const key = 'n:' + id;
-      body = box(key, `<textarea id="note-text" class="inl-text" rows="2" maxlength="1000" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="寫一筆紀錄（只存卡上，不通知）" aria-label="寫一筆紀錄">${cdraft(key)}</textarea>`,
+      body = box(key, `<div class="inl-field"><textarea id="note-text" class="inl-text" rows="2" maxlength="1000" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="寫一筆紀錄（只存卡上，不通知）" aria-label="寫一筆紀錄">${cdraft(key)}</textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>`,
         `${attHint('可直接貼上或拖進截圖')}<button type="button" class="btn small primary" data-act="add-note">記下（不通知）</button>`);
     } else if (mode === 'handover') {
       const key = 'h:' + id, list = hoPeople(d), to = hoTarget(d), dups = dupNameSet(list);
       body = `<label class="cfield">給 <select data-ho-to aria-label="交給誰">${list.map(p => `<option value="${esc(p.participantId)}" ${p === to ? 'selected' : ''}>${esc(nameCodeText(p, dups))}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>`
-        + box(key, `<textarea class="inl-text" rows="2" maxlength="200" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="做到哪：我做完了什麼（必填）" aria-label="做到哪">${cdraft(key)}</textarea>`
-          + `<textarea class="inl-text ho-next" rows="1" maxlength="90" data-cdraft="hn:${esc(id)}" placeholder="下一步：希望對方接著做什麼（選填）" aria-label="下一步">${cdraft('hn:' + id)}</textarea>`,
+        + box(key, `<div class="inl-field"><textarea class="inl-text" rows="2" maxlength="200" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="做到哪：我做完了什麼（必填）" aria-label="做到哪">${cdraft(key)}</textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>`
+          + `<div class="inl-field"><textarea class="inl-text ho-next" rows="1" maxlength="90" data-cdraft="hn:${esc(id)}" placeholder="下一步：希望對方接著做什麼（選填）" aria-label="下一步">${cdraft('hn:' + id)}</textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>`,
           `<span class="muted small ho-hint">${esc(hoHint(to))}</span><button type="button" class="btn small primary" data-act="ho-go" ${to ? '' : 'disabled'}>交接給 ${esc(to?.name || '…')}</button>`);
     } else {
       const key = 'r:' + id, prev = prevHandName(d) || d.owner?.name;
-      body = box(key, `<textarea class="inl-text" rows="2" maxlength="300" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="原因：哪裡有問題、要怎麼改（必填）" aria-label="退回原因">${cdraft(key)}</textarea>`,
+      body = box(key, `<div class="inl-field"><textarea class="inl-text" rows="2" maxlength="300" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="原因：哪裡有問題、要怎麼改（必填）" aria-label="退回原因">${cdraft(key)}</textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>`,
         `${attHint('可直接貼上或拖進截圖')}<button type="button" class="btn small primary" data-act="back-go">退回給 ${esc(prev ? shortOf(prev) : '上一棒')}</button>`);
     }
     const rkey = Object.keys(work.cretry || {}).find(k => k.endsWith(':' + id)) || '', rt = work.cretry?.[rkey]; // 不管現在在哪個分頁（交接、退回後分頁可能不見）
@@ -5835,7 +5800,8 @@
       }
       if (await patchCard(work.openId, data)) { work.editing = false; openCard(work.openId); toast('已儲存'); }
     });
-    host.querySelectorAll('[data-inl-text^="k:"]').forEach(ta => { const c = work.cards.get(ta.dataset.inlText.slice(2)); const list = ta.parentElement.querySelector('.mention-list'); if (c && list) attachMention(ta, list, { candidates: cardMentionCandidates(c) }); });
+    host.querySelectorAll('[data-inl-text^="k:"]').forEach(ta => { const c = work.cards.get(ta.dataset.inlText.slice(2)); const list = ta.parentElement.querySelector('.mention-list'); if (c && list) attachMention(ta, list, { candidates: cardMentionCandidates(c), project: c.project, selfId: c.cardId }); });
+    host.querySelectorAll('.dcompose [data-cdraft]').forEach(ta => { const list = ta.parentElement.querySelector('.mention-list'); if (list) attachMention(ta, list, { candidates: null, project: d.project, selfId: d.cardId }); });
     if (focus) host.querySelector('.modal-x').focus();
   }
   document.addEventListener('keydown', e => {
@@ -7103,8 +7069,9 @@
     box.innerHTML = `<div class="dm-page">
       <div class="dm-top"><button type="button" class="icon-btn dm-back" data-dm-back aria-label="回私訊清單">‹</button>${avatar(ai)}<div class="dm-who"><b>${esc(ai.name)}</b><span class="muted small">🔒 只有你和它看得到 · <span id="dm-status" role="status"></span></span><span class="muted small dm-tip">定案的事請寫回卡片，團隊才看得到</span></div></div>
       <div class="dm-list" id="dm-list" aria-live="polite"></div>
-      <div class="dm-comp"><textarea id="dm-input" rows="2" maxlength="2000" placeholder="${esc(`私訊 ${ai.name}…`)}" aria-label="私訊內容"></textarea><button class="btn primary send" type="button" id="dm-send">送出</button></div>
+      <div class="dm-comp"><div class="inl-field dm-field"><textarea id="dm-input" rows="2" maxlength="2000" placeholder="${esc(`私訊 ${ai.name}…`)}" aria-label="私訊內容"></textarea><ul id="dm-card-list" class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div><button class="btn primary send" type="button" id="dm-send">送出</button></div>
       <p class="muted small" id="dm-note"></p></div>`;
+    { const ta = $('#dm-input'), list = $('#dm-card-list'); if (ta && list) attachMention(ta, list, { candidates: null, allProjects: true }); }
     try { await dmLoad(); } catch (err) { return toast(err.message); }
     if (gen !== dm.gen) return; // 期間又重畫了，交給新的那次
     drawDm(); const l0 = $('#dm-list');
@@ -7199,7 +7166,7 @@
       try { await postMsg({ text: `[回覆] ${c}（來自私訊）：${t}`, cardId: c, requestId: newRequestId() }); toast(`已寫回 ${c}`); dm.wb = null; drawDm(); } catch (err) { toast(err.message); }
     }
   });
-  document.addEventListener('keydown', e => { if (e.target.id === 'dm-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing && isDesktop()) { e.preventDefault(); dmSend(); } }); // 跟群組一樣：Enter 送出、Shift+Enter 換行
+  document.addEventListener('keydown', e => { if (e.target.id === 'dm-input' && e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !e.defaultPrevented && isDesktop()) { e.preventDefault(); dmSend(); } }); // 跟群組一樣：Enter 送出、Shift+Enter 換行
   // 側欄人數拆開：人類 N 在線 · AI N 在做事、N 待命
   function drawPresence(list) {
     if (!state.team) return;
@@ -9947,40 +9914,136 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     openUpload(files);
   });
 
-  // @ 成員選單（上傳視窗的附註欄用）：輸入 @ 跳出清單，↑↓ 移動、Enter／Tab／點選插入、Esc 關閉
-  function attachMention(ta, list, { candidates = mentionCandidates } = {}) {
-    let st = null;
+  // # 卡片選單觸發（開頭或空白後面）、排序搜尋、列表 HTML 與浮動定位
+  function findCardRefTrigger(before) {
+    const m = String(before || '').match(/(?:^|\s)(#([^\s#]*))$/);
+    return m ? { start: before.length - m[1].length, end: before.length, query: m[2] } : null;
+  }
+  function cardRefCandidates(raw, { project = null, selfId = null, allProjects = false } = {}) {
+    const q = String(raw || '').trim().toLowerCase(), visible = myProjects();
+    const list = [];
+    for (const c of work.cards?.values() || []) {
+      if (!c || c.status === '已封存' || (selfId && c.cardId === selfId)) continue;
+      if (allProjects) { if (visible.length && !visible.includes(c.project)) continue; }
+      else if (project && c.project !== project) continue;
+      const key = ckeyOf(c), keyLo = key.toLowerCase(), dash = keyLo.indexOf('-'), num = dash >= 0 ? keyLo.slice(dash + 1) : keyLo;
+      const title = cardTitle(c), titleLo = title.toLowerCase();
+      let rank = 0;
+      if (q) {
+        if (keyLo === q || num === q) rank = 0;
+        else if (keyLo.startsWith(q) || num.startsWith(q)) rank = 1;
+        else if (keyLo.includes(q)) rank = 2;
+        else if (titleLo.includes(q)) rank = 3;
+        else continue;
+      }
+      list.push({ c, key, title, rank, ts: Date.parse(c.updatedAt || c.createdAt || 0) || 0 });
+    }
+    list.sort((a, b) => a.rank - b.rank || b.ts - a.ts);
+    return (q ? list.slice(0, 20) : list.slice(0, 8)).map(x => x.c);
+  }
+  function cardPickItemsHtml(items, index, q, { project = null, allProjects = false } = {}) {
+    const qLo = String(q || '').trim().toLowerCase();
+    const head = q ? L(`符合「${esc(q)}」`, `Matching “${esc(q)}”`)
+      : (allProjects || !project ? L('最近更新的卡 · 你的專案', 'Recently updated cards · your projects') : L(`最近更新的卡 · ${esc(projName(project))}`, `Recently updated cards · ${esc(projName(project))}`));
+    const body = items.length
+      ? `<li class="mention-grp" role="presentation">${head}</li>` + items.map((c, i) => `<li role="option" class="card-pick-row" data-i="${i}" aria-selected="${i === index}">
+          <span class="cid">${markQ(ckeyOf(c), qLo)}</span><span class="card-pick-title">${markQ(cardTitle(c), qLo)}</span>${allProjects ? projTag(c.project) : ''}<span class="cst" data-st="${esc(c.status)}">${esc(shownName(c.status))}</span>
+        </li>`).join('')
+      : `<li class="card-pick-empty" role="status"><b>${L(`找不到符合「${esc(q)}」的卡。`, `No cards match “${esc(q)}”.`)}</b><span class="muted small">${L(`試試卡號數字或標題的其他字；按 Esc 照打 #${esc(q)}。`, `Try the card number or other words from the title. Press Esc to keep typing #${esc(q)}.`)}</span></li>`;
+    return body + `<li class="mention-grp mention-tip card-pick-tip" role="presentation">${L('↑↓ 選 · Enter 插入 · Esc 關閉（照打 #）', '↑↓ to move · Enter to insert · Esc to close (type # as is)')}</li>`;
+  }
+  function placePickerList(ta, list) {
+    const floatHost = ta.closest('.dcompose, .dm-comp, .modal');
+    list.classList.toggle('pick-float', !!floatHost);
+    if (!floatHost) {
+      list.style.left = ''; list.style.top = ''; list.style.bottom = '';
+      list.style.width = ''; list.style.minWidth = ''; list.style.maxWidth = ''; list.style.maxHeight = '';
+      return;
+    }
+    const r = ta.getBoundingClientRect(), mob = innerWidth < 900, dmComp = ta.closest('.dm-comp');
+    const ar = (dmComp || ta.closest('.dcompose, .att-box, .field') || ta).getBoundingClientRect();
+    const spaceAbove = r.top - 12, spaceBelow = innerHeight - r.bottom - 12;
+    const up = spaceAbove >= 200 || spaceAbove >= spaceBelow;
+    const w = mob ? Math.min(innerWidth - 16, Math.max(240, ar.width))
+      : dmComp ? Math.min(innerWidth - 16, Math.max(400, ar.width))
+      : Math.min(420, Math.max(300, r.width));
+    const prefLeft = mob ? ar.left : dmComp ? Math.min(ar.left, ar.right - w) : r.left;
+    const left = Math.max(8, Math.min(innerWidth - w - 8, prefLeft));
+    list.style.left = Math.round(left) + 'px';
+    list.style.width = Math.round(w) + 'px';
+    list.style.minWidth = Math.round(w) + 'px';
+    list.style.maxWidth = 'calc(100vw - 16px)';
+    list.style.maxHeight = Math.min(260, Math.max(120, Math.round(up ? spaceAbove : spaceBelow))) + 'px';
+    if (up) { list.style.top = 'auto'; list.style.bottom = Math.round(innerHeight - r.top + 6) + 'px'; }
+    else { list.style.bottom = 'auto'; list.style.top = Math.round(r.bottom + 6) + 'px'; }
+  }
+
+  // @ 成員／# 卡片共用選單（上傳附註、群組輸入框、卡片留言、交接、私訊）：↑↓ 移動、Enter／Tab／點選插入、Esc 關閉
+  function attachMention(ta, list, { candidates = mentionCandidates, cardRef = true, project = null, allProjects = false, selfId = null, formatMention = null } = {}) {
+    let st = null, escHashStart = -1, composing = false;
+    const val = x => (typeof x === 'function' ? x() : x);
     const close = () => { st = null; list.hidden = true; };
     const render = () => {
-      list.innerHTML = mentionItemsHtml(st.items, st.index, mentionScope() || projectView());
+      const pj = val(project), allP = !!val(allProjects);
+      list.innerHTML = st.kind === 'card'
+        ? cardPickItemsHtml(st.items, st.index, st.query, { project: pj, allProjects: allP })
+        : mentionItemsHtml(st.items, st.index, pj || projectView());
       list.hidden = false;
+      placePickerList(ta, list);
       scrollPicked(list);
     };
     const update = () => {
-      const pos = ta.selectionStart, m = ta.value.slice(0, pos).match(/@([^\s@]*)$/);
-      if (!m) return close();
-      const items = candidates(m[1]);
+      const pos = ta.selectionStart ?? ta.value.length, before = ta.value.slice(0, pos);
+      const am = candidates ? before.match(/@([^\s@]*)$/) : null;
+      const hm = cardRef ? findCardRefTrigger(before) : null;
+      const aStart = am ? pos - am[0].length : -1, hStart = hm ? hm.start : -1;
+      if (hStart !== escHashStart) escHashStart = -1;
+      if (hm && hStart > aStart) {
+        if (hStart === escHashStart) return close();
+        const pj = val(project), allP = !!val(allProjects);
+        const items = cardRefCandidates(hm.query, { project: pj, selfId, allProjects: allP });
+        st = { kind: 'card', start: hm.start, end: hm.end, query: hm.query, items, index: items.length ? 0 : -1 };
+        return render();
+      }
+      if (!am) return close();
+      const items = candidates(am[1]);
       if (!items.length) return close();
-      st = { start: pos - m[0].length, end: pos, items, index: 0 };
+      st = { kind: 'mention', start: aStart, end: pos, items, index: 0 };
       render();
     };
     ta.openMention = update; // 「＠ 加人」按鈕插入 @ 後直接開選單
     const pick = i => {
-      noteRecentAt(st.items[i]);
-      const insert = '@' + st.items[i].name + ' ';
+      if (!st || i < 0 || i >= st.items.length) return;
+      let insert;
+      if (st.kind === 'card') {
+        insert = ckeyOf(st.items[i]) + ' ';
+      } else {
+        noteRecentAt(st.items[i]);
+        insert = formatMention ? formatMention(st.items[i], st.items) : '@' + st.items[i].name + ' ';
+      }
       ta.value = ta.value.slice(0, st.start) + insert + ta.value.slice(st.end);
       const caret = st.start + insert.length;
-      close(); ta.focus(); ta.setSelectionRange(caret, caret);
+      escHashStart = -1; close(); ta.focus(); ta.setSelectionRange(caret, caret);
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     };
-    ta.addEventListener('input', update);
+    ta.addEventListener('compositionstart', () => { composing = true; });
+    ta.addEventListener('compositionend', () => { composing = false; update(); });
+    ta.addEventListener('input', e => { if (composing || e?.isComposing || e?.inputType === 'insertCompositionText') return; update(); });
     ta.addEventListener('click', update);
     ta.addEventListener('blur', () => setTimeout(close, 150));
     ta.addEventListener('keydown', e => {
-      if (!st || e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); st.index = (st.index + (e.key === 'ArrowDown' ? 1 : st.items.length - 1)) % st.items.length; return render(); }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pick(st.index); }
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      if (!st || composing || e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); e.stopPropagation();
+        if (!st.items.length) return;
+        st.index = (st.index + (e.key === 'ArrowDown' ? 1 : st.items.length - 1)) % st.items.length;
+        return render();
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (!st.items.length || st.index < 0 || st.index >= st.items.length) { close(); return; }
+        e.preventDefault(); e.stopPropagation(); return pick(st.index);
+      }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (st.kind === 'card') escHashStart = st.start; close(); }
     });
     list.addEventListener('mousedown', e => { const li = e.target.closest('li[data-i]'); if (li && st) { e.preventDefault(); pick(Number(li.dataset.i)); } });
   }
@@ -10149,7 +10212,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     // 視窗開著時 Ctrl+V 連貼（附註欄裡貼純文字照舊）
     modal.addEventListener('paste', e => { const l = pastedImages(e); if (!l.length) return; e.preventDefault(); more(l); });
     chk.addEventListener('change', () => { st.declared = chk.checked; if (st.declared) st.redeclare = ''; draw(); });
-    attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'));
+    attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'), { cardRef: false });
     body.querySelector('#up-note').addEventListener('input', e => { const w = body.querySelector('#up-warn'), t = outsideText(outsideMentions(e.target.value)); w.textContent = t; w.hidden = !t; });
     new MutationObserver((_, ob) => { if (!modal.isConnected) { ob.disconnect(); for (const x of items) if (x.url) URL.revokeObjectURL(x.url); } }).observe($('#modal-root'), { childList: true });
     let requestId = null;
@@ -10222,7 +10285,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
     body.querySelector('.up-preview')?.addEventListener('load', () => URL.revokeObjectURL(previewUrl));
     if (problem) { if (previewUrl) URL.revokeObjectURL(previewUrl); return; }
-    attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'));
+    attachMention(body.querySelector('#up-note'), body.querySelector('#up-mention'), { cardRef: false });
     body.querySelector('#up-note').addEventListener('input', e => { const w = body.querySelector('#up-warn'), t = outsideText(outsideMentions(e.target.value)); w.textContent = t; w.hidden = !t; });
     const go = body.modal.querySelector('#up-go');
     body.querySelector('#up-declare').addEventListener('change', e => { go.disabled = !e.target.checked; });

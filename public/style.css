@@ -4445,3 +4445,23 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
   :root:not([data-theme="light"]) .tb-filter-btn.active { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }
 }
 :root[data-theme="dark"] .tb-filter-btn.active { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }
+
+/* 打 # 跳出卡片選單（共用 .mention-list，浮動不裁切、手機滿寬 44px 無按鍵提示） */
+.composer .mention-list { min-width: 340px; max-width: min(460px, calc(100vw - 24px)); }
+.mention-list.pick-float { position: fixed; z-index: 65; bottom: auto; right: auto; box-sizing: border-box; }
+.mention-list li.card-pick-row { gap: 6px; padding: 6px 9px; }
+.mention-list .card-pick-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.mention-list .card-pick-row .ptag,
+.mention-list .card-pick-row .ptag[data-p] { margin-left: 0; flex: none; background: var(--human-bg); color: var(--human-text); font-size: 11.5px; line-height: 20px; padding: 0 7px; }
+.mention-list .card-pick-row .cst { flex: none; margin-left: auto; }
+.mention-list .card-pick-row .ptag + .cst { margin-left: 0; }
+.mention-list li.card-pick-tip { color: var(--muted); font-variant-emoji: text; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.mention-list li.card-pick-empty { display: grid; gap: 2px; cursor: default; padding: 10px 12px; }
+.mention-list li.card-pick-empty:hover { background: none; }
+.dm-field { flex: 1; min-width: 0; }
+.dm-field textarea { width: 100%; box-sizing: border-box; }
+@media (max-width: 899px) {
+  .composer .mention-list, #composer .mention-list { left: 0; right: 0; min-width: 0; width: 100%; max-width: none; box-sizing: border-box; }
+  .mention-list li.card-pick-row { min-height: 44px; }
+  .mention-list li.card-pick-tip { display: none; }
+}
