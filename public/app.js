@@ -7486,6 +7486,11 @@
       const it = item();
       if (!it) return;
       if (!it.classList.contains('open')) it.querySelector('.ma-row')?.click();
+      if (!item()?.querySelector('.ma-tabs [data-tab="conn"]')) {
+        if (!item()?.querySelector('.ma-menu')) item()?.querySelector('[data-act="menu"]')?.click();
+        const manual = item()?.querySelector('.ma-menu [data-tab="conn"]');
+        if (manual) { manual.closest('details').open = true; manual.click(); }
+      }
       const tab = item()?.querySelector('.ma-tabs [data-tab="conn"]');
       if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
     };
@@ -7703,6 +7708,120 @@
       });
     });
   }
+  async function launchDialog(ai, data, finish) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'ma-launch-dialog';
+    const binding = data.ais[ai.participantId];
+    const platformName = key => ({win32:"Windows",darwin:"macOS",linux:"Linux"})[key] || key;
+    let computers = data.launchers;
+    const tools = maToolsOn().filter(([v]) => ['claude','codex','antigravity'].includes(v));
+    dialog.innerHTML = `<form><div class="ma-launch-body"><h2>在電腦上跑 · ${esc(ai.name)}</h2>
+      <label>哪台電腦<select name="device">${computers.map(c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(platformName(c.platform))} · ${c.online ? '在線' : '離線'}</option>`).join('')}<option value="">＋ 新電腦…</option></select><small data-offline hidden>那台電腦沒開，或啟動器沒在跑。打開電腦後，在任一已登記資料夾執行 npx aigile-cli 就會連回來。</small></label>
+      <label data-existing>哪個資料夾<select name="folder"></select><small data-folder-path></small><small data-folder-warning hidden></small></label>
+      <div data-pair><p>在這隻 AI 的工作資料夾開啟終端機，執行這一行。</p><div class="ma-launch-line"><code></code><button class="btn small" type="button" data-copy>複製</button></div>
+        <label for="ma-pair-code">輸入終端機的 8 碼確認碼</label>
+        <div class="ma-launch-line"><input id="ma-pair-code" name="pairCode" maxlength="8" autocomplete="off"><button class="btn" type="button" data-preview>確認是你的電腦</button></div>
+        <p data-code-error aria-live="polite"></p><section data-detail hidden></section></div>
+      <label>用什麼工具<select name="tool"><option value="">請選擇工具</option>${tools.map(([key,label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('')}</select></label>
+      <p role="alert"></p></div><footer><small data-token-note>在新資料夾設定會發新 Token，用舊 Token 的連線會停止。</small><div><button class="btn" type="button" data-cancel>取消</button><button class="btn primary" type="submit" disabled>啟動</button></div></footer></form>`;
+    document.body.append(dialog);
+    const form = dialog.querySelector('form'), { device, folder, tool, pairCode } = form.elements;
+    const submit = form.querySelector('[type=submit]'), error = form.querySelector('[role=alert]');
+    const command = 'npx aigile-cli@1.1.0 ' + location.origin;
+    form.querySelector('code').textContent = command;
+    form.querySelector('[data-copy]').onclick = () => navigator.clipboard.writeText(command).catch(e => { error.textContent = e.message; });
+    let previewCode = '';
+    if (binding?.launcherId) device.value = binding.launcherId;
+    tool.value = [binding?.tool, ai.tool, maTool(ai)].find(key => tools.some(([value]) => value === key)) || '';
+    function update() {
+      const c = computers.find(x => x.id === device.value);
+      form.querySelector('[data-existing]').hidden = !c;
+      form.querySelector('[data-pair]').hidden = !!c;
+      form.querySelector('[data-detail]').hidden = !previewCode;
+      folder.replaceChildren(...(c?.folders || []).map(f => {
+        const shared = c.ais.filter(a => a.folder === f && a.aiId !== ai.participantId).map(a => a.name);
+        const parts = f.split(/[\\/]/).filter(Boolean);
+        const opt = new Option(parts.at(-1) || f, f);
+        opt.title = f;
+        opt.dataset.shortPath = parts.length > 2 ? '…' + f.slice(f.lastIndexOf(parts.at(-2))) : f;
+        opt.dataset.shared = shared.join('、');
+        return opt;
+      }));
+      if (c && binding?.launcherId === c.id && c.folders.includes(binding.folder)) folder.value = binding.folder;
+      showFolder();
+      submit.textContent = c ? '啟動' : '同意並啟動';
+      submit.disabled = c ? !c.online || !folder.value : !previewCode;
+      form.querySelector('[data-offline]').hidden = !c || c.online;
+      form.querySelector('[data-token-note]').hidden = !!c;
+      error.textContent = c && c.online && !folder.value ? '請在工作資料夾執行 npx aigile-cli add。' : '';
+    }
+    function showFolder() {
+      const opt = folder.selectedOptions[0];
+      const hint = form.querySelector('[data-folder-path]');
+      hint.title = opt?.value || '';
+      hint.textContent = opt?.dataset.shortPath || '';
+      if (opt?.dataset.shared) {
+        const shared = document.createElement('span');
+        shared.textContent = document.documentElement.lang === 'en' ? opt.dataset.shared + ' also uses this folder' : opt.dataset.shared + ' 也在用';
+        hint.append(' · ',shared);
+      }
+    }
+    const warning = form.querySelector('[data-folder-warning]');
+    const codeError = form.querySelector('[data-code-error]');
+    folder.onchange = () => { warning.hidden = true; folder.removeAttribute('aria-invalid'); showFolder(); submit.disabled = !folder.value || !computers.find(c=>c.id === device.value)?.online; };
+    device.onchange = () => { warning.hidden = true; folder.removeAttribute('aria-invalid'); update(); };
+    pairCode.oninput = () => { codeError.textContent = ''; pairCode.removeAttribute('aria-invalid'); previewCode = ''; form.querySelector('[data-detail]').textContent = ''; update(); };
+    form.querySelector('[data-preview]').onclick = async () => {
+      const code = pairCode.value.trim().toUpperCase();
+      try {
+        const row = await api('/api/launcher/browser-preview', { method:'POST', body:{ confirmationCode:code } });
+        if (code !== pairCode.value.trim().toUpperCase()) return;
+        previewCode = code;
+        const system = platformName(row.platform);
+        const time = new Intl.DateTimeFormat(document.documentElement.lang || 'zh-TW', {dateStyle:'medium', timeStyle:'short'}).format(new Date(row.createdAt));
+        const fields = [['電腦',row.name],['系統',system],['資料夾',row.folder],['IP',row.ip.replace(/^::ffff:/i,'')],['時間',time]];
+        form.querySelector('[data-detail]').innerHTML = '<strong>確認是你的電腦</strong><dl>' + fields.map(([label,value]) =>
+          '<dt>' + esc(label) + '</dt><dd data-nt title="' + esc(value) + '">' + esc(value) + '</dd>').join('') + '</dl>' +
+          (row.returning ? '<p>這台電腦之前配對過，會沿用原本的紀錄，不會多一台。</p>' : '');
+        update();
+      } catch (e) {
+        if (code !== pairCode.value.trim().toUpperCase()) return;
+        previewCode = '';
+        update();
+        if (e.code === 'INVALID_PAIR_CODE') {
+          codeError.textContent = '這組碼不存在、已用過或已過期。請在終端機重新執行指令。';
+          pairCode.setAttribute('aria-invalid','true');
+        } else error.textContent = e.message;
+      }
+    };
+    form.onsubmit = async event => {
+      event.preventDefault();
+      if (!tool.value) { error.textContent = '請選擇工具'; return; }
+      submit.disabled = true;
+      try {
+        if (device.value) await api('/api/my-ais/' + encodeURIComponent(ai.participantId) + '/launch', {method:'POST',body:{launcherId:device.value,folder:folder.value,tool:tool.value}});
+        else if (previewCode && previewCode === pairCode.value.trim().toUpperCase()) await api('/api/launcher/pair-code',{method:'POST',body:{aiId:ai.participantId,tool:tool.value,confirmationCode:previewCode}});
+        else return;
+        dialog.close(); await finish(!device.value);
+      } catch (e) {
+        if (e.code !== 'WORKSPACE_CHANGED') { submit.disabled = false; error.textContent = e.message; return; }
+        try { computers = (await api('/api/launcher')).launchers; }
+        catch (refreshError) { error.textContent = refreshError.message; return; }
+        update();
+        folder.prepend(new Option('請重新選擇資料夾',''));
+        folder.value = '';
+        showFolder();
+        folder.setAttribute('aria-invalid','true');
+        warning.textContent = '這個資料夾的登記改過了（路徑不同），請重新選一次。';
+        warning.hidden = false;
+        submit.disabled = true;
+        folder.focus();
+      }
+    };
+    dialog.onclose = () => dialog.remove();
+    form.querySelector('[data-cancel]').onclick = () => dialog.close();
+    update(); dialog.showModal();
+  }
   function myAiRowHtml(ai, tab, menu, q = '') {
     const id = esc(ai.participantId), active = ai.status === 'active', level = tokenLevel(ai.expiresAt);
     const [stCls, stText] = maState(ai), pjs = state.projMeta.crossRoleIds.includes(ai.participantId) ? null : (ai.projects || []).filter(p => PROJECTS.includes(p));
@@ -7712,8 +7831,11 @@
     const main = !active ? `<button class="btn" type="button" data-act="enable" data-id="${id}">重新啟用</button>`
       : ai.cloud ? `<button class="btn ma-copy" type="button" data-act="tab" data-tab="cloud" data-id="${id}">用量</button>` // 雲端 AI 不用接入
       : maWarn(ai) ? `<button class="btn warn" type="button" data-act="reissue" data-id="${id}">重發<span class="ma-long"> Token</span></button>`
-      : `<button class="btn ma-copy" type="button" data-act="short" data-id="${id}">複製接入文字</button>`; // 短版接入是主要做法
+      : maTool(ai) === 'copilot' ? `<button class="btn ma-copy" type="button" data-act="tab" data-tab="conn" data-id="${id}">Copilot 用手動接入</button>`
+      : maTool(ai) === 'other' ? `<button class="btn" data-act="short" data-id="${id}">手動接入</button>`
+      : `<button class="btn primary" data-act="local-launch" data-id="${id}"${ai.isOnline || ai.launcher?.pendingJob ? ' disabled' : ''}>${ai.isOnline ? '已在執行' : ai.launcher?.pendingJob ? '正在啟動' : ai.launchError ? '重試' : ai.launcher?.registered ? '啟動' : '在電腦上跑…'}</button>`;
     const menuHtml = menu ? `<div class="ma-menu" role="menu">
+        ${active && !ai.cloud && !['copilot','other'].includes(maTool(ai)) ? `<button role="menuitem" data-act="local-change" data-id="${id}">換電腦或資料夾…</button>${ai.launcher?.registered ? `<button role="menuitem" data-act="local-remove" data-id="${id}">從這台電腦移除</button>` : ''}<details><summary>進階</summary><button role="menuitem" data-act="tab" data-tab="conn" data-id="${id}">手動接入</button></details>` : ''}
         <button type="button" role="menuitem" data-act="edit" data-id="${id}">✏️ 編輯名稱、角色、專案</button>
         ${active && ai.cloud ? `<button type="button" role="menuitem" data-act="cloud-limit" data-id="${id}">⚙️ 每輪上限</button>
         <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
@@ -7727,6 +7849,8 @@
         ${maAvatar(ai)}
         <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
           <div class="ma-meta">${[markQ(ai.role || '', q), ai.cloud ? cloudModelLine(ai.cloud) : ''].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
+        ${!ai.cloud && ai.launcher?.registered ? `<small>${esc([ai.launcher.launcherName,ai.launcher.folder,ai.launcher.tool].join(' · '))}</small>` : ''}
+        ${ai.launchError ? `<small class="error" role="status">${esc(ai.launchError)}</small>` : ''}
         <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
       </div>
       ${tab ? myAiPanelHtml(ai, tab) : ''}
@@ -7739,6 +7863,10 @@
     const id = esc(ai.participantId), active = ai.status === 'active', o = maOpt(ai);
     const tabs = ai.cloud ? [['cloud', '雲端'], ['set', '設定']].filter(([k]) => active || k === 'set')
       : [['conn', '接入'], ['skills', `技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}`], ['set', '設定']].filter(([k]) => active || k === 'set');
+    if (tab !== 'conn' && !ai.cloud && !['copilot','other'].includes(maTool(ai))) {
+      const manual = tabs.findIndex(([key]) => key === 'conn');
+      if (manual >= 0) tabs.splice(manual,1);
+    }
     const t = tabs.some(([k]) => k === tab) ? tab : tabs[0][0];
     const convoLabel = v => v ? CONVO_OPTS.find(x => x[0] === v)[1] : '太長才換新（建議）';
     const tool = maTool(ai), ask = maAskTool.has(ai.participantId), closed = maToolClosed(ai);
@@ -7787,6 +7915,32 @@
       <div id="ma-sync"></div>
       <div id="ma-find"></div>
       <div id="ai-list" class="ma-list"><p class="muted small">載入中…</p></div>`, { sub: inProjectView() ? `你在「${esc(projName(projectView()))}」的 AI；新增和新角色都用這個專案。點一列看接入、技能、設定。` : '你名下所有 AI，不分專案。點一列看接入、技能、設定。' });
+    const devicesBar = document.createElement('div');
+    devicesBar.className = 'ma-devices';
+    body.querySelector('#ai-list').after(devicesBar);
+    devicesBar.onclick = async event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.hasAttribute('data-manage')) {
+        const list = devicesBar.querySelector('[data-device-list]');
+        list.hidden = !list.hidden; button.setAttribute('aria-expanded', String(!list.hidden)); return;
+      }
+      const device = launcher.launchers.find(c => c.id === button.dataset.device);
+      if (!device) return;
+      try {
+        const route = '/api/launchers/' + encodeURIComponent(device.id);
+        if (button.hasAttribute('data-rename')) {
+          const name = prompt('電腦名稱',device.name);
+          if (!name || name.trim() === device.name) return;
+          await api(route,{method:'PATCH',body:{name}});
+        } else {
+          if (!await confirmDialog({title:'移除這台電腦？',text:device.name,confirmText:'移除'})) return;
+          await api(route + '/disable',{method:'POST'});
+        }
+        await draw();
+      } catch (err) { toast(err.message); }
+    };
+    let launcher = { ais: {}, launchers: [], logs: [] };
     let items = [];
     const scope = inProjectView() ? projectView() : null;
     const open = new Map(); // AI id → 展開的分頁
@@ -7811,11 +7965,24 @@
         : items.length ? findEmptyHtml('myai', true) : '<p class="muted">還沒有 AI。按「＋ 新增 AI」選一個角色範例開始。</p>';
       for (const ai of list) if (open.get(ai.participantId) === 'skills') loadSkills(ai);
     }
+    let launchRefresh;
     async function draw() {
-      const d = (await Promise.all([api('/api/my-ais'), waitFor]))[0]; waitFor = null;
+      const [d, devices] = await Promise.all([api('/api/my-ais'), api('/api/launcher'), waitFor]); waitFor = null;
+      launcher = devices;
       items = d.items; maToolsOff = new Set(d.toolsOff || []);
+      for (const ai of items) {
+        ai.launcher = launcher.ais[ai.participantId];
+        const last = launcher.logs.find(j => j.aiId === ai.participantId);
+        ai.launchError = last?.detail === 'launcher_update_required' ? '請在這台電腦執行網頁上的新版指令。' : last && ['refused','offline','timeout'].includes(last.status) ? last.detail || '沒開成功' : '';
+      }
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
       if (scope) items = items.filter(a => (a.projects || []).includes(scope) || state.projMeta.crossRoleIds.includes(a.participantId));
+      devicesBar.innerHTML = launcher.launchers.length ? `<span>我的電腦</span> · ${launcher.launchers.map(c=>esc(c.name)).join('、')} <button class="btn small" data-manage aria-expanded="false">管理</button>
+        <div data-device-list hidden>${launcher.launchers.map(c=>`<p><b>${esc(c.name)}</b> · ${c.online ? '在線' : '離線'} <button class="btn small" data-device="${esc(c.id)}" data-rename>改名</button> <button class="btn small" data-device="${esc(c.id)}">移除</button></p>`).join('')}</div>` : '';
+      clearTimeout(launchRefresh);
+      if (items.some(ai => ai.launcher?.pendingJob)) launchRefresh = setTimeout(() => {
+        if (body.isConnected) draw().catch(err => toast(err.message));
+      }, 1500);
       drawList();
       drawSync();
     }
@@ -7871,11 +8038,37 @@
       if (!ai) return;
       const id = ai.participantId;
       try {
-        if (b.dataset.act === 'row') { if (open.has(id)) open.delete(id); else open.set(id, ai.status === 'active' ? (ai.skillsWaiting ? 'skills' : 'conn') : 'set'); menuFor = null; return row(id); }
+        if (b.dataset.act === 'row') { if (open.has(id)) open.delete(id); else open.set(id, ai.status === 'active' ? (ai.skillsWaiting || !['copilot','other'].includes(maTool(ai)) ? 'skills' : 'conn') : 'set'); menuFor = null; return row(id); }
         if (b.dataset.act === 'menu') { menuFor = menuFor === id ? null : id; row(id); maPlaceMenu(body); return body.querySelector('.ma-menu [role=menuitem]')?.focus(); }
         if (menuFor) { const m = menuFor; menuFor = null; row(m); }
-        if (b.dataset.act === 'tab') { open.set(id, b.dataset.tab); return row(id); }
+        if (b.dataset.act === 'tab') {
+          const askTool = b.dataset.tab === 'conn' && b.closest('.ma-menu') && !maTool(ai);
+          if (askTool) maAskTool.add(id);
+          open.set(id, b.dataset.tab); row(id);
+          if (askTool) body.querySelector(`[data-ma="${CSS.escape(id)}"] .ma-tool button`)?.focus();
+          return;
+        }
         if (b.dataset.act === 'cloud-limit') { const c = await cloudLimitDialog(ai); if (c) { ai.cloud = c; toast('已儲存每輪上限'); row(id); } return; }
+        if (b.dataset.act === 'local-remove') {
+          if (!await confirmDialog({title:'從這台電腦移除？',confirmText:'移除'})) return;
+          await api('/api/my-ais/' + encodeURIComponent(id) + '/launcher',{method:'DELETE'}); return draw();
+        }
+        if (b.dataset.act === 'local-change' || b.dataset.act === 'local-launch') {
+          if (b.dataset.act === 'local-change' || !ai.launcher?.registered) return launchDialog(ai,launcher,async paired => {
+            await draw();
+            if (paired && !items.find(item => item.participantId === id)?.launcher?.registered) {
+              const deadline = Date.now() + 30000;
+              async function checkPair() {
+                if (!body.isConnected) return;
+                try { await draw(); } catch (error) { toast(error.message); return; }
+                if (!items.find(item => item.participantId === id)?.launcher?.registered && Date.now() < deadline) setTimeout(checkPair,1500);
+              }
+              setTimeout(checkPair,1500);
+            }
+          });
+          try { await api('/api/my-ais/' + encodeURIComponent(id) + '/launch',{method:'POST',body:{}}); return draw(); }
+          catch (e) { ai.launchError = e.message; return row(id); }
+        }
         if (b.dataset.act === 'cloud-run') { const d = await api(`/api/my-ais/${encodeURIComponent(id)}/cloud/run`, { method: 'POST' }); ai.cloud = d.cloud; toast(d.started ? '已叫醒，再跑一輪' : '它正在跑，這輪結束會接著處理'); return row(id); }
         if (b.dataset.act === 'copy') { // 平台只存 Token 雜湊：完整接入設定一律附一組新 Token（舊的失效）
           if (ai.lastSeenAt && !await confirmDialog({ title: '換一組 Token 並複製接入設定？', confirmText: '換新並複製',

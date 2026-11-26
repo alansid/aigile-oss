@@ -44,6 +44,7 @@ const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 // Codex 預設沙盒（workspace-write）不准連網；只要開網路，不用完全權限（官方設定名稱，2026-10 查證）
 const CODEX_FIX = "Codex 沙盒預設不能連網：請所屬人類在 ~/.codex/config.toml 加 sandbox_mode = \"workspace-write\" 與 [sandbox_workspace_write] network_access = true（或啟動時加 --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'），不用開完全權限（danger-full-access）；改完重開 Codex 再跑一次";
 const inCodexSandbox = process.env.CODEX_SANDBOX_NETWORK_DISABLED === '1';
+const bundled = args.includes('--bundled');
 const restMode = args.includes('--no-mcp');
 const SKILLS_ONLY = args.includes('--skills-only');
 // 工具：這次有帶 --tool 就用它（並記進 watcher.env 的 SKILL_TOOL）；沒帶就用上次記的；都沒有才自己判斷
@@ -99,7 +100,7 @@ report = (p, body) => fetch(BASE + p, { method: 'POST', headers: { Authorization
 REPORT = SKILLS_ONLY;
 
 // 同步工具自己更新：跟平台給的雜湊不同 → 下載、核對 SHA-256 → 覆蓋自己 → 用新版重跑（只重跑一次）
-if (cfg.setup && SELF_SHA !== cfg.setup) {
+if (!bundled && cfg.setup && SELF_SHA !== cfg.setup) {
   if (process.env.AIGILE_SETUP_UPDATED) fail('同步工具', '更新後還是跟平台給的雜湊不一樣', '把這行告訴所屬人類');
   const r = await fetch(`${BASE}/aigile-setup.mjs`, { signal: AbortSignal.timeout(20_000) }).catch(() => null);
   const buf = r?.ok ? Buffer.from(await r.arrayBuffer()) : null;
@@ -198,7 +199,9 @@ async function syncSkills() {
 if (SKILLS_ONLY) { await syncSkills(); out('完成：技能已同步。'); } else {
 fs.mkdirSync(path.join('.aigile', 'watcher'), { recursive: true });
 let changed = false;
-const files = { ...cfg.files };
+const bundleFiles = ["aigile-start.mjs", "watcher.mjs", "aigile-wait.mjs", "aigile-codex.mjs", "aigile-codex-ui.mjs", "aigile-antigravity.mjs", "aigile-hook.mjs", "aigile-opencode.mjs", "aigile-mcp.mjs", "poll.mjs"];
+if (bundled && Object.keys(cfg.files || {}).some(name => !bundleFiles.includes(name))) fail('版本', '站台要求未隨 CLI 發行的檔案', '請更新 Aigile CLI');
+const files = bundled ? Object.fromEntries(bundleFiles.filter(name => name !== 'poll.mjs').map(name => [name,true])) : { ...cfg.files };
 if (restMode) {
   if (!fileTok || !cfg.poll) fail('REST', '缺少本機身分檔或輪詢工具雜湊。', 'Check the agent token file and platform version.');
   files['poll.mjs'] = cfg.poll;
@@ -222,6 +225,15 @@ if (restMode) {
     '若貴單位允許平台 API，請由管理者指定 --no-mcp。Administrators may select --no-mcp where REST is permitted.');
 }
 for (const [f, want] of Object.entries(files)) {
+  if (bundled) {
+    const source = new URL('./' + f, import.meta.url);
+    const dest = path.join('.aigile', 'watcher', f);
+    const st = fs.lstatSync(dest, { throwIfNoEntry: false });
+    if (st && (!st.isFile() || st.nlink !== 1)) fail('工作區', '腳本路徑含有連結', '請選擇一般工作資料夾');
+    const local = fs.readFileSync(source);
+    if (!st || !fs.readFileSync(dest).equals(local)) { fs.writeFileSync(dest, local); changed = true; }
+    continue;
+  }
   const dest = path.join('.aigile', 'watcher', f);
   let have = null; try { have = sha(fs.readFileSync(dest)); } catch {}
   if (have === want) { out(`✓ ${f} 已是最新`); continue; }
@@ -239,12 +251,23 @@ const envPath = path.join(DIR, 'watcher.env');
 const parse = t => new Map(t.split(/\r?\n/).map(l => /^\s*([A-Z_]+)=(.*)$/.exec(l)).filter(Boolean).map(m => [m[1], m[2]]));
 let old = null; try { old = parse(fs.readFileSync(envPath, 'utf8')); } catch {}
 const std = parse(cfg.env);
+if (bundled) {
+  // The site supplies connection data. Commands and local paths belong to this release.
+  for (const key of [...std.keys()]) if (!['SUPABASE_URL', 'SUPABASE_KEY', 'SUPABASE_TOPIC'].includes(key)) std.delete(key);
+  std.set('AIGILE_BASE', BASE);
+  std.set('AIGILE_ME', me.participantId);
+  std.set('AIGILE_TOKEN_FILE', '.aigile/' + AGENT + '/.token');
+  std.set('BELL_FILE', '.aigile/' + AGENT + '/bell.json');
+  std.set('PID_FILE', '.aigile/' + AGENT + '/watcher.pid');
+  std.set('WAKE_CMD', 'echo WAKE');
+}
 const merged = new Map(std);
-if (old) for (const [k, v] of old) if (k === 'WAKE_CMD' || !std.has(k)) merged.set(k, v);
+if (old && !bundled) for (const [k, v] of old) if (k === 'WAKE_CMD' || !std.has(k)) merged.set(k, v);
 const added = old ? [...std.keys()].filter(k => !old.has(k)) : [];
 const fixed = old ? ['AIGILE_BASE', 'AIGILE_ME'].filter(k => old.has(k) && old.get(k) !== std.get(k)) : [];
 // Codex 不前景常駐，watcher 有待處理才叫 Codex 喚醒腳本跑一輪。原本是 echo（只寫門鈴）或已是 Codex 腳本才改，自己寫的 WAKE_CMD 不動
-const WAKE_MODE = ['auto', 'fresh', 'keep'].includes(opt('mode')) ? opt('mode') : '';
+const savedMode = bundled ? /(?:^| )--mode[ =](auto|fresh|keep)(?: |$)/.exec(old?.get('WAKE_CMD') || '')?.[1] : '';
+const WAKE_MODE = ['auto', 'fresh', 'keep'].includes(opt('mode')) ? opt('mode') : savedMode || '';
 const codexCmd = m => `node .aigile/watcher/aigile-codex.mjs --agent ${AGENT} --mode ${m}`;
 const antigravityCmd = m => `node .aigile/watcher/aigile-antigravity.mjs --agent ${AGENT} --mode ${m}`;
 if (merged.has('WAKE_FOREGROUND')) { merged.delete('WAKE_FOREGROUND'); fixed.push('WAKE_FOREGROUND'); }
@@ -263,7 +286,7 @@ if (TOOL === 'codex') {
     : curMode && (hasFg || (WAKE_MODE && curMode !== WAKE_MODE)) ? antigravityCmd(WAKE_MODE || curMode) : cur;
   if (want !== cur) { merged.set('WAKE_CMD', want); fixed.push('WAKE_CMD'); }
 }
-if (!old || added.length || fixed.length) {
+if (bundled || !old || added.length || fixed.length) {
   fs.writeFileSync(envPath, [...merged].map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
   changed = true;
   out(old ? `✓ ${envPath} 補上 ${[...added, ...fixed].join('、')}` : `✓ 已建 ${envPath}`);
@@ -278,7 +301,7 @@ if (fs.existsSync('.git')) {
 let pid = 0; try { pid = Number(fs.readFileSync(path.join(DIR, 'watcher.pid'), 'utf8').trim()); } catch {}
 const running = pid > 0 && alive(pid);
 const envArg = `--env-file=${envPath.replace(/\\/g, '/')}`;
-await syncSkills();
+if (!bundled) await syncSkills();
 out('');
 if (running && changed) {
   try {
@@ -436,7 +459,9 @@ function antigravityWorkspace() {
 // 沒開網路的沙盒設定只偵測、印清楚，不幫忙改。AIGILE_CODEX_BIN 給測試用假的 codex
 async function codexMcp(mcpPath, manual) {
   const modulePath = path.resolve('.aigile', 'watcher', 'aigile-codex-ui.mjs');
-  const { missingToolApprovals } = await import(pathToFileURL(modulePath).href);
+  const missingToolApprovals = bundled
+    ? config => ({ config, missing: [] })
+    : (await import(pathToFileURL(modulePath).href)).missingToolApprovals;
   // AIGILE_TEST_CODEX_HOME：測試的保險（CODEX_HOME 被設成空字串時也不會落到真的 ~/.codex）；一般使用不會設
   const dir = process.env.CODEX_HOME || process.env.AIGILE_TEST_CODEX_HOME || path.join(os.homedir(), '.codex');
   const file = path.join(dir, 'config.toml');

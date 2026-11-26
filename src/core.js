@@ -11,6 +11,7 @@ import { registerSkills, KEYISH } from './skills.js'; // 角色技能庫
 import { registerJoin, joinOpen } from './join.js'; // 申請加入專案
 import { registerDocs, DOC_MAX_TOTAL_BYTES } from './docs.js'; // 專案文件區
 import { registerKbPages } from './kb-pages.js'; // 知識頁、整理卡
+import { registerLauncher } from './launcher.js';
 import { registerReviews } from './reviews.js'; // 審查者
 import { registerCardTemplates } from './card-templates.js'; // 專案級卡片範本
 import { registerBackup } from './backup.js'; // 備份匯出與匯入
@@ -603,6 +604,8 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     if (await db.get('SELECT 1 AS x FROM participants WHERE token IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(keys))) leak('Token');
     const dv = cands.filter(s => s.startsWith('dv_'));
     if (dv.length && await db.get('SELECT 1 AS x FROM devices WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(dv.map(s => sha256(s)))))) leak('Token');
+    const lk = cands.filter(s => s.startsWith('lk_'));
+    if (lk.length && await db.get('SELECT 1 AS x FROM launchers WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(lk.map(s => sha256(s)))))) leak('Token');
   }
   // 知識庫抽出的長文字找密鑰（有就不建索引，不然 AI 一搜就把密鑰帶進對話）。回傳找到什麼或 null
   // 跟 assertNoSecret 同一套（接入連結、成員現在的 Token），但候選字串分批全查；再加常見金鑰樣式與連線字串裡的密碼
@@ -618,6 +621,8 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       if (await db.get('SELECT 1 AS x FROM participants WHERE token IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(keys))) return 'Token';
       const dv = part.filter(s => s.startsWith('dv_'));
       if (dv.length && await db.get('SELECT 1 AS x FROM devices WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(dv.map(s => sha256(s)))))) return 'Token';
+      const lk = part.filter(s => s.startsWith('lk_'));
+      if (lk.length && await db.get('SELECT 1 AS x FROM launchers WHERE token_hash IN (SELECT value FROM json_each(?)) LIMIT 1', JSON.stringify(await Promise.all(lk.map(s => sha256(s)))))) return 'Token';
     }
     return null;
   }
@@ -1482,7 +1487,7 @@ ${ending}`;
     const js = await joinSettings();
     if (DEFAULT_ADMIN && !admin) throw new ApiError(503, 'ADMIN_SETUP_FAILED', '無法初始化預設管理員');
     const defaultCredentials = DEFAULT_ADMIN && !!(await db.get("SELECT 1 AS x FROM app_settings WHERE key >= 'must_change_cred:' AND key < 'must_change_cred;' LIMIT 1")); // 預設管理員還沒改帳密：登入頁提示去看 README（不寫出密碼）
-    return { ok: true, roomCodeRequired: js.roomCodeSet, setup: !admin, openJoin: js.openJoin, ...(defaultCredentials ? { defaultCredentials: true } : {}), loginMethods: login.methods, live: !!live, ...(TURNSTILE ? { turnstileSiteKey: TS_SITE, captchaAfterFails: TS_AFTER } : {}) }; // site key 本來就公開 // 公開端點不回管理員姓名
+    return { ok: true, launcherVersions: { min: '1.1.0', max: '1.1.0' }, roomCodeRequired: js.roomCodeSet, setup: !admin, openJoin: js.openJoin, ...(defaultCredentials ? { defaultCredentials: true } : {}), loginMethods: login.methods, live: !!live, ...(TURNSTILE ? { turnstileSiteKey: TS_SITE, captchaAfterFails: TS_AFTER } : {}) }; // site key 本來就公開 // 公開端點不回管理員姓名
   }, { open: true });
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS }), { open: true });
   const feedbackRepo = String(config.feedbackRepo ?? 'alansid/aigile-oss').trim();
@@ -3940,6 +3945,18 @@ ${ending}`;
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）
   const reviewsApi = registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager: kbManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, isolatedFrom,
     roleNamesIn: (p, pj) => (p.kind === 'ai' ? [p.role_key, p.role] : [projRoles[p.id]?.[pj]]).filter(Boolean), repoOf: async pj => (await reposMap())[pj] || null, docStorage, audit });
+  async function launcherSetupText(ai, base, tool, currentToken) {
+    await assertToolOn(tool);
+    if (typeof currentToken === 'string' && currentToken.length <= 256 && ai.token_expires_at > Date.now() && await tokenKey(currentToken) === ai.token) {
+      return onboardingText(base, ai, { consent:true, oneLine:true, tool, token:currentToken });
+    }
+    const token = newToken(), expires = Date.now() + AI_TOKEN_TTL_MS;
+    const changed = await db.run("UPDATE participants SET token = ?, token_expires_at = ?, updated_at = ? WHERE id = ? AND kind = 'ai' AND owner_id = ? AND status = 'active' AND token = ?", await tokenKey(token), expires, nowIso(), ai.id, ai.owner_id, ai.token);
+    if (!changed.changes) throw new ApiError(409, 'AI_CHANGED', 'AI 狀態已改變，請重新啟動');
+    invalidatePeople();
+    return onboardingText(base, { ...ai, token_expires_at: expires }, { consent: true, oneLine: true, tool, token });
+  }
+  registerLauncher({ assertToolOn, launchTransport, localLauncherPackage: config.localLauncherPackage === true, launcherSetupText, route, db, ApiError, invalid, readJson, randId, newToken, sha256, requireHuman, requireAdmin, peopleMap, isOnline, agentDir, live });
   Object.assign(kbHooks, registerKbPages({ route, db, ApiError, invalid, readJson, randId, nowIso, peopleMap, identity, projectsOf, PROJECTS, assertWritable, roIn, kbManager, findSecret, getJson, setJson, createMessage, cardKey, cardsApi, claimsOf, kbSkillState: (pj, ais) => skillsApi.templateState(pj, 'kb-curation', ais) })); // 知識頁、整理卡
 
   // 只屬部分專案的人：每個人的目前工作、張數、待處理則數只算看的人也在的專案（卡片看專案、訊息照隔離規則）

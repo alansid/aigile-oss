@@ -17,14 +17,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const opt = name => { const i = args.findIndex(a => a === `--${name}` || a.startsWith(`--${name}=`)); return i < 0 ? '' : args[i].includes('=') ? args[i].split('=').slice(1).join('=') : args[i + 1] || ''; };
 const AGENT = opt('agent');
 const BASE = (opt('base') || '').replace(/\/+$/, '');
-const SETUP_URL = opt('setup');
+const launcherJob = opt('launcher-job');
+const SETUP_URL = launcherJob ? BASE + '/api/launcher/jobs/' + encodeURIComponent(launcherJob) + '/setup' : opt('setup');
 const TOOL = opt('tool') || 'claude';
 const NO_LAUNCH = args.includes('--no-launch');
 const DIR = path.join('.aigile', AGENT || '_');
@@ -40,6 +41,15 @@ try {
   if (!/^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)?$/.test(AGENT) || !/^https?:\/\//.test(BASE)) fail('參數', '缺 --agent 或 --base', '請所屬人類在網頁「我的 AI」重新複製一行啟動');
   if (!['claude', 'codex', 'antigravity', 'copilot'].includes(TOOL)) fail('參數', `--tool 只能是 claude、codex、antigravity 或 copilot（收到 ${TOOL}）`, '請所屬人類在網頁選對工具再複製');
   if (Number(process.versions.node.split('.')[0]) < 22) fail('Node 版本', `目前 ${process.versions.node}，要 22 以上`, '請安裝 Node 22 以上');
+  if (launcherJob) {
+    if (!/^[A-Z0-9]+_[A-Z0-9]+$/.test(AGENT) || !/^ljob_[a-z0-9_-]+$/i.test(launcherJob)) fail('身分', '啟動授權格式錯誤', '請重新按啟動');
+    // A selected workspace may already contain links. Never follow them when
+    // writing the credential or the setup files on behalf of the owner.
+    for (const target of ['.aigile', DIR, W, ...['.token', 'watcher.env', 'launcher-origin', 'onboarding.md', 'codex-checkin.pending', 'antigravity-checkin.pending'].map(name => path.join(DIR, name))]) {
+      const st = fs.lstatSync(target, { throwIfNoEntry: false });
+      if (st && (st.isSymbolicLink() || (st.isFile() && st.nlink > 1))) fail('工作區', '接入路徑含有連結', '請選擇一般工作資料夾');
+    }
+  }
   fs.mkdirSync(DIR, { recursive: true });
   fs.mkdirSync(W, { recursive: true });
 
@@ -52,8 +62,30 @@ try {
   const NET_FIX = '公司網路多半要代理：設 HTTPS_PROXY 並加 NODE_USE_ENV_PROXY=1 再貼一次';
   const RECOPY = '請所屬人類在網頁「我的 AI」重新複製一行啟動';
   // 用一次性連結拿 Token（連結會給目前有效的 Token）；接入設定去掉 Token 存成 onboarding.md
+  function localInstructions(text) {
+    if (!launcherJob) return text;
+    return text.split(/\r?\n/).map(line =>
+      line.includes('/aigile-setup.mjs') && line.includes('SHA-256')
+        ? '- 啟動器已使用 CLI 內建版本完成接入檢查。需要更新時，請使用本站相容的 CLI 版本。'
+        : line).join('\n');
+  }
   async function fromLink() {
-    const r = await fetch(SETUP_URL, { signal: AbortSignal.timeout(20_000) }).catch(e => fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, NET_FIX));
+    let options = {};
+    let trustedOrigin = '';
+    if (launcherJob) {
+      const deviceHome = process.env.AIGILE_LAUNCHER_HOME || path.join(os.homedir(), '.aigile-launcher');
+      const cfg = JSON.parse(fs.readFileSync(path.join(deviceHome, 'config.json'), 'utf8'));
+      if (cfg.base !== BASE || !cfg.token?.startsWith('lk_')) fail('裝置', '啟動器與站台不符', RECOPY);
+      const marker = path.join(DIR, 'launcher-origin');
+      const legacyEnv = path.join(DIR, 'watcher.env');
+      trustedOrigin = fs.existsSync(marker) ? fs.readFileSync(marker,'utf8').trim() :
+        fs.existsSync(legacyEnv) ? /^AIGILE_BASE=(.+)$/m.exec(fs.readFileSync(legacyEnv,'utf8'))?.[1].trim().replace(/\/+$/, '') || '' : '';
+      if ((trustedOrigin || token) && trustedOrigin !== BASE)
+        fail('工作區', '這個資料夾已有其他接入身分', '請選擇另一個工作資料夾');
+      options = { method:'POST', headers:{Authorization:'Bearer ' + cfg.token,'Content-Type':'application/json'}, redirect:'error',
+        body:JSON.stringify({folder:fs.realpathSync(process.cwd()), ...(trustedOrigin === BASE && token ? { currentToken:token } : {})}) };
+    }
+    const r = await fetch(SETUP_URL, { ...options, signal: AbortSignal.timeout(20_000) }).catch(e => fail('連線', `連不到 ${BASE}（${e.cause?.code || e.name}）`, NET_FIX));
     if (r.status === 410 || r.status === 409) fail('接入連結', '已失效或已用過（15 分鐘內、只能用一次）', RECOPY);
     if (!r.ok) fail('接入連結', `HTTP ${r.status}`, '把這行告訴所屬人類');
     const text = await r.text();
@@ -63,14 +95,23 @@ try {
     const t = ti < 0 ? '' : lines[ti].trim();
     if (!/^[A-Za-z0-9_.~-]{16,}$/.test(t)) fail('Token', '接入設定裡找不到 Token', '把這行告訴所屬人類');
     if (!new RegExp(`--agent ${AGENT}\\b`).test(text)) fail('身分', `這份接入設定不是 ${AGENT} 的`, '請所屬人類確認複製的是這隻 AI 的一行啟動');
+    if (launcherJob) {
+      const originFile = path.join(DIR, 'launcher-origin');
+      let recorded = '';
+      try { recorded = fs.readFileSync(originFile, 'utf8').trim(); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+      if ((recorded && recorded !== BASE) || (!recorded && token && trustedOrigin !== BASE)) {
+        fail('工作區', '這個資料夾已有其他接入身分', '請在另一個資料夾配對');
+      }
+      fs.writeFileSync(originFile, BASE, { mode: 0o600 });
+    }
     first = /（初次接入）/.test(lines[0] || '');
     if (first && (TOOL === 'codex' || TOOL === 'antigravity')) fs.writeFileSync(pendingCheckin, AGENT);
-    fs.writeFileSync(tokFile, t);
+    fs.writeFileSync(tokFile, t, { mode: 0o600 });
     lines[ti] = `（Token 已存在 ${posix(tokFile)}；不要印出、不要貼到群組）`;
-    fs.writeFileSync(path.join(DIR, 'onboarding.md'), lines.join('\n'));
+    fs.writeFileSync(path.join(DIR, 'onboarding.md'), localInstructions(lines.join('\n')));
     return t;
   }
-  if (!token) {
+  if (!token || launcherJob) {
     if (!SETUP_URL) fail('Token', `找不到 ${posix(tokFile)}`, RECOPY + '（裡面有一次性接入連結）');
     token = await fromLink();
     out(`✓ Token 已存好（${posix(tokFile)}），接入設定存成 ${posix(path.join(DIR, 'onboarding.md'))}`);
@@ -103,9 +144,9 @@ try {
   // 2. 接入檢查（下載核對 aigile-setup.mjs 再執行；它會自己更新這支一行啟動）
   const cfg = await (await get('/api/me/watcher-env')).json();
   if (cfg.agent && cfg.agent !== AGENT) fail('代號', `這個 Token 是 ${cfg.agent} 的，不是 ${AGENT}`, '請所屬人類確認複製的是這隻 AI 的一行啟動');
-  const setup = path.join(W, 'aigile-setup.mjs');
+  const setup = launcherJob ? fileURLToPath(new URL('./aigile-setup.mjs', import.meta.url)) : path.join(W, 'aigile-setup.mjs');
   let have = ''; try { have = sha(fs.readFileSync(setup)); } catch {}
-  if (cfg.setup && have !== cfg.setup) {
+  if (!launcherJob && cfg.setup && have !== cfg.setup) {
     const r = await fetch(`${BASE}/aigile-setup.mjs`, { signal: AbortSignal.timeout(20_000) }).catch(() => null);
     const buf = r?.ok ? Buffer.from(await r.arrayBuffer()) : null;
     if (!buf) fail('下載', 'aigile-setup.mjs 下載失敗', '再貼一次；還是不行就告訴所屬人類');
@@ -113,12 +154,18 @@ try {
     fs.writeFileSync(setup, buf);
   }
   out('— 接入檢查 —');
-  const s = spawnSync(process.execPath, [setup, '--agent', AGENT, '--base', BASE, '--tool', TOOL, ...(args.includes('--no-mcp') ? ['--no-mcp'] : [])], { stdio: 'inherit', env: { ...process.env, AIGILE_TOKEN: '' } });
+  const s = spawnSync(process.execPath, [setup, ...(launcherJob ? ['--bundled'] : []), '--agent', AGENT, '--base', BASE, '--tool', TOOL, ...(args.includes('--no-mcp') ? ['--no-mcp'] : [])], { stdio: 'inherit', env: { ...process.env, AIGILE_TOKEN: '' } });
   if (s.status !== 0) fail('接入檢查', `結束碼 ${s.status}`, '照上面接入檢查最後一行做，做完再貼一次這一行');
   out('— 接入檢查結束 —');
 
   // 記號：這台是用一行啟動接的＝所屬人類同意待命（/clear 的 hook 拿重新接上設定時帶 start=1）
   try { fs.writeFileSync(path.join(DIR, 'started-by-line'), new Date().toISOString()); } catch {}
+
+  if (launcherJob && !NO_LAUNCH) {
+    const windows = path.join(process.env.AIGILE_LAUNCHER_HOME || path.join(os.homedir(), '.aigile-launcher'), 'windows');
+    fs.mkdirSync(windows, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(windows, launcherJob), String(process.pid), { mode: 0o600 });
+  }
 
   // 3. watcher
   const lock = path.join(DIR, 'foreground.lock');
@@ -200,7 +247,7 @@ try {
     }
     watcherReady = true;
   };
-  if (TOOL === 'claude' || TOOL === 'antigravity' || (TOOL === 'codex' && NO_LAUNCH)) startWatcher(); // Copilot CLI 不開 watcher
+  if (!(launcherJob && NO_LAUNCH) && (TOOL === 'claude' || TOOL === 'antigravity' || (TOOL === 'codex' && NO_LAUNCH))) startWatcher(); // Copilot CLI 不開 watcher
 
   // 4. 待命提示
   const wait = `node --env-file=${envFile} .aigile/watcher/aigile-wait.mjs --agent ${AGENT}`;
@@ -219,7 +266,7 @@ try {
     : `你是 ${AGENT}，這是初次接入：照 ${posix(path.join(DIR, 'onboarding.md'))} 做（Token 已存在 ${posix(tokFile)}，不要印出）。所屬人類已用一行啟動同意待命，watcher 已在背景跑；接好後用背景執行開等待腳本：${wait}`;
   else {
     const r = await get(`/api/me/reconnect?tool=${TOOL}&start=1`);
-    fs.writeFileSync(path.join(DIR, 'reconnect.md'), await r.text());
+    fs.writeFileSync(path.join(DIR, 'reconnect.md'), localInstructions(await r.text()));
     prompt = TOOL === 'antigravity'
       ? `你是 ${AGENT}，剛用一行啟動重新開：照 ${posix(path.join(DIR, 'reconnect.md'))} 重新接上（不要重新簽到、游標沿用），跑一輪收訊息。${agyTail}`
     : TOOL === 'copilot'
