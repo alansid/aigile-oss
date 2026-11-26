@@ -1860,7 +1860,7 @@
     const n = state.me ? mineAskIds().size : 0;
     document.querySelectorAll('[data-scope="mine"]').forEach(b => {
       let c = b.querySelector('.scope-n');
-      if (!c) { b.insertAdjacentHTML('beforeend', '<span class="scope-n" data-nt hidden></span>'); c = b.querySelector('.scope-n'); }
+      if (!c) { b.insertAdjacentHTML('beforeend', ' <span class="scope-n" data-nt hidden></span>'); c = b.querySelector('.scope-n'); }
       c.hidden = !n; c.textContent = n > 99 ? '99+' : n;
       b.setAttribute('aria-label', n ? L(`給我的，${n} 則要你回`, `For me, ${n} to reply`) : L('給我的', 'For me'));
     });
@@ -1871,7 +1871,7 @@
     for (const p of myProjects()) n[p] = items.filter(x => x.p === p).length;
     return n;
   }
-  const PAGE_NAME = { overview: '概觀', messages: '訊息', inbox: '要你處理', work: '工作', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員管理', dm: '私訊', releases: '版本紀錄', help: L('說明', 'Help') }; // 私訊整頁；「說明」在字典是交接的「Notes」，說明頁自己給英文
+  const PAGE_NAME = { overview: '概觀', messages: '訊息', inbox: '要你處理', work: '看板', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員管理', dm: '私訊', releases: '版本紀錄', help: L('說明', 'Help') }; // 私訊整頁；「說明」在字典是交接的「Notes」，說明頁自己給英文
   const pageNameOf = p => (p === 'perm' ? (state.permTab === 'admin' ? '管理員設定' : state.permTab === 'leadproj' ? '專案管理' : '成員管理') : PAGE_NAME[p]); // 成員管理、管理員設定兩頁
   const canSetProj = pj => PROJECTS.includes(pj) && (isAdmin() || leadersOf(pj).includes(meId())); // 專案卡 ⚙
   const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases', help: '/help' }; // 第一層頁面（不分專案）：版本紀錄、說明等
@@ -1930,18 +1930,328 @@
     const d = e.target.closest('[data-role-dismiss]');
     if (d) { store.set(`aigile-role-hint:${meId()}:${d.dataset.roleDismiss}`, '1'); drawRoleBanner(); }
   });
-  // 頂端麵包屑「我的專案 ▸ 平台 ▸ 訊息」、手機頂欄「‹」與標題、第一層的「要你處理 N」、輸入框的「發到」
+  // 桌面單排整合頂欄（頁名＋該頁篩選＋收合鈕＋搜尋／圖示／頭像）；手機頂欄維持原本兩層不動
+  const TOPBAR_FILTERS_KEY = 'aigile-filters-collapsed';
+  const topbarNarrowMq = matchMedia('(max-width: 1399px)');
+  const topbarDesktopMq = matchMedia('(min-width: 900px)');
+  const filtersCollapsed = () => topbarNarrowMq.matches || store.get(TOPBAR_FILTERS_KEY) === '1';
+  let teamSearchQ = '';
+  function applyTeamSearch(box = $('#page-work')) {
+    const q = teamSearchQ.trim().toLowerCase();
+    box?.querySelectorAll('[data-person-search]').forEach(row => {
+      row.hidden = !!q && !row.dataset.personSearch.includes(q);
+    });
+  }
+  const tbHint = document.createElement('div');
+  tbHint.className = 'side-hint tb-hint';
+  tbHint.hidden = true;
+  tbHint.setAttribute('aria-hidden', 'true');
+  document.body.append(tbHint);
+  function tbTipText(raw) {
+    if (!raw) return '';
+    if (raw === '說明') return L('說明', 'Help');
+    if (raw === '私訊') return L('私訊', 'DMs');
+    return window.aigileI18n?.tr?.(raw) || raw;
+  }
+  function showTbHint(e) {
+    const btn = e.target.closest?.('[data-tb-tip]');
+    if (!btn || !topbarDesktopMq.matches || btn.hidden || !btn.getClientRects().length) return;
+    const text = tbTipText(btn.dataset.tbTip);
+    if (!text) return;
+    tbHint.textContent = text;
+    tbHint.hidden = false;
+    const r = btn.getBoundingClientRect(), w = tbHint.offsetWidth;
+    tbHint.style.left = Math.max(8, Math.min(innerWidth - w - 8, Math.round(r.left + r.width / 2 - w / 2))) + 'px';
+    tbHint.style.top = Math.round(r.bottom + 6) + 'px';
+  }
+  const topbarEl = $('.topbar');
+  topbarEl?.addEventListener('pointerover', showTbHint);
+  topbarEl?.addEventListener('focusin', showTbHint);
+  for (const ev of ['pointerout', 'focusout', 'click']) topbarEl?.addEventListener(ev, () => { tbHint.hidden = true; }, true);
+  window.addEventListener('resize', () => { tbHint.hidden = true; if (topbarEl && !$('#tb-filter-pop')?.hidden) closeTbFilterPop(); });
+
+  function setTopSearch(open, focus = false) {
+    const form = $('.topbar .tb-search'), tog = form?.querySelector('[data-tb-search-toggle]'), box = form?.querySelector('.tb-search-box');
+    if (!form || !tog || !box) return;
+    form.classList.toggle('open', open);
+    tog.hidden = open;
+    tog.setAttribute('aria-expanded', String(open));
+    box.hidden = !open;
+    tbHint.hidden = true;
+    if (open && focus) { const inp = box.querySelector('input'); inp?.focus(); inp?.select(); }
+  }
+  $('.topbar [data-tb-search-toggle]')?.addEventListener('click', () => { closeTbFilterPop(); setTopSearch(true, true); });
+  $('.topbar .tb-search input')?.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setTopSearch(false); $('.topbar [data-tb-search-toggle]')?.focus(); }
+  });
+  document.addEventListener('keydown', e => {
+    const pop = $('#tb-filter-pop');
+    if (e.key === 'Escape' && pop && !pop.hidden) { e.preventDefault(); closeTbFilterPop(); $('#tb-page [data-tb-filter]')?.focus(); }
+  });
+  document.addEventListener('click', e => {
+    if ($('.topbar .tb-search.open') && !e.target.closest('.topbar .tb-search')) setTopSearch(false);
+    const pop = $('#tb-filter-pop'), path = e.composedPath?.() || [];
+    if (pop && !pop.hidden && !e.target.closest('#tb-filter-pop') && !e.target.closest('[data-tb-filter]') && !path.includes(pop)) closeTbFilterPop();
+  });
+
+  const collapseBtnHtml = collapsed => (topbarNarrowMq.matches ? ''
+    : `<button type="button" class="tb-collapse-btn" data-tb-collapse aria-expanded="${!collapsed}" aria-label="${collapsed ? '展開篩選' : '收合篩選'}" data-tb-tip="${collapsed ? '展開篩選' : '收合篩選'}">${collapsed ? '»' : '«'}</button>`);
+  const tbMsgPeople = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+  const tbWorkPeople = () => projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
+  function tbCollapseCount(page) {
+    if (page === 'messages') return filterCount();
+    if (page === 'work') return (work.q.trim() ? 1 : 0) + (work.owner ? 1 : 0) + (work.type ? 1 : 0);
+    if (page === 'team') return teamSearchQ.trim() ? 1 : 0;
+    if (page === 'releases') return rel.q.trim() ? 1 : 0;
+    return 0;
+  }
+  const tbFilterBtnLabel = n => (n ? `篩選 · ${n} ▾` : '篩選 ▾');
+  function closeTbFilterPop() {
+    const pop = $('#tb-filter-pop');
+    if (!pop || pop.hidden) return;
+    pop.hidden = true;
+    pop.innerHTML = '';
+    const btn = $('#tb-page [data-tb-filter]');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+  function drawTbFilterPopBody() {
+    const pop = $('#tb-filter-pop');
+    if (!pop) return;
+    const p = state.page;
+    if (p === 'messages') {
+      const f = state.filter, people = tbMsgPeople(), dups = dupNameSet(people);
+      const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
+      pop.innerHTML = `
+        <label class="tb-fp-field"><span>成員</span><select data-tb-fp-member><option value="">所有成員</option>${people.map(x => `<option value="${esc(x.participantId)}"${f.member === x.participantId ? ' selected' : ''}>${esc(nameCodeText(x, dups))}</option>`).join('')}</select></label>
+        <label class="tb-fp-field"><span>訊息類型</span><select data-tb-fp-tag><option value="">所有類型</option>${tags.map(t => `<option${f.tag === t ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+        <div class="tb-fp-field"><span>顯示</span><div class="seg-scope full" role="group" aria-label="顯示">
+          <button type="button" data-msg-view="slim" aria-pressed="${slimMode()}">精簡</button>
+          <button type="button" data-msg-view="full" aria-pressed="${!slimMode()}">完整</button>
+        </div></div>
+        <label class="chk"><input type="checkbox" data-tb-fp-ainow ${aiNowOn() ? 'checked' : ''}> 顯示「AI 現況」（記在這台裝置）</label>
+        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
+    } else if (p === 'work') {
+      const people = tbWorkPeople();
+      pop.innerHTML = `
+        <label class="tb-fp-field"><span>搜尋卡片</span><input type="search" data-tb-fp-card-q placeholder="搜尋標題、下一步或編號" value="${esc(work.q)}"></label>
+        <label class="tb-fp-field"><span>負責人</span><select data-tb-fp-card-owner><option value="">所有負責人</option>${people.map(x => `<option value="${esc(x.participantId)}"${work.owner === x.participantId ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+        <label class="tb-fp-field"><span>類型</span><select data-tb-fp-card-type><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option${work.type === t ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
+    } else if (p === 'team') {
+      pop.innerHTML = `
+        <label class="tb-fp-field"><span>搜尋成員</span><input type="search" data-tb-fp-team-q placeholder="搜尋名字、角色或代號" value="${esc(teamSearchQ)}"></label>
+        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
+    } else if (p === 'releases') {
+      pop.innerHTML = `
+        <label class="tb-fp-field"><span>找版本或卡號</span><input type="search" data-tb-fp-rel-q placeholder="找版本、卡號或關鍵字（例：MAIN-12、1.0.5、快取）" value="${esc(rel.q)}"></label>
+        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
+    }
+  }
+  function openTbFilterPop(btn) {
+    const pop = $('#tb-filter-pop');
+    if (!pop || !btn) return;
+    if (!pop.hidden) { closeTbFilterPop(); return; }
+    setTopSearch(false);
+    drawTbFilterPopBody();
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    const r = btn.getBoundingClientRect(), pw = pop.offsetWidth || 296;
+    pop.style.left = Math.max(8, Math.min(innerWidth - pw - 8, Math.round(r.left))) + 'px';
+    pop.style.top = Math.round(r.bottom + 6) + 'px';
+    (pop.querySelector('input, select, button') || pop).focus();
+  }
+  function drawTopbarPage(force = false) {
+    const host = $('#tb-page');
+    if (!host) return;
+    const p = state.page || 'messages', col = filtersCollapsed(), pj = projectView();
+    const sub = p === 'files' ? `${pj}:${filesUi.tab}` : p === 'perm' ? `${perm.tab}:${perm.adm || ''}:${isAdmin() ? 1 : 0}:${state.projMeta?.adminName || ''}` : p === 'releases' ? rel.tab : '';
+    const sig = `${p}|${pj}|${col ? 1 : 0}|${topbarNarrowMq.matches ? 1 : 0}|${sub}`;
+    const filterBtn = () => {
+      const n = tbCollapseCount(p);
+      return `<button type="button" class="tb-filter-btn${n ? ' active' : ''}" data-tb-filter aria-expanded="false" aria-controls="tb-filter-pop">${esc(tbFilterBtnLabel(n))}</button>${collapseBtnHtml(true)}`;
+    };
+    if (force || host._sig !== sig) {
+      host._sig = sig;
+      if (p === 'messages') {
+        const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
+        host.innerHTML = `
+          <div class="seg-scope tb-scope" role="group" aria-label="範圍">
+            <button type="button" data-scope="all" aria-pressed="true">全部</button>
+            <button type="button" data-scope="mine" aria-pressed="false">給我的</button>
+            <button type="button" data-scope="related" aria-pressed="false">與我相關</button>
+          </div>
+          ${col ? filterBtn() : `
+            <select class="tb-sel" data-tb-f-member aria-label="成員"><option value="">所有成員</option></select>
+            <select class="tb-sel" data-tb-f-tag aria-label="訊息類型"><option value="">所有類型</option>${tags.map(t => `<option>${t}</option>`).join('')}</select>
+            <div class="seg-scope" role="group" aria-label="顯示"><button type="button" data-msg-view="slim" aria-pressed="false">精簡</button><button type="button" data-msg-view="full" aria-pressed="true">完整</button></div>
+            <label class="chk tb-chk"><input type="checkbox" data-tb-ainow><span>AI 現況</span></label>
+            ${collapseBtnHtml(false)}
+          `}`;
+      } else if (p === 'work') {
+        host.innerHTML = `
+          <span class="tb-sub" data-tb-work-count></span>
+          <div class="seg-scope" role="group" aria-label="檢視方式">
+            <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
+            <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
+          </div>
+          <button class="btn small primary tb-card-new" type="button" data-tb-card-new>＋ 新增卡片</button>
+          ${col ? filterBtn() : `
+            <input class="tb-inp" type="search" data-tb-card-q placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片">
+            <select class="tb-sel" data-tb-card-owner aria-label="負責人"><option value="">所有負責人</option></select>
+            <select class="tb-sel" data-tb-card-type aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option>${t}</option>`).join('')}</select>
+            ${collapseBtnHtml(false)}
+          `}`;
+      } else if (p === 'inbox') {
+        host.innerHTML = '<span class="tb-sub" data-tb-inbox-count></span>';
+      } else if (p === 'team') {
+        host.innerHTML = col ? filterBtn() : `<input class="tb-inp" type="search" data-tb-team-search placeholder="搜尋名字、角色或代號" aria-label="搜尋名字、角色或代號">${collapseBtnHtml(false)}`;
+      } else if (p === 'files') {
+        const hasDocs = PROJECTS.includes(pj), tab = hasDocs ? filesUi.tab : 'att';
+        const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['kb', '📚 知識庫'], ['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-tb-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
+        host.innerHTML = `${tabs}${tab === 'att' ? '<button class="btn small" type="button" data-tb-files-up>上傳</button>' : ''}`;
+      } else if (p === 'releases') {
+        host.innerHTML = `<span class="tb-sub">v${esc(APP_VERSION)}</span>
+          <div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>
+          ${rel.tab === 'list' ? (col ? filterBtn() : `<input class="tb-inp" type="search" data-tb-rel-q placeholder="找版本、卡號或關鍵字（例：MAIN-12、1.0.5、快取）" aria-label="找版本或卡號">${collapseBtnHtml(false)}`) : ''}`;
+      } else if (p === 'perm') {
+        const admin = isAdmin(), onAdm = perm.tab === 'admin', onLead = perm.tab === 'leadproj', admName = state.projMeta?.adminName || '';
+        if (onLead) {
+          const subTxt = `你是 leader 的專案 · 新增、永久刪除專案請找管理員 ${admName}`;
+          host.innerHTML = `<span class="tb-sub" title="${esc(subTxt)}">${esc(subTxt)}</span>`;
+        } else if (onAdm) {
+          const subTxt = '只有管理員看得到 · 成員、角色、技能在';
+          host.innerHTML = `<span class="tb-sub" title="${esc(subTxt + ' 👥 成員管理 ›')}">${subTxt} </span><button type="button" class="link small" data-pm-page="members">👥 成員管理 ›</button>`;
+        } else {
+          const subTxt = `群組管理員：${admName}${admin ? '' : ' · 你是 leader'}`;
+          host.innerHTML = `<div class="seg-scope tb-pm-tabs" role="tablist" aria-label="分頁">${[['members', '成員'], ['roles', '角色'], ['skills', '技能']].map(([k, t]) => `<button type="button" role="tab" data-pm-tab="${k}" aria-selected="${perm.tab === k}" aria-pressed="${perm.tab === k}">${t}</button>`).join('')}</div><span class="tb-sub" title="${esc(subTxt)}">${esc(subTxt)}</span>${admin ? '<button type="button" class="link small" data-adm="">⚙️ 管理員設定 ›</button>' : ''}`;
+        }
+      } else {
+        host.innerHTML = '';
+      }
+    }
+    syncTbValues();
+  }
+  function syncTbValues() {
+    const host = $('#tb-page');
+    if (!host) return;
+    const p = state.page || 'messages';
+    const fbBtn = host.querySelector('[data-tb-filter]');
+    if (fbBtn) {
+      const n = tbCollapseCount(p);
+      fbBtn.classList.toggle('active', n > 0);
+      fbBtn.textContent = window.aigileI18n?.tr?.(tbFilterBtnLabel(n)) || tbFilterBtnLabel(n);
+    }
+    if (p === 'messages') {
+      const f = state.filter, people = tbMsgPeople(), dups = dupNameSet(people);
+      host.querySelectorAll('[data-scope]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === f.scope)));
+      host.querySelectorAll('[data-msg-view]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.msgView === 'slim') === slimMode())));
+      const sel = host.querySelector('[data-tb-f-member]');
+      if (sel) { sel.innerHTML = `<option value="">${esc(L('所有成員', 'All members'))}</option>` + people.map(x => `<option value="${esc(x.participantId)}">${esc(nameCodeText(x, dups))}</option>`).join(''); sel.value = f.member; }
+      const tag = host.querySelector('[data-tb-f-tag]'); if (tag) tag.value = f.tag;
+      const an = host.querySelector('[data-tb-ainow]'); if (an) an.checked = aiNowOn();
+      drawMineCount();
+    } else if (p === 'work') {
+      const cnt = host.querySelector('[data-tb-work-count]');
+      if (cnt && work.loaded) {
+        const shownOpen = visibleCards().filter(c => !closedSt(c.status)).length, pv = projectView();
+        const serverOpen = (pv === 'hub' || pv === 'cross' ? work.openCount : work.openByProject?.[pv]) ?? work.openCount;
+        cnt.textContent = !(work.q || work.owner || work.type) && work.openHidden > 0 && serverOpen > shownOpen
+          ? L(`顯示 ${shownOpen}／共 ${serverOpen} 張未完成`, `Showing ${shownOpen} of ${serverOpen} open cards`)
+          : L(`${shownOpen} 張未完成`, `${shownOpen} open cards`);
+        cnt.title = cnt.textContent;
+      }
+      host.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === work.view)));
+      const q = host.querySelector('[data-tb-card-q]'); if (q && document.activeElement !== q) q.value = work.q;
+      const own = host.querySelector('[data-tb-card-owner]');
+      if (own) { own.innerHTML = `<option value="">${esc(L('所有負責人', 'All assignees'))}</option>` + tbWorkPeople().map(x => `<option value="${esc(x.participantId)}">${esc(x.name)}</option>`).join(''); own.value = work.owner; }
+      const tp = host.querySelector('[data-tb-card-type]'); if (tp) tp.value = work.type;
+    } else if (p === 'inbox') {
+      const cnt = host.querySelector('[data-tb-inbox-count]');
+      if (cnt) { const n = todoByView()[projectView()] || 0; cnt.textContent = n ? L(`${n} 件`, `${n} items`) : L('目前沒有', 'Nothing right now'); cnt.title = cnt.textContent; }
+    } else if (p === 'team') {
+      const q = host.querySelector('[data-tb-team-search]'); if (q && document.activeElement !== q) q.value = teamSearchQ;
+    } else if (p === 'releases') {
+      const rq = host.querySelector('[data-tb-rel-q]'); if (rq && document.activeElement !== rq) rq.value = rel.q;
+    }
+  }
+  $('#tb-page')?.addEventListener('click', e => {
+    const col = e.target.closest('[data-tb-collapse]');
+    if (col) {
+      store.set(TOPBAR_FILTERS_KEY, store.get(TOPBAR_FILTERS_KEY) === '1' ? '0' : '1');
+      closeTbFilterPop(); tbHint.hidden = true; drawTopbarPage(true);
+      ($('#tb-page [data-tb-collapse]') || $('#tb-page [data-tb-filter]'))?.focus();
+      return;
+    }
+    const fbBtn = e.target.closest('[data-tb-filter]');
+    if (fbBtn) return openTbFilterPop(fbBtn);
+    const sc = e.target.closest('[data-scope]'); if (sc) return setFilter({ scope: sc.dataset.scope });
+    const mv = e.target.closest('[data-msg-view]'); if (mv) return setView(mv.dataset.msgView);
+    const wv = e.target.closest('[data-view]'); if (wv) { work.view = wv.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
+    if (e.target.closest('[data-tb-card-new]')) return openNewCard();
+    const ft = e.target.closest('[data-tb-files-tab]'); if (ft) { filesUi.tab = ft.dataset.tbFilesTab; return openFiles(); }
+    if (e.target.closest('[data-tb-files-up]')) return $('#file-input')?.click();
+    const pmPg = e.target.closest('[data-pm-page]'); if (pmPg) return openPermTab(pmPg.dataset.pmPage);
+    const pmTab = e.target.closest('[data-pm-tab]'); if (pmTab) { perm.tab = pmTab.dataset.pmTab; if (perm.tab === 'skills') skv.data = null; if (state.page === 'perm') loadInvites(); Object.assign(perm, { picker: false, addOpen: false, mobileDetail: false, moreOpen: null }); return drawPerm(); }
+  });
+  $('#tb-page')?.addEventListener('change', e => {
+    const t = e.target;
+    if (t.matches('[data-tb-f-member]')) setFilter({ member: t.value });
+    else if (t.matches('[data-tb-f-tag]')) setFilter({ tag: t.value });
+    else if (t.matches('[data-tb-ainow]')) { store.set(AINOW_KEY, t.checked ? '1' : '0'); syncFilterBar(); }
+    else if (t.matches('[data-tb-card-owner]')) { work.owner = t.value; renderWork(); }
+    else if (t.matches('[data-tb-card-type]')) { work.type = t.value; renderWork(); }
+  });
+  $('#tb-page')?.addEventListener('input', e => {
+    const t = e.target;
+    if (t.matches('[data-tb-card-q]')) { work.q = t.value; searchArchived(); renderWork(); }
+    else if (t.matches('[data-tb-team-search]')) { teamSearchQ = t.value; applyTeamSearch(); }
+    else if (t.matches('[data-tb-rel-q]')) { rel.q = t.value; rel.hit = ''; drawReleases(); }
+  });
+  $('#tb-filter-pop')?.addEventListener('click', e => {
+    const mv = e.target.closest('[data-msg-view]');
+    if (mv) { setView(mv.dataset.msgView); e.target.closest('.seg-scope')?.querySelectorAll('[data-msg-view]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.msgView === 'slim') === slimMode()))); return; }
+    if (e.target.closest('[data-tb-fp-clear]')) {
+      if (state.page === 'messages') { setFilter({ scope: 'all', member: '', tag: '' }); drawTbFilterPopBody(); }
+      else if (state.page === 'work') { work.q = ''; work.owner = ''; work.type = ''; renderWork(); drawTbFilterPopBody(); }
+      else if (state.page === 'team') { teamSearchQ = ''; applyTeamSearch(); syncTbValues(); drawTbFilterPopBody(); }
+      else if (state.page === 'releases') { rel.q = ''; rel.hit = ''; drawReleases(); drawTbFilterPopBody(); }
+      const pop = $('#tb-filter-pop');
+      (pop?.querySelector('input, select, button') || pop)?.focus();
+    }
+  });
+  $('#tb-filter-pop')?.addEventListener('change', e => {
+    const t = e.target;
+    if (t.matches('[data-tb-fp-member]')) setFilter({ member: t.value });
+    else if (t.matches('[data-tb-fp-tag]')) setFilter({ tag: t.value });
+    else if (t.matches('[data-tb-fp-ainow]')) { store.set(AINOW_KEY, t.checked ? '1' : '0'); syncFilterBar(); }
+    else if (t.matches('[data-tb-fp-card-owner]')) { work.owner = t.value; renderWork(); }
+    else if (t.matches('[data-tb-fp-card-type]')) { work.type = t.value; renderWork(); }
+  });
+  $('#tb-filter-pop')?.addEventListener('input', e => {
+    const t = e.target;
+    if (t.matches('[data-tb-fp-card-q]')) { work.q = t.value; searchArchived(); renderWork(); }
+    else if (t.matches('[data-tb-fp-team-q]')) { teamSearchQ = t.value; applyTeamSearch(); syncTbValues(); }
+    else if (t.matches('[data-tb-fp-rel-q]')) { rel.q = t.value; rel.hit = ''; drawReleases(); }
+  });
+  $('#tb-filter-pop')?.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTbFilterPop(); $('#tb-page [data-tb-filter]')?.focus(); }
+  });
+  topbarNarrowMq.addEventListener('change', () => { closeTbFilterPop(); drawTopbarPage(true); });
+
+  // 頂端頁名＋手機頂欄「‹」與標題、第一層的「要你處理 N」、輸入框的「發到」
   function drawChrome() {
     drawRoleBanner();
     const v = projectView(), page = pageNameOf(state.page) || '訊息', top = !!TOP_PAGES[state.page];
-    const home = !hasHub() ? '' : v === 'hub' && !top ? '<b aria-current="page">總覽</b>' : '<button type="button" class="crumb-link" data-proj="hub">總覽</button>';
-    // 說明頁不掛在總覽底下：目錄頁只寫「說明」，章節頁「說明 ▸ 第 2 章」
-    const parts = state.page === 'help' ? (help.ch ? [`<a href="/help" class="crumb-link">${L('說明', 'Help')}</a>`, `<b aria-current="page">第 ${help.ch} 章</b>`] : [`<b aria-current="page">${L('說明', 'Help')}</b>`])
-      : top ? [home, `<b aria-current="page">${page}</b>`] : v === 'hub' ? [home] : [home, `<b>${esc(viewLabel(v))}</b>`, `<span aria-current="page">${page}</span>`];
     // 側欄「總覽」只在總覽頁亮（第一層頁面也掛在總覽檢視底下）；在說明頁改亮右上「？ 說明」
     document.querySelectorAll('.hub-side [data-proj="hub"]').forEach(b => { const on = state.page === 'hub'; b.classList.toggle('on', on); if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     document.querySelectorAll('[data-help-open]').forEach(b => { if (state.page === 'help') b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-    $('#crumbs').innerHTML = parts.filter(Boolean).join('<span class="crumb-sep" aria-hidden="true">▸</span>');
+    document.body.dataset.page = state.page || 'messages';
+    const tbTitle = $('#topbar-title');
+    if (tbTitle) {
+      tbTitle.textContent = state.page === 'help' ? (help.ch ? `${L('說明', 'Help')} · ${L(`第 ${help.ch} 章`, `Chapter ${help.ch}`)}` : L('說明', 'Help'))
+        : state.page === 'hub' ? '總覽' : page;
+    }
+    drawTopbarPage();
     $('#m-back').hidden = !hasHub() || (v === 'hub' && !top);
     $('#m-title').textContent = top ? page : v === 'hub' ? '總覽' : page; // 手機只放頁名，專案名放副標（不然窄畫面被截成「平台 · 收…」）
     const msub = $('#m-sub'); if (msub) { msub.textContent = top || v === 'hub' ? '' : viewLabel(v); msub.hidden = !msub.textContent; }
@@ -2019,8 +2329,10 @@
   // 切換所在：k＝hub／專案 id／cross；切專案時留在同一頁（工作頁在跨專案頻道沒有，改到訊息）
   function setProjectView(k, page) {
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); setProjectView(k, page); });
+    if (state.page !== 'perm') closeTbFilterPop();
     if (k !== state.view && myProjects().includes(k)) recordProjectVisit(k);
     state.view = k;
+    teamSearchQ = '';
     if (state.replyTo) setReply(null);
     drawProjSwitch();
     syncFilterBar();
@@ -2030,9 +2342,11 @@
   }
   window.addEventListener('popstate', () => {
     if (!state.me) return;
+    closeTbFilterPop();
     const r = parseRoute();
     if (r.view && state.view !== r.view && myProjects().includes(r.view)) recordProjectVisit(r.view);
     state.view = r.view || 'hub';
+    teamSearchQ = '';
     if (state.replyTo) setReply(null);
     drawProjSwitch(); syncFilterBar(); renderMessages(true);
     showPage(r.page || (projectView() === 'hub' ? 'hub' : 'messages'), { noHistory: true });
@@ -2090,6 +2404,7 @@
     $('#f-clear').hidden = !filtering();
     const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
     const an = $('#f-ainow'); if (an) an.checked = aiNowOn();
+    syncTbValues();
     drawAiNow();
   }
   // 範圍「全部／給我的／與我相關」在手機頂部，篩選按鈕只算成員、標籤
@@ -3747,10 +4062,10 @@
         <div class="team-columns"><b>${pageText('成員', 'Member')}</b><b>${pageText('狀態', 'Status')}</b><b>${pageText('在做什麼', 'Working on')}</b><b>${pageText('最後出現', 'Last seen')}</b></div>${t.active.map((m) => teamRow(m, project, false, tdups)).join('')}
         <details class="inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true, tdups)).join('')}</details>
         <details><summary>${pageText('狀態怎麼判斷？', 'How is status decided?')}</summary>${pageText('優先看負責的卡，再看最新訊息。AI 超過 20 分鐘沒出現算可能斷線，開著等待腳本放寬到 60 分鐘。', 'Cards take priority over tagged messages. An AI may be offline after 20 minutes, or 60 minutes with a watcher.')}</details></div>`;
-      box.querySelector('[data-team-search]').oninput = (e) =>
-        box.querySelectorAll('[data-person-search]').forEach((row) => {
-          row.hidden = !row.dataset.personSearch.includes(e.target.value.trim().toLowerCase());
-        });
+      box.querySelector('[data-team-search]').value = teamSearchQ;
+      applyTeamSearch(box);
+      box.querySelector('[data-team-search]').oninput = (e) => { teamSearchQ = e.target.value; applyTeamSearch(box); syncTbValues(); };
+      drawTopbarPage();
     } catch (err) {
       if (state.page === page && projectView() === project) box.textContent = err.message;
     }
@@ -3806,6 +4121,7 @@
   function showPage(page, { replace = false, noHistory = false } = {}) {
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); showPage(page, { replace, noHistory }); }); // 有未儲存的變更先提醒
     if (work.openId) closeCard();
+    closeTbFilterPop();
     const v = projectView();
     if (page === 'dm') { page = 'messages'; setTimeout(() => dmPanel(true), 0); } // 私訊改面板，舊網址照樣打開
     state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files', 'overview'].includes(page) && !(v === 'cross' && ['work','overview'].includes(page)) ? page : 'messages';
@@ -3916,9 +4232,10 @@
       keepTop(inboxHtml());
       if (control) box.querySelector(`[${control}="${CSS.escape(value)}"]`)?.focus({ preventScroll: true });
       applyFocusItem();
+      drawTopbarPage();
       return;
     }
-    if (state.page === 'hub') { keepTop(hubHtml()); return; }
+    if (state.page === 'hub') { keepTop(hubHtml()); drawTopbarPage(); return; }
     const all = visibleCards();
     const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
     const keep = document.activeElement?.id;
@@ -3946,6 +4263,7 @@
       ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
     box.classList.toggle('is-board', work.view === 'B'); // 看板：高度＝頁面剩餘高度，欄內各自捲動
     if (work.view === 'B') boardMore();
+    drawTopbarPage();
     if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
@@ -4178,7 +4496,7 @@
     const values = dates.map(
       (d) => completed.filter((c) => new Date(c.done.at).toDateString() === d.toDateString()).length
     );
-    return `<section class="project-page"><h2>${esc(projName(pj))} · ${pageText('概觀', 'Overview')}</h2><p>${pageText('最近 7 天', 'Last 7 days')} · ${dates[0].toLocaleDateString()} – ${dates[6].toLocaleDateString()}</p>
+    return `<section class="project-page"><h2 class="ov-desk-hide">${esc(projName(pj))} · ${pageText('概觀', 'Overview')}</h2><p>${pageText('最近 7 天', 'Last 7 days')} · ${dates[0].toLocaleDateString()} – ${dates[6].toLocaleDateString()}</p>
       <div class="overview-stats">${counts.map(([label, n], i) => `<div>${label}<strong>${n}</strong><small>${esc(notes[i])}</small></div>`).join('')}</div>
       <div class="overview-columns"><section class="hub-panel"><h3>${pageText('每天完成幾張', 'Cards done per day')}</h3><div class="overview-chart">${dates.map((d, i) => `<div><b>${values[i]}</b><i class="${values[i] ? '' : 'zero'}" style="height:${Math.max(2, (72 * values[i]) / Math.max(1, ...values))}px"></i><small>${d.getMonth() + 1}/${d.getDate()}</small></div>`).join('')}</div>
       </section><section class="hub-panel"><h3>${pageText('團隊', 'Team')}</h3><div class="project-summary">${team.totals}<button data-nav="team" class="link">${pageText('看團隊', 'Open team')} ›</button></div>${team.alerts[0] || ''}
@@ -7134,6 +7452,7 @@
     const d = rel.data;
     const tabs = `<div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>`;
     const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">v${esc(APP_VERSION)} · <span>${rel.tab === 'flows' ? '每個功能從開始到完成怎麼走' : '每一版新增了什麼、修好了什麼'}</span></span></div>${tabs}</div>`;
+    drawTopbarPage();
     if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
     if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
     const q = rel.q.trim().toLowerCase().replace(/^v/, '');
@@ -7442,10 +7761,10 @@
         alt: { text: '現在沒有事等你。AI 交件或問你時，這裡會出現紅色數字。' } },
       { at: () => state.page === 'inbox' && projectView() === proj, go: () => setProjectView(proj, 'inbox'),
         find: () => { const s = $('#page-work .wverify'); return s ? [s.querySelector('.wsugg-head'), s.querySelector('.ver-row')] : null; },
-        ready: () => !!$('#page-work .work-head'),
+        ready: () => !!($('#page-work .work-head')?.getClientRects().length || $('#topbar-title')?.getClientRects().length),
         title: '看過回報，再按驗收通過', text: '先按「看回報」讀 AI 寫的說明。沒問題按「驗收通過」，不對就按「退回」，寫一句哪裡不對。',
         tip: '導覽到這裡結束，按鈕要你自己按。',
-        alt: { find: () => $('#page-work .work-head'), text: 'AI 交件後，會出現在這裡的「等你驗收」，按「看回報」再決定通過或退回。', tip: '現在沒有要驗收的，等第一件交回來再試。' } },
+        alt: { find: () => ($('#page-work .work-head')?.getClientRects().length ? $('#page-work .work-head') : $('#topbar-title')), text: 'AI 交件後，會出現在這裡的「等你驗收」，按「看回報」再決定通過或退回。', tip: '現在沒有要驗收的，等第一件交回來再試。' } },
     ];
   }
   // 路線 B：第 1 章「讓你的 AI 加入」4 步：頭像選單「我的 AI」→「＋ 新增 AI」→ 最新那隻接入分頁的「工具」→「複製」那一列
@@ -9946,6 +10265,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       actions: tabs + (tab !== 'att' ? '' : '<button class="btn small" type="button" id="files-up">上傳</button>'),
     });
     body.modal.querySelectorAll('[data-files-tab]').forEach(b => { b.onclick = () => { filesUi.tab = b.dataset.filesTab; openFiles(); }; });
+    drawTopbarPage();
     if (tab === 'docs') return drawDocs(body, pj);
     if (tab === 'kb') return drawKb(body, pj); // 知識庫
     body.modal.querySelector('#files-up').onclick = () => $('#file-input').click();
@@ -11838,6 +12158,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <div id="pm-bar" class="pm-bar" role="region" aria-label="未儲存的變更" hidden></div>`;
     box.scrollTop = top;
     drawPermBar();
+    drawTopbarPage();
     if (['pm-pq', 'pm-mq', 'pm-pickq', 'fb-q-perm'].includes(keep)) { const q = $('#' + keep); if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); } }
     if (perm.moreOpen) box.querySelector('.pm-more-menu [role="menuitem"]')?.focus();
   }

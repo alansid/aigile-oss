@@ -4326,3 +4326,122 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .ma-launch-dialog footer { flex:none; border-top:1px solid var(--border); padding:.75rem 1.25rem; }
 .ma-launch-dialog footer div { display:flex; justify-content:flex-end; gap:.5rem; margin-top:.5rem; }
 @media (max-width:480px) { .ma-launch-dialog { width:100%; max-width:100%; margin:auto 0 0; border-radius:1rem 1rem 0 0; } }
+
+/* 桌面單排整合頂欄（<900 手機版不動） */
+@media (max-width: 899px) {
+  .tb-filter-pop, .tb-hint { display: none !important; }
+}
+@media (min-width: 900px) {
+  .topbar {
+    height: 52px; min-height: 52px; box-sizing: border-box;
+    padding: 0 16px; gap: 10px;
+  }
+  .tb-title {
+    margin: 0; font-size: 16px; font-weight: 700; color: var(--text);
+    white-space: nowrap; flex: none; line-height: 1.25;
+  }
+  .tb-page {
+    display: flex; align-items: center; gap: 8px; flex: 1 1 auto;
+    min-width: 0; overflow: hidden;
+  }
+  .tb-sub {
+    font-size: 12.5px; color: var(--muted); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto;
+  }
+  .tb-page .seg-scope { flex: none; padding: 2px; border-radius: 8px; }
+  .tb-page .seg-scope button { height: 28px; padding: 0 10px; font-size: 13px; white-space: nowrap; }
+  .tb-page .tb-sel {
+    width: auto; max-width: 148px; height: 32px; padding: 0 8px;
+    border-radius: 8px; font-size: 13px; flex: 0 1 auto; min-width: 0;
+  }
+  .tb-page .tb-inp {
+    width: 170px; min-width: 110px; height: 32px; padding: 0 10px;
+    border-radius: 8px; font-size: 13px; flex: 0 1 180px;
+  }
+  .tb-page .tb-chk {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 13px; color: var(--muted); white-space: nowrap; flex: none; cursor: pointer;
+  }
+  .tb-page .btn.small { min-height: 32px; padding: 0 10px; font-size: 13px; white-space: nowrap; flex: none; }
+  .tb-page .link.small { font-size: 13px; white-space: nowrap; flex: none; }
+  .tb-collapse-btn {
+    flex: none; width: 28px; height: 28px; padding: 0;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--muted); font: inherit;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .tb-collapse-btn:hover { background: var(--surface-2); color: var(--text); }
+  .tb-collapse-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .tb-filter-btn {
+    flex: none; height: 32px; padding: 0 11px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); color: var(--text);
+    font: inherit; font-size: 13px; font-weight: 500;
+    cursor: pointer; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .tb-filter-btn:hover { background: var(--surface-2); }
+  .tb-filter-btn.active {
+    background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; font-weight: 600;
+  }
+  .tb-filter-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+  .tb-right {
+    display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto;
+  }
+  .topbar .tb-search { flex: none; margin: 0; display: inline-flex; align-items: center; }
+  .topbar .tb-ico-btn {
+    all: unset; box-sizing: border-box; cursor: pointer;
+    width: 36px; height: 36px; flex: none; border-radius: 50%;
+    background: var(--surface-2); color: var(--text); font-size: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .topbar .tb-ico-btn:hover { background: var(--border); }
+  .topbar .tb-ico-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .topbar .tb-ico-btn[hidden] { display: none; }
+  .topbar .tb-search-box { position: relative; display: inline-flex; align-items: center; width: 220px; }
+  .topbar .tb-search-box[hidden] { display: none; }
+  .topbar .tb-search-box input {
+    width: 100%; height: 34px; padding: 0 12px 0 32px; border-radius: 17px;
+    background: var(--surface-2); border: 1px solid var(--primary); font-size: 13.5px;
+  }
+  .topbar .tb-search-ico { left: 11px; }
+  .topbar .dm-btn {
+    width: 36px; height: 36px; min-height: 36px; padding: 0; margin-right: 0;
+    border-radius: 50%; justify-content: center;
+  }
+  .topbar .dm-btn .dm-btn-t { display: none; }
+  .topbar .dm-btn .dm-ico { display: block; flex: none; }
+  .topbar .av-btn { width: 36px; height: 36px; }
+
+  .tb-filter-pop {
+    position: fixed; z-index: 65; width: 296px; max-width: calc(100vw - 24px);
+    padding: 14px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow); display: grid; gap: 10px;
+  }
+  .tb-filter-pop[hidden] { display: none; }
+  .tb-fp-field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  .tb-fp-field select, .tb-fp-field input { height: 36px; padding: 0 8px; border-radius: 8px; font-size: 13.5px; }
+  .tb-fp-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; border-top: 1px solid var(--border); }
+  .ro-here .tb-card-new { display: none !important; }
+
+  /* 桌面各頁原本的第二排標題／篩選列隱藏（手機 <900px 完全保留不動） */
+  body[data-page="messages"] .filter-bar { display: none; }
+  body[data-page="work"] #page-work > .work-head,
+  body[data-page="work"] #page-work > .work-filters,
+  body[data-page="inbox"] #page-work > .work-head,
+  body[data-page="releases"] #page-work > .work-head,
+  body[data-page="releases"] #page-work > .work-filters,
+  body[data-page="perm"] #page-work > .work-head,
+  body[data-page="team"] #page-work .project-team > header.work-title,
+  body[data-page="overview"] #page-work .ov-desk-hide,
+  body[data-page="files"] #files-pane .modal-head,
+  body[data-page="myai"] #myai-pane .modal-head { display: none; }
+}
+@media (max-width: 1399px) {
+  .tb-collapse-btn { display: none !important; }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tb-filter-btn.active { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }
+}
+:root[data-theme="dark"] .tb-filter-btn.active { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }

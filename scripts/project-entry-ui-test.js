@@ -21,7 +21,7 @@ try {
   const { js, login, cdp } = await kit.browser(1280, 900);
   const click = sel => js(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.click(); return true; })()`);
   const text = sel => js(`document.querySelector(${JSON.stringify(sel)})?.textContent || ''`);
-  const crumbs = () => text('#crumbs');
+  const crumbs = () => text('#topbar-title');
   const menuItems = () => js("[...document.querySelectorAll('#pset-menu [data-pset-act]')].map(b => b.dataset.psetAct).join(',')");
   const openGear = async () => {
     await until(() => js("!!document.querySelector('.proj-switch [data-pset]')"), 10000, '專案卡齒輪');
@@ -46,7 +46,7 @@ try {
   assert.equal(await js("[...document.querySelectorAll('.pm-tabs [data-pm-tab]')].map(b => b.dataset.pmTab).join(',')"), 'members,roles,skills', '成員管理只留成員、角色、技能');
   assert.equal(await js("document.querySelector('[data-pm-proj][aria-current=\"true\"], .pm-plist [data-pm-proj].sel, [data-pm-proj].on')?.dataset.pmProj || document.querySelector('.pm-detail h3, .pm-dhead b')?.textContent || ''").then(v => /預設專案/.test(v)), true, '選好預設專案');
   // 頂端連到管理員設定：沒有分頁、有左側目錄
-  await click('.work-title [data-adm=""]');
+  await click('.topbar [data-adm=""]');
   await until(() => js("!!document.querySelector('.adm-split .adm-nav')"), 8000, '管理員設定頁');
   assert.match(await crumbs(), /管理員設定/, '麵包屑寫管理員設定');
   assert.ok(!(await js("!!document.querySelector('.pm-tabs')")), '管理員設定沒有分頁');

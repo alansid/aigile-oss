@@ -81,10 +81,10 @@ try {
     // ---------- C leader 的專案管理頁 ----------
     await click('#av-menu [data-av="lead-projects"]');
     await until(() => js("location.pathname === '/projects' && !!document.querySelector('.pm-ptable')"), 8000, L + '專案管理頁');
-    assert.match(await txt('.work-title'), /📁 專案管理 你是 leader 的專案 · 新增、永久刪除專案請找管理員 劉昱志/, L + '標題與副標');
+    assert.match(await txt(w < 900 ? '.work-title' : '.topbar'), w < 900 ? /📁 專案管理 你是 leader 的專案 · 新增、永久刪除專案請找管理員 劉昱志/ : /專案管理.*你是 leader 的專案 · 新增、永久刪除專案請找管理員 劉昱志/, L + '標題與副標');
     assert.deepEqual(await J("[...document.querySelectorAll('.pm-prow .c-pname b')].map(b => b.textContent)"), ['預設專案', '測試專案'], L + '只列自己當 leader 的專案');
     assert.equal(await js("!!document.querySelector('[data-pm-newproj], .adm-nav')"), false, L + '沒有新增專案、沒有管理員設定左欄');
-    assert.match(await js("document.querySelector('#crumbs')?.textContent || ''"), /專案管理/, L + '麵包屑');
+    if (w >= 900) assert.match(await js("document.querySelector('#topbar-title')?.textContent || ''"), /專案管理/, L + '頂欄頁名');
     await click('[data-pm-more="預設專案"]');
     await until(() => js("!!document.querySelector('.pm-more-menu')"), 5000, L + '⋯ 選單');
     const mi = await J("[...document.querySelectorAll('.pm-more-menu [role=menuitem]')].map(b => b.innerText.replace(/\\s+/g, ' ').trim())");
@@ -165,14 +165,14 @@ try {
   const zhLeft = t => (t.replace(/預設專案|第二專案|測試專案|劉昱志|王小明|陳大文|李小華|想幫忙測試搜尋功能/g, '').match(/[一-鿿]+/g) || []);
   await login(wang.token, '/projects');
   await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.pm-ptable')"), 10000, '英文專案管理頁');
-  const enP = await txt('#page-work');
-  assert.match(enP, /Projects you lead · ask the admin 劉昱志 to add or permanently delete projects/, '英文副標：' + enP.slice(0, 200));
+  const enTitle = await txt('#topbar-title'), enSub = await txt('#tb-page'), enP = await txt('#page-work');
+  assert.match(enSub, /Projects you lead · ask the admin 劉昱志 to add or permanently delete projects/, '英文副標：' + enSub.slice(0, 200));
   assert.match(enP, /Projects you lead · 2/, '英文卡片標題（跟要你處理同一個說法，UX #6595）');
   await click('[data-pm-more="預設專案"]');
   await until(() => js("!!document.querySelector('.pm-more-menu')"), 5000, '英文 ⋯ 選單');
   const enM = await txt('.pm-more-menu');
   assert.match(enM, /Rename[\s\S]*Repository and branch[\s\S]*Members and project roles[\s\S]*Change log[\s\S]*Archive project[\s\S]*Can be restored[\s\S]*Delete permanently[\s\S]*Admins only/, '英文 ⋯：' + enM);
-  assert.deepEqual(zhLeft(enP + ' ' + enM), [], '專案管理頁沒有中文殘留');
+  assert.deepEqual(zhLeft(enTitle + ' ' + enSub + ' ' + enP + ' ' + enM), [], '專案管理頁沒有中文殘留');
   await shot('PLAT-381-8-電腦-英文-leader-專案管理頁');
   await js("document.body.click(); true");
   await login(wang.token, '/p/main/inbox');

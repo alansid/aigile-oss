@@ -59,7 +59,7 @@ try {
   // ---------- B 左側 7 區 ----------
   const nav = await J("[...document.querySelectorAll('.adm-nav [data-adm]')].map(b => b.dataset.adm + ':' + b.querySelector('.adm-t b').textContent)");
   assert.deepEqual(nav, ['todo:待處理', 'group:群組設定', 'models:模型設定', 'projects:專案', 'invites:邀請', 'accounts:帳號與救援', 'audit:稽核與儲存', 'system:系統與備份'], 'B 八區照順序（含模型設定）');
-  assert.match(await js("document.querySelector('#crumbs').textContent"), /管理員設定/, '麵包屑：管理員設定');
+  assert.match(await js("document.querySelector('#topbar-title').textContent"), /管理員設定/, '頂欄頁名：管理員設定');
   assert.equal(await js("document.querySelector('.adm-nav [data-adm=\"todo\"] .adm-n')?.textContent"), '2', 'B 待處理 2');
   const todo = await J("[...document.querySelectorAll('.adm-todo .adm-row')].map(r => r.innerText.replace(/\\s+/g, ' '))");
   assert.equal(todo.length, 2, '待處理兩列（預設專案的技能先給 leader 王小明，PLAT-381）：' + todo.join(' / '));
@@ -185,8 +185,9 @@ try {
   await js("localStorage.setItem('aigile-lang', 'en'); window.__staleReload = 1; location.reload(); true");
   await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
   await until(() => js("document.documentElement.lang === 'en' && !!document.querySelector('.adm-acc')"), 15000, '英文介面');
+  assert.equal(await js("document.querySelector('#topbar-title')?.textContent"), 'Admin settings', '英文頂欄頁名');
   const en = await js("document.querySelector('#page-work').innerText");
-  assert.match(en, /Admin settings[\s\S]*To do[\s\S]*Group settings[\s\S]*Accounts & recovery[\s\S]*Audit & storage[\s\S]*System & backup/, '英文目錄');
+  assert.match(en, /To do[\s\S]*Group settings[\s\S]*Accounts & recovery[\s\S]*Audit & storage[\s\S]*System & backup/, '英文目錄');
   assert.match(en, /Everyone's account[\s\S]*Account actions[\s\S]*Rescue command/, '英文帳號與救援');
   assert.match(await js("document.querySelector('.adm-nav [data-adm=\"projects\"] .adm-t b').textContent"), /^Projects$/, '英文目錄寫複數 Projects');
   const restoreBtn = "document.querySelector('.adm-main .pm-disabled [data-pm-enable]')?.textContent";

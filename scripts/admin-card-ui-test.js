@@ -22,7 +22,7 @@ try {
   assert.ok(!/Sponsor/.test(await meLine()), `管理員名片不顯示舊角色（${await meLine()}）`);
   // 管理員進專案：不跳「你在 平台 還沒設角色」
   await go('/p/main/messages');
-  await until(() => js("/預設專案/.test(document.querySelector('#crumbs')?.textContent || '')"), 8000, '進預設專案');
+  await until(() => js("/預設專案/.test(document.querySelector('.proj-switch .ph-name')?.textContent || '')"), 8000, '進預設專案');
   assert.equal(await js("document.querySelector('#role-banner').hidden"), true, '管理員不提示設角色');
 
   // ---- ：新建專案 testing，管理員沒角色 → 不算成員 ----
@@ -67,7 +67,7 @@ try {
   const c = (await kit.call(mate.token, '/api/cards', 'POST', { requestId: 'tc', project: pj, title: 'testing 的卡', ownerId: mateId })).body;
   await login(mate.token);
   await go(`/p/${encodeURIComponent((views.find(p => p.id === pj).slug) || pj)}/messages`);
-  await until(() => js("/testing/.test(document.querySelector('#crumbs')?.textContent || '')"), 8000, '進 testing');
+  await until(() => js("/testing/.test(document.querySelector('.proj-switch .ph-name')?.textContent || '')"), 8000, '進 testing');
   await js("const t = document.querySelector('#composer-input') || document.querySelector('textarea'); t.focus(); t.value = '@'; t.dispatchEvent(new Event('input', { bubbles: true })); true");
   await sleep(500);
   const at = await js("[...document.querySelectorAll('#mention-list [role=option], .mention-list li, .mention-item')].map(x => x.textContent)");

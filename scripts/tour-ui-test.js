@@ -86,7 +86,7 @@ try {
   assert.equal(p.title, '在這裡交辦一件事');
   assert.equal(p.text, '開頭打 @，選你要交給的 AI，再寫要做什麼。導覽不會幫你送出，想試就自己按「送出」。');
   assert.deepEqual([p.btns, p.focus, p.dots, p.x], [['下一步'], 'next', '第 1 步，共 4 步', '結束導覽'], '第 1 步按鈕、焦點、步數');
-  assert.ok(p.page === 'messages' && /\/messages$/.test(p.path) && /預設專案/.test(await js("document.querySelector('#crumbs')?.textContent || ''")), '帶到專案的訊息頁：' + p.path);
+  assert.ok(p.page === 'messages' && /\/messages$/.test(p.path) && /預設專案/.test(await js("document.querySelector('.proj-switch .ph-name')?.textContent || ''")), '帶到專案的訊息頁：' + p.path);
   assert.ok(await covers(p.hole, "document.querySelector('.composer')"), '框住整個訊息框');
   const vis = await J('({ w: document.documentElement.clientWidth, h: document.documentElement.clientHeight })');
   assert.ok(p.hole.l >= 3 && p.hole.t >= 3 && p.hole.r <= vis.w - 3 && p.hole.b <= vis.h - 3, '白框四邊都看得到：' + JSON.stringify({ hole: p.hole, vis }));
@@ -176,7 +176,7 @@ try {
   assert.ok(Date.now() - t0 < 3500, `第 4 步不用等滿 3 秒（${Date.now() - t0}ms）`);
   assert.equal(p.text, 'AI 交件後，會出現在這裡的「等你驗收」，按「看回報」再決定通過或退回。');
   assert.equal(p.tip, '現在沒有要驗收的，等第一件交回來再試。');
-  assert.ok(await covers(p.hole, "document.querySelector('#page-work .work-head')"), '框頁首標題');
+  assert.ok(await covers(p.hole, "document.querySelector('#topbar-title')"), '框頂欄頁首標題');
   await key('ArrowRight');
   await until(noTour, 5000, '空專案完成');
 

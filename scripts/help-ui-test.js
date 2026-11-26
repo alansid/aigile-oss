@@ -21,7 +21,7 @@ try {
   const size = (w, h) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: w < 600 });
   const path_ = () => js('location.pathname + location.hash');
   const noHScroll = () => js('document.documentElement.scrollWidth <= innerWidth + 1 && [...document.querySelectorAll(".help-ch, .help-toc")].every(e => e.scrollWidth <= e.clientWidth + 1)');
-  const crumbs = () => js("document.querySelector('#crumbs').textContent.replace(/\\s+/g, '')");
+  const crumbs = () => js("document.querySelector('#topbar-title').textContent.replace(/\\s+/g, '')");
   const chIs = n => until(() => js(`document.querySelector('.help-ch')?.dataset.helpCh === '${n}'`), 20000, `第 ${n} 章`);
   const go = sel => js(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) throw new Error('找不到 ' + ${JSON.stringify(sel)}); e.click(); return true; })()`);
   const setLang = async l => { await goto('/', '首頁'); await js(`localStorage.setItem('aigile-lang', '${l}'); true`); };
@@ -83,7 +83,7 @@ try {
   await go('.help-toc a[href="/help/2"]');
   await chIs(2);
   assert.equal(await path_(), '/help/2');
-  assert.equal(await crumbs(), '說明▸第2章', '章節頁麵包屑');
+  assert.equal(await crumbs(), '說明·第2章', '章節頁頂欄頁名');
   const early = await J(`[...document.querySelectorAll('.help-fig img')].map(i => [Math.round(i.getBoundingClientRect().height), Math.round(i.getBoundingClientRect().width * i.getAttribute('height') / i.getAttribute('width'))])`);
   assert.ok(early.length === 4 && early.every(([h, want]) => Math.abs(h - want) <= 2), '圖載入前先留好位置：' + JSON.stringify(early));
   const c2 = await J(`(() => { const side = document.querySelector('.help-side'), art = document.querySelector('.help-ch'), sr = side.getBoundingClientRect(), ar = art.getBoundingClientRect(), img = document.querySelector('.help-fig img').getBoundingClientRect();
@@ -191,16 +191,16 @@ try {
   assert.deepEqual(await J("[document.querySelector('.topbar .help-btn').textContent.trim(), document.querySelector('.topbar .help-btn').getAttribute('aria-label')]"), ['？Help', 'Help'], '英文「？ Help」（不是交接的 Notes）');
   await go('.topbar .help-btn');
   await until(() => js("document.querySelectorAll('.help-toc li').length === 7"), 10000, '英文目錄');
-  const etoc = await J(`({ h: document.querySelector('.help-index h2').textContent, q: document.querySelector('#help-ask-q').textContent, btns: [...document.querySelectorAll('[data-help-mode]')].map(b => b.textContent), meta: document.querySelector('.ht-n').textContent, t: document.querySelector('.ht-t').textContent, crumbs: document.querySelector('#crumbs').textContent.trim(), all: document.querySelector('.help-index').innerText })`);
+  const etoc = await J(`({ h: document.querySelector('.help-index h2').textContent, q: document.querySelector('#help-ask-q').textContent, btns: [...document.querySelectorAll('[data-help-mode]')].map(b => b.textContent), meta: document.querySelector('.ht-n').textContent, t: document.querySelector('.ht-t').textContent, crumbs: document.querySelector('#topbar-title').textContent.trim(), all: document.querySelector('.help-index').innerText })`);
   assert.deepEqual([etoc.h, etoc.q, etoc.btns, etoc.meta, etoc.t, etoc.crumbs], ['Help', 'Will you bring your own AI?', ['Yes', 'No'], 'Chapter 1 · 5 min · If you bring your own AI', 'Bring your AI on board', 'Help'], '英文目錄：' + JSON.stringify(etoc));
   assert.ok(!/[㐀-鿿]/.test(etoc.all), '英文目錄沒有中文');
   await go('.help-toc a[href="/help/2"]');
   await chIs(2);
   await until(() => js("[...document.querySelectorAll('.help-fig img')].slice(0, 1).every(i => i.complete && i.naturalWidth > 0)"), 8000, '英文圖載入');
-  const e2 = await J(`({ crumbs: document.querySelector('#crumbs').textContent.replace(/\\s+/g, ''), title: document.querySelector('.help-head h2').textContent, meta: document.querySelector('.help-meta').textContent, caps: [...document.querySelectorAll('.help-fig figcaption')].map(x => x.textContent),
+  const e2 = await J(`({ crumbs: document.querySelector('#topbar-title').textContent.replace(/\\s+/g, ''), title: document.querySelector('.help-head h2').textContent, meta: document.querySelector('.help-meta').textContent, caps: [...document.querySelectorAll('.help-fig figcaption')].map(x => x.textContent),
     src: document.querySelector('.help-fig img').getAttribute('src'), step3: document.querySelectorAll('.help-step')[2].innerText, pager: [...document.querySelectorAll('.help-pager .hp-dir')].map(x => x.textContent), side: document.querySelector('.help-side .hsd-top').textContent,
     tour: document.querySelector('.help-tour').innerText.replace(/\\s+/g, ' ').trim(), tryT: document.querySelector('.help-try').innerText.replace(/\\s+/g, ' ').trim(), note: document.querySelector('.help-note').innerText.replace(/\\s+/g, ' ').trim(), lang: document.querySelector('.help-ch').lang, all: document.querySelector('.help-wrap').innerText })`);
-  assert.deepEqual([e2.crumbs, e2.title, e2.meta, e2.src, e2.side, e2.lang], ['Help▸Chapter2', 'Walk through it: from request to verification', 'Chapter 2 · 3 min · Everyone', '/help-img/en/2-1.webp', 'Chapters', 'en'], '英文第 2 章：' + JSON.stringify(e2));
+  assert.deepEqual([e2.crumbs, e2.title, e2.meta, e2.src, e2.side, e2.lang], ['Help·Chapter2', 'Walk through it: from request to verification', 'Chapter 2 · 3 min · Everyone', '/help-img/en/2-1.webp', 'Chapters', 'en'], '英文第 2 章：' + JSON.stringify(e2));
   assert.deepEqual(e2.caps, ['Screen 2-1', 'Screen 2-2', 'Screen 2-3', 'Screen 2-4']);
   assert.deepEqual(e2.pager, ['‹ Previous chapter', 'Next chapter ›']);
   assert.match(e2.step3, /red number appears on "Needs your attention" on the left/, '英文桌機寫法');

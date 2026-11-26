@@ -47,7 +47,7 @@ try {
 
   // 2. 手機頂欄：只放頁名，專案名放副標
   await open(375, '/p/main/work', '#page-work .work-title');
-  assert.equal(await js("document.querySelector('#m-title').textContent"), '工作', '手機標題只放頁名');
+  assert.equal(await js("document.querySelector('#m-title').textContent"), '看板', '手機標題只放頁名');
   assert.equal(await js("document.querySelector('#m-sub').textContent"), '預設專案', '專案名放副標');
   await open(375, '/my-ai', '#myai-pane');
   assert.equal(await js("document.querySelector('#m-sub').hidden"), true, '第一層頁面沒有副標');
