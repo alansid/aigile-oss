@@ -5609,40 +5609,33 @@
     return secs.find(s => { const sn = s.name.trim().toLowerCase(); return sn === low || al.includes(sn); }) || null;
   }
   const ctplClean = s => String(s || '').split(/\r?\n/).map(l => l.replace(/^\s*(?:\d+\s*[.、)）]|[-*•])\s*/, '').trim()).filter(Boolean).join('\n').trim();
-  const ctplSteps = s => String(s || '').split(/\r?\n/).filter(l => /^\s*(?:\d+\s*[.、)）]|[-*•])\s*\S/.test(l)).length;
   function evalTplChecks(tpl, vals) {
+    const loc = ctplLocalized(tpl);
     const items = [];
-    const pfx = String(tpl.titlePrefix || '').trim();
+    const pfx = String(loc.titlePrefix || '').trim();
     let after = String(vals.title || '').trim();
     if (pfx && after.startsWith(pfx)) after = after.slice(pfx.length).trim();
     const titleOk = after.length >= 5;
-    items.push({ field: 'title', section: '標題', ok: titleOk, lineIndex: 0, label: titleOk ? '標題前綴後有寫內容' : '標題前綴後至少 5 個字', reasonText: '前綴後至少要 5 個字' });
-    const parsed = { reason: parseTplSections(vals.reason), criteria: parseTplSections(vals.criteria) };
-    for (const c of (tpl.checks || [])) {
-      if (!c || c.rule === 'none') continue;
-      const field = c.field === 'criteria' ? 'criteria' : 'reason';
-      const secName = String(c.section || '').trim();
-      const disp = secName || (field === 'criteria' ? '完成條件' : '原因');
-      const sec = ctplFindSec(parsed[field], secName);
-      const raw = sec ? sec.content : '', clean = ctplClean(raw), lineIndex = sec ? sec.lineIndex : 0;
-      if (c.rule === 'not_empty') {
-        const ok = clean.length > 0;
-        const eg = disp === '環境' ? '（例如：Chrome 131、正式站）' : '';
-        items.push({ field, section: disp, ok, lineIndex, label: ok ? `${disp}不能空白` : L(`${disp}不能空白`, `${window.aigileI18n?.tr?.(disp) || disp} is empty`), reasonText: `還是空的${eg}` });
-      } else if (c.rule === 'min_chars') {
-        const n = Math.max(1, Number(c.value) || 1), len = clean.length, ok = len >= n;
-        items.push({ field, section: disp, ok, lineIndex, label: ok ? `${disp}至少 ${n} 字` : `${disp}至少 ${n} 字（現在 ${len} 字）`, reasonText: `至少要 ${n} 字，現在 ${len} 字` });
-      } else if (c.rule === 'min_steps') {
-        const n = Math.max(1, Number(c.value) || 1), cnt = ctplSteps(raw), ok = cnt >= n;
-        items.push({ field, section: disp, ok, lineIndex, label: ok ? `${disp}至少 ${n} 步` : `${disp}至少 ${n} 步（現在 ${cnt} 步）`, reasonText: `至少要 ${n} 步，現在 ${cnt} 步` });
-      } else if (c.rule === 'not_same_as') {
-        const other = String(c.value || '').trim(), oSec = ctplFindSec(parsed[field], other), oClean = oSec ? ctplClean(oSec.content) : '';
-        if (c.notEmpty !== false) {
-          const neOk = clean.length > 0;
-          items.push({ field, section: disp, ok: neOk, lineIndex, label: neOk ? `${disp}不能空白` : L(`${disp}不能空白`, `${window.aigileI18n?.tr?.(disp) || disp} is empty`), reasonText: '還是空的' });
-        }
-        const same = clean.length > 0 && oClean.length > 0 && clean === oClean;
-        items.push({ field, section: disp, ok: !same, lineIndex, label: same ? `${disp}跟${other}一樣` : `${disp}與${other}不同`, reasonText: `跟${other}寫得一樣，請寫實際看到什麼` });
+    items.push({ field: 'title', section: '標題', ok: titleOk, lineIndex: 0, why: '前綴後至少 5 個字' });
+    for (const field of ['reason', 'criteria']) {
+      const tplRaw = String(tpl[field] || '');
+      if (!tplRaw.trim()) continue;
+      const tplSecs = parseTplSections(tplRaw);
+      const locSecs = parseTplSections(String(loc[field] || ''));
+      const userSecs = parseTplSections(vals[field]);
+      for (let i = 0; i < tplSecs.length; i++) {
+        const ts = tplSecs[i];
+        const secName = String(ts.name || '').trim();
+        const disp = secName || (field === 'criteria' ? '完成條件' : '原因');
+        const uSec = ctplFindSec(userSecs, secName);
+        const uClean = ctplClean(uSec ? uSec.content : '');
+        const tClean = ctplClean(ts.content);
+        const lClean = locSecs[i] ? ctplClean(locSecs[i].content) : '';
+        const lineIndex = uSec ? uSec.lineIndex : 0;
+        let why = '';
+        if (!uClean) why = '空白';
+        else if (secName && ((tClean && uClean === tClean) || (lClean && uClean === lClean))) why = '還是範本提示字';
+        items.push({ field, section: disp, ok: !why, lineIndex, why });
       }
     }
     const passed = items.filter(i => i.ok).length;
@@ -5721,9 +5714,7 @@
   }
   function openCardTemplateEditor(pj, tpl, allList, onDone) {
     const isNew = !tpl;
-    const init = tpl ? JSON.parse(JSON.stringify(tpl)) : { name: '', type: '工作', titlePrefix: '', reason: '', criteria: '', checks: [] };
-    const checkMap = new Map();
-    for (const c of (init.checks || [])) checkMap.set(`${c.field}:${c.section || ''}`, { ...c });
+    const init = tpl ? JSON.parse(JSON.stringify(tpl)) : { name: '', type: '工作', titlePrefix: '', reason: '', criteria: '' };
     const body = openModal(isNew ? '新增範本' : `編輯範本：${ctplLocalized(tpl).name}`, `
       <form id="ctpl-ed-form" class="stack">
         <label>名稱<input name="name" required maxlength="40" value="${esc(init.name)}" placeholder="例如：客戶需求"></label>
@@ -5732,14 +5723,9 @@
             ${['工作', '阻塞', '決策'].map(t => `<button type="button" data-ctpl-type="${t}" aria-pressed="${init.type === t}">${t}</button>`).join('')}
           </div><input type="hidden" name="type" value="${esc(init.type || '工作')}"></div>
         <label>標題前綴<input name="titlePrefix" maxlength="30" value="${esc(init.titlePrefix || '')}" placeholder="例如：[Bug] "></label>
-        <label>原因預填<textarea name="reason" rows="4" maxlength="500" placeholder="每段用「段落名：」開頭，平台會自動列出檢核">${esc(init.reason || '')}</textarea></label>
+        <label>原因預填<textarea name="reason" rows="5" maxlength="500" placeholder="每段用「段落名：」開頭，例如「重現步驟：」">${esc(init.reason || '')}</textarea></label>
         <label>完成條件預填<textarea name="criteria" rows="3" maxlength="500">${esc(init.criteria || '')}</textarea></label>
-        <div class="ctpl-ed-checks">
-          <b>檢核</b>
-          <div class="ctpl-ed-chk-row"><span>標題</span><span class="muted small">前綴後至少 5 個字（固定）</span></div>
-          <div id="ctpl-ed-sec-list" class="stack"></div>
-          <p class="muted small" style="margin:0">不檢查／不能空白／至少 N 字／至少 N 步（數 1. 2. 或 - 開頭的行）／不能跟某段一樣</p>
-        </div>
+        <div class="info-box">ℹ️ 建卡時，沒填或還是提示字的段落會提醒一次，可以照樣建立。標題前綴後至少 5 個字。</div>
         <p class="error" id="ctpl-ed-err" role="alert"></p>
       </form>`, {
       size: 'form',
@@ -5752,77 +5738,26 @@
       </div>`,
     });
     const form = body.querySelector('#ctpl-ed-form');
-    const secHost = body.querySelector('#ctpl-ed-sec-list');
     form.querySelectorAll('[data-ctpl-type]').forEach(b => b.addEventListener('click', () => {
       form.type.value = b.dataset.ctplType;
       form.querySelectorAll('[data-ctpl-type]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     }));
-    const syncMapFromDom = () => {
-      secHost.querySelectorAll('[data-chk-key]').forEach(row => {
-        const key = row.dataset.chkKey, [field, ...rest] = key.split(':'), section = rest.join(':');
-        const rule = row.querySelector('[data-chk-rule]').value;
-        const item = { field, section, rule };
-        if (rule === 'min_chars' || rule === 'min_steps') item.value = Math.max(1, Number(row.querySelector('[data-chk-num]')?.value) || 1);
-        else if (rule === 'not_same_as') { item.value = row.querySelector('[data-chk-target]')?.value || ''; item.notEmpty = true; }
-        checkMap.set(key, item);
-      });
-    };
-    const renderChecksEditor = () => {
-      const rSecs = parseTplSections(form.reason.value);
-      const cSecs = parseTplSections(form.criteria.value);
-      const renderGroup = (title, field, secs) => {
-        const named = secs.map(s => s.name).filter(Boolean);
-        return `<div class="muted small" style="font-weight:700">${title}</div>` + secs.map(s => {
-          const key = `${field}:${s.name}`, cur = checkMap.get(key) || { field, section: s.name, rule: 'none' };
-          const others = named.filter(n => n !== s.name);
-          const lbl = s.name || '（整欄）';
-          const numVal = cur.value || (cur.rule === 'min_chars' ? 10 : 2);
-          const tgtVal = cur.value || others[0] || '';
-          return `<div class="ctpl-ed-chk-row" data-chk-key="${esc(key)}">
-            <span>${esc(lbl)}</span>
-            <div class="ctpl-ed-chk-ctl">
-              <select data-chk-rule>
-                <option value="none" ${cur.rule === 'none' ? 'selected' : ''}>不檢查</option>
-                <option value="not_empty" ${cur.rule === 'not_empty' ? 'selected' : ''}>不能空白</option>
-                <option value="min_chars" ${cur.rule === 'min_chars' ? 'selected' : ''}>至少 N 字</option>
-                <option value="min_steps" ${cur.rule === 'min_steps' ? 'selected' : ''}>至少 N 步</option>
-                ${others.length ? `<option value="not_same_as" ${cur.rule === 'not_same_as' ? 'selected' : ''}>不能跟某段一樣</option>` : ''}
-              </select>
-              ${cur.rule === 'min_chars' || cur.rule === 'min_steps' ? `<input type="number" min="1" max="500" data-chk-num value="${esc(numVal)}">` : ''}
-              ${cur.rule === 'not_same_as' && others.length ? `<select data-chk-target>${others.map(o => `<option value="${esc(o)}" ${o === tgtVal ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>` : ''}
-            </div>
-          </div>`;
-        }).join('');
-      };
-      secHost.innerHTML = renderGroup('原因的段落', 'reason', rSecs) + renderGroup('完成條件的段落', 'criteria', cSecs);
-      secHost.querySelectorAll('[data-chk-rule]').forEach(sel => sel.addEventListener('change', () => { syncMapFromDom(); renderChecksEditor(); }));
-    };
-    renderChecksEditor();
-    form.reason.addEventListener('input', () => { syncMapFromDom(); renderChecksEditor(); });
-    form.criteria.addEventListener('input', () => { syncMapFromDom(); renderChecksEditor(); });
     body.modal.querySelector('#ctpl-ed-cancel').onclick = () => openCardTemplates(pj);
     body.modal.querySelector('#ctpl-restore')?.addEventListener('click', async () => {
       try {
         const r = await api(`/api/projects/${encodeURIComponent(pj)}/card-templates/${encodeURIComponent(tpl.id)}/restore`, { method: 'POST' });
-        toast('已回復預設內容與檢核');
+        toast('已回復預設內容');
         onDone(r.templates);
       } catch (err) { body.querySelector('#ctpl-ed-err').textContent = err.message; }
     });
     form.addEventListener('submit', async e => {
       e.preventDefault();
-      syncMapFromDom();
-      const checks = [];
-      secHost.querySelectorAll('[data-chk-key]').forEach(row => {
-        const c = checkMap.get(row.dataset.chkKey);
-        if (c && c.rule && c.rule !== 'none') checks.push(c);
-      });
       const payload = {
         name: form.name.value.trim(),
         type: form.type.value,
         titlePrefix: form.titlePrefix.value,
         reason: form.reason.value,
         criteria: form.criteria.value,
-        checks,
       };
       try {
         const r = isNew
@@ -5876,7 +5811,6 @@
         <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500"></textarea></label>
         <label>等誰<select name="waitForId">${opts('不用等人')}</select></label>
         </div></details>
-        <div id="nc-tpl-checks" class="ctpl-checks" hidden></div>
         <div id="nc-tpl-warn" class="ctpl-warn" hidden></div>
         <p class="muted small">卡片內容所有成員都看得到，請勿填入內部路徑、程式碼或客戶個資。</p>
         <p class="error" id="card-new-error" role="alert"></p>
@@ -5890,21 +5824,13 @@
     const dirty = { title: !!(sg || srcMsg), reason: !!(sg || srcMsg), criteria: !!sg, type: !!sg };
     let tplList = [], selectedTpl = null, warnedOnce = false, lastEval = null;
     const tplWrap = body.querySelector('#nc-tpl-wrap'), tplBar = body.querySelector('#nc-tpl-bar');
-    const chkBox = body.querySelector('#nc-tpl-checks'), warnBox = body.querySelector('#nc-tpl-warn');
+    const warnBox = body.querySelector('#nc-tpl-warn');
     const clearWarn = () => { warnedOnce = false; warnBox.hidden = true; warnBox.innerHTML = ''; footEl.innerHTML = defaultFoot; };
-    const updateLiveChecks = () => {
-      if (!selectedTpl) { chkBox.hidden = true; chkBox.innerHTML = ''; lastEval = null; return; }
-      lastEval = evalTplChecks(selectedTpl, { title: form.title.value, reason: form.reason.value, criteria: form.criteria.value });
-      chkBox.hidden = false;
-      chkBox.innerHTML = `<div class="ctpl-checks-head">檢核 ${lastEval.passed}/${lastEval.total}</div><ul class="ctpl-check-list">${
-        lastEval.items.map(i => `<li class="ctpl-check-item ${i.ok ? 'ok' : 'bad'}"><span>${i.ok ? '✓' : '✕'}</span><span>${esc(i.label)}</span></li>`).join('')
-      }</ul>`;
-    };
     const applyTemplate = tpl => {
       selectedTpl = tpl;
       clearWarn();
       tplBar.querySelectorAll('[data-nc-tpl]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ncTpl === (tpl?.id || ''))));
-      if (!tpl) { updateLiveChecks(); return; }
+      if (!tpl) return;
       const loc = ctplLocalized(tpl);
       if (!dirty.title) {
         form.title.value = loc.titlePrefix || '';
@@ -5915,10 +5841,12 @@
         const tb = body.querySelector(`[data-nt="${CSS.escape(loc.type)}"]`);
         if (tb && !tb.hidden) tb.click();
       }
-      if (!dirty.reason) form.reason.value = loc.reason || '';
+      if (!dirty.reason) {
+        form.reason.value = loc.reason || '';
+        form.reason.rows = Math.min(8, Math.max(3, (loc.reason || '').split('\n').length + 1));
+      }
       if (!dirty.criteria) form.criteria.value = loc.criteria || '';
       body.querySelector('#nc-more').open = true;
-      updateLiveChecks();
     };
     const loadProjTemplates = async pj => {
       if (!pj) { tplList = []; tplWrap.hidden = true; applyTemplate(null); return; }
@@ -5936,7 +5864,7 @@
         }));
       } catch { tplWrap.hidden = true; }
     };
-    for (const f of ['title', 'reason', 'criteria']) form[f].addEventListener('input', () => { dirty[f] = true; updateLiveChecks(); });
+    for (const f of ['title', 'reason', 'criteria']) form[f].addEventListener('input', () => { dirty[f] = true; });
     form.project.addEventListener('change', () => { selectedTpl = null; clearWarn(); loadProjTemplates(form.project.value); });
     loadProjTemplates(form.project.value);
     body.querySelector('#nc-more').addEventListener('toggle', e => store.set('aigile-switch-nc-more', e.target.open ? '1' : '0')); // 展開狀態記在瀏覽器
@@ -5978,13 +5906,12 @@
     form.addEventListener('submit', async e => {
       e.preventDefault();
       if (selectedTpl && !warnedOnce) {
-        updateLiveChecks();
+        lastEval = evalTplChecks(selectedTpl, { title: form.title.value, reason: form.reason.value, criteria: form.criteria.value });
         if (lastEval && lastEval.failed.length) {
           warnedOnce = true;
-          const isBug = selectedTpl.id === 'builtin_bug' || /bug/i.test(selectedTpl.name);
           warnBox.hidden = false;
-          warnBox.innerHTML = `<div class="ctpl-warn-title">⚠️ 還有 ${lastEval.failed.length} 項沒過，${isBug ? 'AI 修 Bug 常需要這些' : 'AI 通常需要這些資訊'}：</div><ul>${
-            lastEval.failed.map((f, idx) => `<li><button type="button" class="ctpl-jump" data-jump-idx="${idx}">${esc(f.section)}</button> ${esc(f.reasonText)}</li>`).join('')
+          warnBox.innerHTML = `<div class="ctpl-warn-title">還有 ${lastEval.failed.length} 項沒填：</div><ul>${
+            lastEval.failed.map((f, idx) => `<li><button type="button" class="ctpl-jump" data-jump-idx="${idx}">${esc(f.section)}</button>（${esc(f.why)}）</li>`).join('')
           }</ul>`;
           warnBox.querySelectorAll('[data-jump-idx]').forEach(b => b.addEventListener('click', () => jumpToTplItem(form, lastEval.failed[Number(b.dataset.jumpIdx)])));
           footEl.innerHTML = '<button class="btn primary" type="button" id="nc-tpl-fix">回去補</button><button class="btn" type="submit" form="card-new-form">照樣建立</button>';

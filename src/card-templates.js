@@ -108,9 +108,20 @@ function countSteps(content) {
     .length;
 }
 
+const EN_BUILTIN_TEXT = {
+  builtin_bug: {
+    reason: 'Steps to reproduce:\n1. \nExpected:\nActual:\nEnvironment:',
+    criteria: 'Following the steps no longer fails\nAdd a test',
+  },
+  builtin_feature: {
+    reason: 'Problem to solve:\nWho uses it:',
+    criteria: 'Acceptance criteria:\n1. ',
+  },
+};
+
+// 建卡自動提醒：不讀已存 checks 設定；檢查標題前綴後至少 5 字，以及範本預填的每一段（含整欄）是否空白或仍是範本提示字
 export function evaluateTemplateChecks(tpl, { title = '', reason = '', criteria = '' } = {}) {
   const items = [];
-  // 固定檢核：標題前綴後至少 5 個字
   const prefix = String(tpl.titlePrefix || '');
   let afterPrefix = String(title || '').trim();
   if (prefix && afterPrefix.startsWith(prefix.trim())) {
@@ -122,73 +133,48 @@ export function evaluateTemplateChecks(tpl, { title = '', reason = '', criteria 
     field: 'title',
     section: '標題',
     ok: titleOk,
-    label: titleOk ? '標題前綴後有寫內容' : '標題前綴後至少 5 個字',
-    detail: '標題前綴後至少 5 個字',
+    kind: titleOk ? 'ok' : 'title_short',
+    label: titleOk ? '標題前綴後有寫內容' : '標題（前綴後至少 5 個字）',
+    detail: '標題（前綴後至少 5 個字）',
     lineIndex: 0,
   });
 
-  const parsed = {
-    reason: parseTemplateSections(reason),
-    criteria: parseTemplateSections(criteria),
-  };
-  const checks = Array.isArray(tpl.checks) ? tpl.checks : [];
-  for (const c of checks) {
-    if (!c || c.rule === 'none') continue;
-    const field = c.field === 'criteria' ? 'criteria' : 'reason';
-    const secName = String(c.section || '').trim();
-    const displayName = secName || (field === 'criteria' ? '完成條件' : '原因');
-    const sec = findSection(parsed[field], secName);
-    const rawContent = sec ? sec.content : '';
-    const clean = cleanMeaningfulText(rawContent);
-    const lineIndex = sec ? sec.lineIndex : 0;
+  const userVals = { reason, criteria };
+  const enRef = EN_BUILTIN_TEXT[tpl.id] || null;
+  for (const field of ['reason', 'criteria']) {
+    const tplRaw = String(tpl[field] || '');
+    if (!tplRaw.trim()) continue;
+    const tplSecs = parseTemplateSections(tplRaw);
+    const enSecs = enRef ? parseTemplateSections(enRef[field]) : null;
+    const userSecs = parseTemplateSections(userVals[field]);
+    for (let idx = 0; idx < tplSecs.length; idx++) {
+      const ts = tplSecs[idx];
+      const secName = String(ts.name || '').trim();
+      const displayName = secName || (field === 'criteria' ? '完成條件' : '原因');
+      const uSec = findSection(userSecs, secName);
+      const uRaw = uSec ? uSec.content : '';
+      const uClean = cleanMeaningfulText(uRaw);
+      const tClean = cleanMeaningfulText(ts.content);
+      const enClean = enSecs?.[idx] ? cleanMeaningfulText(enSecs[idx].content) : '';
+      const lineIndex = uSec ? uSec.lineIndex : 0;
 
-    if (c.rule === 'not_empty') {
-      const ok = clean.length > 0;
-      items.push({
-        key: `${field}:${displayName}:not_empty`,
-        field, section: displayName, ok, lineIndex,
-        label: `${displayName}不能空白`,
-        detail: `${displayName} 還是空的`,
-      });
-    } else if (c.rule === 'min_chars') {
-      const n = Math.max(1, Number(c.value) || 1);
-      const len = clean.length;
-      const ok = len >= n;
-      items.push({
-        key: `${field}:${displayName}:min_chars`,
-        field, section: displayName, ok, lineIndex,
-        label: ok ? `${displayName}至少 ${n} 字` : `${displayName}至少 ${n} 字（現在 ${len} 字）`,
-        detail: `${displayName} 至少要 ${n} 字，現在 ${len} 字`,
-      });
-    } else if (c.rule === 'min_steps') {
-      const n = Math.max(1, Number(c.value) || 1);
-      const cnt = countSteps(rawContent);
-      const ok = cnt >= n;
-      items.push({
-        key: `${field}:${displayName}:min_steps`,
-        field, section: displayName, ok, lineIndex,
-        label: ok ? `${displayName}至少 ${n} 步` : `${displayName}至少 ${n} 步（現在 ${cnt} 步）`,
-        detail: `${displayName} 至少要 ${n} 步，現在 ${cnt} 步`,
-      });
-    } else if (c.rule === 'not_same_as') {
-      const otherName = String(c.value || '').trim();
-      const otherSec = findSection(parsed[field], otherName);
-      const otherClean = otherSec ? cleanMeaningfulText(otherSec.content) : '';
-      if (c.notEmpty !== false) {
-        const notEmptyOk = clean.length > 0;
-        items.push({
-          key: `${field}:${displayName}:not_empty`,
-          field, section: displayName, ok: notEmptyOk, lineIndex,
-          label: `${displayName}不能空白`,
-          detail: `${displayName} 還是空的`,
-        });
+      let kind = 'ok';
+      if (!uClean) {
+        kind = 'empty';
+      } else if (secName && ((tClean && uClean === tClean) || (enClean && uClean === enClean))) {
+        kind = 'hint';
       }
-      const same = clean.length > 0 && otherClean.length > 0 && clean === otherClean;
+      const ok = kind === 'ok';
+      const why = kind === 'empty' ? '空白' : kind === 'hint' ? '還是範本提示字' : '';
       items.push({
-        key: `${field}:${displayName}:not_same_as`,
-        field, section: displayName, ok: !same, lineIndex,
-        label: same ? `${displayName}跟${otherName}一樣` : `${displayName}與${otherName}不同`,
-        detail: `${displayName} 跟${otherName}寫得一樣，請寫實際看到什麼`,
+        key: `${field}:${displayName}`,
+        field,
+        section: displayName,
+        ok,
+        kind,
+        lineIndex,
+        label: ok ? `${displayName}已填寫` : `${displayName}（${why}）`,
+        detail: ok ? `${displayName}已填寫` : `${displayName}（${why}）`,
       });
     }
   }

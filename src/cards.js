@@ -420,7 +420,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (tpl) {
       tplCheck = cardTemplates.evaluateTemplateChecks(tpl, { title, reason: reasonVal, criteria: criteriaVal });
       if (tplCheck.failed.length && me.kind === 'ai') {
-        tplWarnings.push('檢核沒過（請補上再開工）：\n' + tplCheck.failed.map(f => `・ ${f.detail}`).join('\n'));
+        tplWarnings.push('以下段落還沒填（建議補上再開工）：\n' + tplCheck.failed.map(f => `・ ${f.detail}`).join('\n'));
       }
     }
     const owner = await validPerson(people, body.ownerId, '負責人');
@@ -465,7 +465,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const seqOf = '(SELECT seq FROM cards WHERE uid = ?)';
     const createLogText = tpl
       ? (tplCheck?.failed?.length
-        ? `用「${tpl.name}」建立，略過 ${tplCheck.failed.length} 項檢核：${[...new Set(tplCheck.failed.map(f => f.section))].join('、')}`
+        ? `用「${tpl.name}」建立，略過提醒：${[...new Set(tplCheck.failed.map(f => f.section))].join('、')}`
         : `用「${tpl.name}」建立`)
       : `建立卡片（類型：${type}）`;
     await db.batch([
