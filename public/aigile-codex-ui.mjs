@@ -159,13 +159,35 @@ function launch(bin, args, options) {
 }
 
 // Check the inventory seen by the client, which can differ from the server's catalog.
-async function hasEmptyAigileCatalog(ui) {
+// 剛起來、還沒有對話的 App Server 不會啟動 MCP（runtimeStatus 是 null、0 個工具），直接查一定是空的。
+// 所以先開一個 ephemeral 對話讓 MCP 啟動，帶 threadId 查到有結果為止（有上限），查完 unsubscribe。
+// 回傳 { state, detail }：ok＝看得到 aigile_ 工具；empty＝連上了卻沒有 aigile_ 工具；failed＝確定啟動失敗；unknown＝判斷不了（逾時、舊版不支援）。
+const FAILED = ['failed', 'authenticationRequired', 'cancelled', 'disabled'];
+export async function checkAigileCatalog(ui, { timeoutMs = 20000, pollMs = 500, cwd = process.cwd() } = {}) {
   const rpc = await connect(ui);
+  let threadId;
   try {
-    const page = await rpc.request('mcpServerStatus/list', { serverName: 'aigile' });
-    const server = page?.data?.find(entry => entry.name === 'aigile');
-    return server && !server.toolsError && server.tools && !Object.keys(server.tools).some(name => name.startsWith('aigile_'));
-  } finally { rpc.close(); }
+    try { threadId = (await rpc.request('thread/start', { ephemeral: true, cwd })).thread?.id; }
+    catch (e) { return { state: 'unknown', detail: 'thread/start: ' + e.message }; }
+    if (!threadId) return { state: 'unknown', detail: 'thread/start returned no thread' };
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const page = await rpc.request('mcpServerStatus/list', { serverName: 'aigile', threadId });
+      const server = page?.data?.find(entry => entry.name === 'aigile');
+      if (!server) return { state: 'unknown', detail: 'aigile not in MCP list' };
+      const tools = Object.keys(server.tools || {});
+      const status = server.runtimeStatus ?? 'null';
+      const detail = `runtimeStatus=${status}, ${tools.length} tools` + (server.toolsError ? `, toolsError=${server.toolsError}` : '');
+      if (tools.some(name => name.startsWith('aigile_'))) return { state: 'ok', detail };
+      if (FAILED.includes(status) || server.toolsError) return { state: 'failed', detail };
+      if (status === 'connected') return { state: 'empty', detail: detail + ' (no aigile_ tools)' };
+      if (Date.now() >= deadline) return { state: 'unknown', detail: `timeout ${Math.round(timeoutMs / 1000)}s, ${detail}` };
+      await delay(pollMs);
+    }
+  } finally {
+    if (threadId) await rpc.request('thread/unsubscribe', { threadId }).catch(() => {});
+    rpc.close();
+  }
 }
 
 export async function launchForeground({ dir, bin, args, env, prompt, onReady, checkCatalog = false }) {
@@ -212,9 +234,17 @@ export async function launchForeground({ dir, bin, args, env, prompt, onReady, c
       server.once('exit', () => { clearTimeout(timer); resolve(null); });
     });
     if (!url) return null; // Older CLI: caller uses its ordinary interactive launch.
-    if (checkCatalog && await hasEmptyAigileCatalog({ url, key }).catch(() => false)) {
-      console.error('這台電腦沒有可用的 Aigile MCP 工具，請核對公司政策。No Aigile MCP tools available. If company policy permits REST, an administrator may restart with --no-mcp.');
-      return { status: 1 };
+    if (checkCatalog) {
+      // 只有確定失敗、或連上了卻沒有 aigile_ 工具才停下；判斷不了就照常開窗，第一輪先提醒 AI 核對
+      const check = await checkAigileCatalog({ url, key }).catch(e => ({ state: 'unknown', detail: e.message }));
+      if (check.state === 'empty' || check.state === 'failed') {
+        console.error(`這台電腦沒有可用的 Aigile MCP 工具（${check.detail}），請核對公司政策。No Aigile MCP tools available (${check.detail}). If company policy permits REST, an administrator may restart with --no-mcp.`);
+        return { status: 1 };
+      }
+      if (check.state === 'unknown') {
+        console.error(`⚠ 啟動前沒能確認 Aigile MCP 工具（${check.detail}），照常開啟。Could not confirm Aigile MCP tools before launch (${check.detail}); launching anyway.`);
+        prompt = `啟動檢查沒能確認 Aigile MCP 工具（${check.detail}），先確認看得到 aigile_ 工具再做事。The launch check could not confirm Aigile MCP tools; verify them first. ` + prompt;
+      }
     }
     const stage = descriptor(dir) + '.' + process.pid;
     fs.writeFileSync(stage, JSON.stringify({ pid: process.pid, marker, key, url, createdAt: Date.now() }), { mode: 0o600 });
