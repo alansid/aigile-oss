@@ -63,8 +63,12 @@ async function runChecks() {
     await setLang(lang);
     await toMyAi();
     // 2. 列上主按鈕；沒選過工具：不複製，展開接入分頁、提示、焦點到工具
-    assert.equal(await js(`${row(A.participantId)}.querySelector('.ma-row .ma-copy').textContent`), L('複製接入文字', 'Copy onboarding text'), lang + '：列上主按鈕');
-    await js(`${row(A.participantId)}.querySelector('.ma-row .ma-copy').click(); true`);
+    assert.equal(await js(`${row(A.participantId)}.querySelector('[data-act="local-launch"]').textContent`), L('在電腦上跑…', 'Run on a computer…'));
+    await js(`${row(A.participantId)}.querySelector('[data-act="menu"]').click()`);
+    await js(`${row(A.participantId)}.querySelector('.ma-menu details summary').click()`);
+    await js(`${row(A.participantId)}.querySelector('.ma-menu [data-tab="conn"]').click()`);
+    await until(() => js(`!!${row(A.participantId)}?.querySelector('.ma-btns [data-act="short"]')`));
+    await js(`${row(A.participantId)}.querySelector('.ma-btns [data-act="short"]').click()`);
     await until(() => js(`!!${row(A.participantId)}?.querySelector('.ma-tool-ask')`), 5000, lang + '：沒選工具提示');
     let tab = await J(`(() => { const it = ${row(A.participantId)};
       return { open: it.classList.contains('open'), tab: it.querySelector('.ma-tabs [aria-selected="true"]')?.dataset.tab, ask: it.querySelector('.ma-tool-ask').textContent,
@@ -110,7 +114,7 @@ async function runChecks() {
     await toMyAi();
     await js(`${row(A.participantId)}.querySelector('.ma-row').click(); true`);
     await until(() => js(`${row(A.participantId)}?.querySelector('[data-tool="other"]')?.getAttribute('aria-pressed') === 'true'`), 5000, lang + '：重新整理還記得');
-    await js(`${row(A.participantId)}.querySelector('.ma-row .ma-copy').click(); true`);
+    await js(`${row(A.participantId)}.querySelector('.ma-row [data-act="short"]').click(); true`);
     assert.doesNotMatch(await copied(lang + '：列上直接複製', L('已複製接入文字（連結 15 分鐘內有效、只能讀一次）', 'Copied the onboarding text (link valid for 15 minutes, can be read once)')), CODEX);
 
     // 4. 重發 Token 後的視窗：B 沒選過工具 → 在視窗裡選，選之前複製鈕停用
