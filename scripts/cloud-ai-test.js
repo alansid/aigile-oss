@@ -52,6 +52,7 @@ async function cloudFetch(url, init = {}) {
   assert.equal(init.redirect, 'manual', '模型請求不跟轉址');
   if (mode === 'down') throw new TypeError('fetch failed');
   if (mode === 'badkey') return res(401, { error: { message: 'Incorrect API key provided: ' + KEY } });
+  if (mode === 'ws400') return res(400, { type: 'error', error: { type: 'invalid_request_error', message: 'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header. Key: ' + (init.headers?.Authorization || '').replace('Bearer ', '') } });
   if (mode === 'echo400') return res(400, { error: { message: 'x'.repeat(130) + (init.headers?.Authorization || '').replace('Bearer ', '') + ' tail' } }); // 金鑰剛好跨在第 160 字
   if (u.endsWith('/models')) return res(200, { data: [{ id: 'models/gemini-2.5-flash' }, { id: 'models/gemini-2.5-pro' }] });
   if (u.endsWith('/v1/models')) return res(200, { data: [{ id: 'claude-x' }] });
@@ -325,6 +326,19 @@ try {
   mode = 'ok';
   assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.ok, true);
 
+  // 400 而且提到金鑰：附上供應者原文（正式站實測：Anthropic 使用者層級金鑰缺 workspace 標頭），金鑰照樣遮掉
+  mode = 'ws400';
+  const ws = (await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body;
+  assert.equal(ws.ok, false);
+  assert.equal(ws.status, 'key_error');
+  assert.match(ws.message, /^金鑰被拒絕（400）：This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header/, '看得到供應者原文：' + ws.message);
+  assert.match(ws.message, /。請按「換金鑰」重貼$/);
+  for (let i = 0; i + 5 <= KEY_NOW.length; i++) assert.ok(!ws.message.includes(KEY_NOW.slice(i, i + 5)), '原文裡的金鑰遮掉：' + ws.message);
+  mode = 'badkey';
+  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.message, '金鑰被拒絕（401）。請按「換金鑰」重貼', '401 維持原本的文字');
+  mode = 'ok';
+  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.ok, true);
+
   // ---------- 10. 主密鑰：讀取出錯不覆寫；同時第一次建立只會有一把 ----------
   {
     const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'aigile-p463-mk-'));
@@ -405,7 +419,7 @@ try {
   assert.equal(del.affected, 1);
   assert.equal((await call(admin.token, '/api/my-ais')).body.items.find(x => x.participantId === ai2.participantId).cloud.state, 'error');
 
-  console.log('cloud-ai-test：全部通過（網址規則、只有管理員、金鑰加密只回末 4 碼、測試連線、新增雲端 AI、被 @ 跑一輪、替它回覆、不並行、每輪上限與再跑一輪、金鑰錯誤只通知一次並自動恢復、連不到 10 分鐘後重試、Token 遺失自己重發、Anthropic 格式、平台版只准官方網址、刪除設定、錯誤訊息先遮金鑰、主密鑰讀取出錯不覆寫與同時建立、連線層擋 metadata／內網、DNS over HTTPS 檢查）');
+  console.log('cloud-ai-test：全部通過（網址規則、只有管理員、金鑰加密只回末 4 碼、測試連線、新增雲端 AI、被 @ 跑一輪、替它回覆、不並行、每輪上限與再跑一輪、金鑰錯誤只通知一次並自動恢復、連不到 10 分鐘後重試、Token 遺失自己重發、Anthropic 格式、平台版只准官方網址、刪除設定、錯誤訊息先遮金鑰、400 金鑰錯附供應者原文、主密鑰讀取出錯不覆寫與同時建立、連線層擋 metadata／內網、DNS over HTTPS 檢查）');
 } finally {
   await db.close?.();
   fs.rmSync(dataDir, { recursive: true, force: true });

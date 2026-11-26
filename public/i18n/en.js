@@ -4155,5 +4155,7 @@ window.AIGILE_EN = {
     "只能用 Gemini、OpenAI、Anthropic 的官方網址；自訂網址和私人模型之後再開放。要接公司地端模型請用開源版。": "Only the official Gemini, OpenAI and Anthropic URLs can be used; custom URLs and private models will come later. Use the self-hosted version for on-premises models.",
     "平台版只能用官方網址；要接公司代理或地端模型，請用開源版（架在公司內）。": "The hosted version only allows official URLs; use the self-hosted version (inside your company) for a company proxy or on-premises model.",
     "平台版只能用官方網址（Gemini、OpenAI、Anthropic）；要接公司代理或地端模型請用開源版（架在公司內）。": "The hosted version only allows official URLs (Gemini, OpenAI, Anthropic); use the self-hosted version (inside your company) for a company proxy or on-premises model.",
+    "金鑰被拒絕（{0}）：{1}": "The key was rejected ({0}): {1}",
+    "金鑰被拒絕（{0}）：{1}。請按「換金鑰」重貼": "The key was rejected ({0}): {1}. Press \"Replace\" to paste it again",
   },
 };

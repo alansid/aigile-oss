@@ -114,13 +114,18 @@ export class ModelError extends Error {
 // 供應者回的錯誤分類（UX v2：網址錯、金鑰錯、模型不存在、額度用完）；回應內文只在「其他錯誤」時截一小段，先把金鑰抹掉
 function classify(status, text, model, key) {
   const t = String(text || '');
-  if (status === 401 || status === 403 || (status === 400 && /api[_ ]?key|API_KEY_INVALID|invalid x-api-key|authentication/i.test(t))) return new ModelError('key', status, `金鑰被拒絕（${status}）`);
+  // 供應者的原文：先取 JSON 的 error.message，再遮金鑰、再截斷（截在金鑰中間會留下一段金鑰）
+  let said = t;
+  try { const j = JSON.parse(t); said = String(j?.error?.message || j?.message || (typeof j?.error === 'string' ? j.error : '') || t); } catch {}
+  const snip = (key ? said.split(key).join('••••') : said).replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (status === 401 || status === 403) return new ModelError('key', status, `金鑰被拒絕（${status}）`);
+  // 400 而且內文提到金鑰：多半是金鑰的問題，但原因不一定（例：Anthropic 使用者層級金鑰要帶 workspace 標頭），附上供應者原文
+  if (status === 400 && /api[_ ]?key|API_KEY_INVALID|invalid x-api-key|authentication/i.test(t)) return new ModelError('key', status, snip ? `金鑰被拒絕（${status}）：${snip}` : `金鑰被拒絕（${status}）`);
   if (status === 429 || /insufficient_quota|credit balance|quota/i.test(t)) return new ModelError('quota', status, `供應者說額度用完（${status}）`);
   if (status === 404) return new ModelError('model', 404, `找不到模型 ${model}（404）`);
   if (status >= 300 && status < 400) return new ModelError('unreachable', status, `網址被轉到別處（${status}），請填最後的網址`);
   if (status >= 500) return new ModelError('unreachable', status, `供應者暫時有問題（${status}）`);
-  const masked = key ? t.split(key).join('••••') : t; // 先遮金鑰再截斷：截在金鑰中間會留下一段金鑰
-  return new ModelError('bad', status, `供應者回 ${status}：${masked.slice(0, 160)}`);
+  return new ModelError('bad', status, `供應者回 ${status}：${snip}`);
 }
 
 function schemaFor(s) { // 只留各家都吃的 JSON Schema 欄位（Gemini 不收 additionalProperties、pattern 等）
