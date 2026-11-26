@@ -5400,10 +5400,21 @@
         root.querySelector('[data-act="ho-go"]').textContent = `交接給 ${to?.name || '…'}`;
         root.querySelector('.ho-hint').textContent = hoHint(to);
       });
-      // 拖檔案進輸入區＝加進附件格（存成卡片附件）
-      host.addEventListener('dragover', e => { if (e.target.closest?.('.dcompose') && e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+      // 拖檔案進輸入區＝加進附件格（存成卡片附件），並顯示拖曳提示框
+      host.addEventListener('dragover', e => {
+        const root = e.target.closest?.('.dcompose');
+        if (!root || !e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        root.classList.add('drop-target', 'drop-over');
+        root.dataset.dropHint = window.aigileI18n?.tr?.('放開檔案以加入卡片附件') || '放開檔案以加入卡片附件';
+      });
+      host.addEventListener('dragleave', e => {
+        const root = e.target.closest?.('.dcompose');
+        if (root && !root.contains(e.relatedTarget)) root.classList.remove('drop-over');
+      });
       host.addEventListener('drop', e => {
         const root = e.target.closest?.('.dcompose');
+        if (root) root.classList.remove('drop-over');
         if (!root || !e.dataTransfer?.files?.length) return;
         e.preventDefault();
         const key = root.querySelector('[data-att-key]')?.dataset.attKey;
@@ -9369,6 +9380,41 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (x) deleteFileById(x.dataset.deleteFile).then(ok => { if (ok && x.closest('.modal')) openFiles(); });
   });
 
+  // 全域防止拖檔到非上傳區時瀏覽器開檔跳走；不攔截看板卡片拖曳（只針對 Files）
+  window.addEventListener('dragover', e => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+  window.addEventListener('drop', e => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); });
+  function setDropZone(el, { canDrop = () => true, hint = '', onFiles }) {
+    if (!el) return;
+    const resolveHint = () => {
+      const raw = typeof hint === 'function' ? hint() : hint;
+      return window.aigileI18n?.tr?.(raw) || raw;
+    };
+    el.classList.add('drop-target');
+    el.dataset.dropHint = resolveHint();
+    el.ondragover = e => {
+      if (!e.dataTransfer?.types?.includes('Files') || !canDrop()) return;
+      e.preventDefault();
+      el.dataset.dropHint = resolveHint();
+      el.classList.add('drop-over');
+    };
+    el.ondragleave = e => {
+      if (!el.contains(e.relatedTarget)) el.classList.remove('drop-over');
+    };
+    el.ondrop = e => {
+      el.classList.remove('drop-over');
+      if (!e.dataTransfer?.files?.length || !canDrop()) return;
+      e.preventDefault();
+      onFiles([...e.dataTransfer.files]);
+    };
+  }
+  const msgPageEl = $('#page-messages');
+  const composerEl = document.querySelector('footer.composer');
+  setDropZone(msgPageEl, {
+    canDrop: () => !msgPageEl.hidden && !composerEl?.hidden && !$('#attach')?.disabled && !meRO(projectView()),
+    hint: '放開就上傳到群組（跟 📎 一樣的限制與聲明）',
+    onFiles: files => openUpload(files),
+  });
+
   // 選檔 → 聲明 → 上傳（一次可選多個，最多 4 個）
   $('#attach').addEventListener('click', () => $('#file-input').click());
   $('#file-input').addEventListener('change', e => {
@@ -9791,6 +9837,15 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <p class="muted small">只有本專案成員看得到。單檔 ${fmtBytes(d.maxFileBytes)} 以內，只收 pdf、docx、xlsx、pptx、md、txt、png、jpg，禁止程式碼與客戶個資；資料夾最多 ${d.maxFolderDepth} 層。這個專案已用 ${fmtBytes(d.projectBytes)}（全部專案 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}）。</p>
       <details class="audit"><summary>異動紀錄</summary><div id="docs-log" class="muted small">載入中…</div></details>`;
     box.querySelector('#docs-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files); });
+    const dropFolder = trail.length ? trail[trail.length - 1].name : projName(pj);
+    setDropZone(box, {
+      canDrop: () => !!(d.canWrite && d.enabled),
+      hint: () => {
+        const fn = window.aigileI18n?.tr?.(dropFolder) || dropFolder;
+        return L(`放開就上傳到「${dropFolder}」`, `Drop to upload to "${fn}"`);
+      },
+      onFiles: files => uploadDocs(pj, files),
+    });
     box.addEventListener('change', e => { const c = e.target.closest('[data-kb-pick]'); if (!c) return; if (c.checked) filesUi.pick.add(c.dataset.kbPick); else filesUi.pick.delete(c.dataset.kbPick); kbSelBar(box, pj); });
     kbSelBar(box, pj);
     box.querySelector('details.audit').addEventListener('toggle', async e => {
@@ -10032,11 +10087,17 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (e.target.closest('[data-kb-up]')) box.querySelector('#kb-input').click();
     };
     box.querySelector('#kb-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files, true); });
+    setDropZone(box, {
+      canDrop: () => !!(mgr && kd.enabled),
+      hint: '放開就上傳到知識庫',
+      onFiles: files => uploadDocs(pj, files, true),
+    });
   }
   const kbOut = p => /^來源已移出知識庫：/.test(p.staleNote || ''); // 來源移出知識庫的頁
   const kbBackLabel = () => (kbUi.q ? `回搜尋結果「${esc(kbUi.q)}」` : '回知識庫');
   // 知識頁（設計稿 05、05v2、06）：頂端「AI 整理，以原始文件為準」＋整理的 AI、時間、來源；leader 有退回、刪除；過時頁有「請 AI 更新」
   async function kbPage(box, pj) {
+    box.ondragover = box.ondragleave = box.ondrop = null; box.classList.remove('drop-over', 'drop-target');
     const base = `/api/projects/${encodeURIComponent(pj)}/kb/pages/${encodeURIComponent(kbUi.page)}`;
     let p;
     try { p = await api(base); } catch (err) { toast(err.message); kbUi.page = null; return openFiles(); }

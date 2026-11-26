@@ -4283,3 +4283,19 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .mc-warn { margin: 4px 0 0; color: #92400e; font-size: 13px; }
 .mc-where .pm-card { padding: 10px 12px; }
 .mc-log th, .mc-log td { text-align: left; }
+
+/* 檔案拖曳上傳視覺提示 */
+.drop-target { position: relative; }
+.drop-target.drop-over { outline: 2px dashed var(--primary); outline-offset: -2px; }
+.drop-target.drop-over::after {
+  content: '⬆  ' attr(data-drop-hint);
+  position: absolute; inset: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, 0.93);
+  backdrop-filter: blur(2px);
+  border: 2px dashed var(--primary);
+  color: var(--primary);
+  font-size: 15px; font-weight: 700; border-radius: inherit;
+  pointer-events: none; padding: 16px; text-align: center;
+  box-sizing: border-box;
+}
