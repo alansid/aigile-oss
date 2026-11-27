@@ -20,12 +20,21 @@ try {
   const first = await create('DemoOne'), second = await create('DemoTwo');
   const secret = randomUUID(), folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'aigile-fixture-work-')));
   const {code} = await call(null,'/api/launcher/browser-request','POST',{secret,name:'Demo laptop',platform:'win32',folder});
-  const {js,cdp,login} = await kit.browser(1280,900);
+  const {js,cdp,goto,login} = await kit.browser(1280,900);
   await cdp('Page.addScriptToEvaluateOnNewDocument',{source:"localStorage.setItem('aigile-lang','en')"});
   await login(owner.token,'/my-ai');
+  const clickWhenReady = (selector, label) => until(() => js(`(() => {
+    const button = document.querySelector(${JSON.stringify(selector)});
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`), 15000, label);
+  const clickFolder = target => clickWhenReady(
+    'button[data-device=' + JSON.stringify(device.launcherId) + '][data-folder=' + JSON.stringify(target) + ']',
+    'unregister folder ' + target
+  );
   const selector = '[data-act="local-launch"][data-id="'+first.participantId+'"]';
-  await until(()=>js('!!document.querySelector('+JSON.stringify(selector)+')'),10000,'launcher row');
-  await js('document.querySelector('+JSON.stringify(selector)+').click()');
+  await clickWhenReady(selector, 'launcher row');
   await until(()=>js('!!document.querySelector(".ma-launch-dialog[open]")'));
   const screenshot = async name => {
     if (!process.env.LAUNCHER_SHOTS) return;
@@ -109,10 +118,8 @@ try {
   const secondSelector = '[data-act="local-launch"][data-id="'+third.participantId+'"]';
   const openSecond = async () => {
     await js('document.querySelector(".ma-launch-dialog")?.close()');
-    await cdp('Page.reload');
-    await until(()=>js('document.readyState === "complete"'));
-    await until(()=>js('!!document.querySelector('+JSON.stringify(secondSelector)+')'));
-    await js('document.querySelector('+JSON.stringify(secondSelector)+').click()');
+    await goto('/my-ai');
+    await clickWhenReady(secondSelector, 'launcher row');
     await until(()=>js('!!document.querySelector(".ma-launch-dialog[open]")'));
   };
   await cdp('Emulation.setDeviceMetricsOverride',{width:1280,height:850,deviceScaleFactor:1,mobile:false});
@@ -147,8 +154,8 @@ try {
   assert.equal((await kit.call(outsider.token, removeUrl, 'POST', confirmed)).status, 404);
   kit.sql("UPDATE launcher_jobs SET status='opened', window_closed_at=NULL WHERE launcher_id=?",device.launcherId);
   assert.equal((await kit.call(owner.token, removeUrl, 'POST', confirmed)).status, 409);
-  await js('document.querySelector("[data-manage]").click()');
-  await js('document.querySelector("button[data-device][data-folder]").click()');
+  await clickWhenReady('[data-manage]', 'manage devices');
+  await clickFolder(folder);
   await until(()=>js('!!document.querySelector(".ma-unregister[open]")'));
   await js('document.querySelector(".ma-unregister input").click()');
   assert.ok(await js('document.querySelector(".ma-unregister [type=submit]").disabled'));
@@ -217,16 +224,15 @@ try {
   const removeSession = {folder,generation:current.folderUsage[0].generation,confirmedAiIds:[second.participantId],sessionIds:[job.id]};
   const wrongKey = await kit.call(device.token,'/api/launcher/jobs/'+job.id+'/session','POST',{key:'0'.repeat(64),closed:true});
   assert.equal(wrongKey.status,409);
-  await cdp('Page.reload');
-  await until(()=>js('!!document.querySelector("[data-manage]")'));
-  await js('document.querySelector("[data-manage]").click()');
+  await goto('/my-ai');
+  await clickWhenReady('[data-manage]', 'manage devices');
   for (const width of [375,1280]) {
     await cdp('Emulation.setDeviceMetricsOverride',{width,height:850,deviceScaleFactor:1,mobile:false});
     await js('document.querySelector(".ma-computer").scrollIntoView({block:"center"})');
     assert.ok(await js('document.documentElement.scrollWidth<=innerWidth+1'));
     await screenshot('folder-management-'+width);
   }
-  await js('document.querySelector("button[data-device][data-folder]").click()');
+  await clickFolder(folder);
   await until(()=>js('!!document.querySelector(".ma-unregister[open]")'));
   await js('document.querySelector(".ma-unregister input").click()');
   assert.equal(await js('document.querySelector(".ma-unregister [type=submit]").disabled'),false);
@@ -245,10 +251,9 @@ try {
   const legacy = {folder:moved,generation:'legacy',confirmedAiIds:[],sessionIds:[]};
   assert.equal((await kit.call(owner.token,removeUrl,'POST',legacy)).body.error.code,'UPGRADE_REQUIRED');
   assert.equal((await kit.call(owner.token,removeUrl,'POST',{...legacy,manuallyClosed:true})).status,409);
-  await cdp('Page.reload');
-  await until(()=>js('!!document.querySelector("[data-manage]")'));
-  await js('document.querySelector("[data-manage]").click()');
-  await js('Array.from(document.querySelectorAll("button[data-device][data-folder]")).find(b=>b.dataset.folder.endsWith("-moved")).click()');
+  await goto('/my-ai');
+  await clickWhenReady('[data-manage]', 'manage devices');
+  await clickFolder(moved);
   await until(()=>js('!!document.querySelector("[name=manuallyClosed]")'));
   assert.ok(await js('document.querySelector(".ma-unregister [type=submit]").disabled'));
   await js('document.querySelector("[name=manuallyClosed]").click(); document.querySelector(".ma-unregister form").requestSubmit()');
