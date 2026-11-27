@@ -3275,10 +3275,12 @@
   }
   input.addEventListener('input', onInput);
 
-  const isDesktop = () => matchMedia('(hover: hover) and (pointer: fine)').matches;
+  // Headless Linux/macOS CI browsers may lack a fine pointer (pointer: none); only treat coarse touch or narrow viewports as non-desktop.
+  const isDesktop = () => matchMedia('(hover: hover) and (pointer: fine)').matches
+    || (!matchMedia('(pointer: coarse)').matches && !narrowMq.matches);
   input.addEventListener('keydown', e => {
     if (e.isComposing || e.keyCode === 229 || e.defaultPrevented) return; // 中文組字中或已由選單處理
-    if (e.key === 'Enter' && !e.shiftKey && isDesktop()) { e.preventDefault(); send(); }
+    if (e.key === 'Enter' && ((e.ctrlKey || e.metaKey) || (!e.shiftKey && !e.altKey && isDesktop()))) { e.preventDefault(); send(); }
   });
   sendBtn.addEventListener('click', send);
 

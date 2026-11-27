@@ -82,10 +82,12 @@ try {
   await typeIn('#input', '#xyz123');
   assert.equal(await js("document.querySelector('#mention-list').hidden"), true, '同一 # 不再開');
 
+  await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'hover', value: 'none' }, { name: 'pointer', value: 'none' }] });
   await typeIn('#input', '請看 #9999');
   await until(() => js("!!document.querySelector('#mention-list .card-pick-empty')"), 3000, '#9999 無結果');
   await keyIn('#input', 'Enter');
   await until(() => js("document.querySelector('#mention-list').hidden && document.querySelector('#messages').textContent.includes('請看 #9999')"), 8000, '無結果時 Enter 照常送出並關選單');
+  await cdp('Emulation.setEmulatedMedia', { features: [] });
 
   await typeIn('#input', '看 #');
   await until(() => js("!document.querySelector('#mention-list').hidden && document.querySelectorAll('#mention-list .card-pick-row').length >= 2"), 3000, '重開 #');
