@@ -28,7 +28,8 @@ try {
   assert.equal((await kit.call(liu.token, '/api/projects/%E9%A0%90%E8%A8%AD%E5%B0%88%E6%A1%88/dm', 'PUT', { on: true })).status, 200);
   const DEF = {
     role: '測試與發布', key: 'REL',
-    duties: '把審查通過、負責人已同意提交的 PG 版本合進整合分支（平台版、開源版各一條），跑完整套測試，整理成可以部署的版本，再照規矩請負責人同意部署。合併前先確認差異指紋跟審查通過的一致，合併後在整合版上補跑相關的單支測試，全套測試失敗時先找出是哪一張卡造成的，交回原作者修，不自己動別人的程式。每次部署後追蹤線上版本號，確認畫面與 API 都正常才回報完成。',
+    // 用換行分成 5 行：「超過 3 行」不會因為各系統中文字型寬度不同而改變
+    duties: '把審查通過、負責人已同意提交的 PG 版本合進整合分支（平台版、開源版各一條）。\n跑完整套測試，整理成可以部署的版本，再照規矩請負責人同意部署。\n合併前先確認差異指紋跟審查通過的一致，合併後在整合版上補跑相關的單支測試。\n全套測試失敗時先找出是哪一張卡造成的，交回原作者修，不自己動別人的程式。\n每次部署後追蹤線上版本號，確認畫面與 API 都正常才回報完成。',
     style: '回報一律寫結果：綠／紅、卡在哪、要誰做什麼。附完整 40 碼 SHA、測試通過數、跑的時間。',
     autonomy: '合併已同意提交的 commit 到整合分支、跑全套與單支測試。',
     mustConfirm: '推送 GitHub、部署平台、正式庫遷移：每次都要負責人在本機明確同意。',
@@ -36,7 +37,7 @@ try {
   };
   const propose = async (ai, body, rid) => { const r = await kit.call(ai.tok, '/api/role-proposals', 'POST', { project: '預設專案', ...DEF, ...body, requestId: rid }); assert.equal(r.status, 201, JSON.stringify(r.body)); return r.body.proposalId; };
   const P0 = await propose(pgL, { key: 'PG', role: '衝突角色' }, 'p0'); // 跟內建代碼衝突
-  const P2 = await propose(pgL, { key: 'CHK', role: '品質把關', style: '回報一律寫結果：綠／紅、卡在哪、要誰做什麼。附完整 40 碼 SHA、測試通過數、跑的時間；失敗時貼最短的錯誤那幾行，不貼整段紀錄，也不要猜原因；同一件事一天內只回報一次，有新進度才再發。' }, 'p2'); // 375 用、按「不要」
+  const P2 = await propose(pgL, { key: 'CHK', role: '品質把關', style: '回報一律寫結果。\n同一件事一天內只回報一次。\nGreen or red, where it is stuck, who acts next, the full SHA and test count.' }, 'p2'); // 375 用、按「不要」。3 行，最後一行英文 1280 放得下、375 會折行（英文字型寬度各系統差不多）
   const P1 = await propose(pgL, {}, 'p1'); // 主要那張
   const PC = await propose(pgC, { key: 'DOC', role: '文件整理' }, 'pc'); // 一般成員收到的
 
@@ -197,7 +198,7 @@ try {
 
   // 8. 英文：卡片、彈窗、修改、放棄修改
   const P3 = await propose(pgL, { key: 'OPS', role: '維運整理' }, 'p3');
-  const zh = t => t.split(String.fromCharCode(10)).filter(l => /[一-鿿]/.test(l) && !Object.values(DEF).concat('維運整理', '預設專案').some(v => l.includes(v)));
+  const zh = t => t.split(String.fromCharCode(10)).filter(l => /[一-鿿]/.test(l) && !Object.values(DEF).flatMap(v => v.split(String.fromCharCode(10))).concat('維運整理', '預設專案').some(v => l.includes(v)));
   await js("localStorage.setItem('aigile-lang', 'en'); true");
   await openChat(liu.token, pgL.id);
   await until(() => has(card(P3)), 5000, '英文 P3 卡');
