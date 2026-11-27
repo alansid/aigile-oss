@@ -2,8 +2,9 @@
 // 設定存 app_settings 的 review＝{ [專案]: 設定 }；紀錄存 card_reviews（一列一個事件：送審、通過、要改、作廢）。
 // 平台擋得了：審查者是作者或不符合規則、卡片沒通過就請人同意 commit、版本改了還拿舊的通過。擋不了：AI 在自己電腦直接 git commit。
 // differ＝審查者要多不一樣（只管 AI）：any 不限（不是作者就好）／model 不同模型／vendor 不同家（不同家一定也是不同模型）
-export const REVIEW_DEFAULTS = { cards: 'off', who: 'any', roles: [], members: [], need: 1, needHuman: false, differ: 'any', notOwner: false, humanPass: 'separate', diffUpload: true }; // 開源版預設可以上傳 diff（架在自己的伺服器，diff 不會離開公司；leader 可以關）
+export const REVIEW_DEFAULTS = { cards: 'off', who: 'any', roles: [], members: [], need: 1, needHuman: false, differ: 'any', notOwner: false, humanPass: 'separate', localFallback:false, diffUpload: true }; // 開源版預設可以上傳 diff（架在自己的伺服器，diff 不會離開公司；leader 可以關）
 export const DIFF_DECLARATION = '這是本專案自己的程式差異，不含密鑰與客戶個資';
+import { fetchReviewChanges, testGitHubRepo, localSnapshot } from './review-manifest.js';
 const DIFF_MAX = 2 * 1048576;
 const CARDS = ['off', 'code', 'all'], WHO = ['any', 'ai', 'human', 'roles', 'members'], PASS = ['separate', 'combined'], DIFFER = ['any', 'model', 'vendor'];
 // 舊設定 diffTool（要／不要不同家）：true → 不同家、false → 不限
@@ -40,7 +41,7 @@ export function readReviewCfg(body, cur = REVIEW_DEFAULTS, invalid) {
     out.differ = body.diffTool ? 'vendor' : 'any';
   }
   if (body.need !== undefined) { if (![1, 2].includes(body.need)) throw invalid('need 只能是 1 或 2'); out.need = body.need; }
-  for (const k of ['needHuman', 'notOwner', 'diffUpload']) if (body[k] !== undefined) { if (typeof body[k] !== 'boolean') throw invalid(`${k} 需為 true／false`); out[k] = body[k]; }
+  for (const k of ['needHuman', 'notOwner', 'diffUpload', 'localFallback']) if (body[k] !== undefined) { if (typeof body[k] !== 'boolean') throw invalid(`${k} 需為 true／false`); out[k] = body[k]; }
   for (const k of ['roles', 'members']) if (body[k] !== undefined) {
     if (!Array.isArray(body[k]) || body[k].length > 30 || body[k].some(x => typeof x !== 'string' || !x.trim() || x.length > 40)) throw invalid(`${k} 需為 0～30 個字串的陣列`);
     out[k] = [...new Set(body[k].map(x => x.trim()))];
@@ -50,7 +51,7 @@ export function readReviewCfg(body, cur = REVIEW_DEFAULTS, invalid) {
   return out;
 }
 
-export function registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, roleNamesIn, loadRoles = async () => {}, isolatedFrom, repoOf = async () => null, docStorage = null, audit = async () => {} }) {
+export function registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, roleNamesIn, loadRoles = async () => {}, isolatedFrom, repoOf = async () => null, docStorage = null, audit = async () => {}, fetchChanges = fetchReviewChanges }) {
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   async function cfgOf(pj) { return normReviewCfg(((await getJson('review')) || {})[pj] || {}); }
   async function logOf(pj) { return (((await getJson('review')) || {})[pj]?.log || []); }
@@ -73,7 +74,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       try {
         const detail = JSON.parse(comment.slice(1));
         if (typeof detail.note === 'string' && Object.hasOwn(detail, 'repo')) {
-          return { note: detail.note, branch: detail.branch, repo: detail.repo };
+          return { note: detail.note, tests:detail.tests || [], branch: detail.branch, repo: detail.repo, ...(detail.fallback ? { fallback: detail.fallback, origins: detail.origins } : {}), ...(detail.fetchIssue ? { fetchIssue: detail.fetchIssue } : {}), ...(detail.summary ? { summary: detail.summary } : {}) };
         }
       } catch { /* A legacy note can start with the same characters. */ }
     }
@@ -94,6 +95,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     for (const k of ['cards', 'who', 'differ', 'humanPass']) if (a[k] !== b[k]) out.push(`${{ cards: '哪些卡要審', who: '誰可以審', differ: '審查者要多不一樣', humanPass: '人審查通過時' }[k]}：${SET_LABEL[k][a[k]]} → ${SET_LABEL[k][b[k]]}`);
     if (a.need !== b.need) out.push(`要幾位通過：${a.need} → ${b.need}`);
     for (const [k, l] of [['needHuman', '至少要有一位是人'], ['notOwner', '不能是作者的主人']]) if (!!a[k] !== !!b[k]) out.push(`${l}：${b[k] ? '要' : '不要'}`);
+    if (!!a.localFallback !== !!b.localFallback) out.push(b.localFallback ? '啟用本機差異補傳' : '停用本機差異補傳');
     if (!!a.diffUpload !== !!b.diffUpload) out.push(`把「送審可以上傳 diff」改成${b.diffUpload ? '可以' : '不可以'}`);
     if (JSON.stringify(a.roles) !== JSON.stringify(b.roles) && b.who === 'roles') out.push(`指定角色：${b.roles.join('、') || '（沒有）'}`);
     if (JSON.stringify(a.members) !== JSON.stringify(b.members) && b.who === 'members') out.push('指定幾位：改了名單');
@@ -202,6 +204,16 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     if (cfg.cards === 'off' && !evs.length) return null;
     const people = await peopleMap(ctx), maps = await aiInfo();
     const { state, round } = stateOf(evs, cfg, people);
+    const previousRounds = new Map(), approvedBeforeVoid = new Set();
+    let group = [];
+    for (const event of evs) {
+      if (event.ev === 'request' && group.length && event.message_id !== group[0].message_id) {
+        previousRounds.set(group[0].message_id,stateOf(group,cfg,people).state);
+        group = [];
+      }
+      if (event.ev === 'void' && group.length && stateOf(group,cfg,people).state === 'passed') approvedBeforeVoid.add(group[0].message_id);
+      if (group.length || event.ev === 'request') group.push(event);
+    }
     const passed = [...evs].reverse().find(e => e.ev === 'pass');
     const replyOf = id => round.passes.find(e => e.actor_id === id) || (round.changes?.actor_id === id ? round.changes : null);
     return {
@@ -212,9 +224,9 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
         reviewers: round.reviewers.map(id => { const r = replyOf(id); return { ...person(people, id, maps, r), result: r ? r.ev : null }; }) } : {}),
       ...(round.changes ? { changes: { by: person(people, round.changes.actor_id, maps, round.changes), at: round.changes.at, comment: round.changes.comment, version: round.changes.version } } : {}),
       ...(round.voided ? { voided: { at: round.voided.at, version: round.voided.version } } : {}),
-      ...(passed ? { passed: { by: person(people, passed.actor_id, maps, passed), at: passed.at, comment: passed.comment, version: passed.version } } : {}),
+      ...(passed ? { passed: { by: person(people, passed.actor_id, maps, passed), roundId: passed.message_id, at: passed.at, comment: passed.comment, version: passed.version } } : {}),
       // 歷次紀錄：送審、通過、要改帶當時的工具與模型（之後換模型不影響）
-      history: evs.map(e => ({ at: e.at, ev: e.ev, by: person(people, e.actor_id, maps, e.ev === 'void' ? { tool: null, model: null } : e), version: e.version, ...(e.comment && e.ev !== 'request' ? { comment: e.comment } : {}) })).reverse(),
+      history: evs.map(e => ({ at: e.at, ev: e.ev, roundId: e.message_id, ...(e.ev === 'request' ? { ...requestDetails(e.comment), approvedBeforeVoid:approvedBeforeVoid.has(e.message_id), roundState:previousRounds.get(e.message_id) || state } : {}), by: person(people, e.actor_id, maps, e.ev === 'void' ? { tool: null, model: null } : e), version: e.version, ...(e.comment && e.ev !== 'request' ? { comment: e.comment } : {}) })).reverse(),
     };
   }
 
@@ -256,11 +268,110 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   });
 
   // 送審：作者做完呼叫，附版本、說明；審查者可指定（不符合規則直接回錯誤），不指定平台自動挑
+  function appendSnapshot(stmts, c, mid, version, fetched, at, local = false) {
+    // Recheck the round inside the write transaction. NULL fails the NOT NULL constraint and rolls back all parts.
+    const roundSql = local ? "(SELECT CASE WHEN ev='request' AND message_id=? THEN message_id END FROM card_reviews WHERE card_seq=? ORDER BY at DESC,rowid DESC LIMIT 1)" : '?';
+    const roundArgs = local ? [mid, c.seq] : [mid];
+    stmts.push([`INSERT INTO review_change_sets (card_seq, round_id, version, manifest) VALUES (?,${roundSql},?,?)`, [c.seq, ...roundArgs, version, JSON.stringify({ ...fetched.manifest, expiresAt: Date.parse(at) + 30 * 86400_000 })]]);
+    {
+      const expires = Date.parse(at) + 30 * 86400_000;
+      const encoder = new TextEncoder();
+      let rows = [], rowBytes = 2;
+      function flush() {
+        if (!rows.length) return;
+        stmts.push(["INSERT INTO review_change_parts (card_seq,round_id,file_index,part,lines,expires_at) SELECT ?,?,json_extract(value,'$[0]'),json_extract(value,'$[1]'),json_extract(value,'$[2]'),? FROM json_each(?)",
+          [c.seq,mid,expires,JSON.stringify(rows)]]);
+        rows = [];
+        rowBytes = 2;
+      }
+      for (const patch of fetched.patches) {
+        let chunk = [], size = 0, part = 0;
+        const save = () => {
+          const row = [patch.index,part++,chunk];
+          const bytes = encoder.encode(JSON.stringify(row)).length + 1;
+          if (rowBytes + bytes > 96000) flush();
+          rows.push(row);
+          rowBytes += bytes;
+        };
+        for (const line of patch.lines) {
+          const bytes = new TextEncoder().encode(JSON.stringify(line)).length + 1;
+          if (chunk.length && size + bytes > 64000) { save(); chunk = []; size = 0; }
+          chunk.push(line); size += bytes;
+        }
+        if (chunk.length) save();
+      }
+      flush();
+    }
+  }
+  const restrictsContent = (people, pj) => [...people.values()].some(p => p.status === 'active' && projectsOf(p).includes(pj) && ['行內','投信'].includes(p.env));
+  const canonicalRepo = url => String(url || '').replace(/\/$/, '').replace(/\.git$/, '').toLowerCase();
+  function configuredOrigins(config, origins) {
+    return Array.isArray(origins) && origins.length >= 1 && origins.length <= 2 && new Set(origins).size === origins.length &&
+      origins.every(o => /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+$/.test(o) && config?.items?.some(item => canonicalRepo(item.url) === o));
+  }
+  route('POST', '/api/cards/:id/review-changes/:roundId', async ({ ctx, me, req, params }) => {
+    const c = await cardOf(params.id, me);
+    if (!projectsOf(me).includes(c.project) || roIn(me,c.project)) throw new ApiError(403, 'FORBIDDEN','沒有送審權限');
+    const round = roundOf(await eventsOf(c.seq));
+    if (round.id !== params.roundId || round.req?.actor_id !== me.id || round.passes.length || round.changes || round.voided ||
+        Date.now() - Date.parse(round.req.at) > 600000) throw new ApiError(409,'ROUND_CHANGED','這一輪目前不能補傳');
+    const { fallback, origins } = requestDetails(round.req.comment);
+    const cfg = await cfgOf(c.project);
+    if (!cfg.localFallback || !fallback || !configuredOrigins(await repoOf(c.project),origins)) throw new ApiError(403,'FALLBACK_OFF','專案沒有允許這次補傳');
+    const content = fallback === 'content' && cfg.diffUpload && !restrictsContent(await peopleMap(ctx),c.project);
+    const body = await readJson(req, 3 * 1024 * 1024);
+    const snapshot = localSnapshot(body,round.req.version,origins,content,invalid);
+    const stmts = [];
+    appendSnapshot(stmts,c,round.id,round.req.version,snapshot,round.req.at,true);
+    const saved = JSON.parse(round.req.comment.slice(1));
+    const subset = snapshot.manifest.files;
+    saved.fetchIssue = null;
+    saved.fallback = null;
+    saved.summary = { repositories:snapshot.manifest.repositories.map(repo => {
+      const files = subset.filter(f => f.origin === repo.origin);
+      return {...repo,files:files.length,added:files.reduce((n,f)=>n+f.added,0),removed:files.reduce((n,f)=>n+f.removed,0)};
+    }), files:subset.length, added:subset.reduce((n,f)=>n+f.added,0), removed:subset.reduce((n,f)=>n+f.removed,0) };
+    stmts.push(["UPDATE card_reviews SET comment = ? WHERE card_seq = ? AND message_id = ? AND ev = 'request'", ['\u001e' + JSON.stringify(saved), c.seq, round.id]]);
+    try { await db.batch(stmts); }
+    catch (error) {
+      if (/constraint.*review_change_sets|review_change_sets.*constraint/i.test(String(error))) throw new ApiError(409,'ROUND_CHANGED','這一輪目前不能補傳');
+      throw error;
+    }
+    return { source:'local', version:round.req.version };
+  });
+
+  route('POST', '/api/projects/:id/repo/test', async ({ ctx, me, req, params }) => {
+    if (!(await isManager(ctx, me, params.id))) throw new ApiError(403, 'FORBIDDEN', '只有專案負責人或管理員能測試連線');
+    const body = await readJson(req);
+    const info = await testGitHubRepo(body.url, body.branch).catch(error => { throw invalid(error.message); });
+    return info;
+  });
+
+  route('GET', '/api/cards/:id/review-changes/:roundId', async ({ ctx, me, params }) => {
+    const c = await cardOf(params.id, me);
+    if (!projectsOf(me).includes(c.project)) throw new ApiError(403, 'FORBIDDEN', 'Only project members can view changes');
+    const row = await db.get('SELECT manifest FROM review_change_sets WHERE card_seq = ? AND round_id = ?', c.seq, params.roundId);
+    if (!row) return { manifest: null };
+    const manifest = JSON.parse(row.manifest);
+    manifest.contentExpired = Number.isFinite(manifest.expiresAt) && manifest.expiresAt <= Date.now();
+    if (restrictsContent(await peopleMap(ctx),c.project) || !(await cfgOf(c.project)).diffUpload) manifest.contentAllowed = false;
+    if (manifest.contentExpired || manifest.contentAllowed === false) return { manifest };
+    const parts = await db.all('SELECT file_index, lines FROM review_change_parts WHERE card_seq = ? AND round_id = ? AND expires_at > ? ORDER BY file_index, part', c.seq, params.roundId, Date.now());
+    for (const part of parts) {
+      const file = manifest.files[part.file_index];
+      if (file) (file.lines ||= []).push(...JSON.parse(part.lines));
+    }
+    return { manifest };
+  });
+
   route('POST', '/api/cards/:id/review-request', async ({ ctx, me, req, params }) => {
     const c = await cardOf(params.id, me);
     const body = await readJson(req);
     const version = String(body.version ?? '').trim();
     if (!VERSION_RE.test(version)) throw invalid('version 需為 40 碼 SHA 或 diff 指紋（7～80 個英數字）');
+    if (body.changeManifest !== undefined || body.worktree !== undefined) throw invalid('送審只需提供版本，請勿傳工作樹或程式差異');
+    const tests = body.tests ?? [];
+    if (!Array.isArray(tests) || tests.length > 100 || tests.some(t => !t || typeof t.name !== 'string' || !t.name.trim() || t.name.length > 120 || typeof t.passed !== 'boolean')) throw invalid('測試結果格式不符');
     const note = String(body.note ?? '').trim();
     if (!note || note.length > 500) throw invalid('note（改了什麼、怎麼驗證）為必填，最多 500 字');
     if (body.isCode !== undefined && typeof body.isCode !== 'boolean') throw invalid('isCode 需為 true／false');
@@ -308,14 +419,29 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     // 群組訊息（作者名義）：AI 審查者用 replyFrom 叫醒；人進「要你處理」的審查清單（不另外佔 replyFrom）
     const names = reviewers.map(id => people.get(id).name);
     const config = await repoOf(c.project);
-    const selected = body.repo === undefined ? config : config?.items?.find(item => item.name === body.repo);
+    const selected = body.repo === undefined ? (config?.items?.find(item => canonicalRepo(item.url) === body.origin) || config) : config?.items?.find(item => item.name === body.repo);
     if (body.repo !== undefined && !selected) throw invalid('找不到指定的程式庫名稱');
+    let fetched = null, fetchIssue = null, fallback = null;
+    if (isCode) {
+      try {
+        if (!selected?.url) throw new Error('這個專案沒有設定程式庫');
+        if (body.origin !== undefined && (!body.origin || String(selected.url).replace(/\/$/, '').replace(/\.git$/, '').toLowerCase() !== body.origin)) throw new Error('本機 origin 與專案程式庫無法核對，請檢查工作樹與程式庫設定');
+        const restricted = restrictsContent(people,c.project);
+        if (cfg.localFallback && configuredOrigins(config,body.origins)) fallback = restricted || !cfg.diffUpload ? 'summary' : 'content';
+        if (restricted) throw new Error('受限專案須設定只回傳檔名與行數的行內 Git 連線');
+        fetched = await fetchChanges(selected, version, { allowContent: cfg.diffUpload });
+        fallback = null;
+      } catch (error) {
+        fetchIssue = error.message;
+      }
+    }
     const cmp = compareUrl(selected, version, branch);
-    const requestComment = '\u001e' + JSON.stringify({ note, branch: branch || null, repo: selected?.name || null });
+    const requestComment = '\u001e' + JSON.stringify({ note, tests:tests.map(({name,passed})=>({name,passed})), branch: branch || null, repo: selected?.name || null, fetchIssue, fallback, origins: fallback ? body.origins : undefined, summary: fetched && { files: fetched.manifest.files.length, added: fetched.manifest.files.reduce((n,f) => n + f.added, 0), removed: fetched.manifest.files.reduce((n,f) => n + f.removed, 0) } });
     const text = `[交接] ${names.map(n => '@' + n).join(' ')} ${key} 請你審查：${c.title}\n版本：${version}${branch ? `（分支 ${branch}）` : ''}\n改了什麼、怎麼驗證：${note}${diffDocId ? `\ndiff：專案文件 ${diffDocId}` : cmp ? `\n比較：${cmp}` : ''}\n審完用 aigile_review（cardId ${key}、version 照上面、roundId＝這則訊息的 messageId、result pass／changes、意見）。`;
     const firstAi = reviewers.find(id => people.get(id).kind === 'ai');
     const msg = await createMessage(ctx, me, { project: c.project, text: text.slice(0, 4000), recipientIds: reviewers, ...(firstAi ? { replyFrom: [firstAi] } : {}), requestId: `review:${c.seq}:${version}:${at}` });
     const mid = msg.message.messageId;
+    if (fetched) appendSnapshot(stmts, c, mid, version, fetched, at);
     const myTool = me.kind === 'ai' ? maps.tools.get(me.id) || null : null, myModel = me.kind === 'ai' ? maps.models.get(me.id) || null : null; // 作者這一刻的工具與模型
     for (const id of reviewers) {
       const p = people.get(id);
@@ -325,7 +451,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     stmts.push(['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, REVIEW_LOG, `${me.name} ${round.req ? '重新送審' : '送審'} ${short(version)}，審查者 ${names.join('、')}：${note}`.slice(0, 1000)]]);
     stmts.push(['INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', [c.seq, mid]]);
     await db.batch(stmts);
-    return { cardId: key, version, reviewers: reviewers.map(id => person(people, id, maps)), messageId: mid, sequence: msg.message.sequence };
+    return { cardId: key, version, reviewers: reviewers.map(id => person(people, id, maps)), messageId: mid, sequence: msg.message.sequence, ...(fetchIssue ? { warnings: [fetchIssue] } : {}), ...(fallback ? { fallback } : {}), ...(fetched ? { changeSource:'從主機取得' } : {}) };
   });
 
   // 送審附 diff（專案開了「送審可以上傳 diff」才行）：存專案文件、不過期。只有這個入口用「本專案自己的程式差異」聲明，其他上傳照舊不收程式碼
@@ -431,8 +557,18 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const { state, round } = stateOf(evs, cfg, people);
     if (!needsReview(cfg, round)) return null; // 只審程式卡、作者標了不是程式卡
     if (state !== 'passed') throw new ApiError(409, 'REVIEW_REQUIRED', '這張卡還沒通過審查，不能請人同意 commit。請先送審（aigile_review_request），通過後再發。');
-    const hexes = [...new Set(text.match(HEX_RE) || [])];
-    if (hexes.length && !hexes.some(h => sameVersion(h, round.req.version))) {
+    const hexes = [...new Set(text.replace(/(?:基底|基準|疊在|base|parent)\s*(?:SHA|commit)?\s*[:：]?\s*\b[0-9a-f]{7,64}\b/gi,' ').match(HEX_RE) || [])];
+    const matches = (hashes, version, repos, same) => {
+      const components = (repos || []).map(r => r.fingerprint);
+      if (components.length < 2) return hashes.some(h => same(h, version));
+      const targets = [...new Set([version,...components])];
+      const resolved = hashes.map(h => {
+        const hits = targets.filter(t => t === h || (h.length >= 7 && h.length <= 12 && t.startsWith(h)));
+        return hits.length === 1 ? hits[0] : null;
+      });
+      return resolved.every(Boolean) && (resolved.includes(version) || components.every(h => resolved.includes(h)));
+    };
+    if (hexes.length && !matches(hexes, round.req.version, requestDetails(round.req.comment).summary?.repositories, sameVersion)) {
       await db.batch([
         ['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, at) VALUES (?,?,?,?,?,?,?)', [randId('rv'), c.seq, c.project, 'void', hexes.find(h => h.length === 40) || hexes[0], me.id, nowIso()]],
         ['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, nowIso(), me.id, REVIEW_LOG, `版本變了，通過作廢（審過 ${short(round.req.version)}，要 commit 的是 ${short(hexes[0])}）`]],

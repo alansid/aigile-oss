@@ -3683,6 +3683,7 @@ ${ending}`;
 
   // 清除超過保存期限的檔案（排程呼叫）
   async function cleanupExpired() {
+    await db.run('DELETE FROM review_change_parts WHERE (card_seq, round_id, file_index, part) IN (SELECT card_seq, round_id, file_index, part FROM review_change_parts WHERE expires_at <= ? ORDER BY expires_at LIMIT 500)', Date.now());
     if (!storage) return 0;
     const rows = await db.all('SELECT * FROM files WHERE deleted_at IS NULL AND expires_at <= ? LIMIT 500', Date.now());
     for (const f of rows) {

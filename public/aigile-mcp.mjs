@@ -17,6 +17,8 @@
 // stdout 只寫 MCP 回應（一行一則 JSON）；說明與錯誤寫 stderr。
 // aigile_memory（read／patch／write）成功、aigile_ack 回了 messagesCursor，就同步寫本機 .aigile/<代號>/state.json（AI 不用另外寫）。
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -181,6 +183,82 @@ async function fetchOriginal(agent, out) {
   } catch (e) { log(`下載原檔失敗：${e.message}`); return out; }
 }
 
+
+function reviewRepo(worktree) {
+  const root = fs.realpathSync(WORK || process.cwd());
+  const cwd = fs.realpathSync(path.resolve(root, worktree || process.cwd()));
+  const relative = path.relative(root, cwd);
+  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('工作樹超出工作區');
+  const git = (...args) => execFileSync('git', ['--no-replace-objects', ...args], { cwd, windowsHide:true,
+    timeout:10000, maxBuffer:16*1024*1024, stdio:['pipe','pipe','ignore'] });
+  if (fs.realpathSync(git('rev-parse','--show-toplevel').toString().trim()) !== cwd) throw new Error('請指定 Git 工作樹根目錄');
+  const raw = git('remote','get-url','origin').toString().trim();
+  const ssh = /^git@github\.com:([\w.-]+\/[\w.-]+)$/.exec(raw);
+  const url = ssh ? new URL('https://github.com/' + ssh[1]) : new URL(raw);
+  if (!['https:','ssh:'].includes(url.protocol) || url.port || url.hostname !== 'github.com' || !/^\/[\w.-]+\/[\w.-]+\/?$/.test(url.pathname)) throw new Error('不支援的 Git 主機');
+  return { git, origin: 'https://github.com' + url.pathname.replace(/\/$/, '').replace(/\.git$/, '').toLowerCase() };
+}
+
+export function collectLocalReview(repos, version, includeContent) {
+  let byteLimit = false;
+  if (repos.length < 1 || repos.length > 2 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(version)) throw new Error('送審版本格式不符');
+  const hash = createHash(version.length === 64 ? 'sha256' : 'sha1');
+  let commit = false, remaining = 2*1024*1024;
+  const files = [], repositories = [];
+  for (const repo of repos) {
+    const { git, origin } = repo;
+    if (repos.length === 1 && version.length === 40) {
+      try { commit = git('cat-file','-t',version).toString().trim() === 'commit'; } catch {}
+    }
+    const common = ['--no-ext-diff','--no-textconv','--no-color'];
+    const cmd = commit ? ['show','--format=','--first-parent',...common,version] : ['diff',...common];
+    const bytes = git(...cmd);
+    hash.update(bytes);
+    repositories.push({ origin, fingerprint: createHash("sha256").update(bytes).digest("hex") });
+    const sections = bytes.toString('utf8').split(/^diff --git /m).slice(1);
+    const statCmd = commit ? ['show','--format=','--first-parent',...common,'--numstat','-z',version] : ['diff',...common,'--numstat','-z'];
+    const stats = git(...statCmd).toString('utf8').split('\0');
+    let pos = 0;
+    for (const section of sections) {
+      const m = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(stats[pos++] || '');
+      if (!m) throw new Error('Git 變更已改變，請重新送審');
+      const previousName = m[3] ? undefined : stats[pos++];
+      const name = m[3] || stats[pos++];
+      if (!name || /(^|[\\/])(?:\.git|\.aigile)(?:[\\/]|$)/i.test(name)) throw new Error('變更包含排除的內部路徑');
+      const all = section.replace(/\n$/, '').split('\n');
+      const at = all.findIndex(line=>line.startsWith('@@ '));
+      const rows = at < 0 ? [] : all.slice(at);
+      const file = { origin, name, previousName, status: previousName ? 'R' : all.some(l=>l.startsWith('new file mode ')) ? 'A' : all.some(l=>l.startsWith('deleted file mode ')) ? 'D' : 'M',
+        binary:m[1] === '-', added:Number(m[1]) || 0, removed:Number(m[2]) || 0, totalLines:rows.length };
+      if (includeContent && rows.length) {
+        file.lines = [];
+        for (const line of rows.slice(0,500)) {
+          const size = Buffer.byteLength(JSON.stringify(line)) + 1;
+          if (size > remaining) { byteLimit = true; break; }
+          if (size > 60000) break;
+          remaining -= size;
+          file.lines.push(line);
+        }
+        file.truncated = file.lines.length < rows.length;
+      }
+      files.push(file);
+    }
+    if (stats.slice(pos).some(Boolean) || (!commit && !bytes.equals(git(...cmd)))) throw new Error('工作樹已變更，請重新送審');
+  }
+  if (!commit && hash.digest('hex') !== version) throw new Error('工作樹與送審指紋不符');
+  return { version, files, repositories, byteLimit };
+}
+
+export function prepareReview(input, resolveRepo = reviewRepo) {
+  const {worktree, worktrees, origin, origins, ...args} = input;
+  if (worktree === undefined && worktrees === undefined) return {args,repos:[]};
+  const paths = worktrees === undefined ? [worktree] : worktrees;
+  if ((worktree !== undefined && worktrees !== undefined) || !Array.isArray(paths) || !paths.length || paths.length > 2 ||
+      paths.some(p => typeof p !== 'string' || !p.trim())) throw new Error('Invalid worktree selection');
+  const repos = paths.map(resolveRepo);
+  return {args:{...args,origin:repos[0].origin,origins:repos.map(repo=>repo.origin)},repos};
+}
+
 async function forward(line) {
   let msg;
   try { msg = JSON.parse(line); } catch { return send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'JSON 解析失敗' } }); }
@@ -241,9 +319,46 @@ async function forward(line) {
       } catch (e) { return reply({ ...text(`失敗：${e.message}`), isError: true }); }
     }
   }
+  let localRepos = [];
+  if (method === 'tools/call' && msg.params?.name === 'aigile_review_request') {
+    try {
+      const prepared = prepareReview(msg.params.arguments || {});
+      localRepos = prepared.repos;
+      line = JSON.stringify({...msg,params:{...msg.params,arguments:prepared.args}});
+    } catch {
+      return fail('Cannot verify the specified Git worktree. Check its path and origin.');
+    }
+  }
   let out;
   try { out = await post(AGENT, line); } catch (e) { return fail(e.message); }
   if (out === null) return;
+  if (localRepos.length && msg.params?.name === 'aigile_review_request') {
+    const rpc = JSON.parse(out);
+    const entry = rpc.result?.content?.[0];
+    if (entry?.text && !rpc.result.isError) {
+      const result = JSON.parse(entry.text);
+      if (result.fallback) {
+        try {
+          const wantsContent = result.fallback === 'content';
+          if (wantsContent && wakeAgent !== undefined) throw new Error('watcher 回合不能補傳程式內容');
+          const packet = collectLocalReview(localRepos, result.version, wantsContent);
+          const token = fs.readFileSync(path.join(dirOf(AGENT), '.token'), 'utf8').trim();
+          const response = await fetch(baseOf(AGENT) + '/api/cards/' + encodeURIComponent(result.cardId) + '/review-changes/' + encodeURIComponent(result.messageId), {
+            method:'POST', redirect:'error', signal:AbortSignal.timeout(30000),
+            headers:{ Authorization:'Bearer ' + token, 'Content-Type':'application/json' }, body:JSON.stringify(packet)
+          });
+          if (!response.ok) throw new Error('補傳未完成（HTTP ' + response.status + '）');
+          delete result.warnings;
+          result.changeSource = wantsContent ? '已從本機補傳' : '已從本機補送檔名與行數';
+        } catch (err) {
+          result.warnings = [...(result.warnings || []), err.message.startsWith('Command failed') ? 'Git 無法讀取指定版本' : err.message];
+        }
+        delete result.fallback;
+        entry.text = JSON.stringify(result);
+        out = JSON.stringify(rpc);
+      }
+    }
+  }
   if (method === 'tools/call') syncState(msg.params?.name, out);
   if (method === 'tools/call' && msg.params?.name === 'aigile_doc_read') out = await fetchOriginal(AGENT, out);
   if (FIXED && !wakeAgent) return send(out);

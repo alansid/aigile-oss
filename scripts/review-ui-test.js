@@ -90,7 +90,7 @@ try {
     assert.match(await text('.rv-diff-more'), /打開（預設）：只有送審能附 diff/, 'A 點說明展開長說明（開源預設打開）');
     assert.match(await text('.rv-set'), /人審通過時 分開按 通過後再按一次「同意 commit」（預設） 一起算 通過就等於同意 commit/, 'A 人審通過時');
     const rows = await js("[...document.querySelectorAll('.rv-set .rv-row > .rv-row-l b')].map(b => b.textContent)");
-    assert.deepEqual(rows, ['哪些卡要審', '誰可以審', '要幾位通過', '要多不一樣', '作者的主人', '送審附 diff', '人審通過時'], 'A v2 欄位順序：' + rows);
+    assert.deepEqual(rows, ['哪些卡要審', '誰可以審', '要幾位通過', '要多不一樣', '作者的主人', '本機補傳', '送審附 diff', '人審通過時'], 'A v2 欄位順序：' + rows);
     assert.ok(!(await hscroll()), `G ${tag} 展開後不橫向捲動`);
     await js("document.querySelector('.rv-set .rv-row:nth-of-type(4)')?.scrollIntoView({ block: 'center' }); true");
     await shot(`01a-${tag}-專案設定-審查-只有程式卡`);
@@ -157,7 +157,7 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.match(await text('#card-drawer .rv-box'), /^審查 要改 程式卡（有分支） 示範Codex AI · Codex · 模型不明 審 a1b2c3d · .+ 拿掉了「不會連正式庫」的檢查，請加回來；幣別欄沒有測空值。 已退回作者。改好重新送審，預設還是由 示範Codex 審。 重新送審 歷次紀錄/, `C ${tag} 要改`);
+    assert.match(await text('#card-drawer .rv-box'), /^審查與程式變更 要改 程式卡（有分支） 示範Codex AI · Codex · 模型不明 審 a1b2c3d · .+ 拿掉了「不會連正式庫」的檢查，請加回來；幣別欄沒有測空值。 已退回作者。改好重新送審，預設還是由 示範Codex 審。 重新送審 (?:看程式變更 ›|程式變更請在電腦上看) 歷次紀錄/, `C ${tag} 要改`);
     assert.ok(!(await hscroll()), `G ${tag} 卡片不橫向捲動`);
     await shot(`03-${tag}-卡片-要改`);
   }
@@ -166,7 +166,7 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.match(await text('#card-drawer .rv-box'), /^審查 ✅ 已審查 程式卡 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。 下一步：找人同意 commit。 歷次紀錄 .+通過 · 示範Codex · Codex · 模型不明 · 9f8e7d6 .+重新送審 · 林志明 · 9f8e7d6 .+要改 · 示範Codex · Codex · 模型不明 · a1b2c3d .+送審 · 林志明 · a1b2c3d$/, `C ${tag} 已審查＋歷次紀錄`);
+    assert.match(await text('#card-drawer .rv-box'), /^審查與程式變更 ✅ 已審查 程式卡 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。 下一步：找人同意 commit。 (?:看程式變更 ›|程式變更請在電腦上看) 歷次紀錄 .+通過 · 示範Codex · Codex · 模型不明 · 9f8e7d6 .+重新送審 · 林志明 · 9f8e7d6 .+要改 · 示範Codex · Codex · 模型不明 · a1b2c3d .+送審 · 林志明 · a1b2c3d$/, `C ${tag} 已審查＋歷次紀錄`);
     await shot(`03b-${tag}-卡片-已審查`);
   }
 
@@ -193,7 +193,7 @@ try {
     await login(liu.token, '/p/main/inbox');
     await until(() => js(`!!${badRow}?.querySelector('.rv-box')?.getClientRects().length && !document.documentElement.classList.contains('i18n-wait')`), 15000, 'F 紅框');
     assert.match(await js(`${badRow}.querySelector('.rv-box').innerText.replace(/\\s+/g, ' ').trim()`), /^審查 ⚠ 版本對不上 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 審過的是 9f8e7d6，要 commit 的是 4c5d6e7。中間改過的程式沒人看過，建議先退回重新送審。$/, `F ${tag} 紅框`);
-    assert.equal(await js(`[...${badRow}.querySelectorAll('.rv-mm button')].map(b => b.textContent.trim()).join('|')`), '退回重新送審|仍要同意', 'F 退回重新送審／仍要同意');
+    assert.equal(await js(`[...${badRow}.querySelectorAll('.rv-mm button')].map(b => b.textContent.trim()).join('|')`), '退回重新送審|仍要同意|看程式變更 ›', 'F 退回重新送審／仍要同意');
     assert.match(await js(`${confRow}?.querySelector('.rv-box')?.innerText || ''`), /✅ 已審查/, `D ${tag} 舊的那則請同意的是審過的版本：仍是綠框`);
     await js(`${badRow}.scrollIntoView({ block: 'center' }); true`);
     await shot(`07-${tag}-要你處理-版本對不上`);
@@ -203,7 +203,7 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.match(await text('#card-drawer .rv-box'), /^審查 通過已作廢 程式卡 示範Codex 通過的是 9f8e7d6，現在的版本是 4c5d6e7。 程式改過，原本的通過就不算。請重新送審。 重新送審/, `D ${tag} 通過已作廢`);
+    assert.match(await text('#card-drawer .rv-box'), /^審查與程式變更 通過已作廢 程式卡 示範Codex 通過的是 9f8e7d6，現在的版本是 4c5d6e7。 程式改過，原本的通過就不算。請重新送審。 重新送審/, `D ${tag} 通過已作廢`);
     await shot(`04-${tag}-卡片-通過已作廢`);
   }
 
@@ -215,7 +215,7 @@ try {
     await size(w, h);
     await login(liu.token, '/p/main/inbox');
     await until(() => js(`!!${rvRow}?.getClientRects().length && !document.documentElement.classList.contains('i18n-wait')`), 15000, 'E 請你審查（畫出來了）');
-    assert.match(await js(`${rvRow}.innerText.replace(/\\s+/g, ' ').trim()`), new RegExp(`^🔍 請你審查：${K2} 報價單加上匯率換算 作者 示範PG AI · Claude · 模型不明 · 版本 a1b2c3d · 「加匯率換算；跑了 rate-test，全過。」 要改… ?通過$`), `E ${tag} 請你審查`);
+    assert.match(await js(`${rvRow}.innerText.replace(/\\s+/g, ' ').trim()`), new RegExp(`^🔍 請你審查：${K2} 報價單加上匯率換算 作者 示範PG AI · Claude · 模型不明 · 版本 a1b2c3d · 「加匯率換算；跑了 rate-test，全過。」 (?:看程式變更 › )?要改… ?通過$`), `E ${tag} 請你審查`);
     assert.ok(await js(`(() => { const r = ${rvRow}, m = r.querySelector('.sugg-main'), a = r.querySelector('.sugg-actions'); return m.getBoundingClientRect().width >= r.clientWidth - 40 && a.getBoundingClientRect().top >= m.getBoundingClientRect().bottom - 2; })()`), `E ${tag} 說明佔滿整列、按鈕在下面`);
     assert.match(await text('.wreview .wsugg-head'), /^請你審查 1 按「要改…」要寫一句意見才送得出去。$/, 'E 區塊標題');
     assert.ok(!(await hscroll()), `G ${tag} 請你審查不橫向捲動`);
@@ -258,7 +258,7 @@ try {
   await enReady();
   await sleep(400);
   const enBox = await text('#card-drawer .rv-box');
-  assert.match(enBox, /^Review Approval void /, 'H 卡片審查欄：' + enBox);
+  assert.match(enBox, /^Review & code changes Approval void /, 'H 卡片審查欄：' + enBox);
   assert.match(enBox, /示範Codex approved 9f8e7d6; the current version is 4c5d6e7\./, 'H 作廢那句是英文：' + enBox);
   for (const w of ['Version changed, approval void', 'Approved', 'Sent for review again', 'Changes requested', 'Sent for review']) assert.ok(enBox.includes(' · ' + w + ' · '), 'H 歷次紀錄翻成英文：' + w + '｜' + enBox);
   assert.ok(!/[㐀-鿿]/.test(enBox.replace(/示範\w+/g, '').replace(/劉昱志|林志明/g, '')), 'H 卡片審查欄沒有剩中文（人名除外）：' + enBox);

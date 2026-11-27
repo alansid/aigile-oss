@@ -318,6 +318,34 @@ try {
   await req(pg.token, `/api/cards/${K9}/review-request`, 'POST', { version: SHA1, note: 'x', reviewerId: id(cx) });
   assert.equal((await tool(cx.token, 'aigile_review', { cardId: K9, version: SHA1, result: 'pass', roundId: 'msg_old' })).isError, true, 'I6 MCP 帶錯的 roundId 也擋');
 
+
+  const origin = 'https://github.com/example/demo';
+  assert.equal((await putRepos([{name:'Demo',url:origin,branch:'main',primary:true}])).status,200);
+  assert.equal((await req(liu.token,SET,'PUT',{cards:'all',who:'any',need:1,needHuman:false,differ:'any',notOwner:false,localFallback:true,diffUpload:true})).status,200);
+  const secondOrigin = origin+'-oss';
+  await putRepos([{name:'Demo',url:origin,branch:'main',primary:true},{name:'OSS',url:secondOrigin,branch:'main',primary:false}]);
+  const components = ['c'.repeat(64),'d'.repeat(64)];
+  const version = 'a'.repeat(64);
+  const sent = await rq(pg.token,{version,origin,origins:[origin,secondOrigin],reviewerId:id(cx)});
+  assert.equal(sent.status,200, JSON.stringify(sent.body));
+  assert.equal(sent.body.fallback,'content');
+  const endpoint = '/api/cards/'+K+'/review-changes/'+sent.body.messageId;
+  const packet = {version,repositories:[{origin,fingerprint:components[0]},{origin:secondOrigin,fingerprint:components[1]}],files:[{origin,name:'test.txt',status:'M',added:1,removed:1,lines:['@@ -1 +1 @@','-old','+new']}]};
+  assert.equal((await req(cx.token,endpoint,'POST',packet)).status,409);
+  assert.equal((await req(pg.token,endpoint,'POST',packet)).status,200);
+  let snap = (await req(liu.token,endpoint)).body.manifest;
+  assert.deepEqual(snap.files[0].lines,packet.files[0].lines);
+  await db.run('UPDATE review_change_parts SET expires_at = ? WHERE round_id = ?',0,sent.body.messageId);
+  snap = (await req(liu.token,endpoint)).body.manifest;
+  assert.equal(snap.files[0].lines,undefined);
+  assert.equal(snap.files[0].added,1);
+  assert.equal((await req(cx.token,'/api/cards/'+K+'/review','POST',{version,roundId:sent.body.messageId,result:'pass'})).status,200);
+  const commitAsk = hashes => ask('[需確認] '+K+' 請同意 commit '+hashes.join(' '));
+  assert.equal((await commitAsk(components)).status,201);
+  assert.equal((await commitAsk([...components.map(h=>h.slice(0,9)),'疊在 abc0123 之上'])).status,201);
+  assert.equal((await req(liu.token,'/api/cards/'+K)).body.review.state,'passed');
+  assert.equal((await commitAsk([components[0]])).status,201);
+  assert.equal((await req(liu.token,'/api/cards/'+K)).body.review.state,'void');
   console.log('review-test：全部通過（預設不審、設定權限與紀錄、沒通過就擋 commit、審查者不能是作者／同一家／作者的主人、送審→要改→重新送審→通過、版本變了通過作廢、要 2 位至少一位是人、人通過就算同意 commit、diff 上傳開關（開源預設開）、比較連結、MCP）');
 } finally {
   db.close();

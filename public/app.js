@@ -699,6 +699,7 @@
   // ---------- 啟動 ----------
   async function start() {
     await Promise.race([window.aigileI18n?.ready, new Promise(r => setTimeout(r, 3000))]); // 英文字典（最多等 3 秒）
+    const initialDiff = /^#diff\/([A-Z]+-\d+)\/(msg_[\w-]+)$/.exec(location.hash);
     state.me = await api('/api/me');
     if (state.me.memberType !== 'human') {
       store.del(TOKEN_KEY);
@@ -739,6 +740,7 @@
     await showPage(route.page || (projectView() === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files','overview'].includes(savedPage) ? savedPage : 'messages'), { replace: true });
     $('#boot').hidden = true;
     $('#app').hidden = false;
+    if (initialDiff) openReviewChanges(initialDiff[1], '', initialDiff[2]).catch(err => toast(err.message));
     if (state.page === 'messages') scrollBottom();
     if (state.me.setupWizard) openSetupWizard(); // 預設管理員改完帳密後的第一次設定引導
   }
@@ -1478,8 +1480,9 @@
   function messageHtml(m) {
     const prevCard = state.lastCard;
     state.lastCard = ''; // 一行／精簡沒有卡片列，下一則同卡要完整顯示
-    if (isFlowLine(m)) return flowLineHtml(m);
-    if (isSlim(m)) return slimHtml(m);
+    const reviewLink = /請你審查|審查：通過/.test(m.text) ? reviewChangesLink(rvKeyOf(m), '', /請你審查/.test(m.text) ? m.messageId : '') : '';
+    if (isFlowLine(m)) return flowLineHtml(m) + reviewLink;
+    if (isSlim(m)) return slimHtml(m) + reviewLink;
     const ai = aiParts(m);
     if (ai && !ai.head && !ai.rest && tagOf(m.text) === '交接') return flowLineHtml(m); // 只有格式字的系統交接通知縮成一行
     state.lastCard = msgCardOf(m);
@@ -1502,6 +1505,7 @@
         ${cardRefHtml(m, prevCard)}
         ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${nameCodeHtml(state.participants.get(parent.author.participantId) || parent.author, dups)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
         ${m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, ai) : textHtml(m)}${docsHtml(m)}
+        ${reviewLink}
         ${authHtml(m)}
         <div class="msg-foot${linkedCapsules(m) || state.open.has(m.messageId) || (!m.file && !ai && isLong(m.text)) || repliesOf(m.messageId).length ? '' : ' acts-only'}">
           <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
@@ -1579,7 +1583,8 @@
       <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}${timeHtml(m)}${ask}${resolvedPill(m)}${unansweredTag(m)}</div>
       ${re}
       ${body}
-      ${authHtml(m)}
+      ${/請你審查|審查：通過/.test(m0.text) ? reviewChangesLink(rvKeyOf(m0),'',/請你審查/.test(m0.text)?m0.messageId:'') : ''}
+      ${authHtml(m0)}
       <div class="msg-foot">
         ${needReply(m) ? `<button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆這則</button>` : ''}
         ${state.open.has(m.messageId) ? `<button type="button" class="link more" data-fold="${esc(m.messageId)}">收合 ▴</button>` : !m.file && !ai && isLong(m.text) ? `<button type="button" class="link more" data-more="${esc(m.messageId)}">${state.expanded.has(m.messageId) ? '收合' : '展開全文'}</button>` : ''}
@@ -3467,6 +3472,8 @@
   let modalGuard = null; // 關彈窗前先問：回傳 true 才關（角色提案改了沒送出）
   async function tryCloseModal() { if (modalGuard && !(await modalGuard())) return; closeModal(); }
   function closeModal() {
+    const changes = document.querySelector('#modal-root .change-modal');
+    if (changes && location.hash.startsWith('#diff/')) history.replaceState(history.state, '', location.pathname + location.search + (changes.dataset.changeOrigin || ''));
     modalGuard = null;
     $('#modal-root').innerHTML = '';
     if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
@@ -7117,9 +7124,10 @@
       if (sent) rows.push(answeredHtml(m, sent));
       else if (pend && (pend.key === 'commit' || (showQuick && pend.key === 'need'))) rows.push(authConfirm(m, pend));
       else if (!answered && (hasCommit || showQuick)) rows.push(hasCommit
-        ? ((rv = rvCommitBox(m)) => (rv ? rv.html : '') + (rv?.mismatch ? `<div class="auth-row rv-mm"><button type="button" class="btn auth-btn" data-rv-back="${esc(m.messageId)}">退回重新送審</button>${authBtn(m, 'commit', '仍要同意', '', true)}</div>` : `<div class="auth-row"><span class="auth-title">授權 commit</span>${authBtn(m, 'commit', '💾 同意 commit（只存在本機）')}</div>`))() // 審查欄
+        ? ((rv = rvCommitBox(m)) => (rv ? rv.html : '') + (rv?.mismatch ? `<div class="auth-row rv-mm"><button type="button" class="btn auth-btn" data-rv-back="${esc(m.messageId)}">退回重新送審</button>${authBtn(m, 'commit', '仍要同意', '', true)}${reviewChangesLink(rvKeyOf(m),m.messageId)}</div>` : `<div class="auth-row"><span class="auth-title">授權 commit</span>${authBtn(m, 'commit', '💾 同意 commit（只存在本機）')}${reviewChangesLink(rvKeyOf(m), m.messageId)}</div>`))() // 審查欄
         : quickHtml(m));
     }
+
     for (const sha of shas) {
       const sent = mineR.find(r => r.text.includes('同意 push：' + sha));
       if (sent) rows.push(`<div class="auth-row sent"><b>已授權 Push · ${shortTime(sent.createdAt)}</b><span class="muted small">僅限 ${sha.slice(0, 7)}…${sha.slice(-4)}</span></div>`);
@@ -7155,6 +7163,8 @@
     await Promise.all(miss.map(id => api(`/api/messages/${encodeURIComponent(id)}`).then(m => { state.byId.set(id, m); }).catch(() => {})));
   }
   function refreshMsg(id) {
+    const changeFoot = document.querySelector('.change-modal [data-change-auth]');
+    if (changeFoot?.dataset.changeAuth === id && state.byId.has(id)) changeFooter(changeFoot,state.byId.get(id));
     if (state.page === 'inbox' && document.querySelector(`#page-work [data-q-root="${CSS.escape(id)}"], #page-work [data-conf-row="${CSS.escape(id)}"]`)) { // 收件匣裡的選項區：重畫收件匣、保留捲動位置
       const box = $('#page-work'), top = box.scrollTop, keep = document.activeElement?.dataset?.qText;
       renderWork(); box.scrollTop = top;
@@ -7188,7 +7198,7 @@
       if (!m || !p || p.busy) return true;
       p.busy = true; p.error = ''; refreshMsg(id);
       postMsg({ text: p.text, requestId: p.requestId, replyToMessageId: id, recipientIds: [m.author.participantId] })
-        .then(r => { authPending.delete(id); onNewMessage(r); refreshMsg(id); toast('已送出授權'); })
+        .then(r => { authPending.delete(id); onNewMessage(r); refreshMsg(id); toast(p.key === 'commit' ? cw('已同意 commit，已通知 ','Commit approved. Notified ')+m.author.name : '已送出授權'); })
         .catch(err => {
           p.busy = false; p.error = err.message;
           if (err.code === 'IDEMPOTENCY_CONFLICT' || err.code === 'INVALID_REQUEST') p.requestId = newRequestId();
@@ -10116,6 +10126,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <label class="field repo-url"><span>連結</span><input name="url" type="url" required maxlength="300" value="${esc(item.url)}" placeholder="https://github.com/org/repo"></label>
         <label class="field repo-branch"><span>分支</span><input name="branch" maxlength="100" value="${esc(item.branch)}" placeholder="main"></label>
         <label class="repo-primary"><input type="radio" name="primary" data-primary ${item.primary ? 'checked' : ''}><span>主要</span></label>
+        <button type="button" class="link small" data-repo-test>測試連線</button>
         <button type="button" class="repo-remove" data-remove aria-label="移除">✕</button>
       </div>`).join('') || '<span class="muted">尚無程式庫</span>';
       const add = form.querySelector('.repo-add');
@@ -10158,6 +10169,15 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const btn = e.target.closest('button');
       if (!btn) return;
       const row = btn.closest('[data-row]');
+      if (btn.hasAttribute('data-repo-test')) {
+        const { url, branch } = items[Number(row.dataset.row)];
+        btn.disabled = true;
+        api('/api/projects/' + encodeURIComponent(p.id) + '/repo/test', { method:'POST', body:{ url, branch } })
+          .then(r => { form.querySelector('#repo-err').textContent = r.repository + ' · ' + r.branch + ' · ' + r.sha.slice(0,12) + ' ✓'; })
+          .catch(err => { form.querySelector('#repo-err').textContent = err.message; })
+          .finally(() => { btn.disabled = false; });
+        return;
+      }
       if (btn.matches('.repo-add') && items.length < 5) items.push({ url: '', branch: '', name: '', primary: !items.length });
       else if (btn.hasAttribute('data-remove')) {
         const i = Number(row.dataset.row);
@@ -11635,6 +11655,230 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const rvCodeTag = r => (r.isCode ? `程式卡${r.diffDocId ? '（附 diff）' : r.branch ? '（有分支）' : ''}` : '');
   const RV_EV = { request: '送審', changes: '要改', pass: '通過', void: '版本變了，通過作廢' };
   // 卡片上的審查欄
+
+
+  function displayPatch(file, split) {
+    let oldLine = 0, newLine = 0, inHunk = false;
+    const rows = [];
+    let deleted = [], added = [];
+    const cell = (entry, kind) => entry ? '<td class="change-' + kind + '">' + entry.number + '</td><td class="change-' + kind + '"><pre data-nt>' + esc(entry.text) + '</pre></td>' : '<td></td><td></td>';
+    const flush = () => {
+      for (let i = 0; i < Math.max(deleted.length, added.length); i++) rows.push('<tr>' + cell(deleted[i], 'del') + cell(added[i], 'add') + '</tr>');
+      deleted = []; added = [];
+    };
+    for (const line of file.lines || []) {
+      const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (hunk) {
+        flush();
+        oldLine = Number(hunk[1]); newLine = Number(hunk[2]); inHunk = true;
+        rows.push('<tr><td colspan="4"><code data-nt>' + esc(line) + '</code></td></tr>');
+        continue;
+      }
+      if (!inHunk || ![' ', '+', '-'].includes(line[0])) continue;
+      const old = line[0] === '+' ? null : { number: oldLine++, text: line.slice(1) };
+      const next = line[0] === '-' ? null : { number: newLine++, text: line.slice(1) };
+      if (!split) {
+        const kind = old && next ? 'context' : old ? 'del' : 'add';
+        rows.push('<tr class="change-' + kind + '"><td>' + (old?.number || '') + '</td><td>' + (next?.number || '') + '</td><td>' + esc(line[0]) + '</td><td><pre data-nt>' + esc(line.slice(1)) + '</pre></td></tr>');
+      } else if (old && next) {
+        flush(); rows.push('<tr>' + cell(old, 'context') + cell(next, 'context') + '</tr>');
+      } else if (old) deleted.push(old);
+      else added.push(next);
+    }
+    flush();
+    return '<table class="change-patch"><colgroup><col class="cc-number">'+(split ? '<col><col class="cc-number"><col>' : '<col class="cc-number"><col class="cc-sign"><col>')+'</colgroup><tbody>' + rows.join('') + '</tbody></table>';
+  }
+
+  function changeCounts(files) {
+    const added = files.reduce((n,f) => n + f.added, 0);
+    const removed = files.reduce((n,f) => n + f.removed, 0);
+    return '<b class="cc-plus">+' + added + '</b>' + (removed || !files.every(f=>f.status === 'A') ? ' <b class="cc-minus">−' + removed + '</b>' : '');
+  }
+
+  const cw = L;
+  const roundName = n => cw('第 '+n+' 輪送審','Review round '+n);
+  function showChangeFiles(body, manifest) {
+    const sources = manifest.repositories || [];
+    const tabs = document.createElement('div');
+    tabs.className = 'cc-tabs';
+    body.prepend(tabs);
+    const panel = document.createElement('section');
+    panel.className = 'change-layout';
+    body.append(panel);
+    panel.innerHTML = '<aside><input type="search"><small class="cc-count"></small><nav></nav></aside><div class="cc-main"><div class="cc-tools"></div><div class="cc-files"></div></div>';
+    const filter = panel.querySelector('input'), nav = panel.querySelector('nav');
+    const tools = panel.querySelector('.cc-tools'), files = panel.querySelector('.cc-files');
+    filter.placeholder = cw('篩選檔名…','Filter files…');
+    filter.setAttribute('aria-label',filter.placeholder);
+    let active = sources[0]?.origin, split = false;
+    function btn(parent, label, click) {
+      const el = document.createElement('button');
+      el.type = 'button'; el.textContent = label; el.onclick = click; parent.append(el);
+      return el;
+    }
+    for (const [i, repo] of sources.entries()) {
+      const subset = manifest.files.filter(f => f.origin === repo.origin);
+      const tab = btn(tabs,'',() => { active = repo.origin; render(); });
+      tab.dataset.origin = repo.origin;
+      tab.innerHTML = (i ? cw('開源版','Open source') : cw('平台版','Platform')) + ' · ' + subset.length + cw(' 檔 ',' files ') + changeCounts(subset);
+    }
+    btn(tools,cw('全部展開','Expand all'),() => files.querySelectorAll('details').forEach(el => el.open = true));
+    btn(tools,cw('全部收起','Collapse all'),() => files.querySelectorAll('details').forEach(el => el.open = false));
+    const modes = document.createElement('div'); modes.className = 'cc-modes'; tools.append(modes);
+    for (const [value,label] of [[false,cw('單欄','Unified')],[true,cw('左右對照','Split')]]) {
+      btn(modes,label,() => { split = value; render(); }).dataset.split = String(value);
+    }
+    function render() {
+      for (const b of tabs.children) b.setAttribute('aria-pressed',String(b.dataset.origin === active));
+      for (const b of modes.children) b.setAttribute('aria-pressed',String(b.dataset.split === String(split)));
+      const subset = manifest.files.filter(f => (!active || f.origin === active) && f.name.toLowerCase().includes(filter.value.toLowerCase()));
+      panel.querySelector('.cc-count').textContent = subset.length + cw(' 個檔案',' files');
+      nav.replaceChildren(); files.replaceChildren();
+      const metadataOnly = manifest.contentExpired || !manifest.contentAllowed;
+      panel.classList.toggle('cc-metadata',metadataOnly);
+      for (const f of subset) {
+        const parts = f.name.split('/'), name = parts.pop();
+        const status = '<b class="cc-status" data-status="'+esc(f.status)+'">'+esc(f.status)+'</b>';
+        const plus = Math.round(5*f.added/(f.added+f.removed || 1));
+        const meter = '<span class="cc-meter" aria-hidden="true">' + Array.from({length:5},(_,i)=>'<i class="'+(i<plus?'positive':'negative')+'"></i>').join('')+'</span>';
+        const entry = document.createElement(metadataOnly ? 'div' : 'button');
+        entry.className = 'cc-file-row';
+        entry.innerHTML = status+'<span data-nt>'+esc(name)+'<small>'+esc(parts.join('/') || '·')+'</small></span><span>'+changeCounts([f])+' '+meter+'</span>';
+        nav.append(entry);
+        if (metadataOnly) continue;
+        const el = document.createElement('details');
+        el.open = !/lock(?:\.json)?$/.test(f.name);
+        const header = '<summary>'+status+' <code data-nt>'+esc(f.previousName ? f.previousName+' → '+f.name : f.name)+'</code> <span>'+changeCounts([f])+'</span></summary>';
+        el.innerHTML = header + (f.lines?.length ? displayPatch(f,split) : '<p>'+ (f.binary ? cw('二進位檔，不顯示內容','Binary file; no text diff') : cw('只有檔名與行數','File names and line counts only'))+'</p>')
+          + (f.truncated ? '<p class="cc-warning">'+ cw('差異共 ','Diff lines: ')+(f.totalLines ?? '—')+cw(' 行，已保留 ',' · kept ')+(f.lines?.length || 0)+cw(' 行。要看全文，請在送審電腦上看。','. View the complete diff on the submitting computer.')+'</p>' : '');
+        files.append(el);
+        entry.onclick = () => { el.open = true; el.scrollIntoView({block:'nearest'}); };
+      }
+    }
+    filter.oninput = render; render();
+  }
+  function changeFooter(foot,m) {
+    const sent = repliesOf(m.messageId).find(r => isMine(r) && r.text.startsWith('[回覆] 同意 commit（針對第 '+m.sequence+' 則）'));
+    const reviewed = work.rvCache.get(rvKeyOf(m))?.review;
+    const repos = reviewed?.summary?.repositories || [];
+    const hashes = repos.length ? repos.map((repo,i)=>(i?cw('開源','Open source'):cw('平台','Platform'))+' '+repo.fingerprint.slice(0,7)).join(' · ') : (reviewed?.version || '').slice(0,7);
+    const ref = cw('要 commit（第 '+m.sequence+' 則）','Commit request (message '+m.sequence+')')+'　'+hashes;
+    if (sent) {
+      foot.className='modal-foot cc-approved';
+      foot.textContent = '✓ '+cw('已同意 commit，已通知 ','Commit approved. Notified ')+m.author.name+' · '+rvTime(sent.createdAt)+' · '+ref;
+      return;
+    }
+    const mismatch = rvCommitBox(m)?.mismatch;
+    foot.className='modal-foot '+(mismatch?'cc-mismatch':'cc-ask');
+    const reason = mismatch && m.rvMismatch ? cw('⚠ 版本對不上：審過的是 ','⚠ Version mismatch. Reviewed ')+m.rvMismatch.a.slice(0,7)+cw('，要 commit 的是 ', ', requested ')+m.rvMismatch.b.slice(0,7)+cw('。中間改過的程式沒人審過。','. The intervening changes have not been reviewed.') : ref;
+    const help = cw('同意後會在群組回覆那則訊息，','Approval replies to the group message and notifies ')+m.author.name+cw(' 會收到通知。','.');
+    foot.innerHTML = '<span><b>'+esc(reason)+'</b><small>'+esc(help)+'</small></span>'+authHtml(m,{inbox:true});
+
+  }
+
+  function reviewChangesLink(cardId, messageId = '', roundId = '') {
+    if (!cardId) return '';
+    return `<button type="button" class="link small change-link" data-change-card="${esc(cardId)}" data-change-round="${esc(roundId)}" data-change-message="${esc(messageId)}">看程式變更 ›</button>`;
+  }
+
+  async function openReviewChanges(cardId, messageId, initialRound) {
+    if (matchMedia('(max-width: 600px)').matches) return;
+    const d = await api('/api/cards/' + encodeURIComponent(cardId));
+    const events = d.review?.history || [];
+    const requests = new Map();
+    for (const event of [...events].reverse()) {
+      if (event.ev === 'request' && event.roundId) requests.set(event.roundId, event);
+    }
+    const rounds = [...requests.values()];
+    if (!rounds.length) return toast('這張卡還沒有送審紀錄');
+    const body = openModal(d.title, '', { size: 'change-modal', foot: ' ' });
+    const kicker = document.createElement('small'); kicker.textContent=cw('程式變更','Code changes')+' · '+cardId;
+    body.modal.querySelector('.modal-titles').prepend(kicker);
+    const foot = body.modal.querySelector('.modal-foot');
+    const select = document.createElement('select');
+    select.setAttribute('aria-label', '送審輪次');
+    rounds.forEach((r, i) => select.add(new Option(roundName(i+1) + ' · ' + r.version.slice(0,7), r.roundId)));
+    select.value = requests.has(initialRound) ? initialRound : rounds.at(-1).roundId;
+    body.modal.querySelector('.modal-head').insertBefore(select, body.modal.querySelector('.modal-x'));
+    const origin = location.hash.startsWith('#diff/') ? '' : location.hash;
+    body.modal.dataset.changeOrigin = origin;
+    let generation = 0;
+    async function showRound() {
+      const current = ++generation;
+      const r = requests.get(select.value);
+      history.replaceState(history.state, '', location.pathname + location.search + '#diff/' + encodeURIComponent(cardId) + '/' + encodeURIComponent(r.roundId));
+      body.innerHTML = '<p>載入中…</p>';
+      delete foot.dataset.changeAuth;
+      foot.className='modal-foot cc-readonly'; foot.textContent = cw('只看：這張卡目前沒有人請你同意 commit。','Read only. There is no commit approval request for you.');
+      try {
+        const { manifest } = await api('/api/cards/' + encodeURIComponent(cardId) + '/review-changes/' + encodeURIComponent(r.roundId));
+        if (generation !== current || !body.isConnected) return;
+        const votes = events.filter(e => e.roundId === r.roundId && ['pass','changes'].includes(e.ev));
+        const n = rounds.indexOf(r)+1, sha = r.version.slice(0,7);
+        const previous = rounds.slice(0,n-1).reverse().find(item => item.roundState === 'passed');
+        const verified = manifest?.version === r.version && (r.roundState === 'passed' || r.approvedBeforeVoid);
+        const last = votes[0];
+        const banner = document.createElement('div');
+        banner.className = 'change-banner '+(verified ? 'ok' : previous ? 'warn' : 'neutral');
+        banner.textContent = verified ? cw('✓ 這份就是審查通過的版本','✓ This is the reviewed version')+' · '+roundName(n)+' · '+sha+' · '+(last?.by?.name || '')+' '+(last ? rvTime(last.at) : '')
+          : roundName(n)+' · '+sha+' · '+(r.roundState === 'changes' ? cw('要修改','Changes requested') : cw('尚未通過審查','Awaiting approval'));
+        if (!verified && previous) {
+          const back = document.createElement('button');
+          back.textContent = cw('查看','View')+' '+roundName(rounds.indexOf(previous)+1)+' '+cw('（審查通過的）','(reviewed)');
+          back.onclick = () => { select.value = previous.roundId; showRound(); };
+          banner.append(' ',back);
+        }
+        const review = document.createElement('section');
+        review.className = 'cc-review';
+        review.innerHTML = '<b>'+cw('審查意見','Review comments')+'</b> '+(votes.map(v => rvWho(v.by)+' <b class="cc-vote">'+(v.ev === 'pass' ? cw('通過','Approved') : esc(RV_EV[v.ev]))+'</b> '+rvTime(v.at)+' · '+roundName(n)+'<p data-nt>'+esc(v.comment || '')+'</p>').join('') || cw('還沒有審查意見','No review comments yet'));
+        const checks = r.tests || [];
+        if (checks.length) {
+          const tests = document.createElement('details');
+          const failed = checks.filter(t=>!t.passed);
+          tests.innerHTML = '<summary>'+ (failed.length ? '✗ '+failed.length+cw(' 項測試失敗',' tests failed') : '✓ '+checks.length+cw(' 項測試全過',' tests passed'))+' · '+checks.slice(0,3).map(t=>esc(t.name)).join(' · ')+' · '+cw('全部 ▾','All ▾')+'</summary>'+[...failed,...checks.filter(t=>t.passed)].map(t=>'<div data-nt>'+(t.passed?'✓ ':'✗ ')+esc(t.name)+'</div>').join('');
+          review.append(tests);
+        }
+        if (r.note) {
+          const note = document.createElement('details');
+          note.innerHTML = '<summary>'+cw('送審說明','Submission notes')+'</summary><p data-nt>'+esc(r.note)+'</p>';
+          review.append(note);
+        }
+        const meta = document.createElement('small');
+        meta.textContent = cw('送審','Submitted by')+' · '+(r.by?.name || '')+' · '+rvTime(r.at)+' · '+(manifest?.base ? manifest.base.slice(0,7)+' → ' : '')+sha;
+        review.append(meta); body.replaceChildren(banner,review);
+        if (manifest) {
+          const notices = [];
+          if (manifest.contentExpired) notices.push(cw('已超過 30 天，只保留檔名、行數與審查紀錄。','Over 30 days old. File names, counts and review history are retained.'));
+          else if (!manifest.contentAllowed) notices.push(cw('此專案只顯示檔名與增刪行數。請在送審電腦查看內容。','Only file names and line counts are available. View the code on the submitting computer.'));
+          if (manifest.byteLimit) notices.push(cw('這次差異超過 2 MB，部分檔案只保留檔名與行數。','The diff exceeded 2 MB. Some files have only names and line counts.'));
+          if (manifest.source === 'local') notices.push(cw('差異由送審電腦補傳，工具已核對工作樹指紋。','The submitting computer supplied the diff after verifying its fingerprint.'));
+          for (const text of notices) { const p = document.createElement('p'); p.className=text.includes('2 MB')?'cc-warning':'cc-notice';p.textContent=text;body.append(p); }
+          showChangeFiles(body, manifest);
+        } else {
+          const p = document.createElement('p'); p.textContent = r.fetchIssue || cw('這次送審只有版本，沒有差異。更新送審工具後再送審。','Only the version is available. Update the submission tool for future diffs.');body.append(p);
+        }
+        work.rvCache.set(cardId, { at:Date.now(), review:d.review, project:d.project });
+        const matchesCard = m => m && myAiMsg(m) && (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG' && rvKeyOf(m) === cardId && /^\s*\[需確認\]/.test(m.text) && parseGitAuth(m.text).commitAsk;
+        const request = messageId ? state.byId.get(messageId) : [...state.byId.values()].filter(matchesCard).sort((a,b) => b.sequence - a.sequence).find(m => !m.resolution);
+        if (r.roundId === d.review.roundId && matchesCard(request) && Date.parse(request.createdAt) >= Date.parse(r.at)) {
+          foot.dataset.changeAuth = request.messageId;
+          const refresh = () => changeFooter(foot, request);
+          refresh();
+          foot.onclick = e => { authClick(e); };
+        } else foot.onclick = null;
+      } catch (err) {
+        if (generation === current && body.isConnected) body.textContent = err.message;
+      }
+    }
+    select.addEventListener('change', showRound);
+    await showRound();
+  }
+
+  document.addEventListener('click', e => {
+    const button = e.target.closest('[data-change-card]');
+    if (button) openReviewChanges(button.dataset.changeCard, button.dataset.changeMessage, button.dataset.changeRound).catch(err => toast(err.message));
+  });
+
   function reviewHtml(d) {
     const r = d.review;
     if (!r || d.type === '決策' || d.type === NOTE) return '';
@@ -11654,7 +11898,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     else if (st === 'passed') body = `<p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${ruleLine(r.passed.by)}${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}
       <p class="small">下一步：找人同意 commit。</p>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
     else body = `<p class="small">${esc(`${r.passed?.by?.name || ''} 通過的是 ${rvShort(r.passed?.version || r.version)}，現在的版本是 ${rvShort(r.voided.version)}。`)}</p><p class="muted small">程式改過，原本的通過就不算。請重新送審。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">重新送審</button>' : ''}`;
-    return `<div class="rv-box rv-${st}" data-rv-card="${esc(d.cardId)}"><div class="rv-head"><b>審查</b> <span class="rv-pill ${pill[1]}">${esc(pill[0])}</span>${st !== 'none' && rvCodeTag(r) ? ` <span class="muted small rv-kind">${esc(rvCodeTag(r))}</span>` : ''}</div>${body}
+    return `<div class="rv-box rv-${st}" data-rv-card="${esc(d.cardId)}"><div class="rv-head"><b>${r.roundId ? cw('審查與程式變更','Review & code changes') : '審查'}</b> <span class="rv-pill ${pill[1]}">${esc(pill[0])}</span>${st !== 'none' && rvCodeTag(r) ? ` <span class="muted small rv-kind">${esc(rvCodeTag(r))}</span>` : ''}</div>${body}
+      ${r.roundId ? (r.summary?.repositories?.every(repo => Number.isFinite(repo.files)) ? r.summary.repositories.map((repo,i)=>'<div class="cc-card-count">'+(i?cw('開源版','Open source'):cw('平台版','Platform'))+' · '+repo.files+cw(' 檔 ',' files ')+changeCounts([repo])+'</div>').join('') : r.summary ? '<span class="small">'+r.summary.files+cw(' 檔 ',' files ')+changeCounts([r.summary])+'</span> ' : '') + reviewChangesLink(d.cardId) + '<span class="change-mobile small">程式變更請在電腦上看</span>' : ''}
       ${hist && firstReq >= 0 ? `<div class="rv-hist"><b class="small">歷次紀錄</b><ul>${hist}</ul></div>` : ''}</div>`;
   }
   // 送審視窗（人在網頁送審；AI 用 aigile_review_request）
@@ -11792,6 +12037,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           ${row('作者的主人', sw('notOwner', '不能審自己 AI 寫的', '多人團隊用：小明的 AI 寫的，要小華或小華的 AI 審。'))}
           <p class="rv-lock">🔒 固定規則：審查者不能是作者，每個專案都一樣。</p>
           <div class="rv-grp-h">送審與通過</div>
+          ${row('本機補傳', sw('localFallback', '允許 Git 主機找不到版本時由送審工具補傳'))}
           ${row('送審附 diff', `${sw('diffUpload', '允許送審時附 diff 檔')}<p class="muted small">關閉時審查者自己到 git 看版本，打開後 diff 存在專案文件。<button type="button" class="link rv-pick-link" data-rv-diff-help>說明</button></p>${diffHelpOpen ? `<p class="muted small rv-diff-more">${set.diffUploadDefault ? '關閉' : '關閉（預設）'}：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。<br>${set.diffUploadDefault ? '打開（預設）' : '打開'}：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。<br>改這項會記在審查紀錄。</p>` : ''}`)}
           ${row('人審通過時', optList('humanPass', RV_HUMAN_PASS_OPTS, '人審通過時'))}
           <details class="rv-fold" data-rv-eligible-fold${eligibleOpen ? ' open' : ''}><summary><span>現在符合的審查者</span><span class="muted small">${wc.summary}</span></summary><div class="rv-fold-body">${wc.html}</div></details>` : ''}
@@ -11858,9 +12104,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       ${list.map(x => `<div class="sugg-row rv-ask" data-rv-row="${esc(x.cardId)}">
         <div class="sugg-main"><b>🔍 請你審查：<button type="button" class="link" data-rv-open="${esc(x.cardId)}">${esc(x.cardId)}</button> ${esc(x.title)}</b>
           <span class="muted small">作者 ${rvWho(x.author)} · 版本 ${rvVer(x.version)} · 「${esc(oneLine(x.note, 80))}」</span>${x.branch || x.diffDocId || x.compareUrl ? `<span class="small rv-mine-links">${[x.branch ? `分支 ${esc(x.branch)}` : '', rvLinks(x, x.project)].filter(Boolean).join(' · ')}</span>` : ''}</div>
-        <div class="sugg-actions"><button type="button" class="btn small" data-rv-changes="${esc(x.cardId)}">要改…</button><button type="button" class="btn small primary" data-rv-pass="${esc(x.cardId)}">通過</button></div></div>`).join('')}
+        <div class="sugg-actions">${reviewChangesLink(x.cardId,'',x.roundId)}<button type="button" class="btn small" data-rv-changes="${esc(x.cardId)}">要改…</button><button type="button" class="btn small primary" data-rv-pass="${esc(x.cardId)}">通過</button></div></div>`).join('')}
       ${done.map(x => `<div class="sugg-row rv-ask done" data-rv-done="${esc(x.cardId)}"><div class="sugg-main"><b>${x.result === 'pass' ? '✅ 已通過' : '↩ 已退回'}：${esc(x.cardId)} ${esc(x.title)}</b><span class="muted small">版本 ${rvVer(x.version)}${x.approved ? ' · 已同意 commit' : ''}</span></div>
-        <div class="sugg-actions">${x.result === 'pass' && x.canCommit && !x.approved ? `<button type="button" class="btn small primary" data-rv-commit="${esc(x.cardId)}">同意 commit</button>` : ''}</div></div>`).join('')}</section>`;
+        <div class="sugg-actions">${reviewChangesLink(x.cardId,'',x.roundId)}${x.result === 'pass' && x.canCommit && !x.approved ? `<button type="button" class="btn small primary" data-rv-commit="${esc(x.cardId)}">同意 commit</button>` : ''}</div></div>`).join('')}</section>`;
   }
   async function rvAnswer(cardId, result) {
     const x = work.reviews.find(r => r.cardId === cardId);
@@ -11916,10 +12162,21 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     }
     const r = c?.review;
     if (!r || !r.required || !['passed', 'void'].includes(r.state) || !r.passed) return null;
-    const hexes = [...new Set(m.text.match(/\b(?=[0-9]*[a-f])[0-9a-f]{7,80}\b/g) || [])];
-    const same = (a, b) => a === b || a.startsWith(b) || b.startsWith(a);
+    const hexes = [...new Set(m.text.replace(/(?:基底|基準|疊在|base|parent)\s*(?:SHA|commit)?\s*[:：]?\s*\b[0-9a-f]{7,64}\b/gi,' ').match(/\b(?=[0-9]*[a-f])[0-9a-f]{7,80}\b/g) || [])];
+    const same = (a, b) => a === b || (a.length <= 40 && b.length <= 40 && (a.startsWith(b) || b.startsWith(a)));
     // 訊息有寫版本就比訊息的（舊的那則請同意審過的版本仍是綠框）；沒寫版本才看卡片是不是已作廢
-    const target = hexes.length ? (hexes.some(h => same(h, r.passed.version)) ? null : hexes[0]) : r.state === 'void' ? r.voided.version : null;
+    const matches = (hashes, version, repos, same) => {
+      const components = (repos || []).map(r => r.fingerprint);
+      if (components.length < 2) return hashes.some(h => same(h, version));
+      const targets = [...new Set([version,...components])];
+      const resolved = hashes.map(h => {
+        const hits = targets.filter(t => t === h || (h.length >= 7 && h.length <= 12 && t.startsWith(h)));
+        return hits.length === 1 ? hits[0] : null;
+      });
+      return resolved.every(Boolean) && (resolved.includes(version) || components.every(h => resolved.includes(h)));
+    };
+    const repos = r.history?.find(e => e.ev === 'request' && e.roundId === r.passed.roundId)?.summary?.repositories;
+    const target = hexes.length ? (matches(hexes, r.passed.version, repos, same) ? null : hexes[0]) : r.state === 'void' ? r.voided.version : null;
     const head = `<div class="rv-head"><b>審查</b> <span class="rv-pill ${target ? 'warn' : 'ok'}">${target ? '⚠ 版本對不上' : '✅ 已審查'}</span></div>
       <p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}`;
     if (!target) return { html: `<div class="rv-box rv-passed in-auth">${head}${rvLinks(r, c.project) ? `<p class="small">${rvLinks(r, c.project)}</p>` : ''}</div>`, mismatch: false };
