@@ -171,7 +171,7 @@ try {
       }
       await ui.js('document.querySelector(".project-entry").click()');
       await ui.js('document.querySelector(\'[data-nav="team"]\').click()');
-      await waitFor('[data-team-search]');
+      await waitFor('.project-team [data-tm-id]');
       assert.ok(await ui.js('document.querySelector(".project-page").textContent.includes("在用的成員")'));
       assert.ok(await ui.js('document.querySelector(".project-alerts").textContent.includes("訊息還沒看")'));
       assert.ok(
@@ -181,6 +181,12 @@ try {
       );
       if (width === 1920) assert.equal(await ui.js('document.querySelector(".project-team").offsetWidth'), 1200);
       await take('team', width);
+      await ui.js('document.querySelector(' + JSON.stringify(width >= 900 ? '[data-tb-filter]' : '.m-flt-btn[data-flt-toggle]') + ').click()');
+      await waitFor('#work-flt-drawer:not([hidden]) [data-flt-team-q]');
+      await ui.js('(() => { const q = document.querySelector("[data-flt-team-q]"); q.value = "團隊開發"; q.dispatchEvent(new Event("input", { bubbles: true })); })()');
+      assert.equal(await ui.js('document.querySelectorAll(".project-team [data-person-search]:not([hidden])").length'), 1);
+      await ui.js('document.querySelector("#work-flt-drawer [data-flt-clear]").click(); document.querySelector("#work-flt-drawer [data-flt-hide]").click()');
+      assert.ok(await ui.js('document.querySelector("#work-flt-drawer").hidden && document.querySelectorAll(".project-team [data-person-search]:not([hidden])").length > 1'));
       const detail = '.project-member[data-tm-id="' + active + '"]';
       for (const [name, selector] of [['team-detail', detail], ['team-inactive', '.inactive-members']]) {
         await ui.js('(()=>{const d=document.querySelector(' + JSON.stringify(selector) + ');d.open=true;d.scrollIntoView({block:"center"})})()');
@@ -202,7 +208,7 @@ try {
       await waitFor('.project-entry');
       await take('en-home', width);
       await ui.js('document.querySelector(".project-entry").click()');
-      for (const [page, marker] of [['team', '[data-team-search]'], ['overview', '.overview-chart']]) {
+      for (const [page, marker] of [['team', '.project-team [data-tm-id]'], ['overview', '.overview-chart']]) {
         await ui.js('document.querySelector(\'[data-nav="' + page + '"]\').click()');
         await waitFor(marker);
         assert.ok(await ui.js('document.querySelector(".project-page").textContent.includes(' + JSON.stringify(page === 'team' ? 'Needs attention' : 'Last 7 days') + ')'));

@@ -271,16 +271,34 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   }
   const withStale = (v, c, stale) => (stale.get(c.seq)?.lastUpdatedAt === c.updated_at ? { ...v, staleHint: stale.get(c.seq) } : v);
 
+  // 看板「最後有動靜」只追新插入的 card_msgs.rowid，讀過的卡記在記憶體，不每次整批重讀
+  const actLatest = new Map();
+  let actRowid = null;
+  const bumpAct = (seq, at) => { if (!at) return; const cur = actLatest.get(seq); if (!cur || at > cur) actLatest.set(seq, at); };
   async function latestMsgTimes(seqs) {
-    const out = new Map();
-    if (!seqs.length) return out;
-    const rows = await db.all(
-      `SELECT cm.card_seq AS seq, MAX(m.created_at) AS at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
-       WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%' GROUP BY cm.card_seq`,
-      JSON.stringify(seqs),
-    );
-    for (const r of rows) if (r.at) out.set(r.seq, r.at);
-    return out;
+    if (!seqs.length) return actLatest;
+    if (actRowid === null) {
+      actRowid = (await db.get('SELECT COALESCE(MAX(rowid), 0) AS r FROM card_msgs')).r;
+    } else {
+      const fresh = await db.all(
+        `SELECT cm.rowid AS rid, cm.card_seq AS seq, m.created_at AS at, m.text LIKE '[通知]%' AS sys
+         FROM card_msgs cm JOIN messages m ON m.id = cm.message_id WHERE cm.rowid > ?`,
+        actRowid,
+      );
+      for (const r of fresh) { actRowid = Math.max(actRowid, r.rid); if (!r.sys && actLatest.has(r.seq)) bumpAct(r.seq, r.at); }
+    }
+    const need = seqs.filter(s => !actLatest.has(s));
+    if (need.length) {
+      if (actLatest.size > 2000) actLatest.clear();
+      for (const s of need) actLatest.set(s, null);
+      const rows = await db.all(
+        `SELECT cm.card_seq AS seq, MAX(m.created_at) AS at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
+         WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%' GROUP BY cm.card_seq`,
+        JSON.stringify(need),
+      );
+      for (const r of rows) bumpAct(r.seq, r.at);
+    }
+    return actLatest;
   }
   const maxAt = (...xs) => xs.filter(Boolean).sort().at(-1) || null;
 
@@ -341,7 +359,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       claimsOf(db, out.filter(c => !CLOSED_ST.includes(c.status) && c.type !== '決策' && c.type !== NOTE).map(c => c.seq)), // 誰正在做（只看未結案的）
       reportsOf(out),
       linkSums(out, me), // 看板標記（等誰、擋住幾張）
-      latestMsgTimes(out.map(c => c.seq)), // 看板最後有動靜時間（含 24 小時內關聯留言）
+      latestMsgTimes(out.map(c => c.seq)), // 看板最後有動靜時間（增量追蹤不重複整批重讀）
     ]);
     return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), lastActivityAt: maxAt(c.updated_at, msgTimes.get(c.seq), stale.get(c.seq)?.latestMessageAt), ...(sums.has(c.seq) ? { linkSum: sums.get(c.seq) } : {}), ...(claims.get(c.seq) ? { claim: mark(people, claims.get(c.seq).by, claims.get(c.seq).at) } : {}), ...(reports.has(c.seq) ? { report: reports.get(c.seq) } : {}), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
   }
