@@ -2814,7 +2814,7 @@ html, body { overflow-x: clip; }
 .ma-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; cursor: pointer; }
 .ma-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .ma-row.warn { background: #fffdf5; box-shadow: inset 0 0 0 1px #fcd34d; }
-.ma-row.off { opacity: .7; }
+.ma-row.off > :not(.ma-right), .ma-row.off .ma-right > :not(.ma-menu) { opacity: .7; } /* 停用那列淡色；「⋯」選單維持正常顏色 */
 .ma-row .avatar { width: 40px; height: 40px; flex: none; white-space: nowrap; overflow: hidden; font-size: 13px; }
 .ma-main { flex: 1; min-width: 0; }
 .ma-nm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 15px; }
@@ -2830,10 +2830,17 @@ html, body { overflow-x: clip; }
 :root[data-theme="dark"] .ma-st.bad { color: #fca5a5; }
 .ma-right { position: relative; display: flex; align-items: center; gap: 6px; flex: none; }
 .ma-more { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font: inherit; font-size: 16px; cursor: pointer; }
-.ma-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 210px; display: grid; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .18); }
-.ma-menu button { text-align: left; padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer; }
+.ma-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 240px; display: grid; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .18); }
+.ma-menu button { display: flex; align-items: center; gap: 10px; text-align: left; padding: 8px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 13.5px; cursor: pointer; }
 .ma-menu button:hover, .ma-menu button:focus-visible { background: var(--surface-2); }
 .ma-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 0; }
+/* 「⋯」選單：圖示欄固定 16px、文字左緣對齊；只有刪除是紅色（圖示跟著文字色） */
+.ma-menu .ma-ico { flex: none; width: 16px; height: 16px; color: var(--muted); }
+.ma-menu .danger-text .ma-ico { color: currentColor; }
+.ma-menu .ma-mi-l { flex: 1; min-width: 0; }
+.ma-menu .ma-mi-tag { flex: none; font-size: 11.5px; }
+@media (max-width: 600px) { .ma-menu { width: 260px; max-width: calc(100vw - 16px); } }
+.ma-grp { padding: 6px 10px 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: default; user-select: none; }
 .ma-panel { border-top: 1px solid var(--border); padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; }
 .ma-ptop { display: none; }
 .ma-ptop .modal-x { display: inline-block; background: none; border: 0; color: var(--muted); cursor: pointer; } /* 我的 AI 頁是內嵌頁（.inline-pane 會藏 ×），手機全螢幕要能關 */

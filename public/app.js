@@ -8471,7 +8471,7 @@
       if (!item()?.querySelector('.ma-tabs [data-tab="conn"]')) {
         if (!item()?.querySelector('.ma-menu')) item()?.querySelector('[data-act="menu"]')?.click();
         const manual = item()?.querySelector('.ma-menu [data-tab="conn"]');
-        if (manual) { manual.closest('details').open = true; manual.click(); }
+        if (manual) manual.click();
       }
       const tab = item()?.querySelector('.ma-tabs [data-tab="conn"]');
       if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
@@ -8817,16 +8817,19 @@
       : maTool(ai) === 'copilot' ? `<button class="btn ma-copy" type="button" data-act="tab" data-tab="conn" data-id="${id}">Copilot 用手動接入</button>`
       : maTool(ai) === 'other' ? `<button class="btn" data-act="short" data-id="${id}">手動接入</button>`
       : `<button class="btn primary" data-act="local-launch" data-id="${id}"${ai.isOnline || ai.launcher?.pendingJob ? ' disabled' : ''}>${ai.isOnline ? '已在執行' : ai.launcher?.pendingJob ? '正在啟動' : ai.launchError ? '重試' : ai.launcher?.registered ? '啟動' : '在電腦上跑…'}</button>`;
-    const menuHtml = menu ? `<div class="ma-menu" role="menu">
-        ${active && !ai.cloud && !['copilot','other'].includes(maTool(ai)) ? `<button role="menuitem" data-act="local-change" data-id="${id}">換電腦或資料夾…</button>${ai.launcher?.registered ? `<button role="menuitem" data-act="local-remove" data-id="${id}">從這台電腦移除</button>` : ''}<details><summary>進階</summary><button role="menuitem" data-act="tab" data-tab="conn" data-id="${id}">手動接入</button></details>` : ''}
-        <button type="button" role="menuitem" data-act="edit" data-id="${id}">✏️ 編輯名稱、角色、專案</button>
-        ${active && ai.cloud ? `<button type="button" role="menuitem" data-act="cloud-limit" data-id="${id}">⚙️ 每輪上限</button>
-        <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : active ? `<button type="button" role="menuitem" data-act="tab" data-tab="skills" data-id="${id}">🧩 技能${ai.skillsWaiting ? ` · ${ai.skillsWaiting} 等你允許` : ''}</button>
-        <button type="button" role="menuitem" data-act="reissue" data-id="${id}">🔑 重發 Token</button>
-        ${level !== 'expired' ? `<button type="button" role="menuitem" data-act="token" data-id="${id}">📋 只複製 Token</button>` : ''}
-        <hr><button type="button" role="menuitem" data-act="disable" data-id="${id}">⏸ 停用</button>` : `<hr><button type="button" role="menuitem" data-act="enable" data-id="${id}">▶ 重新啟用</button>`}
-        <button type="button" role="menuitem" class="danger-text" data-act="delete" data-id="${id}">🗑 刪除這隻 AI</button>
-      </div>` : '';
+    // 「⋯」選單分三組（常用／進階／停用與刪除），每項單色線條圖示、左緣對齊；項目與出現條件照舊
+    const mi = (act, ico, label, extra = '') => `<button type="button" role="menuitem"${act === 'delete' ? ' class="danger-text"' : ''} data-act="${act}" data-id="${id}"${extra}>${MA_ICO[ico]}<span class="ma-mi-l">${label}</span></button>`;
+    const localTool = active && !ai.cloud && !['copilot','other'].includes(maTool(ai));
+    const grpMain = [mi('edit', 'edit', '編輯名稱、角色、專案'),
+      active && ai.cloud ? mi('cloud-limit', 'gauge', '每輪上限') : '',
+      active && !ai.cloud ? mi('tab', 'skills', '技能', ' data-tab="skills"').replace('</span></button>', `</span>${ai.skillsWaiting ? `<span class="pill-tag yellow ma-mi-tag">${ai.skillsWaiting} 等你允許</span>` : ''}</button>`) : '',
+      localTool ? mi('local-change', 'monitor', '換電腦或資料夾…') : ''].join('');
+    const grpAdv = active && !ai.cloud ? [mi('reissue', 'key', '重發 Token'),
+      level !== 'expired' ? mi('token', 'copy', '只複製 Token') : '',
+      mi('tab', 'plug', '手動接入', ' data-tab="conn"'), // 本機 AI 不分工具都有（Copilot、其他工具也能從這裡打開接入分頁）
+      localTool && ai.launcher?.registered ? mi('local-remove', 'monitorX', '從這台電腦移除') : ''].join('') : '';
+    const grpEnd = (active ? mi('disable', 'pause', '停用') : mi('enable', 'play', '重新啟用')) + mi('delete', 'trash', '刪除這隻 AI');
+    const menuHtml = menu ? `<div class="ma-menu" role="menu">${grpMain}${grpAdv ? `<hr role="separator"><div class="ma-grp" aria-hidden="true">進階</div>${grpAdv}` : ''}<hr role="separator">${grpEnd}</div>` : '';
     return `<div class="ma-item${tab ? ' open' : ''}" data-ma="${id}">
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
         ${maAvatar(ai)}
@@ -8882,6 +8885,21 @@
       ${body}
     </div>`;
   }
+  // 「⋯」選單的單色線條圖示：16px、線寬 1.7、跟文字同色
+  const maIco = d => `<svg class="ma-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d.replace(/<(path|rect|circle)/g, '<$1 vector-effect="non-scaling-stroke"')}</svg>`;
+  const MA_ICO = {
+    edit: maIco('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
+    skills: maIco('<path d="M4 9h16v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="M8 9V6a1 1 0 0 1 1-1h2v4M13 9V5h2a1 1 0 0 1 1 1v3"/>'),
+    monitor: maIco('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+    key: maIco('<circle cx="7.5" cy="16.5" r="3.5"/><path d="M10 14l9-9M16 8l2 2M14 10l1.5 1.5"/>'),
+    copy: maIco('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'),
+    plug: maIco('<path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/>'),
+    monitorX: maIco('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M10 8l4 4M14 8l-4 4"/>'),
+    gauge: maIco('<path d="M4 17a8 8 0 0 1 16 0"/><path d="M12 17l4-5"/>'),
+    pause: maIco('<path d="M9 5v14M15 5v14"/>'),
+    play: maIco('<path d="M7 4l12 8-12 8z"/>'),
+    trash: maIco('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
+  };
   function maPlaceMenu(root) {
     const m = root.querySelector('.ma-menu'), btn = m?.parentElement.querySelector('.ma-more');
     if (!m || !btn) return;

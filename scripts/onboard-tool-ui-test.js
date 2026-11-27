@@ -65,7 +65,6 @@ async function runChecks() {
     // 2. 列上主按鈕；沒選過工具：不複製，展開接入分頁、提示、焦點到工具
     assert.equal(await js(`${row(A.participantId)}.querySelector('[data-act="local-launch"]').textContent`), L('在電腦上跑…', 'Run on a computer…'));
     await js(`${row(A.participantId)}.querySelector('[data-act="menu"]').click()`);
-    await js(`${row(A.participantId)}.querySelector('.ma-menu details summary').click()`);
     await js(`${row(A.participantId)}.querySelector('.ma-menu [data-tab="conn"]').click()`);
     await until(() => js(`!!${row(A.participantId)}?.querySelector('.ma-btns [data-act="short"]')`));
     await js(`${row(A.participantId)}.querySelector('.ma-btns [data-act="short"]').click()`);
