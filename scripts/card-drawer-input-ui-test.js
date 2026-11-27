@@ -130,12 +130,26 @@ try {
   assert.match(await js("document.querySelector('.st-list').innerText"), /已整理/);
   await shot('note-1280');
 
-  // 5. 375：輸入區在底部、不橫向捲動
+  // 5. 375：輸入區在底部、不橫向捲動，且提示字不與送出鈕重疊
+  const assertHintNoOverlap = async label => {
+    const res = await js(`(() => {
+      const h = document.querySelector('.dcompose .att-hint, .dcompose .ho-hint');
+      const b = document.querySelector('.dcompose .att-bar > .btn');
+      if (!h || !b) return { ok: true };
+      const r = document.createRange(); r.selectNodeContents(h);
+      const tr = r.getBoundingClientRect(), br = b.getBoundingClientRect();
+      const ox = Math.min(tr.right, br.right) - Math.max(tr.left, br.left);
+      const oy = Math.min(tr.bottom, br.bottom) - Math.max(tr.top, br.top);
+      return { ok: !(ox > 0 && oy > 0), ox: Math.round(ox), oy: Math.round(oy), txt: h.innerText, btn: b.textContent };
+    })()`);
+    assert.ok(res.ok, `${label} 提示字不與按鈕重疊：${JSON.stringify(res)}`);
+  };
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
   await open(work.cardId);
   assert.ok(await noHScroll(), '375 不橫向捲動');
   assert.ok(await js("(() => { const m = document.querySelector('.drawer-status .more-acts > summary'), st = document.querySelector('.drawer-status .st-menu > summary'); return Math.abs(m.getBoundingClientRect().top - st.getBoundingClientRect().top) < 24; })()"), '375「⋯」跟改狀態同一行');
   await until(() => js("(() => { const r = document.querySelector('.dcompose').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight + 1; })()"), 5000, '375 輸入區在畫面內（底部）');
+  await assertHintNoOverlap('375 中文回覆');
   await shot('work-375');
 
   // 6. 唯讀成員：不顯示輸入區（王小明設成預設專案唯讀）
@@ -147,7 +161,7 @@ try {
   await until(() => js("!!document.querySelector('.drawer .timeline')"), 8000, 'drawer');
   assert.equal(await js("!!document.querySelector('.drawer .dcompose')"), false, '唯讀成員不顯示輸入區');
   assert.equal(await js("!!document.querySelector('.drawer-status .st-menu')"), false, '唯讀成員沒有改狀態');
-  // 7. 英文介面：分段鈕 Reply／Note／Hand over，輸入區與時間軸沒有殘留中文（另開一張劉昱志負責的卡）
+  // 7. 英文介面：分段鈕 Reply／Note／Hand over，輸入區與時間軸沒有殘留中文（另開一張劉昱志負責的卡），且 375 英文提示字不與 Send 重疊
   const enCard = await mk('工作', 'Export currency column');
   await login(liu.token, '/p/main/work');
   await js("localStorage.setItem('aigile-lang', 'en'); true");
@@ -159,6 +173,15 @@ try {
   const cjk = await js("[...document.querySelectorAll('.dcompose, .drawer .timeline, .drawer-status')].map(e => e.innerText).join(' ').match(/[\\u3400-\\u9fff]+/g) || []");
   assert.deepEqual(cjk.filter(w => !/^(劉昱志|王小明|報價單匯出加上幣別欄|客戶要的是左邊這版|匯出欄位都好了)$/.test(w) && !/客戶|匯出|劉昱志|王小明/.test(w)), [], '英文介面輸入區、時間軸沒有殘留中文：' + JSON.stringify(cjk));
   await shot('work-1280-en');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true });
+  await open(enCard.cardId);
+  await until(() => js("!!document.querySelector('.dcompose .att-hint')"), 3000, '375 en hint');
+  await assertHintNoOverlap('375 英文 Reply');
+  await shot('work-375-en-reply');
+  await js("document.querySelector('.dcompose [data-cmode=\"note\"]').click(); true");
+  await until(() => js("!!document.querySelector('#note-text')"), 3000, '375 en note');
+  await assertHintNoOverlap('375 英文 Note');
+  await shot('work-375-en-note');
   console.log('card-drawer-input-ui-test：全部通過（分段鈕、紀錄＋附檔進時間軸與附件區、交接給 X、人類紀錄卡、375、唯讀）');
 } finally {
   await kit.stop();
