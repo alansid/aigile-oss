@@ -76,7 +76,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   const BOARD_LIMIT = boardLimit;
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
-  const maybeArchive = async () => { if (Date.now() - archivedAt < archiveEveryMs) return; archivedAt = Date.now(); await autoArchive(db).catch(e => console.error('autoArchive', e.message)); };
+  const maybeArchive = async (ctx = {}) => { if (Date.now() - archivedAt < archiveEveryMs) return; archivedAt = Date.now(); await autoArchive(db).catch(e => console.error('autoArchive', e.message)); await retryUnblocks(ctx).catch(e => console.error('retryUnblocks', e.message)); }; // 順便補送沒送成的「前置卡都完成」通知
   // 卡片的專案看專案欄位；舊卡標題的「[專案]」前綴在通知裡去掉，改用【專案】標記
   const plainTitle = t => { const m = /^\s*\[([^\]\n]{1,20})\]\s*/.exec(t); return m && PROJECTS.includes(m[1]) ? t.slice(m[0].length) || t : t; };
   const parseNo = id => {
@@ -273,7 +273,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
 
   // 卡片列表（合併搜尋 /api/search 也用；quota: false 由呼叫端算次數）
   async function listCards({ ctx, me, url }, { quota = true } = {}) {
-    await maybeArchive();
+    await maybeArchive(ctx);
     const q = url.searchParams, limit = (q.get('q') || '').trim() ? Math.min(parseLimit(url, 100, 200), 20) : parseLimit(url, 100, 200); // 有關鍵字最多 20 筆
     const offset = Math.max(0, Math.min(Number.parseInt(q.get('offset') || '0', 10) || 0, 100_000)); // 已封存分頁
     const where = [], args = [];
@@ -326,7 +326,8 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     if (noteMap) for (const l of await db.all('SELECT card_seq, at, by_id, text FROM card_log WHERE via = ? AND card_seq IN (SELECT value FROM json_each(?)) ORDER BY id', NOTE_LOG, JSON.stringify(out.map(c => c.seq)))) { if (!noteMap.has(l.card_seq)) noteMap.set(l.card_seq, []); noteMap.get(l.card_seq).push(noteView(people, l)); }
     const claims = await claimsOf(db, out.filter(c => !CLOSED_ST.includes(c.status) && c.type !== '決策' && c.type !== NOTE).map(c => c.seq)); // 誰正在做（只看未結案的）
     const reports = await reportsOf(out);
-    return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), ...(claims.get(c.seq) ? { claim: mark(people, claims.get(c.seq).by, claims.get(c.seq).at) } : {}), ...(reports.has(c.seq) ? { report: reports.get(c.seq) } : {}), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
+    const sums = await linkSums(out, me); // 看板標記（等誰、擋住幾張）
+    return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), ...(sums.has(c.seq) ? { linkSum: sums.get(c.seq) } : {}), ...(claims.get(c.seq) ? { claim: mark(people, claims.get(c.seq).by, claims.get(c.seq).at) } : {}), ...(reports.has(c.seq) ? { report: reports.get(c.seq) } : {}), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
   }
   route('GET', '/api/cards', args => listCards(args));
   // 等人驗收的卡（待確認、有等誰、不是決策），找負責人最後一則 [完成] 或 [交接]，網頁「看回報」直接跳過去
@@ -343,7 +344,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   }
 
   route('GET', '/api/cards/:id', async ({ ctx, me, params }) => {
-    await maybeArchive();
+    await maybeArchive(ctx);
     const c = (await attachMerged([await load(params.id, me)]))[0];
     const people = await peopleMap(ctx);
     // 只有人類紀錄卡會「已整理到」；只查這些卡的紀錄，不掃整張 card_log
@@ -357,10 +358,12 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const ho = log.find(l => l.via === HANDOVER_LOG);
     const tplName = log.map(l => /用「([^」]+)」建立/.exec(l.text || '')?.[1]).find(Boolean) || null;
     const v = withStale(view(c, people), c, await staleHints());
+    const lk = c.type === NOTE ? null : await linksOf(c, me, people), wh = lk && waitingHintOf(c, lk); // 卡片關聯：還在等的前置卡放前面
     return {
       cardId: v.cardId, title: v.title, status: v.status, owner: v.owner,
       ...(tplName ? { template: tplName } : {}),
       ...(cl ? { claim: mark(people, cl.by, cl.at) } : {}), ...(ho ? { handover: handoverView(people, ho) } : {}),
+      ...(wh ? { waitingHint: wh } : {}), ...(lk ? { links: lk } : {}),
       attachments: !projectsOf(me).includes(c.project) || (c.type === NOTE && me.kind !== 'human') ? [] : (await db.all(
         'SELECT d.id, d.name, d.ext, d.size, d.created_at, d.uploader_id, a.note_id FROM card_attachments a JOIN docs d ON d.id = a.doc_id WHERE a.card_seq = ? AND d.project = ? AND d.deleted_at IS NULL AND (a.human_only = 0 OR ? = 1) ORDER BY d.created_at, d.id',
         c.seq, c.project, me.kind === 'human' ? 1 : 0
@@ -596,6 +599,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
         to.push(sets.wait_for_id);
       }
       if (parts.length && !claiming && (sets.type || c.type) !== NOTE) await notifyCard(ctx, me, c, to, parts.join('；'), 'edit'); // 人類紀錄不發群組訊息
+      if (sets.status) await afterClosedChange(ctx, me, c, c.status, sets.status); // 卡片關聯：結案／重開
     }
     return view(await load(params.id), people);
   });
@@ -632,6 +636,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       ? (c.proposer_id && people.get(c.proposer_id)?.status === 'active' ? c.proposer_id : c.created_by)
       : (c.proposer_id || c.created_by);
     await notifyCard(ctx, me, c, [back2], result === '要求補充' ? `要求補充：${note}` : `決定「${result}」${note ? '：' + note : ''}`, 'decide', files);
+    if (result !== '要求補充') await afterClosedChange(ctx, me, c, c.status, '已完成'); // 卡片關聯
     return view(await load(params.id), people);
   });
 
@@ -726,6 +731,196 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       const r = await createMessage(ctx, me, { text: files?.length ? filesText(msg, files) : msg, requestId: `cardev_${c.uid}_${key}_${cur.version}`.slice(0, 128), recipientIds: ids, project: cur.project }, { fileIds: files?.length ? files.map(f => f.id) : null });
       await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', c.seq, r.message.messageId);
     } catch (err) { console.error('card notify failed:', err.message); }
+  }
+
+  // ---------- 卡片關聯（前置卡、這張擋住、關聯卡） ----------
+  // card_links：blocked_by＝from 要等 to 做完；related 存成 from_seq < to_seq（不分方向）。被擋只提醒，不擋接單。
+  const LINK_KINDS = ['blockedBy', 'blocks', 'related'];
+  // 關聯圖的鎖：Postgres 同時加關聯時排隊（SQLite／D1 寫入本來就一個一個來）
+  const LINK_LOCK_SQL = "INSERT INTO app_settings (key, value) VALUES ('lock:card_links', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+  const OPEN_SQL = "('待整理','待處理','進行中','待確認','受阻')";
+  const linkSeen = (me, o) => !(isolatedFrom(me) && !projectsOf(me).includes(o.project)) && !(o.type === NOTE && me.kind !== 'human');
+  // 一張卡的三組關聯（看不到的卡不列）
+  async function linksOf(c, me, people) {
+    const rows = await db.all(`SELECT l.from_seq, l.to_seq, l.kind, o.seq, o.project, o.proj_no, o.title, o.status, o.owner_id, o.type
+      FROM card_links l JOIN cards o ON o.seq = CASE WHEN l.from_seq = ? THEN l.to_seq ELSE l.from_seq END
+      WHERE l.from_seq = ? OR l.to_seq = ? ORDER BY l.created_at, o.seq`, c.seq, c.seq, c.seq);
+    const out = { blockedBy: [], blocks: [], related: [] };
+    for (const r of rows) {
+      if (!linkSeen(me, r)) continue;
+      const item = { cardId: pub(r), title: plainTitle(r.title), status: r.status, owner: ref(people, r.owner_id) };
+      if (r.kind === 'related') out.related.push(item);
+      else (r.from_seq === c.seq ? out.blockedBy : out.blocks).push(item);
+    }
+    return out;
+  }
+  const waitingOn = links => links.blockedBy.filter(x => !CLOSED_ST.includes(x.status));
+  const waitList = w => w.map(x => `${x.cardId}（${x.status}）`).join('、');
+  const waitingHintOf = (c, links) => {
+    const w = CLOSED_ST.includes(c.status) ? [] : waitingOn(links);
+    return w.length ? `這張還在等 ${waitList(w)}。可以先做不受影響的部分，或改做別張；平台不會擋接單。` : null;
+  };
+  // [接單] 回覆用（core.js 呼叫）：還在等的前置卡，沒有就 null
+  async function waitingOf(seq, me) {
+    const c = await db.get('SELECT * FROM cards WHERE seq = ?', seq);
+    if (!c || CLOSED_ST.includes(c.status)) return null;
+    const w = waitingOn(await linksOf(c, me, await peopleMap({})));
+    return w.length ? `⏳ 這張還在等 ${waitList(w)}。` : null;
+  }
+  // 看板用的摘要：waiting＝還沒完成的前置卡號；blocks＝擋住幾張還沒完成的卡（只算看得到的）
+  async function linkSums(cards, me) {
+    const out = new Map();
+    const open = cards.filter(c => !CLOSED_ST.includes(c.status) && c.type !== NOTE);
+    if (!open.length) return out;
+    const ids = JSON.stringify(open.map(c => c.seq));
+    const rows = await db.all(`SELECT l.from_seq, l.to_seq, f.project AS f_project, f.proj_no AS f_proj_no, f.status AS f_status, f.type AS f_type, t.project AS t_project, t.proj_no AS t_proj_no, t.status AS t_status, t.type AS t_type
+      FROM card_links l JOIN cards f ON f.seq = l.from_seq JOIN cards t ON t.seq = l.to_seq
+      WHERE l.kind = 'blocked_by' AND (l.from_seq IN (SELECT value FROM json_each(?)) OR l.to_seq IN (SELECT value FROM json_each(?)))`, ids, ids);
+    const want = new Set(open.map(c => c.seq));
+    const sum = seq => { if (!out.has(seq)) out.set(seq, { waiting: [], blocks: 0 }); return out.get(seq); };
+    for (const r of rows) {
+      const f = { seq: r.from_seq, project: r.f_project, proj_no: r.f_proj_no, status: r.f_status, type: r.f_type };
+      const t = { seq: r.to_seq, project: r.t_project, proj_no: r.t_proj_no, status: r.t_status, type: r.t_type };
+      if (want.has(f.seq) && !CLOSED_ST.includes(t.status) && linkSeen(me, t)) sum(f.seq).waiting.push(pub(t));
+      if (want.has(t.seq) && !CLOSED_ST.includes(f.status) && linkSeen(me, f)) sum(t.seq).blocks++;
+    }
+    for (const [k, v] of out) if (!v.waiting.length && !v.blocks) out.delete(k);
+    return out;
+  }
+  // 一路往上（這張在等的）或往下（在等這張的）所有卡：檢查循環、加關聯視窗先標 ⛔
+  async function reachSeqs(seq, up) {
+    const [a, b] = up ? ['from_seq', 'to_seq'] : ['to_seq', 'from_seq'];
+    const seen = new Set();
+    let front = [seq];
+    while (front.length && seen.size < 2000) {
+      const rows = await db.all(`SELECT ${b} AS s FROM card_links WHERE kind = 'blocked_by' AND ${a} IN (SELECT value FROM json_each(?))`, JSON.stringify(front));
+      front = [];
+      for (const r of rows) if (r.s !== seq && !seen.has(r.s)) { seen.add(r.s); front.push(r.s); }
+    }
+    return seen;
+  }
+  const keysOf = async seqs => (seqs.size ? (await db.all('SELECT seq, project, proj_no FROM cards WHERE seq IN (SELECT value FROM json_each(?))', JSON.stringify([...seqs]))).map(pub) : []);
+  const linkWord = (kind, side, other) => (kind === 'related' ? `關聯卡 ${other}` : side === 'from' ? `前置卡 ${other}` : `這張擋住的 ${other}`);
+  const canLink = (me, c, o) => {
+    if (me.kind === 'human' || canEdit(me, c) || canEdit(me, o)) return;
+    throw new ApiError(403, 'NOT_CARD_OWNER', 'AI 只能替自己負責（或自己建立、還沒指派）的卡加關聯；兩張都不是你的，請負責人或 PO 加。');
+  };
+  async function touchLinked(seqs, at) { // 看板標記跟著變：只動 updated_at，不動 version（別人編輯中不會撞版本）
+    if (seqs.length) await db.run('UPDATE cards SET updated_at = ? WHERE seq IN (SELECT value FROM json_each(?))', at, JSON.stringify(seqs));
+  }
+  async function linkResult(c, me, ctx) {
+    const links = await linksOf(c, me, await peopleMap(ctx));
+    return { cardId: pub(c), links, waitingHint: waitingHintOf(c, links) };
+  }
+  const loadOther = (id, me) => load(String(id), me).catch(e => { throw e.status === 404 ? new ApiError(404, 'NOT_FOUND', `找不到 ${id}`) : e; });
+  route('GET', '/api/cards/:id/links', async ({ ctx, me, params }) => {
+    const c = await load(params.id, me);
+    // upstream：這張（直接或間接）在等的卡；downstream：（直接或間接）在等這張的卡。加關聯視窗用來先標「會變互相等」
+    return { ...await linkResult(c, me, ctx), upstream: await keysOf(await reachSeqs(c.seq, true)), downstream: await keysOf(await reachSeqs(c.seq, false)) };
+  });
+  route('POST', '/api/cards/:id/links', async ({ ctx, me, req, params }) => {
+    const body = await readJson(req);
+    const c = await load(params.id, me);
+    const kind = String(body.kind || '');
+    if (!LINK_KINDS.includes(kind)) throw invalid(`kind 需為：${LINK_KINDS.join('、')}（blockedBy＝這張要等它、blocks＝這張擋住它、related＝關聯卡）`);
+    if (!body.cardId) throw invalid('cardId 為必填：要連到哪張卡，例如 MAIN-12');
+    const o = await loadOther(body.cardId, me);
+    if (o.seq === c.seq) throw new ApiError(400, 'LINK_SELF', '不能連到自己。');
+    if (c.type === NOTE || o.type === NOTE) throw new ApiError(400, 'LINK_NOTE', '人類紀錄卡不能加關聯（AI 看不到）；請先整理成一般卡片。');
+    canLink(me, c, o);
+    if (await db.get('SELECT 1 AS x FROM card_links WHERE (from_seq = ? AND to_seq = ?) OR (from_seq = ? AND to_seq = ?)', c.seq, o.seq, o.seq, c.seq)) throw new ApiError(409, 'LINK_EXISTS', `${pub(c)} 和 ${pub(o)} 已經連過了；要改種類請先移除再加。`);
+    const [from, to] = kind === 'blockedBy' ? [c, o] : kind === 'blocks' ? [o, c] : c.seq < o.seq ? [c, o] : [o, c];
+    if (kind !== 'related' && (await reachSeqs(to.seq, true)).has(from.seq)) throw new ApiError(409, 'LINK_CYCLE', `${pub(to)} 已經在等 ${pub(from)}，加了會變成互相等，不能加。`);
+    const at = nowIso();
+    // 上面的檢查是為了回清楚的錯誤；真正寫入在同一個交易裡：先鎖住關聯圖（同時加關聯的人排隊），再「沒連過、也不會變互相等」才寫
+    const [, added] = await db.batch([
+      [LINK_LOCK_SQL, [at]],
+      [`INSERT INTO card_links (from_seq, to_seq, kind, created_by, created_at)
+        SELECT CAST(? AS INTEGER), CAST(? AS INTEGER), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT)
+        WHERE NOT EXISTS (SELECT 1 FROM card_links WHERE (from_seq = ? AND to_seq = ?) OR (from_seq = ? AND to_seq = ?))${kind === 'related' ? '' : `
+          AND NOT EXISTS (WITH RECURSIVE up(s) AS (SELECT CAST(? AS INTEGER) UNION SELECT l.to_seq FROM card_links l JOIN up ON l.from_seq = up.s WHERE l.kind = 'blocked_by') SELECT 1 FROM up WHERE s = ?)`}`,
+        [from.seq, to.seq, kind === 'related' ? 'related' : 'blocked_by', me.id, at, c.seq, o.seq, o.seq, c.seq, ...(kind === 'related' ? [] : [to.seq, from.seq])]],
+    ]);
+    if (!Number(added)) { // 檢查完到寫入之間被別人搶先：重新判斷是哪一種
+      if (await db.get('SELECT 1 AS x FROM card_links WHERE (from_seq = ? AND to_seq = ?) OR (from_seq = ? AND to_seq = ?)', c.seq, o.seq, o.seq, c.seq)) throw new ApiError(409, 'LINK_EXISTS', `${pub(c)} 和 ${pub(o)} 已經連過了；要改種類請先移除再加。`);
+      throw new ApiError(409, 'LINK_CYCLE', `${pub(to)} 已經在等 ${pub(from)}，加了會變成互相等，不能加。`);
+    }
+    await db.batch([
+      ...logStmt(c.seq, me, [kind === 'blockedBy' ? `設 ${pub(o)} 為前置卡` : kind === 'blocks' ? `設這張擋住 ${pub(o)}` : `加關聯卡 ${pub(o)}`], at),
+      ...logStmt(o.seq, me, [kind === 'blockedBy' ? `設這張擋住 ${pub(c)}` : kind === 'blocks' ? `設 ${pub(c)} 為前置卡` : `加關聯卡 ${pub(c)}`], at),
+    ]);
+    await touchLinked([c.seq, o.seq], at);
+    return { __status: 201, ...await linkResult(c, me, ctx) };
+  });
+  route('DELETE', '/api/cards/:id/links/:other', async ({ ctx, me, params }) => {
+    const c = await load(params.id, me);
+    const o = await loadOther(params.other, me);
+    canLink(me, c, o);
+    const l = await db.get('SELECT * FROM card_links WHERE (from_seq = ? AND to_seq = ?) OR (from_seq = ? AND to_seq = ?)', c.seq, o.seq, o.seq, c.seq);
+    if (!l) throw new ApiError(404, 'LINK_NOT_FOUND', `${pub(c)} 和 ${pub(o)} 沒有關聯。`);
+    const at = nowIso(), side = s => (l.from_seq === s ? 'from' : 'to');
+    await db.batch([
+      ['DELETE FROM card_links WHERE from_seq = ? AND to_seq = ?', [l.from_seq, l.to_seq]],
+      ...logStmt(c.seq, me, [`移除${linkWord(l.kind, side(c.seq), pub(o))}`], at),
+      ...logStmt(o.seq, me, [`移除${linkWord(l.kind, side(o.seq), pub(c))}`], at),
+    ]);
+    await touchLinked([c.seq, o.seq], at);
+    return await linkResult(c, me, ctx);
+  });
+  // 前置卡都完成的通知：送成功（或已送過）才刪待送記錄；失敗就留著，下次整理（maybeArchive）再送。
+  // requestId 固定＝這次解除的代號，作者固定＝完成那張的人，重送不會變兩則
+  const UNBLOCK_LOG = '前置卡';
+  async function deliverUnblock(ctx, key, raw) {
+    let j; try { j = JSON.parse(raw); } catch { j = null; }
+    const w = j && await db.get('SELECT * FROM cards WHERE seq = ?', j.seq);
+    if (w && w.owner_id && w.owner_id !== j.by && !CLOSED_ST.includes(w.status)) {
+      const by = (await peopleMap(ctx, [j.by])).get(j.by);
+      if (by && j.card) {
+        const summary = j.all ? `前置卡都完成了（最後一張 ${j.card} ${j.st}），可以接著做。` : `等的 ${j.card} ${j.st}，可以接著做。`;
+        const msg = `[通知] ${w.project ? `【${projectName(w.project)}】` : ''}${pub(w)} ${plainTitle(w.title)}：${summary}`.slice(0, 1900);
+        try {
+          const r = await createMessage(ctx, by, { text: msg, requestId: `cardev_${w.uid}_unblock${String(j.ev).replace(/\D/g, '')}`.slice(0, 128), recipientIds: [w.owner_id], project: w.project });
+          await db.run('INSERT OR IGNORE INTO card_msgs (card_seq, message_id) VALUES (?,?)', w.seq, r.message.messageId);
+        } catch (err) {
+          if (err?.code !== 'IDEMPOTENCY_CONFLICT') { console.error('unblock notify failed:', err.message); return false; } // 已用同代號送過（卡片標題後來改了）
+        }
+      }
+    }
+    await db.run('DELETE FROM app_settings WHERE key = ?', key);
+    return true;
+  }
+  async function retryUnblocks(ctx) { // 只讀待送清單這一小段（主鍵範圍），不掃卡片紀錄
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE key > 'unblockq:' AND key < 'unblockq;' ORDER BY key LIMIT 20")) await deliverUnblock(ctx, r.key, r.value);
+  }
+  // 卡片結案／重開後：在等它的卡看板標記要變（動 updated_at）；結案時，被擋卡的最後一張前置卡完成就通知負責人一次（AI 會被叫醒）
+  async function afterClosedChange(ctx, me, c, before, after) {
+    if (CLOSED_ST.includes(before) === CLOSED_ST.includes(after)) return;
+    const waiters = await db.all("SELECT w.* FROM card_links l JOIN cards w ON w.seq = l.from_seq WHERE l.kind = 'blocked_by' AND l.to_seq = ?", c.seq);
+    if (!waiters.length) return;
+    const at = nowIso();
+    await touchLinked(waiters.map(w => w.seq), at);
+    if (!CLOSED_ST.includes(after)) return;
+    for (const w of waiters) {
+      if (CLOSED_ST.includes(w.status) || w.type === NOTE) continue;
+      const left = await db.get(`SELECT COUNT(*) AS n FROM card_links l JOIN cards t ON t.seq = l.to_seq WHERE l.kind = 'blocked_by' AND l.from_seq = ? AND t.status IN ${OPEN_SQL}`, w.seq);
+      if (Number(left.n)) continue;
+      // 一次解除只通知一次，而且不會漏：判定、時間軸紀錄、待送通知（app_settings 的 unblockq:）放同一個交易；
+      // 兩張前置卡同時完成時，用「前置卡最後完成時間」當這次解除的代號，鎖住後只有一邊寫得進去
+      const last = await db.get("SELECT COUNT(*) AS n, MAX(COALESCE(t.done_at, t.updated_at)) AS d FROM card_links l JOIN cards t ON t.seq = l.to_seq WHERE l.kind = 'blocked_by' AND l.from_seq = ?", w.seq);
+      const ev = String(last.d || at), total = Number(last.n), logAt = nowIso(); // logAt 在讀完完成時間之後取，一定 ≥ ev，另一邊才查得到這筆
+      const text = `${after === '已封存' ? '封存了' : '完成了'}前置卡 ${pub(c)}${total > 1 ? '，前置卡都完成了' : ''}`;
+      const key = `unblockq:${w.seq}:${ev}`, job = JSON.stringify({ seq: w.seq, by: me.id, card: pub(c), st: after, all: total > 1, ev });
+      const fresh = 'NOT EXISTS (SELECT 1 FROM card_log WHERE card_seq = ? AND via = ? AND at >= ?)';
+      // 資格在拿到鎖之後、寫入當下再判一次（上面的查詢只是先篩）：被擋卡還沒結案、現在沒有未完成的前置卡（加關聯也要這把鎖，不會插隊）。
+      // 時間軸紀錄以「待送記錄這次有寫進去」為條件，兩筆共用同一次判定
+      const eligible = `EXISTS (SELECT 1 FROM cards WHERE seq = ? AND status IN ${OPEN_SQL}) AND NOT EXISTS (SELECT 1 FROM card_links l JOIN cards t ON t.seq = l.to_seq WHERE l.kind = 'blocked_by' AND l.from_seq = ? AND t.status IN ${OPEN_SQL})`;
+      const [, , logged] = await db.batch([
+        [LINK_LOCK_SQL, [at]],
+        [`INSERT INTO app_settings (key, value) SELECT CAST(? AS TEXT), CAST(? AS TEXT) WHERE ${eligible} AND ${fresh} ON CONFLICT(key) DO NOTHING`, [key, job, w.seq, w.seq, w.seq, UNBLOCK_LOG, ev]],
+        [`INSERT INTO card_log (card_seq, at, by_id, via, text) SELECT CAST(? AS INTEGER), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT) WHERE EXISTS (SELECT 1 FROM app_settings WHERE key = ? AND value = ?) AND ${fresh}`, [w.seq, logAt, me.id, UNBLOCK_LOG, text, key, job, w.seq, UNBLOCK_LOG, ev]],
+      ]);
+      if (Number(logged)) await deliverUnblock(ctx, key, job);
+    }
   }
 
   // 卡片動作附檔（先用 POST /api/files?post=false 上傳），沒帶就是 null
@@ -979,6 +1174,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       await claim(r, me, at, c.seq);
       invalidatePeople();
       await note(c, [r.from_id, p.waitForId], `採用了 ${aiName} 的建議：狀態改為 ${p.to}`, `sug${r.id}`);
+      await afterClosedChange(ctx, me, c, c.status, p.to); // 卡片關聯
       return view(await db.get('SELECT * FROM cards WHERE seq = ?', c.seq), people);
     }
     // create：採用時可以先改欄位
@@ -1053,5 +1249,5 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     return { ...c, key: pub(c) };
   }
   const cardLog = (seq, me, text) => db.batch(logStmt(seq, me, [text], nowIso()));
-  return { listCards, createCardBy, cardLog };
+  return { listCards, createCardBy, cardLog, waitingOf };
 }

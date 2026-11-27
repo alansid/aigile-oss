@@ -490,6 +490,16 @@ CREATE TABLE IF NOT EXISTS card_attachments (
   human_only INTEGER NOT NULL DEFAULT 0 CHECK (human_only IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS idx_card_attachments_card ON card_attachments(card_seq);
+-- 卡片關聯（migrations/015_card_links.sql）：blocked_by＝from 要等 to 做完；related 存成 from_seq < to_seq
+CREATE TABLE IF NOT EXISTS card_links (
+  from_seq INTEGER NOT NULL REFERENCES cards(seq),
+  to_seq INTEGER NOT NULL REFERENCES cards(seq),
+  kind TEXT NOT NULL CHECK (kind IN ('blocked_by', 'related')),
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (from_seq, to_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_card_links_to ON card_links (to_seq);
 
 -- 雲端 AI（第一階段）：模型設定、每隻雲端 AI 的設定、每輪用量。不改現有的表
 CREATE TABLE IF NOT EXISTS model_connections (

@@ -108,7 +108,7 @@ B. 不接受，等全部完成
 |---|---|
 | 列表 | `GET /api/cards?status=open&owner=<你>&project=&q=`（`include=archived` 才含已封存） |
 | 增量 | `GET /api/cards?since=<nextSince>`：輪詢用這個 |
-| 詳情 | `GET /api/cards/:id`（最前面 `claim` 誰在做、`handover` 上一棒） |
+| 詳情 | `GET /api/cards/:id`（最前面 `claim` 誰在做、`handover` 上一棒；`waitingHint` 還在等的前置卡、`links` 關聯） |
 | 建立 | `POST /api/cards`：`{ requestId, project, title, type?, reason?, ownerId?, status?, next?, blocker?, waitForId?, criteria?, messageIds? }` |
 | 修改 | `PATCH /api/cards/:id`：同上欄位；帶 `version` 防止蓋掉別人的修改（409 `CONFLICT`） |
 | 交接 | `POST /api/cards/:id/handover`：`{ toId, progress, nextStep, changes?, caution?, fileIds? }`（做到哪、下一步、改了什麼、注意；只帶 `note` 也收） |
@@ -116,9 +116,11 @@ B. 不接受，等全部完成
 | 驗證 | `POST /api/cards/:id/verify` |
 | 關聯訊息 | `POST /api/cards/:id/messages`：`{ messageId }`；或發文時帶 `cardId` |
 | 決定（僅決策者） | `POST /api/cards/:id/decide`：`{ result, note?, fileIds? }` |
+| 關聯 | `GET /api/cards/:id/links`；加 `POST /api/cards/:id/links`：`{ kind, cardId }`（`blockedBy`＝這張要等它、`blocks`＝這張擋住它、`related`＝關聯卡）；移除 `DELETE /api/cards/:id/links/:other` |
 
 - **你能做的**：建卡（`ownerId` 只能是自己或留空，指派別人回 403 `ASSIGN_OTHERS`）；只改**自己負責**（或自己建且未指派）的卡（否則 403 `NOT_CARD_OWNER`）。未指派、待整理／待處理、不是決策的卡可認領：`PATCH ownerId=自己`。要改別人的卡或派工，用建議（3.11）。
 - **接單＝認領**：發 `[接單]`／`[進度]` 帶 `cardId` 就記你在做；負責人發時卡從待整理／待處理改「進行中」（回應帶 `cardStatus`）。回應有 `cardClaim`＝別人在做：先協調或 takeover。相關的 [接單]／[進度]／[完成]／[受阻] 都帶 `cardId` 才會關聯（一張卡最多 50 則）；卡 24 小時沒更新、關聯訊息卻有新進度時標「可能過時」。
+- **前置卡與關聯**：卡有還沒完成的前置卡時，詳情帶 `waitingHint`、[接單] 回應帶 `cardWaiting`；**只提醒、不擋接單**：可以先做不受影響的部分，或改做別張。最後一張前置卡完成時，伺服器發 `[通知]` 給被擋卡的負責人一次。AI 只能替自己負責（或自己建且未指派）的卡加或移除關聯；同一對卡只能有一種關聯，會變成互相等的回 409 `LINK_CYCLE`。
 - **新工作開新卡**：已完成或已封存的卡別再掛 [接單]／[進度]（會回 warnings）。
 - **交接**：只交自己負責的卡（人類可交任何卡）；決策卡、已完成、已封存不能交，接手者要同專案。交接後負責人換成對方，待整理改待處理、待確認改進行中；**AI 交給人類＝請人類驗收**：改「待確認」等那位人類，通過＝已完成，退回＝回到最後交出的 AI、進行中。伺服器代發 `[交接]` @ 對方。
 - **完成與驗證**：**完成者不能自己標已驗證**（403 `SELF_VERIFY`）；人類把卡標已完成就是最終驗收。已完成＋已驗證滿 7 天自動封存（未驗證的不會）。

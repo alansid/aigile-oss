@@ -1246,7 +1246,10 @@
   const ckey = id => work.cards.get(cardIdNorm(id))?.cardId || cardIdNorm(id);
   const ckeyOf = c => c?.cardId || ckey(c?.cardId || '');
   // 卡移到別專案會換號：同一張卡（legacyId 相同）舊號那筆拿掉，清單不會出現兩張
-  function putCard(c) {
+  function putCard(c, { keepLinks = false } = {}) {
+    const prev = work.cards.get(c.cardId);
+    if (c.links) c = { ...c, linkSum: linkSumOf(c) }; // 卡片關聯：卡片詳情自己算看板標記
+    else if (keepLinks && prev?.linkSum && !closedSt(c.status)) c = { ...c, linkSum: prev.linkSum }; // 改卡回傳的沒帶，先沿用（增量同步會補正）
     if (c?.legacyId) for (const [k, x] of work.cards) if (k !== c.cardId && x.legacyId === c.legacyId) work.cards.delete(k);
     work.cards.set(c.cardId, c);
   }
@@ -4862,8 +4865,9 @@
     const cols = wide() ? BOARD_ORDER.filter(s => (s !== '已封存' || work.showArchived) && (s !== '待整理' || all.some(c => c.status === '待整理'))) : [work.mCol];
     const tile = c => `
       <div class="ctile${isMeRef(c.waitFor) ? ' me' : ''}${c.type === NOTE ? ' note' : ''}" role="button" tabindex="0" data-card="${esc(c.cardId)}" draggable="${wide()}">
-        <div class="ctile-top">${cidHtml(c)}${typeTag(c)}${confirmPill(c)}${c.type === NOTE ? (c.mergedInto ? '' : noteStPill(c)) : c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
+        ${linkWaitTag(c)}<div class="ctile-top">${cidHtml(c)}${typeTag(c)}${confirmPill(c)}${c.type === NOTE ? (c.mergedInto ? '' : noteStPill(c)) : c.status === '已完成' ? doneTag(c) : c.status === '已封存' ? archTag(c) : markHtml(c)}</div>
         <b class="ctile-title">${cardPTag(c)} ${esc(cardTitle(c))}</b>
+        ${linkBlocksTag(c)}
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
         <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>${canVerifyDone(c) ? `<div class="ctile-act"><button type="button" class="btn small primary ctile-ok" data-done-ok="${esc(c.cardId)}" aria-label="${esc(`驗收通過 ${c.key || c.cardId}`)}">通過</button></div>` : selfDoneNote(c)}
@@ -5050,7 +5054,7 @@
   async function verifyDone(ids) {
     const bad = [];
     for (const id of ids) {
-      try { putCard(await api(`/api/cards/${encodeURIComponent(id)}/verify`, { method: 'POST' })); work.doneSel.delete(id); }
+      try { putCard(await api(`/api/cards/${encodeURIComponent(id)}/verify`, { method: 'POST' }), { keepLinks: true }); work.doneSel.delete(id); }
       catch (err) { bad.push(`${id}（${err.message}）`); }
     }
     toast(bad.length ? `${ids.length - bad.length} 張驗收通過，${bad.length} 張沒成功：${bad.join('、')}` : ids.length === 1 ? `${ids[0]} 驗收通過` : `已驗收通過 ${ids.length} 張`);
@@ -5195,7 +5199,7 @@
     const c = work.cards.get(id);
     try {
       const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: c?.version } });
-      putCard(r);
+      putCard(r, { keepLinks: true });
       if (render) renderWork(); // 收件匣驗收時由呼叫端先淡出再重畫
       const focusBlocker = body.status === '受阻' && r.status === '受阻';
       if (work.openId === id || focusBlocker) {
@@ -5308,9 +5312,143 @@
     else if (g.items.some(t => /^建立卡片/.test(t))) { icon = '＋'; body = '建了這張卡'; }
     else if (g.items.some(t => /^退回/.test(t))) { icon = '↩'; cls = 'bad'; body = esc(g.items.find(t => /^退回/.test(t))); }
     else if (g.items.some(t => /^標為已完成/.test(t))) { icon = '✓'; body = '標為已完成'; }
-    else body = g.items.map(t => esc(t.replace(/^狀態 (.+?) → (.+)$/, '把狀態從「$1」改成「$2」').replace(/^.+? 認領了這張卡片$/, '認領了這張卡'))).join('，');
+    else body = g.items.map(t => `<span>${esc(t.replace(/^狀態 (.+?) → (.+)$/, '把狀態從「$1」改成「$2」').replace(/^.+? 認領了這張卡片$/, '認領了這張卡'))}</span>`).join(g.items.length > 3 ? '<br>' : pageText('，', ', ')); // 同一秒的幾筆各自一段，英文介面才能逐句翻；超過 3 筆每筆一行
     const who = g.by ? shortOf(g.by.name || '') : '系統';
     return `<li class="tl tl-sys lg ${cls}"><span class="lg-ic" aria-hidden="true">${icon}</span><div class="lg-main"><span><b>${esc(who)}</b> ${body}</span><span class="muted small">${dayTime(g.at)} · <span>系統</span>${ver ? ' · ' + esc(ver) : ''}</span>${note ? `<details class="lg-note"><summary>看交接說明</summary><p>${esc(note)}</p></details>` : ''}</div></li>`;
+  }
+  // ---------- 卡片關聯（前置卡、這張擋住、關聯卡）；被擋只提醒、不擋接單 ----------
+  const LINK_GROUPS = [['blockedBy', '前置卡（這張要等它）'], ['blocks', '這張擋住'], ['related', '關聯卡']];
+  const openLinks = (list = []) => list.filter(x => !closedSt(x.status));
+  // 從卡片詳情算看板摘要（打開卡片後看板標記跟著對）
+  const linkSumOf = d => {
+    if (!d.links || closedSt(d.status)) return undefined;
+    const waiting = openLinks(d.links.blockedBy).map(x => x.cardId), blocks = openLinks(d.links.blocks).length;
+    return waiting.length || blocks ? { waiting, blocks } : undefined;
+  };
+  // 看板：被擋的卡左上「⏳ 等 MAIN-7」（多張「⏳ 等 2 張」）；擋住別人的卡灰色「擋住 1 張」
+  const linkWaitTag = c => {
+    const w = c.linkSum?.waiting || [];
+    if (!w.length || closedSt(c.status)) return '';
+    return `<span class="lk-tag wait" title="${esc(`還在等 ${w.join('、')}`)}">⏳ ${w.length === 1 ? `等 ${esc(w[0])}` : `等 ${w.length} 張`}</span>`;
+  };
+  const linkBlocksTag = c => (c.linkSum?.blocks && !closedSt(c.status) ? `<span class="lk-tag blocks">擋住 ${c.linkSum.blocks} 張</span>` : '');
+  // 抽屜：黃色提醒（還沒解開時才出現）
+  function waitNoteHtml(d) {
+    const w = closedSt(d.status) ? [] : openLinks(d.links?.blockedBy);
+    if (!w.length) return '';
+    const stWord = st => (window.aigileI18n?.lang === 'en' ? window.aigileI18n.tr?.(st) ?? st : st); // 英文介面：狀態查字典；卡片標題不翻（data-nt）
+    const who = w.length === 1 ? `<b data-nt>${esc(w[0].cardId)} ${esc(w[0].title)}</b>${pageText('（', ' (')}${esc(stWord(w[0].status))}${pageText('）', ')')}` : w.map(x => `<b>${esc(x.cardId)}</b>`).join(pageText('、', ', '));
+    return `<div class="wait-note" role="status">${pageText('⏳ 還在等 ', '⏳ Still waiting on ')}${who}${pageText('。可以先做不受影響的部分。', ". You can start on the parts it doesn't affect.")}</div>`;
+  }
+  // 抽屜：「關聯」區塊（三組；沒有任何關聯時只留一行）；唯讀成員看得到，但沒有「＋ 加關聯」和 ✕
+  function linksHtml(d) {
+    if (d.type === NOTE || !d.links) return '';
+    const L = d.links, ro = meRO(d.project), n = L.blockedBy.length + L.blocks.length + L.related.length;
+    const add = ro ? '' : '<button type="button" class="link small" data-act="link-add">＋ 加關聯</button>';
+    if (!n) return `<section class="clinks clinks-none" aria-label="關聯"><div class="clinks-head"><b>關聯</b>${add}</div></section>`;
+    const row = x => `<li class="clink"><button type="button" class="link clink-id" data-link-card="${esc(x.cardId)}">${esc(x.cardId)}</button><span class="clink-t" title="${esc(x.title)}">${esc(x.title)}</span><span class="lk-st" data-st="${esc(x.status)}">${esc(x.status)}</span>${ro ? '' : `<button type="button" class="icon-btn clink-x" data-link-del="${esc(x.cardId)}" aria-label="${esc(`移除 ${x.cardId}`)}" title="移除">✕</button>`}</li>`;
+    return `<section class="clinks" aria-label="關聯"><div class="clinks-head"><b>關聯</b>${add}</div>
+      ${LINK_GROUPS.filter(([k]) => L[k].length).map(([k, t]) => `<div class="clinks-g muted small">${t}</div><ul>${L[k].map(row).join('')}</ul>`).join('')}</section>`;
+  }
+  async function removeLink(d, other) {
+    try { await api(`/api/cards/${encodeURIComponent(d.cardId)}/links/${encodeURIComponent(other)}`, { method: 'DELETE' }); }
+    catch (err) { return toast(err.message); }
+    toast(`已移除 ${other}`);
+    await openCard(d.cardId);
+    syncCards().catch(() => {});
+  }
+  // 加關聯視窗：先選種類，再找卡。不能選自己；已經連過的灰色「已連」；會變互相等的標 ⛔ 並說明
+  async function openLinkModal(d) {
+    let info;
+    try { info = await api(`/api/cards/${encodeURIComponent(d.cardId)}/links`); } catch (err) { return toast(err.message); }
+    const linked = new Set(['blockedBy', 'blocks', 'related'].flatMap(k => info.links[k].map(x => x.cardId)));
+    const up = new Set(info.upstream || []), down = new Set(info.downstream || []);
+    const KIND = { blockedBy: ['前置卡', `${d.cardId} 要等選的那張做完`], blocks: ['這張擋住', `選的那張要等 ${d.cardId} 做完`], related: ['關聯卡', '只是相關，誰也不用等誰'] };
+    const found = new Map(); // 伺服器搜尋補回來的卡（看板沒載入的）
+    let kind = 'blockedBy', pick = null, q = '', timer = 0;
+    const body = openModal(`加關聯到 ${d.cardId}`, `
+      <div class="field-label muted small" id="lk-kind-l">種類</div>
+      <div class="lk-seg" role="radiogroup" aria-labelledby="lk-kind-l">${Object.entries(KIND).map(([k, [t]]) => `<button type="button" role="radio" data-lk-kind="${k}">${t}</button>`).join('')}</div>
+      <p class="muted small lk-desc" data-lk-desc></p>
+      <input type="search" class="lk-q" data-lk-q placeholder="搜尋卡號或標題" aria-label="搜尋卡號或標題" autocomplete="off">
+      <ul class="lk-list" role="listbox" aria-label="卡片" data-lk-list></ul>
+      <p class="lk-err" data-lk-err role="alert"></p>`, {
+      size: 'narrow',
+      foot: `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="button" data-lk-go disabled>${pageText('加入', 'Add')}</button>`,
+    });
+    const modal = body.modal;
+    const cycleOf = id => (kind === 'blockedBy' && down.has(id) ? `${id} 已經在等 ${d.cardId}，選它會變成互相等，不能加`
+      : kind === 'blocks' && up.has(id) ? `${d.cardId} 已經在等 ${id}，選它會變成互相等，不能加` : '');
+    const pool = () => {
+      const all = new Map([...work.cards].filter(([, c]) => c.type !== NOTE && c.cardId !== d.cardId));
+      for (const [k, c] of found) if (!all.has(k) && k !== d.cardId) all.set(k, c);
+      const kw = q.trim().toLowerCase();
+      return [...all.values()].filter(c => !kw || c.cardId.toLowerCase().includes(kw) || cardTitle(c).toLowerCase().includes(kw))
+        .sort((a, b) => (a.project === d.project ? 0 : 1) - (b.project === d.project ? 0 : 1) || (closedSt(a.status) ? 1 : 0) - (closedSt(b.status) ? 1 : 0) || String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .slice(0, 30);
+    };
+    const draw = () => {
+      modal.querySelectorAll('[data-lk-kind]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.lkKind === kind)));
+      modal.querySelector('[data-lk-desc]').textContent = KIND[kind][1];
+      const list = pool();
+      if (pick && (linked.has(pick) || cycleOf(pick))) pick = null;
+      const had = document.activeElement?.closest?.('[data-lk-pick]')?.dataset.lkPick; // 重畫（例如搜尋結果回來）後鍵盤焦點留在同一張
+      modal.querySelector('[data-lk-list]').innerHTML = list.map(c => {
+        const done = linked.has(c.cardId), cyc = cycleOf(c.cardId);
+        return `<li role="option" aria-selected="${pick === c.cardId}" aria-disabled="${done || !!cyc}" class="lk-opt${done ? ' linked' : ''}${cyc ? ' cycle' : ''}" data-lk-pick="${esc(c.cardId)}" tabindex="-1">
+          <span class="cid">${esc(c.cardId)}</span><span class="lk-opt-t">${c.project !== d.project ? `<span class="muted small">${esc(projName(c.project))} · </span>` : ''}${esc(cardTitle(c))}</span>
+          ${done ? '<span class="lk-st linked">已連</span>' : cyc ? '<span class="lk-cyc" aria-label="會變成互相等">⛔</span>' : `<span class="lk-st" data-st="${esc(c.status)}">${esc(c.status)}</span>`}</li>`;
+      }).join('') || `<li class="muted small lk-none">${q.trim() ? '找不到符合的卡' : '看板上沒有其他卡'}</li>`;
+      if (had) (modal.querySelector(`[data-lk-pick="${CSS.escape(had)}"]`) || modal.querySelector('[data-lk-pick]') || modal.querySelector('[data-lk-q]'))?.focus();
+      modal.querySelector('[data-lk-go]').disabled = !pick;
+    };
+    const err = t => { modal.querySelector('[data-lk-err]').textContent = t ? `⛔ ${t}` : ''; };
+    const search = () => {
+      clearTimeout(timer);
+      const kw = q.trim();
+      if ([...kw].length < 2) return;
+      timer = setTimeout(async () => {
+        try {
+          const r = await api(`/api/cards?q=${encodeURIComponent(kw)}&include=archived`);
+          for (const c of r.items || []) if (c.type !== NOTE) found.set(c.cardId, c);
+          if (q.trim() === kw) draw();
+        } catch {}
+      }, 400);
+    };
+    modal.addEventListener('click', async e => {
+      const kb = e.target.closest('[data-lk-kind]');
+      if (kb) { kind = kb.dataset.lkKind; err(''); return draw(); }
+      const op = e.target.closest('[data-lk-pick]');
+      if (op) {
+        const id = op.dataset.lkPick, cyc = cycleOf(id);
+        if (linked.has(id)) { err(''); return; }
+        if (cyc) { pick = null; err(cyc); return draw(); }
+        pick = id; err(''); return draw();
+      }
+      const go = e.target.closest('[data-lk-go]');
+      if (go && pick) {
+        go.disabled = true;
+        try { await api(`/api/cards/${encodeURIComponent(d.cardId)}/links`, { method: 'POST', body: { kind, cardId: pick } }); }
+        catch (e2) { go.disabled = false; return err(e2.message); }
+        closeModal();
+        toast({ blockedBy: `已設 ${pick} 為前置卡`, blocks: `已設這張擋住 ${pick}`, related: `已加關聯卡 ${pick}` }[kind]);
+        await openCard(d.cardId);
+        syncCards().catch(() => {});
+      }
+    });
+    modal.querySelector('[data-lk-q]').addEventListener('input', e => { q = e.target.value; err(''); draw(); search(); });
+    modal.querySelector('[data-lk-q]').addEventListener('keydown', e => {
+      if (e.key !== 'ArrowDown') return;
+      e.preventDefault(); modal.querySelector('[data-lk-pick]')?.focus();
+    });
+    modal.querySelector('[data-lk-list]').addEventListener('keydown', e => {
+      const cur = e.target.closest('[data-lk-pick]');
+      if (!cur) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); (e.key === 'ArrowDown' ? cur.nextElementSibling : cur.previousElementSibling)?.focus(); }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cur.click(); modal.querySelector(`[data-lk-pick="${CSS.escape(cur.dataset.lkPick)}"]`)?.focus(); }
+    });
+    draw();
+    modal.querySelector('[data-lk-q]').focus();
   }
   // 相關訊息、紀錄、附件、系統變更合成一條時間軸（舊到新）；預設只顯示最近 TL_SHOW 則
   const TL_SHOW = 20;
@@ -5726,6 +5864,7 @@
           <div class="drawer-status">
             <span class="cst-pill" data-st="${esc(d.status)}">${esc(d.type === NOTE ? noteStText(d) : verifyingMe(d) ? '等你驗收' : d.status)}</span><span class="muted small">負責：${esc(d.owner?.name || '未指派')}${d.type !== NOTE && prevHandName(d) ? ` · ${esc(shortOf(prevHandName(d)))} 交來` : ''}</span>${stMenuHtml(d, mine)}${moreActsHtml(d)}
           </div>
+          ${d.type === NOTE ? '' : waitNoteHtml(d)}
           ${d.type === NOTE ? '' : `<div class="rel-line" data-rel-card="${esc(d.cardId)}"></div>`}
           ${d.type === NOTE ? '' : nowActsHtml(d)}
           ${d.status === '已封存' ? (() => {
@@ -5767,6 +5906,7 @@
           ${reviewHtml(d)}
           ${cardFieldsHtml(d)}`}
           ${cardFilesHtml(d)}
+          ${linksHtml(d)}
           ${timelineHtml(d)}
         </div>
         ${state.page === 'messages' && d.type === NOTE ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
@@ -5827,10 +5967,15 @@
     if (cm) return switchCmode(cm.dataset.cmode);
     const tf = e.target.closest('[data-tl-file]');
     if (tf) { const m = state.byId.get(tf.dataset.tlFile), fs = m?.files?.length ? m.files : m?.file ? [m.file] : [], f = fs[+tf.dataset.i]; if (f) downloadFrom(f.downloadUrl, f.name); return; }
+    const lc = e.target.closest('[data-link-card]'); // 卡片關聯：點卡號開那張卡；✕ 移除（不另外確認，時間軸有紀錄、可再加回）
+    if (lc) return openCard(lc.dataset.linkCard);
+    const ld = e.target.closest('[data-link-del]');
+    if (ld) return removeLink(work.detail, ld.dataset.linkDel);
     const a = e.target.closest('[data-act]');
     if (!a) return;
     const id = work.openId;
     a.closest('details.st-menu, details.more-acts')?.removeAttribute('open');
+    if (a.dataset.act === 'link-add') return openLinkModal(work.detail);
     if (a.dataset.act === 'open-work') { work.returnFocus = null; closeCard(); showPage('work'); return openCard(id); }
     if (a.dataset.act === 'copy-id') return copyText(id).then(ok => toast(ok ? `已複製 ${id}` : '複製失敗'));
     if (a.dataset.act === 'handover') return cmodesOf(work.detail).includes('handover') ? switchCmode('handover') : openHandover();

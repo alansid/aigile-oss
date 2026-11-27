@@ -11,7 +11,7 @@ export const BACKUP_FORMAT = 'aigile-backup';
 export const BACKUP_FORMAT_VERSION = 1;
 // 匯出的資料表（順序＝匯入順序）。新增資料表時一定要放進 EXPORT_TABLES 或 SKIP_TABLES（backup-test 會檢查）
 export const EXPORT_TABLES = ['projects', 'project_descriptions', 'project_events', 'app_settings', 'participants', 'project_preferences', 'ai_state', 'messages', 'message_recipients', 'notifications', 'dms',
-  'decision_resolutions', 'cards', 'card_log', 'card_msgs', 'suggestions', 'avatars', 'avatar_proposals',
+  'decision_resolutions', 'cards', 'card_log', 'card_msgs', 'card_links', 'suggestions', 'avatars', 'avatar_proposals',
   'skills', 'skill_allows', 'skill_installs', 'skill_syncs', 'join_requests', 'doc_folders', 'docs', 'card_attachments', 'files', 'file_audit', 'file_chunks',
   'kb_chunks', 'kb_pages', 'card_reviews', 'ai_models', 'model_connections', 'cloud_agents']; // 雲端 AI：模型設定與每隻的設定帶走，金鑰與 Token 不帶（見 DROP_COLS）； card_reviews：審查紀錄；ai_models：每隻 AI 最近回報的模型；知識庫：kb_chunks 是文件抽出的文字（跟著文件走），kb_pages 是 AI 寫的知識頁（一定帶）
 // 不匯出：登入用的（Token、密碼雜湊、裝置、登入碼、邀請、救援連結、登入通知、失敗次數）
@@ -22,8 +22,8 @@ const BLOB_COLS = { avatars: ['data'], avatar_proposals: ['data'], file_chunks: 
 const DROP_COLS = { participants: ['token', 'token_expires_at'], // 匯入時換新：Token 隨機、已過期
   // 雲端 AI：金鑰用舊站的主密鑰加密，新站解不開，管理員要重貼（狀態回到「還沒測試」）；Token 由雲端 AI 第一次跑時自己重發
   model_connections: ['key_enc', 'key_last4', 'status', 'last_test', 'last_test_at', 'notified_at'], cloud_agents: ['token_enc'] };
-// app_settings 不帶的：AI 接入連結（一次性密鑰的雜湊）、預設管理員要改帳密的標記、快取用的版本、匯入中的標記、更新檢查的快取
-const skipSetting = k => k.startsWith('olink:') || k.startsWith('must_change_cred:') || k.startsWith('relogin:') || ['people_ver', 'restore_state', 'update_check'].includes(k);
+// app_settings 不帶的：AI 接入連結（一次性密鑰的雜湊）、預設管理員要改帳密的標記、快取用的版本、匯入中的標記、更新檢查的快取、卡片關聯的鎖與還沒送出的「前置卡都完成」通知
+const skipSetting = k => k.startsWith('olink:') || k.startsWith('must_change_cred:') || k.startsWith('relogin:') || k.startsWith('unblockq:') || k.startsWith('lock:') || ['people_ver', 'restore_state', 'update_check'].includes(k);
 // 每頁幾列：一般 500；大欄位的表少一點（技能一列最多 1 MB、file_chunks 一列 512 KB、頭像是圖片）
 const PAGES = { file_chunks: 1, skills: 4, avatar_proposals: 5, avatars: 20, kb_pages: 50 }; // 知識頁一頁最多 2 萬字
 const pageOf = t => PAGES[t] || 500;

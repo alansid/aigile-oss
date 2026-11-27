@@ -62,7 +62,7 @@ export const MCP_TOOLS = [
     inputSchema: obj({ project: str('專案 API 代號（例：平台），公告與跨團隊協調才用 all'), text: str('內文，盡量 600 字內', { minLength: 1, maxLength: 4000 }),
       recipientIds: ids('要通知的 participantId', '^p_'), replyFrom: { ...ids('要誰回覆（最多一位）', '^p_'), maxItems: 1 }, cardId: CARD_ID,
       replyToMessageId: str('回覆哪則訊息', { pattern: '^msg_' }), requestId: str('冪等鍵（選填）', { maxLength: 128 }), full: { type: 'boolean', description: '回完整欄位（舊格式），預設 false＝精簡' } }, ['project', 'text']) },
-  { name: 'aigile_card_get', description: `讀一張卡：最前面是 claim（誰在做）與 handover（上一棒交接四欄），另有紀錄與關聯訊息。${UNTRUSTED}`,
+  { name: 'aigile_card_get', description: `讀一張卡：最前面是 claim（誰在做）與 handover（上一棒交接四欄）；有前置卡還沒完成時帶 waitingHint（只提醒、不擋接單），links 列前置卡／這張擋住／關聯卡；另有紀錄與關聯訊息。${UNTRUSTED}`,
     inputSchema: obj({ cardId: CARD_ID }, ['cardId']) },
   // 審查者：專案開了審查時，做完先送審，通過了才找人同意 commit；被退回照意見改、改完重新送審
   { name: 'aigile_review_request', description: '送審：專案開了審查時，做完先送審，通過了才請人同意 commit。只送版本、說明這類資料：version 帶要審的 40 碼 SHA 或 diff 指紋；note 寫改了什麼、怎麼驗證；model 帶你目前用的完整模型代號（記在審查紀錄上）；branch 選填（有設 GitHub 程式庫時審查者拿到比較連結）；reviewerId 選填（不符合專案規則會回錯誤，不帶平台自動挑；審查者不能是作者）；diffDocId 選填（先用 aigile_review_diff 上傳拿到的）。被退回改完重新送審，預設還是同一位審。',
@@ -170,7 +170,7 @@ export function slimHistory(x) {
 }
 export function slimPost(body, status) {
   return { messageId: body.messageId, sequence: body.sequence, ...(status === 200 ? { duplicate: true } : {}),
-    ...(body.cardLinked !== undefined ? { cardLinked: body.cardLinked } : {}), ...(body.cardStatus ? { cardStatus: body.cardStatus } : {}), ...(body.cardClaim ? { cardClaim: body.cardClaim } : {}),
+    ...(body.cardLinked !== undefined ? { cardLinked: body.cardLinked } : {}), ...(body.cardStatus ? { cardStatus: body.cardStatus } : {}), ...(body.cardClaim ? { cardClaim: body.cardClaim } : {}), ...(body.cardWaiting ? { cardWaiting: body.cardWaiting } : {}),
     ...(body.warnings?.length ? { warnings: body.warnings } : {}) };
 }
 // 工具由伺服器依 Token 的角色給（通用 MCP 不分 AI 裝，換角色不用重裝）。試用者不常駐、不改卡片、不交辦 → 不給改卡與交接

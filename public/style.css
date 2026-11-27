@@ -4465,3 +4465,53 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
   .mention-list li.card-pick-row { min-height: 44px; }
   .mention-list li.card-pick-tip { display: none; }
 }
+
+/* 卡片關聯（前置卡、這張擋住、關聯卡） */
+.wait-note { padding: 8px 10px; border-radius: 8px; background: #fef3c7; color: #92400e; font-size: 13.5px; line-height: 1.5; }
+.wait-note b { font-weight: 600; }
+.clinks { border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; display: grid; gap: 4px; }
+.clinks-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.clinks-g { margin-top: 4px; }
+.clinks ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.clink { display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; }
+.clink-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; flex: none; }
+.clink-t { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clink .lk-st { flex: none; }
+.clink-x { margin-left: auto; font-size: 14px; padding: 6px 8px; flex: none; }
+.lk-st { font-size: 12px; font-weight: 600; border-radius: 6px; padding: 1px 8px; white-space: nowrap; background: var(--surface-2); color: var(--muted); }
+.lk-st[data-st="進行中"] { background: #dbeafe; color: #1d4ed8; }
+.lk-st[data-st="待確認"] { background: #fef3c7; color: #92400e; }
+.lk-st[data-st="受阻"] { background: #fee2e2; color: #991b1b; }
+.lk-st[data-st="已完成"], .lk-st[data-st="已封存"] { background: #dcfce7; color: #166534; }
+.lk-tag { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; font-size: 12px; font-weight: 600; border-radius: 6px; padding: 1px 8px; white-space: nowrap; }
+.lk-tag.wait { background: #fef3c7; color: #92400e; justify-self: start; white-space: normal; overflow-wrap: anywhere; } /* 看板窄欄也要看得到卡號：自己一行、太長就換行 */
+.lk-tag.blocks { background: var(--surface-2); color: var(--muted); justify-self: start; align-self: flex-start; }
+.lk-seg { display: flex; gap: 4px; padding: 3px; border-radius: 10px; background: var(--surface-2); }
+.lk-seg button { flex: 1; min-height: 36px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; cursor: pointer; }
+.lk-seg button[aria-checked="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+.lk-desc { margin: 8px 0; }
+.lk-q { width: 100%; }
+.lk-list { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; max-height: 280px; overflow-y: auto; }
+.lk-opt { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 10px; cursor: pointer; border-top: 1px solid var(--border); min-width: 0; }
+.lk-opt:first-child { border-top: 0; }
+.lk-opt:hover, .lk-opt:focus { background: var(--surface-2); outline: none; }
+.lk-opt[aria-selected="true"] { background: var(--human-bg); box-shadow: inset 3px 0 0 var(--primary); }
+.lk-opt .cid { flex: none; }
+.lk-opt-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lk-opt.linked { cursor: default; opacity: .6; }
+.lk-opt.cycle { cursor: not-allowed; }
+.lk-st.linked { background: var(--surface-2); color: var(--muted); }
+.lk-cyc { flex: none; }
+.lk-none { padding: 10px; }
+.lk-err { color: var(--danger); font-size: 13px; margin: 8px 0 0; min-height: 0; }
+.lk-err:empty { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wait-note, :root:not([data-theme="light"]) .lk-tag.wait, :root:not([data-theme="light"]) .lk-st[data-st="待確認"] { background: #451a03; color: #fde68a; }
+  :root:not([data-theme="light"]) .lk-st[data-st="進行中"] { background: #172554; color: #bfdbfe; }
+  :root:not([data-theme="light"]) .lk-st[data-st="受阻"] { background: #450a0a; color: #fecaca; }
+  :root:not([data-theme="light"]) .lk-st[data-st="已完成"], :root:not([data-theme="light"]) .lk-st[data-st="已封存"] { background: #052e16; color: #bbf7d0; }
+}
+:root[data-theme="dark"] .wait-note, :root[data-theme="dark"] .lk-tag.wait, :root[data-theme="dark"] .lk-st[data-st="待確認"] { background: #451a03; color: #fde68a; }
+:root[data-theme="dark"] .lk-st[data-st="進行中"] { background: #172554; color: #bfdbfe; }
+:root[data-theme="dark"] .lk-st[data-st="受阻"] { background: #450a0a; color: #fecaca; }
+:root[data-theme="dark"] .lk-st[data-st="已完成"], :root[data-theme="dark"] .lk-st[data-st="已封存"] { background: #052e16; color: #bbf7d0; }

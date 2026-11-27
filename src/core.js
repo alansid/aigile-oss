@@ -2889,6 +2889,7 @@ ${ending}`;
       [`DELETE FROM message_recipients WHERE message_id IN (${PM})`, [id]],
       [`DELETE FROM decision_resolutions WHERE message_id IN (${PM})`, [id]],
       [`DELETE FROM card_msgs WHERE card_seq IN (${PC}) OR message_id IN (${PM})`, [id, id]],
+      [`DELETE FROM card_links WHERE from_seq IN (${PC}) OR to_seq IN (${PC})`, [id, id]], // 卡片關聯
       [`DELETE FROM card_attachments WHERE card_seq IN (${PC}) OR doc_id IN (SELECT id FROM docs WHERE project = ?)`, [id, id]],
       [`DELETE FROM card_log WHERE card_seq IN (${PC})`, [id]],
       [`DELETE FROM suggestions WHERE card_seq IN (${PC}) OR (kind = 'create' AND state = 'pending' AND json_valid(payload) AND json_extract(payload, '$.project') = ?)`, [id, id]],
@@ -3315,9 +3316,10 @@ ${ending}`;
       teamCache = { at: 0, data: null };
       cardStarted = true;
     }
+    const cardWaiting = card && !r.duplicate && isAcceptTag && !cardClosed && card.type !== '人類紀錄' ? await cardsApi.waitingOf(card.seq, me) : null; // 卡片關聯：接單成功也提醒還在等哪張（不擋）
     const warnings = [...(r.warnings || []), ...(cardMismatch ? [cardMismatch] : [])];
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`);
-    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(cardClaim ? { cardClaim } : {}), ...(warnings.length ? { warnings } : {}) };
+    return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(cardClaim ? { cardClaim } : {}), ...(cardWaiting ? { cardWaiting } : {}), ...(warnings.length ? { warnings } : {}) };
   });
 
   route('GET', '/api/notifications', ({ ctx, me, url }) => listNotifications(ctx, me, url));
