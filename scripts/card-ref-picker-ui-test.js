@@ -88,7 +88,9 @@ try {
   await until(() => js("document.querySelector('#mention-list').hidden && document.querySelector('#messages').textContent.includes('請看 #9999')"), 8000, '無結果時 Enter 照常送出並關選單');
 
   await typeIn('#input', '看 #');
-  await until(() => js("!document.querySelector('#mention-list').hidden"), 3000, '重開 #');
+  await until(() => js("!document.querySelector('#mention-list').hidden && document.querySelectorAll('#mention-list .card-pick-row').length >= 2"), 3000, '重開 #');
+  // 選第二張（c1），避免 #send 觸發 c2 更新而跟接下來開 c2 抽屜的 SSE syncCards() 強碰
+  await keyIn('#input', 'ArrowDown');
   await keyIn('#input', 'Enter');
   const ins = await js("document.querySelector('#input').value");
   assert.match(ins, /^看 MAIN-\d+ $/, '插入卡號加空白');
@@ -111,6 +113,7 @@ try {
     ['back', `#card-drawer [data-cdraft="r:${c2.cardId}"]`],
   ]) {
     await js(`document.querySelector('#card-drawer [data-cmode="${mode}"]').click(); true`);
+    await until(() => js(`(() => { const ta = document.querySelector(${JSON.stringify(sel)}); return !!ta && ta.isConnected && document.querySelector('#card-drawer [data-cmode="${mode}"]')?.getAttribute('aria-selected') === 'true'; })()`), 5000, mode + ' 輸入框就緒');
     await typeIn(sel, '#');
     await until(() => js("!!document.querySelector('#card-drawer .mention-list:not([hidden]) .card-pick-row')"), 3000, mode + ' 開選單');
     await keyIn(sel, 'Enter');
