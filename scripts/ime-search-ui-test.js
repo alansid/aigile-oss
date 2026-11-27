@@ -14,6 +14,7 @@ try {
   await kit.call(boss.token, '/api/members/matrix', 'PUT', { changes: ids.map(id => ({ id, projects: ['預設專案'] })) });
   for (const [i, t] of ['中文搜尋卡', 'apple 卡', '第三張'].entries()) await kit.call(boss.token, '/api/cards', 'POST', { requestId: 'c' + i, project: '預設專案', title: t });
   const { js, login, cdp } = await kit.browser();
+  const size = (w, h) => cdp('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: w < 700 });
   const go = async url => { await js(`history.pushState(null, '', ${JSON.stringify(url)}); dispatchEvent(new PopStateEvent('popstate')); true`); await sleep(700); };
 
   // 對一個搜尋框：組字「ㄓ」→「ㄓㄨㄥ」期間框不能被換掉、清單不變；選「中」後才篩；回傳篩完的筆數
@@ -32,16 +33,35 @@ try {
   };
 
   await login(boss.token);
-  // 1. 工作頁搜尋卡片
+  // 1. 工作頁搜尋卡片（桌面頂欄：1400 以上測 [data-tb-card-q]，1280 點 [data-tb-filter] 測 [data-tb-fp-card-q]）
+  await size(1400, 800);
   await go('/p/main/work');
-  assert.equal(await ime('#card-q', '.crow:not(.arch), .ctile', '工作頁'), 1, '工作頁只剩「中文搜尋卡」');
+  assert.equal(await ime('[data-tb-card-q]', '.crow:not(.arch), .ctile', '工作頁 1400 頂欄'), 1, '1400 頂欄搜尋只剩「中文搜尋卡」');
   // 英文沒有組字：每打一個字就篩（不能變慢、不能等 compositionend）
-  await js("(() => { const q = document.querySelector('#card-q'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
-  await sleep(300);
-  await js("document.querySelector('#card-q').focus(); true");
+  await js("(() => { const q = document.querySelector('[data-tb-card-q]'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '清空回 3 張');
+  await js("document.querySelector('[data-tb-card-q]').focus(); true");
   await cdp('Input.insertText', { text: 'e' });
   await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 1"), 3000, '英文即時篩選');
-  assert.equal(await js("document.querySelector('#card-q').value"), 'e'); // 卡號 PLAT 也有 a，用 e 只會中 apple
+  assert.equal(await js("document.querySelector('[data-tb-card-q]').value"), 'e');
+
+  // 1280 窄桌機：篩選收進「篩選 ▾」，點 [data-tb-filter] 測 [data-tb-fp-card-q]
+  await js("(() => { const q = document.querySelector('[data-tb-card-q]'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '切 1280 前清空回 3 張');
+  await size(1280, 800);
+  await until(() => js("!!document.querySelector('[data-tb-filter]')"), 5000, '1280 出現篩選鈕');
+  await js("document.querySelector('[data-tb-filter]').click(); true");
+  await until(() => js("!document.querySelector('#tb-filter-pop')?.hidden && !!document.querySelector('[data-tb-fp-card-q]')"), 5000, '1280 打開篩選面板');
+  assert.equal(await ime('[data-tb-fp-card-q]', '.crow:not(.arch), .ctile', '工作頁 1280 篩選面板'), 1, '1280 篩選面板搜尋只剩「中文搜尋卡」');
+  await js("(() => { const q = document.querySelector('[data-tb-fp-card-q]'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '1280 清空回 3 張');
+  await js("document.querySelector('[data-tb-fp-card-q]').focus(); true");
+  await cdp('Input.insertText', { text: 'e' });
+  await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 1"), 3000, '1280 英文即時篩選');
+  assert.equal(await js("document.querySelector('[data-tb-fp-card-q]').value"), 'e');
+  await js("document.querySelector('[data-tb-fp-clear]').click(); true");
+  await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '清除篩選回 3 張');
+  await size(1400, 700);
 
   // 2. 成員與權限：左邊搜尋成員（pm-mq）、右邊共用篩選列（fb-q-perm）
   await go('/members');
