@@ -101,7 +101,7 @@ try {
     await js("(() => { const b = document.querySelector('[data-pset=\"預設專案\"]'); b.scrollIntoView(); b.click(); return true; })()");
     await until(() => js("!document.querySelector('#pset-menu')?.hidden"), 5000, L + '⚙ 選單');
     const ps = await J("[...document.querySelectorAll('#pset-menu [data-pset-act]')].map(b => b.dataset.psetAct + '=' + b.innerText.replace(/\\s+/g, ' ').trim())");
-    assert.deepEqual(ps.map(x => x.split('=')[0]), ['rename', 'repo', 'members', 'kbai', 'review', 'templates'], L + 'leader 的 ⚙（沒有封存）：' + ps.join(' / '));
+    assert.deepEqual(ps.map(x => x.split('=')[0]), ['rename', 'repo', 'members', 'kbai', 'review', 'templates', 'models'], L + 'leader 的 ⚙（沒有封存）：' + ps.join(' / '));
     await shot(`PLAT-381-3-${tag}-leader-專案齒輪`);
     await js("document.body.click(); true");
     // ---------- E leader 的要你處理 ----------
@@ -130,7 +130,7 @@ try {
     await until(() => js("!!document.querySelector('[data-pset=\"預設專案\"]')"), 10000, L + '管理員的專案 ⚙');
     await js("(() => { const b = document.querySelector('[data-pset=\"預設專案\"]'); b.scrollIntoView(); b.click(); return true; })()");
     await until(() => js("!document.querySelector('#pset-menu')?.hidden"), 5000, L + '管理員 ⚙ 選單');
-    assert.equal(await js("[...document.querySelectorAll('#pset-menu [data-pset-act]')].map(b => b.dataset.psetAct).join(',')"), 'rename,repo,members,kbai,review,templates', L + '管理員的 ⚙ 跟 leader 一樣、沒有封存');
+    assert.equal(await js("[...document.querySelectorAll('#pset-menu [data-pset-act]')].map(b => b.dataset.psetAct).join(',')"), 'rename,repo,members,kbai,review,templates,models', L + '管理員的 ⚙ 跟 leader 一樣、沒有封存');
     await shot(`PLAT-381-5b-${tag}-管理員-專案齒輪`);
     await js("document.body.click(); true");
     await login(liu.token, '/p/main/inbox');
@@ -152,7 +152,12 @@ try {
     await until(() => js("!!document.querySelector('.topbar .av-btn')"), 10000, L + '一般成員');
     const cav = await avItems();
     assert.ok(!/lead-projects=|admin=|pm-projects=|perm=/.test(cav), L + '一般成員沒有管理區：' + cav);
-    assert.equal(await js("!!document.querySelector('[data-pset]')"), false, L + '一般成員沒有專案 ⚙');
+    // 一般成員也有專案 ⚙，選單只有唯讀的「模型設定」
+    await until(() => js("!!document.querySelector('[data-pset]')"), 10000, L + '一般成員的專案 ⚙');
+    await click('[data-pset]');
+    await until(() => js("!!document.querySelector('#pset-menu:not([hidden]) [data-pset-act]')"), 5000, L + '⚙ 選單');
+    assert.deepEqual(await js("[...document.querySelectorAll('#pset-menu [data-pset-act]')].map(b => b.dataset.psetAct)"), ['models'], L + '一般成員的 ⚙ 只有模型設定');
+    await js("document.body.click(); true");
     await shot(`PLAT-381-7-${tag}-一般成員-頭像選單`);
     await avClose();
     assert.equal((await call(chen.token, '/api/projects/預設專案', 'PATCH', { name: 'x' })).status, 403);

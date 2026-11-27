@@ -1,5 +1,5 @@
 // 雲端 AI（第一階段）：在平台直接新增 AI，由伺服器呼叫模型 API，不用接任何人的電腦。
-// - 模型設定（model_connections）：管理員在網頁貼金鑰，用主密鑰（AES-GCM）加密存，只顯示末 4 碼，任何 API 都拿不回完整金鑰
+// - 模型設定（model_connections）：掛在專案下，專案負責人或管理員在網頁貼金鑰，用主密鑰（AES-GCM）加密存，只顯示末 4 碼，任何 API 都拿不回完整金鑰
 // - 主密鑰：AIGILE_MASTER_KEY 環境變數優先；沒有就第一次存金鑰時自己產生，放在資料庫以外（平台 R2、開源 data/docs）
 // - 每隻雲端 AI（cloud_agents）：用哪組設定、哪個模型、每輪上限（預設 20 次工具、50k token）
 // - 被叫醒時建一輪（cloud_runs），一步＝一次模型呼叫＋執行它要的工具；狀態存資料表，每步可在不同請求跑（平台 Workers CPU 限制）
@@ -224,7 +224,8 @@ export function createModelClient(fetchImpl = (...a) => fetch(...a), { hosted = 
 
 export function registerCloudAi(d) {
   const { db, route, ApiError, invalid, readJson, randId, nowIso, requireAdmin, requireHuman, peopleMap, adminOf, inner, docStorage,
-    config = {}, background, getJson, setJson, invalidatePeople, createAi, projectsOf, newToken, tokenKey = async t => t } = d;
+    config = {}, background, getJson, setJson, invalidatePeople, createAi, projectsOf, newToken, tokenKey = async t => t,
+    leadersOf = async () => [], projectIds = () => [], nameOf = id => id } = d;
   const hosted = !!d.hosted;
   const client = createModelClient(config.cloudFetch || ((...a) => fetch(...a)), { hosted, guard: config.cloudGuard || null });
   const T = () => Date.now();
@@ -266,24 +267,26 @@ export function registerCloudAi(d) {
     catch { throw new ModelError('key', 0, '金鑰解不開（主密鑰換過或遺失），請按「換金鑰」重貼'); }
   }
 
-  // ---- 模型設定 ----
+  // ---- 模型設定（掛在專案下，專案負責人＋管理員設定；費用、用量算在專案）----
   const connOf = id => db.get('SELECT * FROM model_connections WHERE id = ?', id);
   const modelsOf = c => { try { const a = JSON.parse(c.models || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } };
   const privateOf = c => !isOfficial(c.kind, c.url);
   const hostOf = c => { try { return new URL(c.url).hostname; } catch { return ''; } };
-  function connView(c, usedBy = 0) {
+  function connView(c, usedBy = 0, usage = null, full = true) {
     const chk = checkModelUrl(c.url, { hosted: false });
     return {
-      id: c.id, name: c.name, kind: c.kind, kindLabel: KIND_LABEL[c.kind] || c.kind, url: c.url,
+      id: c.id, project: c.project || null, name: c.name, kind: c.kind, kindLabel: KIND_LABEL[c.kind] || c.kind, url: c.url,
       official: isOfficial(c.kind, c.url), private: privateOf(c), privateHost: privateOf(c) ? hostOf(c) : null, insecure: !!chk.insecure,
-      hasKey: !!c.key_enc, keyLast4: c.key_last4 || null, models: modelsOf(c),
+      hasKey: !!c.key_enc, keyLast4: full ? c.key_last4 || null : null, models: modelsOf(c),
       status: c.status, lastTest: c.last_test || null, lastTestAt: c.last_test_at ? new Date(c.last_test_at).toISOString() : null, usedBy,
+      today: usage || { runs: 0, tokens: 0 },
     };
   }
-  async function logChange(me, text) {
-    const list = (await getJson('model_conn_log')) || [];
-    list.unshift({ at: nowIso(), by: me.id, byName: me.name, text });
-    await setJson('model_conn_log', list.slice(0, 200));
+  const logKey = pj => 'model_conn_log:' + pj;
+  async function logChange(pj, by, text, extra = {}) {
+    const list = (await getJson(logKey(pj))) || [];
+    list.unshift({ at: nowIso(), by: by.id, byName: by.name, text, ...extra });
+    await setJson(logKey(pj), list.slice(0, 200));
   }
   const readName = v => { const s = typeof v === 'string' ? v.trim() : ''; if (!s || s.length > 40) throw invalid('名稱為必填，最多 40 字'); return s; };
   function readUrl(kind, v) {
@@ -307,52 +310,133 @@ export function registerCloudAi(d) {
     for (const r of await db.all('SELECT connection_id, COUNT(*) AS n FROM cloud_agents GROUP BY connection_id')) m.set(r.connection_id, r.n);
     return m;
   }
+  async function todayMap() { // 每組設定今天的輪數與 token（台北時間）
+    const m = new Map();
+    for (const r of await db.all('SELECT a.connection_id AS id, COUNT(*) AS n, COALESCE(SUM(r.tokens), 0) AS t FROM cloud_runs r JOIN cloud_agents a ON a.ai_id = r.ai_id WHERE r.started_at >= ? GROUP BY a.connection_id', dayStart())) m.set(r.id, { runs: r.n, tokens: r.t });
+    return m;
+  }
 
-  route('GET', '/api/admin/model-connections', async ({ ctx, me }) => {
-    await requireAdmin(ctx, me, '管理模型設定');
-    const used = await usageMap();
-    const rows = await db.all('SELECT * FROM model_connections ORDER BY created_at');
+  // 誰能管：管理員，或這個專案的負責人（leader）；一般成員只能看
+  async function projectAccess(ctx, me, pj) {
+    requireHuman(me);
+    if (!projectIds().includes(pj)) throw new ApiError(404, 'NOT_FOUND', '找不到這個專案');
+    const admin = adminOf(await peopleMap(ctx));
+    const isAdmin = !!admin && admin.id === me.id;
+    const manage = isAdmin || (await leadersOf(pj)).includes(me.id);
+    if (!manage && !projectsOf(me).includes(pj)) throw new ApiError(403, 'NOT_MEMBER', '你不在這個專案');
+    return { manage, isAdmin };
+  }
+  async function requireManage(ctx, me, pj) {
+    const a = await projectAccess(ctx, me, pj);
+    if (!a.manage) throw new ApiError(403, 'NOT_LEADER', '只有專案負責人和管理員能改模型設定');
+    return a;
+  }
+  async function connIn(pj, id) {
+    const c = await connOf(id);
+    if (!c || c.project !== pj) throw new ApiError(404, 'NOT_FOUND', '找不到這組模型設定');
+    return c;
+  }
+  const leaderNames = async (ctx, pj) => { const people = await peopleMap(ctx); return (await leadersOf(pj)).map(id => people.get(id)?.name).filter(Boolean); };
+
+  // 舊的全站設定（project 是空的）搬家：有雲端 AI 在用的搬到那隻 AI 的專案（多個專案就各複製一組、同一把金鑰）；沒有 AI 在用的留著，總覽列出請管理員重貼
+  let migrated = false;
+  // 一組設定的搬家在一個交易裡完成（標專案、複製、重綁一起寫）：中途失敗整組回復，下次照樣是「project 是空的」重搬；
+  // 第一句先搶這組（WHERE project = ''，帶一次性的記號），後面每句都要看到自己的記號才寫，同時搬的另一個請求只會全部落空
+  async function moveOne(c, byPj) {
+    const pjs = [...byPj.keys()], ts = nowIso(), mark = 'moving:' + randId('m', 12);
+    const stmts = [["UPDATE model_connections SET project = ?, updated_at = ? WHERE id = ? AND project = ''", [pjs[0], mark, c.id]]];
+    for (const pj of pjs.slice(1)) {
+      const id = randId('mc', 12), ais = byPj.get(pj);
+      stmts.push([`INSERT INTO model_connections (id, project, name, kind, url, key_enc, key_last4, models, status, last_test, last_test_at, notified_at, created_by, created_at, updated_at)
+        SELECT ?, ?, name, kind, url, key_enc, key_last4, models, status, last_test, last_test_at, notified_at, created_by, ?, ? FROM model_connections WHERE id = ? AND updated_at = ?`, [id, pj, ts, ts, c.id, mark]]);
+      stmts.push([`UPDATE cloud_agents SET connection_id = ? WHERE connection_id = ? AND ai_id IN (${ais.map(() => '?').join(',')})
+        AND EXISTS (SELECT 1 FROM model_connections WHERE id = ? AND updated_at = ?)`, [id, c.id, ...ais, c.id, mark]]);
+    }
+    stmts.push(['UPDATE model_connections SET updated_at = ? WHERE id = ? AND updated_at = ?', [ts, c.id, mark]]);
+    return (await db.batch(stmts))[0] === 1; // false＝別的請求已經搬了
+  }
+  async function migrateSiteWide(ctx) {
+    if (migrated) return;
+    const old = await db.all("SELECT * FROM model_connections WHERE project = '' ORDER BY created_at");
+    if (old.length) {
+      const people = await peopleMap(ctx);
+      const moved = [];
+      try {
+        for (const c of old) {
+          const byPj = new Map();
+          for (const a of await db.all('SELECT ai_id FROM cloud_agents WHERE connection_id = ?', c.id)) {
+            const ai = people.get(a.ai_id), pj = ai ? projectsOf(ai)[0] : null; // 舊的雲端 AI 在好幾個專案：算第一個（跟發通知用的一樣）
+            if (pj) byPj.set(pj, [...(byPj.get(pj) || []), a.ai_id]);
+          }
+          if (!byPj.size || !(await moveOne(c, byPj))) continue;
+          for (const pj of byPj.keys()) {
+            await logChange(pj, { id: null, name: '系統' }, `從全站設定搬過來：${c.name}${c.key_last4 ? `（••••${c.key_last4}）` : ''}`, { moved: { name: c.name, last4: c.key_last4 || '' } }); // 畫面用 moved 照語言組字
+            moved.push({ name: c.name, project: pj });
+          }
+        }
+      } catch (e) {
+        console.error('model connection move failed:', e.message); // 這組整個回復，下次用到再搬；頁面照常顯示
+        return;
+      } finally {
+        if (moved.length) await setJson('model_conn_moved', { at: nowIso(), items: [...(((await getJson('model_conn_moved')) || {}).items || []), ...moved], seen: false });
+        invalidatePeople();
+      }
+    }
+    migrated = true;
+  }
+
+  const kindsView = () => KINDS.filter(k => !hosted || OFFICIAL_URL[k]).map(k => ({ key: k, label: KIND_LABEL[k], url: DEFAULT_URL[k], official: !!OFFICIAL_URL[k] }));
+  // 專案 ⚙ › 模型設定：負責人、管理員看得到末 4 碼與變更紀錄；一般成員唯讀（看得到用量）
+  route('GET', '/api/projects/:id/model-connections', async ({ ctx, me, params }) => {
+    const pj = decodeURIComponent(params.id);
+    const { manage } = await projectAccess(ctx, me, pj);
+    await migrateSiteWide(ctx);
+    const [used, today] = [await usageMap(), await todayMap()];
+    const rows = await db.all('SELECT * FROM model_connections WHERE project = ? ORDER BY created_at', pj);
     return {
+      project: pj, canEdit: manage, leaders: await leaderNames(ctx, pj),
       hosted, masterKey: masterSource() ? 'ok' : 'missing', masterSource: masterSource(),
       customUrl: !hosted, // 平台版只准官方網址
-      kinds: KINDS.filter(k => !hosted || OFFICIAL_URL[k]).map(k => ({ key: k, label: KIND_LABEL[k], url: DEFAULT_URL[k], official: !!OFFICIAL_URL[k] })),
-      connections: rows.map(c => connView(c, used.get(c.id) || 0)),
-      log: ((await getJson('model_conn_log')) || []).slice(0, 50),
+      kinds: kindsView(),
+      connections: rows.map(c => connView(c, used.get(c.id) || 0, today.get(c.id), manage)),
+      ...(manage ? { log: ((await getJson(logKey(pj))) || []).slice(0, 50) } : {}),
     };
   });
 
-  route('POST', '/api/admin/model-connections/check-url', async ({ ctx, me, req }) => {
-    await requireAdmin(ctx, me, '管理模型設定');
+  route('POST', '/api/projects/:id/model-connections/check-url', async ({ ctx, me, req, params }) => {
+    await requireManage(ctx, me, decodeURIComponent(params.id));
     const b = await readJson(req);
     const kind = KINDS.includes(b.kind) ? b.kind : 'custom';
     const chk = checkModelUrl(b.url, { hosted });
     return { ...chk, official: chk.ok && isOfficial(kind, b.url), private: chk.ok && !isOfficial(kind, b.url) };
   });
 
-  route('POST', '/api/admin/model-connections', async ({ ctx, me, req }) => {
-    await requireAdmin(ctx, me, '管理模型設定');
+  route('POST', '/api/projects/:id/model-connections', async ({ ctx, me, req, params }) => {
+    const pj = decodeURIComponent(params.id);
+    await requireManage(ctx, me, pj);
     const b = await readJson(req);
     if (!KINDS.includes(b.kind)) throw invalid(`種類只能是 ${KINDS.join('、')}`);
     const name = readName(b.name), url = readUrl(b.kind, b.url), models = readModels(b.models) || [], key = readKey(b.key);
-    if ((await db.get('SELECT id FROM model_connections WHERE name = ?', name))) throw new ApiError(409, 'DUPLICATE_NAME', '已經有同名的模型設定');
+    if ((await db.get('SELECT id FROM model_connections WHERE project = ? AND name = ?', pj, name))) throw new ApiError(409, 'DUPLICATE_NAME', '這個專案已經有同名的模型設定');
     const keyEnc = key ? await encryptKey(key) : '';
     const id = randId('mc', 12), ts = nowIso();
-    await db.run(`INSERT INTO model_connections (id, name, kind, url, key_enc, key_last4, models, status, created_by, created_at, updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, name, b.kind, url, keyEnc, key ? last4(key) : '', JSON.stringify(models), 'untested', me.id, ts, ts);
-    await logChange(me, `${name}：新增${key ? `，金鑰 ••••${last4(key)}` : ''}`);
+    await db.run(`INSERT INTO model_connections (id, project, name, kind, url, key_enc, key_last4, models, status, created_by, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, id, pj, name, b.kind, url, keyEnc, key ? last4(key) : '', JSON.stringify(models), 'untested', me.id, ts, ts);
+    await logChange(pj, me, `${name}：新增${key ? `，金鑰 ••••${last4(key)}` : ''}`);
     return { __status: 201, connection: connView(await connOf(id)) };
   });
 
-  route('PATCH', '/api/admin/model-connections/:id', async ({ ctx, me, req, params }) => {
-    await requireAdmin(ctx, me, '管理模型設定');
-    const c = await connOf(params.id);
-    if (!c) throw new ApiError(404, 'NOT_FOUND', '找不到這組模型設定');
+  route('PATCH', '/api/projects/:id/model-connections/:cid', async ({ ctx, me, req, params }) => {
+    const pj = decodeURIComponent(params.id);
+    await requireManage(ctx, me, pj);
+    const c = await connIn(pj, params.cid);
     const b = await readJson(req);
     const name = b.name !== undefined ? readName(b.name) : c.name;
-    if (name !== c.name && (await db.get('SELECT id FROM model_connections WHERE name = ? AND id <> ?', name, c.id))) throw new ApiError(409, 'DUPLICATE_NAME', '已經有同名的模型設定');
+    if (name !== c.name && (await db.get('SELECT id FROM model_connections WHERE project = ? AND name = ? AND id <> ?', pj, name, c.id))) throw new ApiError(409, 'DUPLICATE_NAME', '這個專案已經有同名的模型設定');
     const url = b.url !== undefined ? readUrl(c.kind, b.url) : c.url;
     const models = readModels(b.models);
     const key = b.key !== undefined ? readKey(b.key) : null;
+    if (url !== c.url && c.key_enc && !key && b.removeKey !== true) throw new ApiError(400, 'KEY_REQUIRED', '換了網址要重貼金鑰（或刪除金鑰）：存好的金鑰只會送到原本的網址。'); // 金鑰只送到當初貼的網址
     const logs = [];
     let keyEnc = c.key_enc, keyL4 = c.key_last4;
     if (b.removeKey === true) { keyEnc = ''; keyL4 = ''; logs.push(`刪除金鑰 ••••${c.key_last4}`); }
@@ -363,34 +447,39 @@ export function registerCloudAi(d) {
     const changedConn = url !== c.url || keyEnc !== c.key_enc;
     await db.run(`UPDATE model_connections SET name = ?, url = ?, key_enc = ?, key_last4 = ?, models = ?, status = ?, updated_at = ? WHERE id = ?`,
       name, url, keyEnc, keyL4, models ? JSON.stringify(models) : c.models, changedConn ? 'untested' : c.status, nowIso(), c.id);
-    if (logs.length) await logChange(me, `${name}：${logs.join('、')}`);
+    if (logs.length) await logChange(pj, me, `${name}：${logs.join('、')}`);
     if (name !== c.name) invalidatePeople();
-    return { connection: connView(await connOf(c.id), (await usageMap()).get(c.id) || 0) };
+    return { connection: connView(await connOf(c.id), (await usageMap()).get(c.id) || 0, (await todayMap()).get(c.id)) };
   });
 
-  route('DELETE', '/api/admin/model-connections/:id', async ({ ctx, me, params }) => {
-    await requireAdmin(ctx, me, '管理模型設定');
-    const c = await connOf(params.id);
-    if (!c) throw new ApiError(404, 'NOT_FOUND', '找不到這組模型設定');
+  async function deleteConn(c) {
     const used = await db.all('SELECT ai_id FROM cloud_agents WHERE connection_id = ?', c.id);
     await db.run('DELETE FROM model_connections WHERE id = ?', c.id);
-    await db.run("UPDATE cloud_agents SET state = 'error', state_note = ? WHERE connection_id = ?", `模型設定「${c.name}」已刪除，請管理員改選別組設定`, c.id);
-    await logChange(me, `${c.name}：刪除整組設定${used.length ? `（${used.length} 隻 AI 叫不醒）` : ''}`);
+    await db.run("UPDATE cloud_agents SET state = 'error', state_note = ? WHERE connection_id = ?", `模型設定「${c.name}」已刪除，請專案負責人或管理員改選別組設定`, c.id);
     invalidatePeople();
-    return { ok: true, affected: used.length };
+    return used.length;
+  }
+  route('DELETE', '/api/projects/:id/model-connections/:cid', async ({ ctx, me, params }) => {
+    const pj = decodeURIComponent(params.id);
+    await requireManage(ctx, me, pj);
+    const c = await connIn(pj, params.cid);
+    const affected = await deleteConn(c);
+    await logChange(pj, me, `${c.name}：刪除整組設定${affected ? `（${affected} 隻 AI 叫不醒）` : ''}`);
+    return { ok: true, affected };
   });
 
   async function keyOf(c) { return c.key_enc ? decryptKey(c.key_enc) : ''; }
 
   // 讀模型清單：新增時（還沒存）用表單上的網址與金鑰；編輯時沒重貼金鑰就用存好的
-  route('POST', '/api/admin/model-connections/discover', async ({ ctx, me, req }) => {
-    await requireAdmin(ctx, me, '管理模型設定');
+  route('POST', '/api/projects/:id/model-connections/discover', async ({ ctx, me, req, params }) => {
+    const pj = decodeURIComponent(params.id);
+    await requireManage(ctx, me, pj);
     const b = await readJson(req);
-    const saved = b.id ? await connOf(b.id) : null;
+    const saved = b.id ? await connIn(pj, String(b.id)) : null;
     const kind = saved?.kind || (KINDS.includes(b.kind) ? b.kind : 'custom');
     const url = readUrl(kind, b.url ?? saved?.url);
     try {
-      const key = readKey(b.key) || (saved ? await keyOf(saved) : '');
+      const key = readKey(b.key) || (saved && url === saved.url ? await keyOf(saved) : ''); // 網址換了就不用存好的金鑰
       const models = await client.listModels({ kind, url }, key);
       return { models };
     } catch (e) {
@@ -399,7 +488,7 @@ export function registerCloudAi(d) {
     }
   });
 
-  async function testConn(c, model, me) {
+  async function testConn(c, model) {
     const started = T();
     let out;
     try {
@@ -420,14 +509,45 @@ export function registerCloudAi(d) {
     if (out.ok) await recoverAgents(c.id);
     return out;
   }
-  route('POST', '/api/admin/model-connections/:id/test', async ({ ctx, me, req, params, base }) => {
-    await requireAdmin(ctx, me, '管理模型設定');
-    const c = await connOf(params.id);
-    if (!c) throw new ApiError(404, 'NOT_FOUND', '找不到這組模型設定');
+  route('POST', '/api/projects/:id/model-connections/:cid/test', async ({ ctx, me, req, params, base }) => {
+    const pj = decodeURIComponent(params.id);
+    await requireManage(ctx, me, pj);
+    const c = await connIn(pj, params.cid);
     const b = await readJson(req).catch(() => ({}));
-    const out = await testConn(c, typeof b.model === 'string' ? b.model.trim() : '', me);
+    const out = await testConn(c, typeof b.model === 'string' ? b.model.trim() : '');
     if (out.ok) kick(base);
-    return { ...out, connection: connView(await connOf(c.id), (await usageMap()).get(c.id) || 0) };
+    return { ...out, connection: connView(await connOf(c.id), (await usageMap()).get(c.id) || 0, (await todayMap()).get(c.id)) };
+  });
+
+  // 系統設定 › 模型設定（各專案）：只有管理員；不能新增、不能貼金鑰。沒搬的舊全站設定列在下面，請管理員到專案重貼後刪掉
+  route('GET', '/api/admin/model-connections', async ({ ctx, me }) => {
+    await requireAdmin(ctx, me, '看各專案的模型設定');
+    await migrateSiteWide(ctx);
+    const conns = await db.all('SELECT id, project, name, kind, key_last4, status FROM model_connections ORDER BY created_at');
+    const ais = await db.all("SELECT a.ai_id, c.project FROM cloud_agents a JOIN model_connections c ON c.id = a.connection_id WHERE c.project <> ''");
+    const today = await todayMap();
+    const projects = projectIds().map(pj => {
+      const mine = conns.filter(c => c.project === pj);
+      return { project: pj, name: nameOf(pj), connections: mine.length, cloudAis: ais.filter(a => a.project === pj).length, tokensToday: mine.reduce((s, c) => s + (today.get(c.id)?.tokens || 0), 0) };
+    });
+    const moved = await getJson('model_conn_moved');
+    return {
+      projects,
+      unassigned: conns.filter(c => !c.project).map(c => ({ id: c.id, name: c.name, kindLabel: KIND_LABEL[c.kind] || c.kind, keyLast4: c.key_last4 || null, status: c.status })),
+      moved: moved && !moved.seen ? moved.items.map(x => ({ name: x.name, project: x.project, projectName: nameOf(x.project) })) : [],
+    };
+  });
+  route('POST', '/api/admin/model-connections/moved-seen', async ({ ctx, me }) => {
+    await requireAdmin(ctx, me, '看各專案的模型設定');
+    const moved = await getJson('model_conn_moved');
+    if (moved && !moved.seen) await setJson('model_conn_moved', { ...moved, seen: true });
+    return { ok: true };
+  });
+  route('DELETE', '/api/admin/model-connections/:id', async ({ ctx, me, params }) => { // 只刪沒搬的舊全站設定
+    await requireAdmin(ctx, me, '刪除舊的全站模型設定');
+    const c = await connOf(params.id);
+    if (!c || c.project) throw new ApiError(404, 'NOT_FOUND', '找不到這組舊的全站設定（專案的設定請到專案 ⚙ › 模型設定刪）');
+    return { ok: true, affected: await deleteConn(c) };
   });
 
   // ---- 雲端 AI ----
@@ -439,38 +559,58 @@ export function registerCloudAi(d) {
     if (!Number.isInteger(maxTokens) || maxTokens < 1000 || maxTokens > 1_000_000) throw invalid('每輪 token 要是 1000～1000000 的整數');
     return { maxTools, maxTokens };
   }
-  async function readModelChoice(b) {
+  async function readModelChoice(b, pj) {
     const c = await connOf(String(b.connectionId || ''));
-    if (!c) throw invalid('請選一組模型設定（管理員在「系統設定 → 模型設定」建）');
+    if (!c || c.project !== pj) throw invalid(`請選「${nameOf(pj)}」的模型設定（專案 ⚙ › 模型設定）`);
     if (c.status !== 'ok') throw invalid(`模型設定「${c.name}」還不能用（${c.last_test || '還沒測試連線'}）`);
     const model = String(b.model || '').trim();
     if (!modelsOf(c).includes(model)) throw invalid(`模型設定「${c.name}」沒有勾選模型「${model}」`);
     return { c, model };
   }
-  // 新增 AI 的表單：哪些設定、模型可以選（只列可以用的）
+  const canCreateIn = async (me, isAdmin, pj) => projectsOf(me).includes(pj) && (isAdmin || (await leadersOf(pj)).includes(me.id));
+  // 新增 AI 的表單：每個你在的專案能不能建、可以選哪些設定和模型（只列那個專案「可以用」的）
   route('GET', '/api/cloud-ai/options', async ({ ctx, me }) => {
     requireHuman(me);
-    const people = await peopleMap(ctx);
-    const admin = adminOf(people);
+    await migrateSiteWide(ctx);
+    const admin = adminOf(await peopleMap(ctx));
     const isAdmin = !!admin && admin.id === me.id;
-    const rows = isAdmin ? await db.all("SELECT * FROM model_connections WHERE status = 'ok' ORDER BY created_at") : [];
-    const choices = rows.flatMap(c => modelsOf(c).map(m => ({ connectionId: c.id, connectionName: c.name, model: m, official: isOfficial(c.kind, c.url), private: privateOf(c) })));
-    return { canCreate: isAdmin && choices.length > 0, isAdmin, reason: !isAdmin ? 'admin_only' : choices.length ? null : 'no_connection', choices, defaults: DEFAULT_LIMITS };
+    const rows = await db.all("SELECT * FROM model_connections WHERE status = 'ok' AND project <> '' ORDER BY created_at");
+    const projects = [];
+    for (const pj of projectsOf(me)) { // AI 的專案不能超出所屬人類
+      const canCreate = await canCreateIn(me, isAdmin, pj);
+      const choices = canCreate ? rows.filter(c => c.project === pj).flatMap(c => modelsOf(c).map(m => ({ connectionId: c.id, connectionName: c.name, model: m, official: isOfficial(c.kind, c.url), private: privateOf(c) }))) : [];
+      projects.push({ project: pj, name: nameOf(pj), canCreate, leaders: await leaderNames(ctx, pj), choices });
+    }
+    const any = projects.some(p => p.canCreate);
+    return { canCreate: any, isAdmin, reason: any ? null : 'not_leader', projects, defaults: DEFAULT_LIMITS };
   });
 
   async function createCloudAi(ctx, me, body) {
-    await requireAdmin(ctx, me, '新增雲端 AI');
-    const { c, model } = await readModelChoice(body);
+    requireHuman(me);
+    await migrateSiteWide(ctx);
+    const pj = typeof body.project === 'string' ? body.project : '';
+    if (!projectsOf(me).includes(pj)) throw invalid('請選這隻雲端 AI 屬於哪個專案（只能選一個你在的專案）');
+    const admin = adminOf(await peopleMap(ctx));
+    if (!(await canCreateIn(me, !!admin && admin.id === me.id, pj))) throw new ApiError(403, 'NOT_LEADER', `只有「${nameOf(pj)}」的專案負責人和管理員能新增雲端 AI`);
+    const { c, model } = await readModelChoice(body, pj);
     const lim = readLimits(body);
     const tokenEnc = await encryptKey('probe'); // 先確定主密鑰可用，再建 AI
     if (!tokenEnc) throw new ApiError(503, 'MASTER_KEY_MISSING', '還不能建雲端 AI：伺服器沒有地方放主密鑰。');
-    const { token: _shown, ...ai } = await createAi(ctx, me, { ...body, environment: '' });
+    const { token: _shown, ...ai } = await createAi(ctx, me, { ...body, projects: [pj], environment: '' }); // 雲端 AI 只屬於一個專案
     const raw = newToken(); // 雲端 AI 的 Token 只在伺服器裡用、不給任何人看，也不會過期
     await db.run('UPDATE participants SET token = ?, token_expires_at = 0 WHERE id = ?', await tokenKey(raw), ai.participantId);
     await db.run('INSERT INTO cloud_agents (ai_id, connection_id, model, max_tools, max_tokens, state, state_note, pending, updated_at, token_enc) VALUES (?,?,?,?,?,?,?,?,?,?)',
       ai.participantId, c.id, model, lim.maxTools, lim.maxTokens, 'ready', '', 0, T(), await encryptKey(raw));
     invalidatePeople();
     return { ...ai, cloud: await cloudInfo(ai.participantId) };
+  }
+  // 改所屬專案前檢查：雲端 AI 只屬於它模型設定的那個專案
+  async function checkProjects(aiId, next) {
+    const ag = await agentOf(aiId);
+    if (!ag) return;
+    const pj = (await connOf(ag.connection_id))?.project;
+    if (pj && next.length === 1 && next[0] === pj) return;
+    throw new ApiError(400, 'CLOUD_ONE_PROJECT', pj ? `雲端 AI 只屬於「${nameOf(pj)}」，用那個專案的金鑰，不能改所屬專案。要在別的專案用，請在那個專案另建一隻。` : '這隻雲端 AI 的模型設定已刪除，請先改選模型設定再改專案。');
   }
 
   async function canManageAi(ctx, me, aiId) {
@@ -484,13 +624,14 @@ export function registerCloudAi(d) {
     return { ai, ag, isAdmin: admin?.id === me.id };
   }
   route('PATCH', '/api/my-ais/:id/cloud', async ({ ctx, me, req, params }) => {
-    const { ag, isAdmin } = await canManageAi(ctx, me, params.id);
+    const { ai, ag, isAdmin } = await canManageAi(ctx, me, params.id);
     const b = await readJson(req);
     const lim = readLimits(b, { maxTools: ag.max_tools, maxTokens: ag.max_tokens });
     let conn = ag.connection_id, model = ag.model;
     if (b.connectionId !== undefined || b.model !== undefined) {
-      if (!isAdmin) throw new ApiError(403, 'NOT_ADMIN', '只有管理員能換雲端 AI 的模型');
-      const ch = await readModelChoice({ connectionId: b.connectionId ?? ag.connection_id, model: b.model ?? ag.model });
+      const pj = (await connOf(ag.connection_id))?.project || projectsOf(ai)[0];
+      if (!isAdmin && !(await leadersOf(pj)).includes(me.id)) throw new ApiError(403, 'NOT_LEADER', '只有專案負責人和管理員能換雲端 AI 的模型');
+      const ch = await readModelChoice({ connectionId: b.connectionId ?? ag.connection_id, model: b.model ?? ag.model }, pj);
       conn = ch.c.id; model = ch.model;
     }
     const changedModel = conn !== ag.connection_id || model !== ag.model;
@@ -561,7 +702,7 @@ export function registerCloudAi(d) {
     const m = await db.get('SELECT project FROM messages WHERE id = ?', info.messageId);
     await apiFor(ai, base)('POST', '/api/messages', {
       requestId: 'cloud_down_' + info.messageId, project: m?.project || undefined, replyToMessageId: info.messageId, recipientIds: [author.id], replyFrom: [],
-      text: `[通知] ${ai.name} 現在叫不醒：${ag.state_note || '模型設定有問題'}。已通知管理員；你的訊息會留著，修好後它會回覆。`,
+      text: `[通知] ${ai.name} 現在叫不醒：${ag.state_note || '模型設定有問題'}。已通知專案負責人和管理員；你的訊息會留著，修好後它會回覆。`,
     });
   }
 
@@ -726,10 +867,11 @@ export function registerCloudAi(d) {
     const people = await peopleMap({});
     const admin = adminOf(people), ai = people.get(ag.ai_id);
     if (!admin || !ai) return;
-    const project = projectsOf(ai)[0];
+    const project = c.project || projectsOf(ai)[0];
+    const leads = c.project ? (await leadersOf(c.project)).filter(id => id !== admin.id && people.get(id)) : []; // 設金鑰的專案負責人也通知
     await apiFor(ai, base)('POST', '/api/messages', {
-      requestId: `cloud_admin_${c.id}_${T()}`, project, recipientIds: [admin.id], replyFrom: [admin.id],
-      text: `[受阻] ${ai.name} 叫不醒：${note}。請到「系統設定 → 模型設定」檢查，修好按「測試連線」，用這組設定的 AI 會自動恢復。`,
+      requestId: `cloud_admin_${c.id}_${T()}`, project, recipientIds: [admin.id, ...leads], replyFrom: [admin.id],
+      text: `[受阻] ${ai.name} 叫不醒：${note}。請到「專案 ⚙ › 模型設定」檢查，修好按「測試連線」，用這組設定的 AI 會自動恢復。`,
     });
   }
 
@@ -777,5 +919,5 @@ export function registerCloudAi(d) {
     return { stepped: n };
   }, { open: true });
 
-  return { wake, decorate, createCloudAi, drain, cloudInfo, checkModelUrl: u => checkModelUrl(u, { hosted }) };
+  return { wake, decorate, createCloudAi, checkProjects, drain, cloudInfo, checkModelUrl: u => checkModelUrl(u, { hosted }) };
 }

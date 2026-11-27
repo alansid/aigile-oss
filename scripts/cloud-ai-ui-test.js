@@ -40,9 +40,18 @@ try {
   const setVal = (sel, v) => js(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
 
   // 1. 模型設定：空的 → 新增一組（自訂 OpenAI 相容、內網 http）
-  await login(liu.token, '/admin/models');
+  const MC = '/api/projects/' + encodeURIComponent('預設專案') + '/model-connections';
+  const openPM = async tok => { // 模型設定在專案 ⚙ › 模型設定
+    await login(tok, '/p/main/messages');
+    await until(() => js("!!document.querySelector('[data-pset]')"), 15000, '專案 ⚙');
+    await click('[data-pset]');
+    await until(() => js("!!document.querySelector('#pset-menu [data-pset-act=\"models\"]')"), 5000, '⚙ 選單');
+    await click('#pset-menu [data-pset-act="models"]');
+    await until(() => js("!!document.querySelector('#mc-proj')"), 8000, '專案模型設定');
+  };
+  await openPM(liu.token);
   await until(() => js("!!document.querySelector('[data-mc=\"new\"]')"), 15000, '模型設定頁');
-  assert.match(await js("document.querySelector('.mc-page').innerText"), /平台版（Cloudflare）[\s\S]*開源版（架在公司內）/);
+  assert.match(await js("document.querySelector('.mc-page').innerText"), /預設專案還沒有模型設定，雲端 AI 要先有一組金鑰才能用。[\s\S]*費用算在這個專案貼的金鑰上/);
   await click('[data-mc="new"]');
   await until(() => js("!!document.querySelector('#mc-form')"), 5000, '新增表單');
   await click('[data-kind="custom"]');
@@ -64,8 +73,8 @@ try {
   await shot('models-form-1280');
   await js("document.querySelector('#modal-root [data-close]').click(); true");
   // 加一組官方（Gemini，貼金鑰；這裡連不到真的 Gemini，只看列表）
-  assert.equal((await kit.call(liu.token, '/api/admin/model-connections', 'POST', { kind: 'gemini', name: 'Gemini 免費額度', key: 'AIza-demo-key-Ij1G', models: ['gemini-2.5-flash', 'gemini-2.5-pro'] })).status, 201);
-  await login(liu.token, '/admin/models');
+  assert.equal((await kit.call(liu.token, MC, 'POST', { kind: 'gemini', name: 'Gemini 免費額度', key: 'AIza-demo-key-Ij1G', models: ['gemini-2.5-flash', 'gemini-2.5-pro'] })).status, 201);
+  await openPM(liu.token);
   await until(() => js("document.querySelectorAll('.mc-row').length === 2"), 15000, '兩組設定');
   const listText = await js("document.querySelector('.mc-page').innerText");
   assert.match(listText, /Gemini 免費額度[\s\S]*官方[\s\S]*金鑰 ••••Ij1G/);
@@ -80,7 +89,7 @@ try {
   await click('#ai-new');
   await until(() => js("!!document.querySelector('.where-why') && !/載入中/.test(document.querySelector('.where-why').textContent)"), 8000, '成員的雲端卡');
   assert.equal(await js("document.querySelector('[data-where=\"cloud\"]').disabled"), true);
-  assert.match(await js("document.querySelector('.where-why').textContent"), /只有管理員能新增/);
+  assert.match(await js("document.querySelector('.where-why').textContent"), /只有專案負責人和管理員能新增/);
 
   // 管理員：選雲端、選模型、建立
   await login(liu.token, '/my-ai');
@@ -173,13 +182,13 @@ try {
 
   // 6. 375
   await cdp('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 2, mobile: true });
-  await login(liu.token, '/admin/models');
+  await openPM(liu.token);
   await until(() => js("document.querySelectorAll('.mc-row').length === 2"), 15000, "行 147");
   assert.ok(await noHScroll(), '375 模型設定不橫向捲動');
   await shot('models-list-375');
   mode = 'ok';
-  const conn = (await kit.call(liu.token, '/api/admin/model-connections')).body.connections.find(c => c.name === '公司地端');
-  assert.equal((await kit.call(liu.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.ok, true, '修好後測試連線成功');
+  const conn = (await kit.call(liu.token, MC)).body.connections.find(c => c.name === '公司地端');
+  assert.equal((await kit.call(liu.token, `${MC}/${conn.id}/test`, 'POST', {})).body.ok, true, '修好後測試連線成功');
   await until(async () => (await kit.call(liu.token, '/api/my-ais')).body.items.find(x => x.participantId === aiId).cloud.state === 'ready', 15000, '自動恢復');
   await login(liu.token, '/my-ai');
   await until(() => js("!!document.querySelector('#ai-new')"), 15000, "行 152");
@@ -192,10 +201,10 @@ try {
   // 7. 英文介面
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await js("localStorage.setItem('aigile-lang', 'en'); true");
-  await login(liu.token, '/admin/models');
+  await openPM(liu.token);
   await until(() => js("document.querySelectorAll('.mc-row').length === 2"), 15000, '英文模型設定');
   const enPage = await js("document.querySelector('.mc-page').innerText");
-  assert.match(enPage, /Hosted version \(Cloudflare\)[\s\S]*Self-hosted version/);
+  assert.match(enPage, /Only project leads and admins can add, replace keys or delete\. Cloud AIs in this project can only use these settings\.[\s\S]*Usage is billed to the key pasted in this project/);
   assert.match(enPage, /🏠 Private model[\s\S]*Unencrypted[\s\S]*✓ Working/);
   assert.match(enPage, /Test connection/);
   const leftover = enPage.split('\n').filter(l => /[一-鿿]/.test(l) && !/公司地端|Gemini 免費額度|劉昱志/.test(l));

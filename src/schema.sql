@@ -504,6 +504,7 @@ CREATE INDEX IF NOT EXISTS idx_card_links_to ON card_links (to_seq);
 -- 雲端 AI（第一階段）：模型設定、每隻雲端 AI 的設定、每輪用量。不改現有的表
 CREATE TABLE IF NOT EXISTS model_connections (
   id TEXT PRIMARY KEY,
+  project TEXT NOT NULL DEFAULT '',            -- 屬於哪個專案；空＝舊版的全站設定
   name TEXT NOT NULL,
   kind TEXT NOT NULL,                       -- gemini | openai | anthropic | ollama | custom
   url TEXT NOT NULL,

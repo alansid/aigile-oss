@@ -1867,6 +1867,7 @@ ${ending}`;
       if (crossRole(target, ov) && removed.length) {
         throw new ApiError(400, 'CROSS_ROLE_FIXED', `${target.name} 是跨專案角色（PO／SM），固定屬於所有專案，不能移出「${removed.map(nameOf).join('、')}」。`);
       }
+      if (target.kind === 'ai' && (added.length || removed.length) && cloudApi) await cloudApi.checkProjects(target.id, next); // 雲端 AI 只屬於一個專案
       if (target.kind === 'ai' && added.length) {
         // AI 的專案不能超出所屬人類；所屬人類同一批被加入也算
         const owner = people.get(target.owner_id);
@@ -3941,7 +3942,7 @@ ${ending}`;
     afterChange: async () => { invalidatePeople(); await bumpPeopleVer(); await loadProjects(true); } });
   const cardTemplatesApi = registerCardTemplates({ route, ApiError, invalid, readJson, randId, nowIso, PROJECTS, projectsOf, isManager: kbManager, getJson, setJson });
   cloudApi = registerCloudAi({ db, route, ApiError, invalid, readJson, randId, nowIso, requireAdmin, requireHuman, peopleMap, adminOf, docStorage, config, background,
-    getJson, setJson, invalidatePeople, createAi, projectsOf, newToken, tokenKey, hosted: config.hosted === true || config.hosted === '1', inner: (req, base) => handleInner(req, base) }); // 雲端 AI
+    getJson, setJson, invalidatePeople, createAi, projectsOf, newToken, tokenKey, leadersOf: async pj => (await loadLeaders())[pj] || [], projectIds: () => [...PROJECTS], nameOf, hosted: config.hosted === true || config.hosted === '1', inner: (req, base) => handleInner(req, base) }); // 雲端 AI
   handle.cloudDrain = opts => cloudApi.drain({ maxSteps: 100, ...opts }); // 測試用：把排好的雲端 AI 跑完
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage, reviewOf: (c, ctx) => reviewsApi.reviewOf(c, ctx), cardTemplates: cardTemplatesApi, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours, boardLimit: BOARD_LIMIT });
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）

@@ -1876,7 +1876,7 @@
   }
   const PAGE_NAME = { overview: '概觀', messages: '訊息', inbox: '要你處理', work: '看板', team: '團隊', files: '文件', myai: '我的 AI', perm: '成員管理', dm: '私訊', releases: '版本紀錄', help: L('說明', 'Help') }; // 私訊整頁；「說明」在字典是交接的「Notes」，說明頁自己給英文
   const pageNameOf = p => (p === 'perm' ? (state.permTab === 'admin' ? '管理員設定' : state.permTab === 'leadproj' ? '專案管理' : '成員管理') : PAGE_NAME[p]); // 成員管理、管理員設定兩頁
-  const canSetProj = pj => PROJECTS.includes(pj) && (isAdmin() || leadersOf(pj).includes(meId())); // 專案卡 ⚙
+  const canSetProj = pj => PROJECTS.includes(pj) && (isAdmin() || leadersOf(pj).includes(meId()) || myProjects().includes(pj)); // 專案卡 ⚙；一般成員也有（只有唯讀的模型設定）
   const TOP_PAGES = { myai: '/my-ai', perm: '/members', releases: '/releases', help: '/help' }; // 第一層頁面（不分專案）：版本紀錄、說明等
   const isTop = p => p === 'myai' || p === 'releases' || p === 'help' || (p === 'perm' && (isAdmin() || myLeadProjects().length > 0));
   const PROJ_COLORS = ['#0b6e8a', '#92400e', '#6d28d9', '#047857', '#be185d', '#1d4ed8'];
@@ -8196,7 +8196,7 @@
   function cloudPanelHtml(ai) {
     const c = ai.cloud, id = esc(ai.participantId);
     return `<div class="cl-panel">
-      ${c.state === 'error' ? `<p class="cl-alert" role="alert">⚠ ${esc(c.stateNote || '')}${isAdmin() ? ' <button type="button" class="link small" data-adm="models">到模型設定</button>' : '（已通知管理員）'}</p>`
+      ${c.state === 'error' ? `<p class="cl-alert" role="alert">⚠ ${esc(c.stateNote || '')}${isAdmin() || leadersOf(ai.projects?.[0]).includes(meId()) ? ` <button type="button" class="link small" data-pmodels="${esc(ai.projects?.[0] || '')}">到模型設定</button>` : '（已通知專案負責人和管理員）'}</p>`
         : c.state === 'retry' ? `<p class="cl-wait" role="status">${esc(c.stateNote || '')}</p>` : ''}
       <p class="cl-today"><b>今天</b> <span class="muted">叫醒 ${c.today.runs} 次 · 共 ${fmtK(c.today.tokens)} token</span></p>
       <p class="muted small">每輪上限：最多 ${c.maxTools} 次工具、${fmtK(c.maxTokens)} token。用量只有主人和管理員看得到。</p>
@@ -9778,13 +9778,14 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   // AI 屬於哪些專案（新增、編輯都能勾）；只列自己在的專案，不在的灰掉寫原因；跨專案角色固定在所有專案
   function aiProjField(ai) {
     const cross = ai && state.projMeta.crossRoleIds.includes(ai.participantId);
+    const cloud = !!ai?.cloud; // 雲端 AI 只屬於一個專案，不能改
     const has = p => (ai ? (ai.projects || []).includes(p) : myProjects().length === 1 || p === projectView()); // 在專案裡新增預設這個專案
     const boxes = PROJECTS.map(p => myProjects().includes(p)
-      ? `<label class="chk"><input type="checkbox" name="proj" value="${esc(p)}" ${has(p) ? 'checked' : ''} ${cross ? 'disabled' : ''}> ${esc(projName(p))}</label>`
+      ? `<label class="chk"><input type="checkbox" name="proj" value="${esc(p)}" ${has(p) ? 'checked' : ''} ${cross || cloud ? 'disabled' : ''}> ${esc(projName(p))}</label>`
       : `<label class="chk off"><input type="checkbox" disabled> ${esc(projName(p))}<span class="muted small">（你不在這個專案）</span></label>`).join('');
     return `<div class="field"><span class="field-label">所屬專案（至少選一個）</span>
       <div class="proj-row new-ai-proj">${myProjects().length ? boxes : '<span class="muted small">你還沒有加入任何專案，請群組管理員把你加入專案。</span>'}</div>
-      <span class="field-hint">${cross ? '這隻 AI 是跨專案角色，固定在所有專案（由管理員在「管理員設定 › 帳號與救援」設定）。' : '改了專案，這隻 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
+      <span class="field-hint">${cloud ? '雲端 AI 只屬於一個專案（用那個專案的金鑰），不能改。要在別的專案用，請在那個專案另建一隻。' : cross ? '這隻 AI 是跨專案角色，固定在所有專案（由管理員在「管理員設定 › 帳號與救援」設定）。' : '改了專案，這隻 AI 在被移出的專案負責的卡會退回待處理，儲存前會先列出。'}</span></div>`;
   }
   // 新增 AI 第一題「這隻 AI 在哪裡跑」；雲端 AI 多選模型與每輪上限，不用接入步驟
   function aiWhereHtml() {
@@ -9795,7 +9796,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       </div>
       <input type="hidden" name="runtime" value="local">
       <div class="cloud-fields" hidden>
-        <label>模型<select name="cloudChoice"></select><span class="field-hint">只列管理員在「系統設定 → 模型設定」設好、可以用的設定和模型。</span></label>
+        <div class="field"><span class="field-label" id="cpj-label">專案</span><div class="proj-row cloud-proj" role="radiogroup" aria-labelledby="cpj-label"></div><span class="field-hint">雲端 AI 只屬於一個專案，用那個專案的金鑰。</span></div>
+        <label class="cloud-model">模型<select name="cloudChoice"></select><span class="field-hint cloud-model-hint"></span></label>
+        <p class="mc-empty cloud-empty" hidden></p>
         <div class="field"><span class="field-label">每輪上限</span>
           <div class="limit-row">最多 <input name="maxTools" type="number" min="1" max="100" value="20" aria-label="每輪工具次數"> 次工具、<input name="maxTokens" type="number" min="1000" max="1000000" step="1000" value="50000" aria-label="每輪 token"> ${tokUnit()}</div>
           <span class="field-hint">到上限就停下來交代進度。建好後可以在「我的 AI」那列改。</span></div>
@@ -9806,19 +9809,44 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const box = body.querySelector('.ai-where');
     if (!box) return null;
     const cloudBtn = box.querySelector('[data-where="cloud"]'), why = box.querySelector('.where-why');
-    let opts = { canCreate: false, choices: [] };
+    let opts = { canCreate: false, projects: [] };
     try { opts = await api('/api/cloud-ai/options'); } catch {}
+    const pjs = (opts.projects || []).filter(p => p.canCreate); // 只能建在自己負責的專案（管理員每個專案都行）
+    const projField = body.querySelector('.new-ai-proj')?.closest('.field');
+    const submitBtn = () => body.closest('.modal')?.querySelector('button[type="submit"]');
+    const curPj = () => pjs.find(p => p.project === form.cloudProject?.value) || null;
+    const sync = () => { // 專案沒有可以用的模型設定：模型欄換成提示，「建立」停用
+      const cloud = form.runtime.value === 'cloud', p = curPj();
+      if (projField) projField.hidden = cloud;
+      const btn = submitBtn(); if (btn) btn.disabled = cloud && !p?.choices.length;
+    };
+    const drawChoices = () => {
+      const p = curPj();
+      if (!p) return;
+      form.cloudChoice.innerHTML = p.choices.map((c, i) => `<option value="${i}">${esc(c.connectionName)} · ${esc(c.model)} · ${c.private ? '🏠 私人模型' : '官方'}</option>`).join('');
+      box.querySelector('.cloud-model').hidden = !p.choices.length;
+      box.querySelector('.cloud-model-hint').textContent = `${pjLabel(p.project)}的模型設定。費用算在這個專案的金鑰上。`;
+      const empty = box.querySelector('.cloud-empty');
+      empty.hidden = !!p.choices.length;
+      empty.innerHTML = `<span>${esc(mcEmptyText(p.project, true, ''))}</span> <button type="button" class="link small" data-pmodels="${esc(p.project)}">去設定模型 ›</button>`;
+      sync();
+    };
     if (opts.canCreate) {
       cloudBtn.disabled = false; why.remove();
-      form.cloudChoice.innerHTML = opts.choices.map((c, i) => `<option value="${i}">${esc(c.connectionName)} · ${esc(c.model)} · ${c.private ? '🏠 私人模型' : '官方'}</option>`).join('');
+      const def = pjs.find(p => p.project === projectView()) || pjs.find(p => p.choices.length) || pjs[0];
+      const row = box.querySelector('.cloud-proj');
+      row.innerHTML = pjs.map(p => `<label class="chk"><input type="radio" name="cloudProject" value="${esc(p.project)}"${p === def ? ' checked' : ''}> ${esc(p.name)}</label>`).join('');
+      row.addEventListener('change', drawChoices);
+      drawChoices();
     } else {
-      why.innerHTML = opts.reason === 'admin_only' ? '第一階段只有管理員能新增' : opts.isAdmin ? '還沒有可以用的模型設定 · <span class="link small" data-adm="models" role="link" tabindex="0">去設定</span>' : '管理員還沒設定模型';
+      why.textContent = '只有專案負責人和管理員能新增';
     }
     const pick = where => {
       form.runtime.value = where;
       box.querySelectorAll('[data-where]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.where === where)));
       box.querySelector('.cloud-fields').hidden = where !== 'cloud';
       const envF = body.querySelector('.env-field'); if (envF) envF.hidden = where === 'cloud';
+      sync();
     };
     box.addEventListener('click', e => { const b = e.target.closest('[data-where]'); if (b && !b.disabled) pick(b.dataset.where); });
     return opts;
@@ -9962,16 +9990,16 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       delete data.proj;
       for (const [k, v] of Object.entries(data)) data[k] = v.trim();
       if (data.runtime === 'cloud') {
-        const ch = (await whereOpts)?.choices?.[Number(data.cloudChoice)];
+        const pj = data.cloudProject, ch = (await whereOpts)?.projects?.find(p => p.project === pj)?.choices?.[Number(data.cloudChoice)];
         if (!ch) return showErr('請選一個模型', form.cloudChoice);
-        Object.assign(data, { connectionId: ch.connectionId, model: ch.model, maxTools: Number(data.maxTools), maxTokens: Number(data.maxTokens), environment: '' });
+        Object.assign(data, { project: pj, connectionId: ch.connectionId, model: ch.model, maxTools: Number(data.maxTools), maxTokens: Number(data.maxTokens), environment: '' });
       } else for (const k of ['runtime', 'maxTools', 'maxTokens']) delete data[k];
-      delete data.cloudChoice;
-      const picked = [...form.querySelectorAll('input[name="proj"]:checked:not(:disabled)')].map(i => i.value);
+      delete data.cloudChoice; delete data.cloudProject;
+      const picked = data.runtime === 'cloud' ? [data.project] : [...form.querySelectorAll('input[name="proj"]:checked:not(:disabled)')].map(i => i.value); // 雲端 AI 只屬於選的那個專案
       if (!editing) {
         data.projects = picked;
         if (!data.projects.length) return showErr('請至少選一個所屬專案', form.querySelector('input[name="proj"]:not(:disabled)'));
-      } else if (!state.projMeta.crossRoleIds.includes(ai.participantId) && myProjects().length) {
+      } else if (!state.projMeta.crossRoleIds.includes(ai.participantId) && !ai.cloud && myProjects().length) {
         // 編輯時改了專案：先看影響（移出的專案有幾張卡會退回待處理）再確認
         const before = (ai.projects || []).filter(p => PROJECTS.includes(p));
         const next = [...picked, ...before.filter(p => !myProjects().includes(p))]; // 自己不在的專案不動
@@ -11802,45 +11830,60 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   function permGo() { if (state.page === 'perm') { drawPerm(); drawChrome(); syncUrl(false); } else goTop('perm'); }
   // ---------- 管理員設定：只有管理員能做的事集中一處 ----------
   // 電腦：左側小目錄＋右邊內容；手機：一頁清單，點進去才看內容。後端權限不變，非管理員打 API 照樣擋
-  // 管理員設定 › 模型設定（UX v4）：一個站存好幾組；官方網址 vs 🏠 私人模型；網頁貼金鑰（加密存、只顯示末 4 碼）
+  // 模型設定掛在專案下（專案 ⚙ › 模型設定）：負責人＋管理員能新增、換金鑰、刪除；一般成員唯讀（看得到用量，看不到末 4 碼與變更紀錄）
+  // 系統設定 › 模型設定改成各專案總覽（只有管理員，不能新增、不能貼金鑰）
   const MC_STATUS = { ok: ['green', '✓ 可以用'], key_error: ['red', '⚠ 金鑰錯'], quota: ['red', '⚠ 額度用完'], unreachable: ['red', '⚠ 連不到'], model_error: ['red', '⚠ 模型不存在'], error: ['red', '⚠ 出錯'], untested: ['grey', '還沒測試'] };
-  function admModelsHtml() {
-    if (perm.models === undefined) {
-      perm.models = null;
-      api('/api/admin/model-connections').then(d => { perm.models = d; if (state.page === 'perm' && perm.adm === 'models') drawPerm(); })
-        .catch(err => { perm.models = { error: err.message }; if (state.page === 'perm' && perm.adm === 'models') drawPerm(); });
-    }
-    const d = perm.models;
-    if (!d) return '<p class="muted pm-pad">載入中…</p>';
-    if (d.error) return `<p class="error pm-pad">${esc(d.error)}</p>`;
+  const mcBase = pj => `/api/projects/${encodeURIComponent(pj)}/model-connections`;
+  const mcCounts = {}; // 專案 ⚙ 選單右邊的「N 組」
+  let mcView = null; // 目前打開的專案模型設定 { pj, d }
+  const mcTime = iso => fmtTime(iso).replace(/:[0-9]{2}$/, ''); // 模型設定的時間不顯示秒數
+  const mcLogText = e => { // 搬家紀錄照語言組字；舊紀錄只有中文全文，從文字拆回名稱與末 4 碼
+    const m = e.moved || (/^從全站設定搬過來：(.+?)(?:（••••(.+)）)?$/.exec(e.text || '') || []).slice(1).reduce((o, v, i) => ({ ...o, [i ? 'last4' : 'name']: v || '' }), null);
+    if (!m) return e.text;
+    const zh = `從全站設定搬過來：${m.name}${m.last4 ? `（••••${m.last4}）` : ''}`;
+    return typeof L === 'function' ? L(zh, `Moved from site-wide settings: ${m.name}${m.last4 ? ` (••••${m.last4})` : ''}`) : zh;
+  };
+  const mcLeads = d => (d.leaders.length ? d.leaders.join('、') : '未設定');
+  const pjLabel = pj => { const n = projName(pj); return /專案$/.test(n) ? n : n + '專案'; }; // 「平台」→「平台專案」，名字本來就有「專案」不重複
+  const mcEmptyText = (pj, edit, leads) => edit ? `${pjLabel(pj)}還沒有模型設定，雲端 AI 要先有一組金鑰才能用。` : `${pjLabel(pj)}還沒有模型設定，請找專案負責人（${leads}）或管理員設定。`;
+  function projModelsHtml(d) {
+    const edit = d.canEdit;
     const conns = d.connections.map(c => {
       const [cls, label] = MC_STATUS[c.status] || MC_STATUS.untested;
+      const key = edit ? (c.hasKey ? ` · 金鑰 ••••${esc(c.keyLast4)}` : ' · 不需金鑰') : '';
       return `<div class="pm-card mc-row" data-mc-id="${esc(c.id)}">
         <div class="mc-top"><b>${esc(c.name)}</b>${c.official ? '<span class="pill-tag blue">官方</span>' : '<span class="pill-tag purple">🏠 私人模型</span>'}${c.insecure ? '<span class="pill-tag yellow">未加密</span>' : ''}<span class="pill-tag ${cls}">${label}</span><span class="grow"></span><span class="muted small">${c.usedBy} 隻 AI</span></div>
-        <p class="muted small mc-line">${esc(c.kindLabel)} · ${esc(c.url)} · ${c.hasKey ? `金鑰 ••••${esc(c.keyLast4)}` : '不需金鑰'} · ${c.models.length} 個模型</p>
-        ${c.lastTest ? `<p class="small mc-test ${c.status === 'ok' ? 'ok' : 'bad'}">${esc(fmtTime(c.lastTestAt))} 測試：${esc(c.lastTest)}</p>` : ''}
-        <div class="row"><button type="button" class="btn small" data-mc="test">測試連線</button><button type="button" class="btn small" data-mc="edit">編輯</button><button type="button" class="btn small danger-text" data-mc="delete">刪除</button></div>
+        <p class="muted small mc-line"><span>${esc(c.kindLabel)}</span>${key ? `<span>${key}</span>` : ''} · <span>${c.models.map(esc).join('、') || '還沒勾模型'}</span></p>
+        <p class="small mc-today">今天 ${c.today.runs} 輪 · ${fmtK(c.today.tokens)} ${tokUnit()}</p>
+        ${edit && c.lastTest ? `<p class="small mc-test ${c.status === 'ok' ? 'ok' : 'bad'}">${esc(mcTime(c.lastTestAt))} 測試：${esc(c.lastTest)}</p>` : ''}
+        ${edit ? '<div class="row"><button type="button" class="btn small" data-mc="test">測試連線</button><button type="button" class="btn small" data-mc="edit">編輯</button><button type="button" class="btn small danger-text" data-mc="delete">刪除</button></div>' : ''}
       </div>`;
     }).join('');
-    return `<div class="mc-page">
-      ${d.masterKey !== 'ok' ? '<div class="cl-alert" role="alert">⚠ 還不能存 API 金鑰：伺服器沒有地方放主密鑰（金鑰要用它加密）。平台版要先開通專案文件區（R2）；或請負責部署的人設定 AIGILE_MASTER_KEY（32 個以上隨機字元），重開服務。設好重新整理這頁。</div>' : ''}
-      <div class="mc-where">
-        <div class="pm-card"><b>☁️ 平台版（Cloudflare）</b><p class="muted small">只能用 Gemini、OpenAI、Anthropic 的官方網址；自訂網址和私人模型之後再開放。要接公司地端模型請用開源版。</p></div>
-        <div class="pm-card"><b>🏢 開源版（架在公司內）</b><p class="muted small">可以接內網的 Ollama、vLLM（http 會標「未加密」），也能接公網服務。</p></div>
-      </div>
-      <p class="muted small">這裡${d.hosted ? '是平台版' : '是開源版'}。每隻雲端 AI 選「哪一組＋哪個模型」；新增 AI 的下拉只列「可以用」的設定和勾選的模型。只有管理員看得到這頁。</p>
-      <div class="row"><span class="grow"></span><button type="button" class="btn primary small" data-mc="new">＋ 新增</button></div>
-      ${conns || '<p class="muted pm-pad">還沒有模型設定。按「＋ 新增」，選 Gemini、OpenAI、Anthropic、Ollama 或自訂 OpenAI 相容。</p>'}
-      <div class="pm-card"><div class="pm-card-head"><strong>變更紀錄</strong></div>
-        ${d.log.length ? `<table class="pm-table mc-log"><thead><tr><th scope="col">時間</th><th scope="col">誰</th><th scope="col">做了什麼</th></tr></thead><tbody>${d.log.map(e => `<tr><td>${esc(fmtTime(e.at))}</td><td>${esc(e.byName || '')}</td><td>${esc(e.text)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted small pm-pad">還沒有紀錄。</p>'}</div>
-    </div>`;
+    return `${edit && d.masterKey !== 'ok' ? '<div class="cl-alert" role="alert">⚠ 還不能存 API 金鑰：伺服器沒有地方放主密鑰（金鑰要用它加密）。平台版要先開通專案文件區（R2）；或請負責部署的人設定 AIGILE_MASTER_KEY（32 個以上隨機字元），重開服務。設好重新整理這頁。</div>' : ''}
+      <div class="row mc-head"><p class="muted small">${edit ? '只有專案負責人和管理員能新增、換金鑰、刪除。這個專案的雲端 AI 只能用這裡的設定。' : `只有專案負責人（${esc(mcLeads(d))}）和管理員能改。要新增或換金鑰請找他們。`}</p>${edit ? '<span class="grow"></span><button type="button" class="btn primary small" data-mc="new">＋ 新增</button>' : ''}</div>
+      ${edit && d.hosted ? '<p class="muted small">平台版只能用 Gemini、OpenAI、Anthropic 的官方網址；要接公司地端模型請用開源版。</p>' : ''}
+      ${conns || `<p class="mc-empty">${esc(mcEmptyText(d.project, edit, mcLeads(d)))}</p>`}
+      <p class="mc-bill">費用算在這個專案貼的金鑰上，用量也記在本專案。</p>
+      ${edit ? `<div class="pm-card"><div class="pm-card-head"><strong>變更紀錄</strong></div>
+        ${d.log.length ? `<table class="pm-table mc-log mc-wide"><thead><tr><th scope="col">時間</th><th scope="col">誰</th><th scope="col">做了什麼</th></tr></thead><tbody>${d.log.map(e => `<tr><td>${esc(mcTime(e.at))}</td><td>${esc(e.byName || '')}</td><td>${esc(mcLogText(e))}</td></tr>`).join('')}</tbody></table>
+        <ul class="mc-log-list mc-narrow">${d.log.map(e => `<li><span class="muted small">${esc(mcTime(e.at))} · ${esc(e.byName || '')}</span><span>${esc(mcLogText(e))}</span></li>`).join('')}</ul>` : '<p class="muted small pm-pad">還沒有紀錄。</p>'}</div>` : ''}`;
   }
-  const mcReload = async () => { try { perm.models = await api('/api/admin/model-connections'); } catch {} if (state.page === 'perm' && perm.adm === 'models') drawPerm(); };
+  async function openProjectModels(pj) {
+    let d;
+    try { d = await api(mcBase(pj)); } catch (err) { return toast(err.message); }
+    mcView = { pj, d }; mcCounts[pj] = d.connections.length;
+    openModal(`☁️ 模型設定 · ${projName(pj)}`, `<div class="mc-page" id="mc-proj">${projModelsHtml(d)}</div>`, { size: 'form', foot: '<button class="btn" type="button" data-close>關閉</button>' });
+  }
+  const mcReload = async () => {
+    if (!mcView) return;
+    try { mcView.d = await api(mcBase(mcView.pj)); mcCounts[mcView.pj] = mcView.d.connections.length; } catch {}
+    const host = $('#mc-proj'); if (host) host.innerHTML = projModelsHtml(mcView.d);
+  };
   function openModelForm(conn) {
-    const d = perm.models, editing = !!conn;
+    const { pj, d } = mcView, editing = !!conn, base = mcBase(pj);
     let kind = conn?.kind || 'gemini', found = null, replacing = !conn?.hasKey;
     const kindOf = k => d.kinds.find(x => x.key === k);
-    const body = openModal(editing ? `編輯模型設定：${conn.name}` : '新增模型設定', `
+    const body = openModal(editing ? `編輯模型設定：${conn.name}` : `新增模型設定 · ${projName(pj)}`, `
       <form id="mc-form" class="stack" autocomplete="off">
         ${editing ? `<p class="muted small">種類：${esc(conn.kindLabel)}</p>` : `<div class="field"><span class="field-label">種類</span><div class="seg-scope mc-kinds" role="group">${d.kinds.map(k => `<button type="button" data-kind="${k.key}" aria-pressed="${k.key === kind}">${esc(k.key === 'ollama' ? 'Ollama（地端）' : k.label)}</button>`).join('')}</div></div>`}
         <label>名稱（AI 選設定時看到的）<input name="name" maxlength="40" required value="${esc(conn?.name || '')}" placeholder="例如：Gemini 免費額度"></label>
@@ -11848,13 +11891,13 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           <div class="mc-urlrow"><input id="mc-url" name="url" value="${esc(conn?.url || kindOf(kind).url)}" spellcheck="false"${d.customUrl === false ? ' readonly' : ''}><span class="mc-urltag"></span></div>
           <div class="mc-urlnote"></div></div>
         <div class="field"><span class="field-label">API 金鑰</span><div class="mc-key"></div>
-          <span class="field-hint">只有管理員能貼。會加密後存在伺服器，之後只顯示末 4 碼，看不到也拿不回完整金鑰。</span></div>
+          <span class="field-hint">只有專案負責人和管理員能貼。會加密後存在伺服器，之後只顯示末 4 碼，看不到也拿不回完整金鑰。費用算在這把金鑰上。</span></div>
         <div class="field"><span class="field-label">可用模型</span><div class="mc-models"></div></div>
         <p class="mc-result" role="status"></p>
         <p class="error" id="mc-err" role="alert"></p>
       </form>`, {
       size: 'form',
-      foot: `<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="mc-form">${editing ? '儲存並測試' : '儲存並測試'}</button>`,
+      foot: '<button class="btn" type="button" data-mc="back">‹ 返回</button><button class="btn primary" type="submit" form="mc-form">儲存並測試</button>',
     });
     const form = body.querySelector('#mc-form');
     const err = m => { body.querySelector('#mc-err').textContent = m || ''; };
@@ -11868,7 +11911,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const have = new Set(conn?.models || []);
       const list = found || [...have];
       const m = body.querySelector('.mc-models');
-      m.innerHTML = `<div class="row"><span class="muted small">${found ? `從供應者讀到 ${found.length} 個` : found === null ? '' : ''}</span><span class="grow"></span><button type="button" class="link small" data-mck="discover">從供應者讀取 ↻</button></div>
+      m.innerHTML = `<div class="row"><span class="muted small">${found ? `從供應者讀到 ${found.length} 個` : ''}</span><span class="grow"></span><button type="button" class="link small" data-mck="discover">從供應者讀取 ↻</button></div>
         ${found === false ? '<p class="muted small">這台沒有提供模型清單，請手動輸入，一行一個</p>' : ''}
         ${list.length && found !== false ? `<div class="mc-checks">${list.map(x => `<label class="chk"><input type="checkbox" name="model" value="${esc(x)}"${have.has(x) || (!have.size && list[0] === x) ? ' checked' : ''}> ${esc(x)}</label>`).join('')}</div><span class="field-hint">勾的才給 AI 選。</span>`
           : `<textarea name="modelsText" rows="3" placeholder="一行一個，例如 gemini-2.5-flash">${esc([...have].join('\n'))}</textarea>`}`;
@@ -11877,8 +11920,9 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const checkUrl = () => {
       clearTimeout(urlTimer);
       urlTimer = setTimeout(async () => {
-        const r = await api('/api/admin/model-connections/check-url', { method: 'POST', body: { kind, url: form.url.value } }).catch(e => ({ ok: false, error: e.message }));
+        const r = await api(`${base}/check-url`, { method: 'POST', body: { kind, url: form.url.value } }).catch(e => ({ ok: false, error: e.message }));
         const tag = body.querySelector('.mc-urltag'), note = body.querySelector('.mc-urlnote');
+        if (!tag) return; // 已經返回清單
         const official = kindOf(kind).official;
         tag.innerHTML = r.ok ? (r.official ? '<span class="pill-tag blue">官方</span>' : '<span class="pill-tag purple">🏠 私人模型</span>') + (r.insecure ? '<span class="pill-tag yellow">未加密</span>' : '') : '';
         note.innerHTML = !r.ok ? `<p class="mc-bad">⛔ ${esc(r.error)}</p>`
@@ -11888,7 +11932,10 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       }, 250);
     };
     drawKey(); drawModels(); checkUrl();
-    form.url.addEventListener('input', checkUrl);
+    form.url.addEventListener('input', () => { // 存好的金鑰只送到原本的網址：換了網址就要重貼
+      if (conn?.hasKey && !replacing && form.url.value.trim() !== conn.url) { replacing = true; drawKey(); if (form.key) form.key.placeholder = '換了網址要重貼金鑰'; }
+      checkUrl();
+    });
     body.addEventListener('click', async e => {
       const kb = e.target.closest('[data-kind]');
       if (kb) {
@@ -11902,12 +11949,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (a === 'replace') { replacing = true; drawKey(); return form.key?.focus(); }
       if (a === 'remove') {
         if (!await confirmDialog({ title: '刪除金鑰？', danger: true, confirmText: '刪除', message: `刪除後用這組設定的 <b>${conn.usedBy} 隻 AI</b> 會叫不醒，直到重貼金鑰。` })) return;
-        try { await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}`, { method: 'PATCH', body: { removeKey: true } }); conn.hasKey = false; replacing = true; drawKey(); mcReload(); toast('已刪除金鑰'); } catch (x) { err(x.message); }
+        try { await api(`${base}/${encodeURIComponent(conn.id)}`, { method: 'PATCH', body: { removeKey: true } }); conn.hasKey = false; replacing = true; drawKey(); mcReload(); toast('已刪除金鑰'); } catch (x) { err(x.message); }
         return;
       }
       if (a === 'discover') {
         err('');
-        const r = await api('/api/admin/model-connections/discover', { method: 'POST', body: { id: conn?.id, kind, url: form.url.value, key: form.key?.value || undefined } }).catch(x => ({ models: null, error: x.message }));
+        const r = await api(`${base}/discover`, { method: 'POST', body: { id: conn?.id, kind, url: form.url.value, key: form.key?.value || undefined } }).catch(x => ({ models: null, error: x.message }));
         found = r.models && r.models.length ? r.models : false;
         drawModels();
         if (r.error) err(r.error);
@@ -11920,12 +11967,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const payload = { name: form.name.value.trim(), url: form.url.value.trim(), models, ...(form.key && form.key.value.trim() ? { key: form.key.value.trim() } : {}) };
       const btn = body.closest('.modal')?.querySelector('button[type="submit"]'); if (btn) btn.disabled = true;
       try {
-        const saved = editing ? await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}`, { method: 'PATCH', body: payload })
-          : await api('/api/admin/model-connections', { method: 'POST', body: { kind, ...payload } });
+        const saved = conn?.id ? await api(`${base}/${encodeURIComponent(conn.id)}`, { method: 'PATCH', body: payload })
+          : await api(base, { method: 'POST', body: { kind, ...payload } });
         conn = { ...saved.connection, usedBy: conn?.usedBy || 0 };
         if (form.key) form.key.value = '';
         replacing = !conn.hasKey; drawKey();
-        const t = await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}/test`, { method: 'POST', body: {} });
+        const t = await api(`${base}/${encodeURIComponent(conn.id)}/test`, { method: 'POST', body: {} });
         const res = body.querySelector('.mc-result');
         res.className = 'mc-result ' + (t.ok ? 'ok' : 'bad');
         res.innerHTML = `<span>${t.ok ? '✓' : '⚠'}</span> <span>${conn.hasKey ? `已存好（••••${esc(conn.keyLast4)}）。` : '已存好。'}</span><span>${esc(t.message)}</span>`;
@@ -11935,32 +11982,72 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     });
   }
   document.addEventListener('click', async e => {
+    const go = e.target.closest?.('[data-pmodels]');
+    if (go) { e.preventDefault(); return openProjectModels(go.dataset.pmodels); }
     const b = e.target.closest?.('[data-mc]');
-    if (!b || !perm.models?.connections) return;
-    const conn = perm.models.connections.find(c => c.id === b.closest('[data-mc-id]')?.dataset.mcId);
+    if (!b || !mcView) return;
     const a = b.dataset.mc;
+    if (a === 'back') return openProjectModels(mcView.pj);
+    const conn = mcView.d.connections.find(c => c.id === b.closest('[data-mc-id]')?.dataset.mcId);
     try {
       if (a === 'new') return openModelForm(null);
       if (!conn) return;
       if (a === 'edit') return openModelForm(conn);
       if (a === 'test') {
         b.disabled = true; b.textContent = '測試中…';
-        const t = await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}/test`, { method: 'POST', body: {} });
+        const t = await api(`${mcBase(mcView.pj)}/${encodeURIComponent(conn.id)}/test`, { method: 'POST', body: {} });
         toast((t.ok ? '✓ ' : '⚠ ') + t.message);
         return mcReload();
       }
       if (a === 'delete') {
         if (!await confirmDialog({ title: `刪除「${conn.name}」？`, danger: true, confirmText: '刪除整組設定', message: conn.usedBy ? `刪除後用這組的 <b>${conn.usedBy} 隻 AI</b> 會叫不醒。` : '還沒有 AI 用這組設定。' })) return;
-        await api(`/api/admin/model-connections/${encodeURIComponent(conn.id)}`, { method: 'DELETE' });
+        await api(`${mcBase(mcView.pj)}/${encodeURIComponent(conn.id)}`, { method: 'DELETE' });
         toast('已刪除'); return mcReload();
       }
     } catch (x) { toast(x.message); mcReload(); }
+  });
+  // 系統設定 › 模型設定（各專案）
+  function admModelsHtml() {
+    if (perm.models === undefined) {
+      perm.models = null;
+      api('/api/admin/model-connections').then(d => { perm.models = d; if (state.page === 'perm' && perm.adm === 'models') drawPerm(); })
+        .catch(err => { perm.models = { error: err.message }; if (state.page === 'perm' && perm.adm === 'models') drawPerm(); });
+    }
+    const d = perm.models;
+    if (!d) return '<p class="muted pm-pad">載入中…</p>';
+    if (d.error) return `<p class="error pm-pad">${esc(d.error)}</p>`;
+    const moved = d.moved.map(x => `原本的「${esc(x.name)}」已搬到有雲端 AI 在用的「${esc(pjLabel(x.project))}」`).join('；');
+    return `<div class="mc-page">
+      ${moved ? `<div class="mc-bill mc-moved" role="status"><p>模型設定已改成各專案自己設定（11/26）。${moved}，金鑰不變，雲端 AI 不用重設。</p><button type="button" class="btn small" data-mcadm="seen">知道了</button></div>` : ''}
+      <p class="muted small">金鑰改在「專案 ⚙ › 模型設定」設定，費用算在各專案自己的金鑰上。</p>
+      <div class="pm-card"><table class="pm-table mc-over mc-wide"><thead><tr><th scope="col">專案</th><th scope="col" class="num">設定數</th><th scope="col" class="num">雲端 AI</th><th scope="col" class="num">今天 token</th></tr></thead><tbody>
+        ${d.projects.map(p => `<tr><td><button type="button" class="link" data-pmodels="${esc(p.project)}">${esc(p.name)}</button></td><td class="num">${p.connections || '—'}</td><td class="num">${p.cloudAis || '—'}</td><td class="num">${p.connections ? fmtK(p.tokensToday) : '—'}</td></tr>`).join('')}
+      </tbody></table>
+      <ul class="mc-over-list mc-narrow">${d.projects.map(p => `<li><button type="button" class="link" data-pmodels="${esc(p.project)}">${esc(p.name)}</button><span class="muted small">${p.connections ? `${p.connections} 組設定 · ${p.cloudAis} 隻雲端 AI · 今天 ${fmtK(p.tokensToday)} token` : '還沒有設定'}</span></li>`).join('')}</ul></div>
+      ${d.unassigned.length ? `<div class="pm-card"><div class="pm-card-head"><strong>還沒搬的舊全站設定 · ${d.unassigned.length}</strong></div>
+        <p class="muted small pm-pad">這幾組沒有雲端 AI 在用，所以沒有搬。要用的話，請到那個專案的「⚙ › 模型設定」重貼金鑰，再把這裡刪掉。</p>
+        ${d.unassigned.map(c => `<div class="mc-top pm-pad"><b>${esc(c.name)}</b><span class="muted small">${esc(c.kindLabel)}${c.keyLast4 ? ` · 金鑰 ••••${esc(c.keyLast4)}` : ''}</span><span class="grow"></span><button type="button" class="btn small danger-text" data-mcadm="del" data-id="${esc(c.id)}">刪除</button></div>`).join('')}</div>` : ''}
+    </div>`;
+  }
+  const admModelsReload = async () => { try { perm.models = await api('/api/admin/model-connections'); } catch {} if (state.page === 'perm' && perm.adm === 'models') drawPerm(); };
+  document.addEventListener('click', async e => {
+    const b = e.target.closest?.('[data-mcadm]');
+    if (!b) return;
+    try {
+      if (b.dataset.mcadm === 'seen') { await api('/api/admin/model-connections/moved-seen', { method: 'POST', body: {} }); return admModelsReload(); }
+      if (b.dataset.mcadm === 'del') {
+        const c = perm.models?.unassigned?.find(x => x.id === b.dataset.id);
+        if (!c || !await confirmDialog({ title: `刪除「${c.name}」？`, danger: true, confirmText: '刪除', message: '這組舊的全站設定沒有 AI 在用。刪除後金鑰也一起刪掉。' })) return;
+        await api(`/api/admin/model-connections/${encodeURIComponent(c.id)}`, { method: 'DELETE' });
+        toast('已刪除'); return admModelsReload();
+      }
+    } catch (x) { toast(x.message); }
   });
 
   const ADM_SECS = [
     ['todo', '📋', '待處理', '加入申請、技能核准、邀請到期'],
     ['group', '🏷️', '群組設定', '群組名稱、開放註冊、群組密碼'],
-    ['models', '☁️', '模型設定', '雲端 AI 用的模型與 API 金鑰'],
+    ['models', '☁️', '模型設定（各專案）', '各專案的設定數、雲端 AI、今天用量'], // 金鑰改在專案 ⚙ 設定
     ['projects', '📁', L('專案', 'Projects'), '新增、改名、程式庫、封存、永久刪除'], // 字典的「專案」是單數，目錄要複數
     ['invites', '✉️', '邀請', '邀請新的人、重發、作廢'],
     ['accounts', '🔑', '帳號與救援', '跨專案角色、重設登入、停用、救援指令'],
@@ -12104,10 +12191,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   function psetItems(pj) {
     const admin = isAdmin(), lead = leadersOf(pj).includes(meId()), it = [];
     if (admin || lead) it.push(['rename', '✏️', '改名'], ['repo', '🔗', '程式庫與分支']);
-    it.push(['members', '👥', '成員與本專案角色']);
+    if (admin || lead) it.push(['members', '👥', '成員與本專案角色']);
     if (admin || lead) it.push(['kbai', '📚', '知識庫整理 AI', esc(kbAiNames[pj] || '')]); 
     if (admin || lead) it.push(['review', '🔍', '審查']);
     if (admin || lead) it.push(['templates', '📋', '卡片範本', ctplCounts[pj] !== undefined ? `${ctplCounts[pj]} 個` : '']);
+    it.push(['models', '☁️', '模型設定', mcCounts[pj] !== undefined ? `${mcCounts[pj]} 組` : '']); // 一般成員也有，點進去唯讀
     return it;
   }
   function psetOpen(btn, open) {
@@ -12127,6 +12215,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     m.querySelector('button')?.focus();
     const kb = m.querySelector('[data-pset-act="kbai"]'); // 選單下面小字顯示目前選誰
     if (kb && kbAiNames[pj] === undefined) api(`/api/projects/${encodeURIComponent(pj)}/kb/settings`).then(r => { kbAiNames[pj] = r.candidates.find(c => c.participantId === r.aiId)?.name || '不自動整理'; if (!m.hidden && m.dataset.pj === pj) kb.insertAdjacentHTML('beforeend', `<span class="muted small">${esc(kbAiNames[pj])}</span>`); }).catch(() => {});
+    const mcb = m.querySelector('[data-pset-act="models"]'); // 模型設定組數
+    if (mcb && mcCounts[pj] === undefined) api(mcBase(pj)).then(r => { mcCounts[pj] = r.connections.length; if (!m.hidden && m.dataset.pj === pj && !mcb.querySelector('.muted')) mcb.insertAdjacentHTML('beforeend', `<span class="muted small">${mcCounts[pj]} 組</span>`); }).catch(() => {});
     const tp = m.querySelector('[data-pset-act="templates"]');
     if (tp && ctplCounts[pj] === undefined) api(`/api/projects/${encodeURIComponent(pj)}/card-templates`).then(r => { ctplCounts[pj] = (r.templates || []).filter(x => x.enabled !== false).length; if (!m.hidden && m.dataset.pj === pj && !tp.querySelector('.muted')) tp.insertAdjacentHTML('beforeend', `<span class="muted small">${ctplCounts[pj]} 個</span>`); }).catch(() => {});
   }
@@ -12135,6 +12225,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (k === 'kbai') return kbAiSetting(pj);
       if (k === 'review') return openReviewSettings(pj);
       if (k === 'templates') return openCardTemplates(pj);
+      if (k === 'models') return openProjectModels(pj);
       if (k === 'members') return openPermTab('members', { tab: 'members', memView: 'byProject', selProj: pj, mobileDetail: true, pq: '' });
       if (k === 'repo') return openRepoEditor(pj);
       if (k === 'rename') {

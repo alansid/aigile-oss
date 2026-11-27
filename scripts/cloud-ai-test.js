@@ -76,6 +76,7 @@ const call = async (token, p, method = 'GET', body) => {
 const sqlAll = (q, ...a) => db.all(q, ...a);
 const drain = async () => { await app.flushBackground(); await app.cloudDrain(); await app.flushBackground(); };
 let seq = 0;
+const MC = '/api/projects/' + encodeURIComponent('預設專案') + '/model-connections'; // 模型設定掛在專案下
 const post = (tok, body) => call(tok, '/api/messages', 'POST', { requestId: 'r' + ++seq, project: '預設專案', ...body });
 
 try {
@@ -85,16 +86,18 @@ try {
   const A = admin.participant.participantId, M = member.participant.participantId;
 
   // ---------- 2. 模型設定：只有管理員 ----------
-  assert.equal((await call(member.token, '/api/admin/model-connections')).status, 403, '成員看不到模型設定');
-  assert.equal((await call(member.token, '/api/admin/model-connections', 'POST', { kind: 'gemini', name: 'x' })).status, 403);
-  const list0 = (await call(admin.token, '/api/admin/model-connections')).body;
+  const ml = await call(member.token, MC);
+  assert.equal(ml.status, 200, '成員唯讀看得到專案的模型設定');
+  assert.equal(ml.body.canEdit, false);
+  assert.equal((await call(member.token, MC, 'POST', { kind: 'gemini', name: 'x' })).status, 403);
+  const list0 = (await call(admin.token, MC)).body;
   assert.equal(list0.masterKey, 'ok', '有地方放主密鑰（自動產生）');
   assert.equal(list0.hosted, true);
   assert.equal(list0.customUrl, false, '平台版不能自訂網址');
   assert.deepEqual(list0.kinds.map(k => k.key), ['gemini', 'openai', 'anthropic'], '平台版只列三家官方');
-  assert.equal((await call(admin.token, '/api/admin/model-connections', 'POST', { kind: 'ollama', name: '地端' })).body.error.code, 'OFFICIAL_ONLY', '平台版不能用 Ollama');
-  assert.equal((await call(admin.token, '/api/admin/model-connections', 'POST', { kind: 'custom', name: '代理', url: 'http://proxy.example.com/v1' })).body.error.code, 'OFFICIAL_ONLY');
-  const created = await call(admin.token, '/api/admin/model-connections', 'POST', { kind: 'gemini', name: 'Gemini 免費額度', key: KEY, models: ['gemini-2.5-flash'] });
+  assert.equal((await call(admin.token, MC, 'POST', { kind: 'ollama', name: '地端' })).body.error.code, 'OFFICIAL_ONLY', '平台版不能用 Ollama');
+  assert.equal((await call(admin.token, MC, 'POST', { kind: 'custom', name: '代理', url: 'http://proxy.example.com/v1' })).body.error.code, 'OFFICIAL_ONLY');
+  const created = await call(admin.token, MC, 'POST', { kind: 'gemini', name: 'Gemini 免費額度', key: KEY, models: ['gemini-2.5-flash'] });
   assert.equal(created.status, 201, created.text);
   const conn = created.body.connection;
   assert.equal(conn.keyLast4, 'Ij1G');
@@ -108,47 +111,47 @@ try {
   assert.ok(!settingsDump.includes('SECRET'), 'app_settings 也沒有金鑰');
   // 私人模型：改網址
   // 平台版只准官方網址（自訂網址延後）：新增、改網址都擋；舊資料裡的自訂網址，送出前也擋、不會連出去
-  const priv = await call(admin.token, '/api/admin/model-connections', 'POST', { kind: 'custom', name: 'Azure 代理', url: 'https://demo-proxy.example.com/v1', models: ['gpt-4o'] });
+  const priv = await call(admin.token, MC, 'POST', { kind: 'custom', name: 'Azure 代理', url: 'https://demo-proxy.example.com/v1', models: ['gpt-4o'] });
   assert.equal(priv.status, 400);
   assert.equal(priv.body.error.code, 'OFFICIAL_ONLY');
-  assert.equal((await call(admin.token, '/api/admin/model-connections', 'POST', { kind: 'gemini', name: 'G2', url: 'https://gemini-proxy.example.com/v1beta/openai/', models: ['m'] })).body.error.code, 'OFFICIAL_ONLY', '官方種類改網址也擋');
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}`, 'PATCH', { url: 'https://evil.example.com/v1' })).body.error.code, 'OFFICIAL_ONLY', '改網址擋');
-  await db.run("INSERT INTO model_connections (id, name, kind, url, key_enc, key_last4, models, status, created_at, updated_at) VALUES ('mc_old', '舊自訂', 'custom', 'https://old-proxy.example.com/v1', '', '', '[\"m\"]', 'ok', 'x', 'x')");
+  assert.equal((await call(admin.token, MC, 'POST', { kind: 'gemini', name: 'G2', url: 'https://gemini-proxy.example.com/v1beta/openai/', models: ['m'] })).body.error.code, 'OFFICIAL_ONLY', '官方種類改網址也擋');
+  assert.equal((await call(admin.token, `${MC}/${conn.id}`, 'PATCH', { url: 'https://evil.example.com/v1' })).body.error.code, 'OFFICIAL_ONLY', '改網址擋');
+  await db.run("INSERT INTO model_connections (id, project, name, kind, url, key_enc, key_last4, models, status, created_at, updated_at) VALUES ('mc_old', '預設專案', '舊自訂', 'custom', 'https://old-proxy.example.com/v1', '', '', '[\"m\"]', 'ok', 'x', 'x')");
   const before463 = calls.length;
-  const oldTest = (await call(admin.token, '/api/admin/model-connections/mc_old/test', 'POST', {})).body;
+  const oldTest = (await call(admin.token, MC + '/mc_old/test', 'POST', {})).body;
   assert.equal(oldTest.ok, false);
   assert.match(oldTest.message, /平台版只能用官方網址/);
   assert.equal(calls.length, before463, '舊的自訂網址沒有連出去');
   await db.run("DELETE FROM model_connections WHERE id = 'mc_old'");
 
   // ---------- 3. 讀模型清單、測試連線 ----------
-  const disc = (await call(admin.token, '/api/admin/model-connections/discover', 'POST', { id: conn.id })).body;
+  const disc = (await call(admin.token, MC + '/discover', 'POST', { id: conn.id })).body;
   assert.deepEqual(disc.models, ['gemini-2.5-flash', 'gemini-2.5-pro'], '讀到模型清單（去掉 models/ 前綴）');
   assert.ok(calls.at(-1).headers.Authorization === 'Bearer ' + KEY, '伺服器用解開的金鑰呼叫供應者');
   mode = 'badkey';
-  const bad = (await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body;
+  const bad = (await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body;
   assert.equal(bad.ok, false);
   assert.match(bad.message, /金鑰被拒絕（401）。請按「換金鑰」重貼/);
   assert.ok(!JSON.stringify(bad).includes('SECRET'), '供應者錯誤訊息裡的金鑰不回傳');
   mode = 'ok';
-  const good = (await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body;
+  const good = (await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body;
   assert.equal(good.ok, true, JSON.stringify(good));
   assert.match(good.message, /^連線成功：gemini-2\.5-flash 回應 \d+\.\d 秒$/);
   assert.equal(good.connection.status, 'ok');
   // 換金鑰：記末 4 碼舊 → 新
   const KEY2 = 'sk-second-key-WXYZ';
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}`, 'PATCH', { key: KEY2 })).body.connection.keyLast4, 'WXYZ');
-  const log = (await call(admin.token, '/api/admin/model-connections')).body.log;
+  assert.equal((await call(admin.token, `${MC}/${conn.id}`, 'PATCH', { key: KEY2 })).body.connection.keyLast4, 'WXYZ');
+  const log = (await call(admin.token, MC)).body.log;
   assert.match(log[0].text, /更換金鑰 ••••Ij1G → ••••WXYZ/, JSON.stringify(log));
   assert.ok(!JSON.stringify(log).includes('SECRET'));
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.ok, true);
+  assert.equal((await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body.ok, true);
 
   // ---------- 4. 新增雲端 AI ----------
   const opts = (await call(admin.token, '/api/cloud-ai/options')).body;
   assert.equal(opts.canCreate, true);
-  assert.deepEqual(opts.choices.map(c => c.model), ['gemini-2.5-flash'], '只列可以用的設定與勾選的模型（Azure 代理還沒測試）');
-  assert.equal((await call(member.token, '/api/cloud-ai/options')).body.reason, 'admin_only');
-  const aiBody = { runtime: 'cloud', connectionId: conn.id, model: 'gemini-2.5-flash', projects: ['預設專案'], roleKey: 'PO', role: 'PO', name: '示範助理', duties: '整理進度', style: '簡短', autonomy: '中', mustConfirm: '無', handoff: '寫清楚' };
+  assert.deepEqual(opts.projects.find(p => p.project === '預設專案').choices.map(c => c.model), ['gemini-2.5-flash'], '只列可以用的設定與勾選的模型（Azure 代理還沒測試）');
+  assert.equal((await call(member.token, '/api/cloud-ai/options')).body.reason, 'not_leader', '成員不是負責人也不是管理員');
+  const aiBody = { runtime: 'cloud', connectionId: conn.id, model: 'gemini-2.5-flash', project: '預設專案', roleKey: 'PO', role: 'PO', name: '示範助理', duties: '整理進度', style: '簡短', autonomy: '中', mustConfirm: '無', handoff: '寫清楚' };
   assert.equal((await call(member.token, '/api/my-ais', 'POST', aiBody)).status, 403, '成員不能新增雲端 AI');
   assert.equal((await call(admin.token, '/api/my-ais', 'POST', { ...aiBody, model: 'gemini-9' })).status, 400, '沒勾選的模型不行');
   const ai = await call(admin.token, '/api/my-ais', 'POST', aiBody);
@@ -262,7 +265,7 @@ try {
   // 修好：測試連線成功 → 自動恢復，留著的訊息再處理
   mode = 'ok';
   script = [say('抱歉剛剛叫不醒，現在處理好了。')];
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.ok, true);
+  assert.equal((await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body.ok, true);
   await drain();
   ag = (await call(admin.token, '/api/my-ais')).body.items.find(x => x.participantId === AI).cloud;
   assert.equal(ag.state, 'ready');
@@ -293,8 +296,8 @@ try {
   assert.ok((await sqlAll('SELECT token_enc FROM cloud_agents WHERE ai_id = ?', AI))[0].token_enc.startsWith('v1:'), '重發的 Token 加密存回');
 
   // Anthropic 格式
-  const an = (await call(admin.token, '/api/admin/model-connections', 'POST', { kind: 'anthropic', name: 'Anthropic API', key: 'sk-ant-xyz-1234', models: ['claude-x'] })).body.connection;
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${an.id}/test`, 'POST', {})).body.ok, true);
+  const an = (await call(admin.token, MC, 'POST', { kind: 'anthropic', name: 'Anthropic API', key: 'sk-ant-xyz-1234', models: ['claude-x'] })).body.connection;
+  assert.equal((await call(admin.token, `${MC}/${an.id}/test`, 'POST', {})).body.ok, true);
   assert.equal(calls.at(-1).headers['x-api-key'], 'sk-ant-xyz-1234');
   const ai2 = (await call(admin.token, '/api/my-ais', 'POST', { ...aiBody, name: '安助理', connectionId: an.id, model: 'claude-x' })).body;
   script = [
@@ -318,26 +321,26 @@ try {
 
   // ---------- 9. 審查補強：錯誤訊息先遮金鑰再截斷 ----------
   mode = 'echo400';
-  const echoed = (await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body;
+  const echoed = (await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body;
   assert.equal(echoed.ok, false);
   const KEY_NOW = 'sk-second-key-WXYZ';
   for (let i = 0; i + 5 <= KEY_NOW.length; i++) assert.ok(!echoed.message.includes(KEY_NOW.slice(i, i + 5)), '截斷處不留下金鑰片段：' + echoed.message);
   assert.match(echoed.message, /••••/, '金鑰換成 ••••');
   mode = 'ok';
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.ok, true);
+  assert.equal((await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body.ok, true);
 
   // 400 而且提到金鑰：附上供應者原文（正式站實測：Anthropic 使用者層級金鑰缺 workspace 標頭），金鑰照樣遮掉
   mode = 'ws400';
-  const ws = (await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body;
+  const ws = (await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body;
   assert.equal(ws.ok, false);
   assert.equal(ws.status, 'key_error');
   assert.match(ws.message, /^金鑰被拒絕（400）：This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header/, '看得到供應者原文：' + ws.message);
   assert.match(ws.message, /。請按「換金鑰」重貼$/);
   for (let i = 0; i + 5 <= KEY_NOW.length; i++) assert.ok(!ws.message.includes(KEY_NOW.slice(i, i + 5)), '原文裡的金鑰遮掉：' + ws.message);
   mode = 'badkey';
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.message, '金鑰被拒絕（401）。請按「換金鑰」重貼', '401 維持原本的文字');
+  assert.equal((await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body.message, '金鑰被拒絕（401）。請按「換金鑰」重貼', '401 維持原本的文字');
   mode = 'ok';
-  assert.equal((await call(admin.token, `/api/admin/model-connections/${conn.id}/test`, 'POST', {})).body.ok, true);
+  assert.equal((await call(admin.token, `${MC}/${conn.id}/test`, 'POST', {})).body.ok, true);
 
   // ---------- 10. 主密鑰：讀取出錯不覆寫；同時第一次建立只會有一把 ----------
   {
@@ -353,20 +356,20 @@ try {
     const adm2 = (await call2(null, '/api/join', 'POST', { name: '管理員二', role: 'PO' })).body;
     slow = true; // 兩個請求都先讀到「沒有」，再同時建立
     const [c1, c2] = await Promise.all([
-      call2(adm2.token, '/api/admin/model-connections', 'POST', { kind: 'gemini', name: 'A 組', key: 'key-aaaa-1111', models: ['m1'] }),
-      call2(adm2.token, '/api/admin/model-connections', 'POST', { kind: 'openai', name: 'B 組', key: 'key-bbbb-2222', models: ['m2'] }),
+      call2(adm2.token, MC, 'POST', { kind: 'gemini', name: 'A 組', key: 'key-aaaa-1111', models: ['m1'] }),
+      call2(adm2.token, MC, 'POST', { kind: 'openai', name: 'B 組', key: 'key-bbbb-2222', models: ['m2'] }),
     ]);
     slow = false;
     assert.equal(c1.status, 201); assert.equal(c2.status, 201);
     calls.length = 0;
-    assert.equal((await call2(adm2.token, `/api/admin/model-connections/${c1.body.connection.id}/test`, 'POST', {})).body.ok, true, '同時建立後 A 組解得開');
-    assert.equal((await call2(adm2.token, `/api/admin/model-connections/${c2.body.connection.id}/test`, 'POST', {})).body.ok, true, '同時建立後 B 組解得開');
+    assert.equal((await call2(adm2.token, `${MC}/${c1.body.connection.id}/test`, 'POST', {})).body.ok, true, '同時建立後 A 組解得開');
+    assert.equal((await call2(adm2.token, `${MC}/${c2.body.connection.id}/test`, 'POST', {})).body.ok, true, '同時建立後 B 組解得開');
     assert.deepEqual(calls.map(c => c.headers.Authorization), ['Bearer key-aaaa-1111', 'Bearer key-bbbb-2222'], '兩組都用同一把主密鑰解出原本的金鑰');
     const before = new TextDecoder().decode(await base.read('_secrets/model-master-key'));
     // 換一份程式（沒有快取）、儲存區暫時讀不到：不能當成沒有而產生新的
     const app3 = createApp({ db: db2, storage: dbStorage(db2), docStorage: store, docText: '', config: { openJoin: '1', rateLimitPerMin: '10000', teamCacheMs: '0', cloudAuto: '0', cloudFetch, hosted: true } });
     failRead = true;
-    const r3 = await app3(new Request('http://localhost/api/admin/model-connections', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adm2.token }, body: JSON.stringify({ kind: 'gemini', name: 'C 組', key: 'key-cccc-3333', models: ['m1'] }) }), 'http://localhost');
+    const r3 = await app3(new Request('http://localhost' + MC, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + adm2.token }, body: JSON.stringify({ kind: 'gemini', name: 'C 組', key: 'key-cccc-3333', models: ['m1'] }) }), 'http://localhost');
     assert.equal(r3.status, 503);
     assert.equal((await r3.json()).error.code, 'MASTER_KEY_UNAVAILABLE');
     failRead = false;
@@ -415,7 +418,7 @@ try {
   }
 
   // 刪除整組設定：用它的 AI 叫不醒
-  const del = (await call(admin.token, `/api/admin/model-connections/${an.id}`, 'DELETE')).body;
+  const del = (await call(admin.token, `${MC}/${an.id}`, 'DELETE')).body;
   assert.equal(del.affected, 1);
   assert.equal((await call(admin.token, '/api/my-ais')).body.items.find(x => x.participantId === ai2.participantId).cloud.state, 'error');
 

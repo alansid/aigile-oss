@@ -37,7 +37,7 @@ try {
   // 1. 管理員：專案卡 ⚙ 四項
   await login(liu.token, '/p/main/messages');
   await openGear();
-  assert.equal(await menuItems(), 'rename,repo,members,kbai,review,templates', '管理員六項（封存只在專案管理頁；知識庫整理 AI、審查、卡片範本）');
+  assert.equal(await menuItems(), 'rename,repo,members,kbai,review,templates,models', '管理員七項（封存只在專案管理頁；知識庫整理 AI、審查、卡片範本、模型設定）');
   assert.match(await text('#pset-menu .pset-head'), /預設專案 · 專案設定/);
   // 成員與本專案角色 → 成員管理、選好預設專案
   await click('#pset-menu [data-pset-act="members"]');
@@ -113,7 +113,7 @@ try {
   // 7. leader：預設專案有 ⚙（只有成員與本專案角色）、第二專案沒有；清單沒有新增；頭像只有成員管理；管理頁沒有切換鈕
   await login(wang.token, '/p/main/messages');
   await openGear();
-  assert.equal(await menuItems(), 'rename,repo,members,kbai,review,templates', 'leader 跟管理員一樣：改名、程式庫、成員與本專案角色');
+  assert.equal(await menuItems(), 'rename,repo,members,kbai,review,templates,models', 'leader 跟管理員一樣：改名、程式庫、成員與本專案角色');
   await click('#pset-menu [data-pset-act="members"]');
   await until(() => js("!!document.querySelector('.pm-tabs')"), 8000, 'leader 成員管理');
   assert.ok(!(await js("!!document.querySelector('.work-title [data-adm]')")), 'leader 沒有管理員設定連結');
@@ -122,13 +122,17 @@ try {
   assert.ok(!av.includes('pm-projects') && !av.includes('admin=') && /perm=👥成員管理/.test(av), 'leader 頭像選單只有成員管理：' + av);
   await login(wang.token, '/p/second/messages');
   await until(() => js("!!document.querySelector('.proj-switch .ph-card')"), 8000, '第二專案');
-  assert.ok(!(await js("!!document.querySelector('.proj-switch [data-pset]')")), '不是 leader 的專案沒有齒輪');
+  await openGear(); // 不是 leader 的專案也有齒輪，只有唯讀的模型設定
+  assert.equal(await menuItems(), 'models', '不是 leader 的專案：齒輪只有模型設定');
+  await js("document.body.click(); true");
   await click('.proj-switch .ps-btn'); await sleep(100);
   assert.ok(!(await js("!!document.querySelector('.proj-switch [data-ps-act]')")), 'leader 的清單沒有新增專案');
-  // 一般成員：沒有齒輪、手機選單沒有新增專案
+  // 一般成員：齒輪只有模型設定、手機選單沒有新增專案
   await login(chen.token, '/p/main/messages');
   await until(() => js("!!document.querySelector('.proj-switch .ph-card')"), 8000, '一般成員');
-  assert.ok(!(await js("!!document.querySelector('.proj-switch [data-pset]')")), '一般成員沒有齒輪');
+  await openGear();
+  assert.equal(await menuItems(), 'models', '一般成員：齒輪只有模型設定');
+  await js("document.body.click(); true");
   assert.ok(await js("document.getElementById('m-newproj').hidden"), '一般成員手機選單沒有新增專案');
   // 8. 英文介面：齒輪選單、頭像選單、管理頁切換鈕
   await login(liu.token, '/p/main/messages');
