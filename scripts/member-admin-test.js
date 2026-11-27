@@ -128,7 +128,11 @@ try {
   // 舊資料庫升級：001 把原本的管理員（最早加入的人類）標起來
   {
     const OLD = fs.readFileSync(new URL('../src/schema.sql', import.meta.url), 'utf8').replace(/\n\s*is_admin INTEGER[^\n]*/, '').replace(/\n\s*wake_(day|count|at) [^\n]*/g, '').replace(/,\n\s*kb_status TEXT[\s\S]*?kb_card INTEGER[^\n]*/, '')
-      .replace(/,\n\s*model TEXT\s+--[^\n]*/, ''); // 之後的升級（002 叫醒次數、004／005 知識庫、009 card_reviews.model）加的欄位也拿掉；ai_models 的「model TEXT NOT NULL」不會比對到
+      .replace(/,\n\s*model TEXT\s+--[^\n]*/, '') // 009 card_reviews.model；保留 ai_models 的 model TEXT NOT NULL
+      // 016 才加入資料夾世代和工作階段停止欄位
+      .replace(/^\s*generation TEXT NOT NULL DEFAULT 'legacy',$/m, '')
+      .replace(/^\s*stop_hash TEXT,$/m, '')
+      .replace(/^\s*stop_requested_at INTEGER,$/m, '');
     assert.ok(!OLD.includes('is_admin'), '1.0 的結構沒有 is_admin');
     const odb = new DatabaseSync(path.join(dataDir, 'old.db'));
     odb.exec(OLD);
@@ -137,6 +141,7 @@ try {
     ins.run('p_first', '最早的人', 'AAA1', 'tok-first', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
     const r = migrateNode(odb, { schema: fs.readFileSync(new URL('../src/schema.sql', import.meta.url), 'utf8'), dir: fileURLToPath(new URL('../migrations/', import.meta.url)) });
     assert.ok(r.applied.includes('001_admin_flag.sql'), JSON.stringify(r));
+    assert.ok(r.applied.includes('016_launcher_folder_removals.sql'), JSON.stringify(r));
     assert.deepEqual(odb.prepare('SELECT id FROM participants WHERE is_admin = 1').all().map(x => x.id), ['p_first'], '升級後原本的管理員有標記');
     odb.close();
   }
