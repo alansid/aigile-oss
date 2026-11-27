@@ -54,7 +54,7 @@ try {
   assert.equal(await bar(), '', '換頁不再跳出');
   await js('window.__staleReload = 1; location.reload(); true');
   await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
-  await until(() => js("!!document.querySelector('.av-btn')"), 15000, '重新整理');
+  await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 15000, '重新整理');
   await new Promise(r => setTimeout(r, 1500));
   assert.equal(await bar(), '', '重新整理不再跳出');
   // 5. 側欄人數：過期一號留著待命心跳也不算待命；快到期二號從沒連線＝還沒接入；正常三號在線＝待命（修正前寫「2 待命」，跟紅條、我的 AI 說法不一）

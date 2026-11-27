@@ -48,7 +48,7 @@ try {
   await until(() => bb.js("/匯入完成/.test(document.querySelector('#bk-msg')?.textContent || '')"), 30000, '匯入完成');
   assert.equal(await bb.js("!!document.querySelector('#bk-msg').closest('.pm-card')?.querySelector('[data-bk-file]')"), true, '匯入的提示在匯入那張卡裡');
   await new Promise(r => setTimeout(r, 2500)); // 自動重新整理
-  await until(() => bb.js("!!document.querySelector('.av-btn')"), 15000, '重新整理後');
+  await until(() => bb.js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 15000, '重新整理後');
   const meNow = (await B.call(me.token, '/api/me')).body;
   assert.equal(meNow.name, '王小明', '你變成備份裡的管理員');
   assert.equal((await B.call(me.token, `/api/cards/${card.cardId}`)).body.title, '搬家測試卡', '卡片搬過來了');

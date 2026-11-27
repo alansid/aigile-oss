@@ -38,7 +38,7 @@ try {
   await js("document.querySelector('.sw [data-sw=\"pjjoin\"]').click(); true");
   await until(() => js("document.querySelector('.sw [data-sw=\"pjjoin\"]')?.getAttribute('aria-checked') === 'true'"), 10000, '再打開');
   await js("document.querySelector('.sw [data-sw=\"skipall\"]').click(); true");
-  await until(() => js("!!document.querySelector('.av-btn') && !document.querySelector('.sw')"), 15000, '引導關掉、重新整理');
+  await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML && !document.querySelector('.sw')"), 15000, '引導關掉、重新整理');
 
   // 2. 管理頁清除
   await open(tok, '/admin/system'); // 管理員設定 › 系統與備份

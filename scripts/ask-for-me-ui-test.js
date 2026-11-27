@@ -37,7 +37,7 @@ try {
     await js(`localStorage.setItem('aigile-lang', '${lang}'); window.__staleReload = 1; location.reload(); true`);
     await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
     await sleep(400);
-    await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg').length >= 3"), 20000, '訊息');
+    await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML && document.querySelectorAll('#messages .msg').length >= 3"), 20000, '訊息');
     if (wantN) await until(() => js("!document.querySelector('.seg-scope [data-scope=\"mine\"] .scope-n')?.hidden"), 10000, '給我的數字');
     await sleep(300);
   };

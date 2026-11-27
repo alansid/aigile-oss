@@ -113,7 +113,8 @@ try {
   // 3. 群組：@ 它 → 正在處理… → 回覆
   delay = 8000;
   await login(wang.token, '/p/main');
-  await until(() => js("!!document.querySelector('#messages')"), 15000, "行 104");
+  // #messages 是寫死在 HTML 的空殼：要等第一次載入的訊息畫上去（有內容）才發文，不然這則會被當成開頁就有的舊訊息，不會顯示「正在處理…」
+  await until(() => js("document.querySelector('#messages')?.children.length > 0"), 15000, "訊息區載入完");
   const sent = await kit.call(wang.token, '/api/messages', 'POST', { requestId: 'ui-1', project: '預設專案', text: '@示範助理 幫我把 DEMO-12 到 DEMO-15 整理成這週進度', recipientIds: [aiId], replyFrom: [aiId] });
   assert.equal(sent.status, 201);
   await until(() => js("/示範助理 正在處理…/.test(document.querySelector('#cloud-busy')?.innerText || '')"), 10000, '正在處理…');

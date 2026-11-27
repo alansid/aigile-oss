@@ -70,7 +70,7 @@ try {
       await js(`localStorage.setItem('aigile-lang', '${lang}'); window.__staleReload = 1; location.reload(); true`);
       await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
       await sleep(400);
-      await until(() => js("document.readyState === 'complete' && !!document.querySelector('.av-btn')"), 20000, '換語言後重新載入');
+      await until(() => js("document.readyState === 'complete' && document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 20000, '換語言後重新載入');
     }
     await js(helpers);
   };

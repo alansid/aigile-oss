@@ -26,10 +26,11 @@ try {
   await cdp('Fetch.enable', { patterns: [{ urlPattern: '*/api/me*' }] });
 
   // 1. 斷一次：自動重試、進得去，Token 還在
+  // 「進得去」要看主畫面真的顯示、載入畫面收起（頭像鈕是 HTML 裡本來就有的，只看它會在 /api/me 還沒發出去前就成立：macOS CI 偶發「真的斷過一次」0 次）
   fail = 1; failed = 0;
   await js('window.__staleReload = 1; location.reload(); true');
   await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
-  await until(() => js("!!document.querySelector('.av-btn') && document.querySelector('#join')?.hidden !== false"), 20000, '斷一次後自動重試進得去');
+  await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 20000, '斷一次後自動重試進得去');
   assert.equal(failed, 1, '真的斷過一次');
   assert.ok(await tokenKept(), '斷一次：Token 還在');
   await until(() => js("sessionStorage.getItem('aigile-boot-retry') === null"), 10000, '啟動完成後重試次數歸零');
@@ -48,7 +49,7 @@ try {
   // 3. 網路好了按「重新整理」就進得去（重試次數歸零）
   fail = 0;
   await js("document.querySelector('#boot .boot-line button').click(); true");
-  await until(() => js("!!document.querySelector('.av-btn') && document.querySelector('#join')?.hidden !== false"), 20000, '按重新整理後進得去');
+  await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 20000, '按重新整理後進得去');
   await until(() => js("sessionStorage.getItem('aigile-boot-retry') === null"), 10000, '進得去後重試次數歸零');
 
   // 4. Token 真的無效（401）照舊登出、回登入頁

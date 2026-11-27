@@ -50,7 +50,7 @@ try {
       localStorage.setItem('aigile-switch-view', '${view}');
       ${seen ? `localStorage.setItem('aigile-seen:${PJ}', '${seen}')` : `localStorage.removeItem('aigile-seen:${PJ}')`}; true`);
     await goto('/p/main/messages');
-    await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg, #messages .flow-line').length > 3"), 20000, `訊息（${view}、${lang}）`);
+    await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML && document.querySelectorAll('#messages .msg, #messages .flow-line').length > 3"), 20000, `訊息（${view}、${lang}）`);
     await sleep(300);
   };
   const grpOf = `[...document.querySelectorAll('#messages .cgrp')].find(g => g.querySelector('#msg-${prog.messageId}'))`;

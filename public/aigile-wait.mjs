@@ -198,9 +198,9 @@ const pidAlive = () => {
   if (!pid) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 };
-const watcherAlive = () => {
+const watcherAlive = (t = now()) => { // 同一次檢查只讀一次時鐘，免得兩次讀之間時鐘跳了而誤判
   const b = readBell();
-  return pidAlive() && !!b?.heartbeatAt && now() - Date.parse(b.heartbeatAt) < STALE_MS;
+  return pidAlive() && !!b?.heartbeatAt && t - Date.parse(b.heartbeatAt) < STALE_MS;
 };
 
 // 1. 啟動時查一次（門鈴編號先記下，查詢期間響的門鈴才不會漏掉）
@@ -253,7 +253,7 @@ if (!ending) {
       note(`偵測到電腦睡醒（停了約 ${Math.round(gap / 60000)} 分鐘），先查一次待處理數，給 watcher ${GRACE_MS / 60000} 分鐘補心跳`);
       health('睡醒後');
     }
-    const alive = t < graceUntil ? pidAlive() : watcherAlive();
+    const alive = t < graceUntil ? pidAlive() : watcherAlive(t);
     if (!alive && !fallback) {
       note(`WARN watcher 不在（${PIDF} 的程序不在，或門鈴檔超過 ${STALE_MS / 60000} 分鐘沒心跳），改成每 ${POLL_MS / 60000} 分鐘問一次待處理數`);
       fallback = setInterval(poll, POLL_MS); handles.push(fallback);

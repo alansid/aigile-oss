@@ -14,7 +14,7 @@ async function scenario(env, within, label) {
     const b = (await kit.call(null, '/api/join', 'POST', { name: '陳大文', role: 'PG' })).body;
     const { js, login } = await kit.browser(1280, 800);
     await login(b.token, '/');
-    await until(() => js("!!document.querySelector('.av-btn')"), 15000, '登入');
+    await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 15000, '登入');
     await js("history.pushState(null, '', '/cross/messages'); dispatchEvent(new PopStateEvent('popstate')); true");
     await sleep(6000); // 等網頁連好、也讓第一輪輪詢過去
     const t0 = Date.now();

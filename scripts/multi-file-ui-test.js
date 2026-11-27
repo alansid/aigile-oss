@@ -54,7 +54,7 @@ try {
     await js(`localStorage.setItem('aigile-lang', '${lang}'); window.__staleReload = 1; location.reload(); true`);
     await until(() => js('!window.__staleReload'), 20000, '重新整理後換成新頁面');
     await sleep(400);
-    await until(() => js("!!document.querySelector('.av-btn') && document.querySelectorAll('#messages .msg').length >= 1"), 20000, '訊息');
+    await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML && document.querySelectorAll('#messages .msg').length >= 1"), 20000, '訊息');
     await js(helpers);
   };
   const dlg = () => J(`(() => { const m = document.querySelector('#modal-root .modal'); if (!m) return null; const go = m.querySelector('#up-go'), rd = m.querySelector('#up-redeclare'), lm = m.querySelector('#up-limit');

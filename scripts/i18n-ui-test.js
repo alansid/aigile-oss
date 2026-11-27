@@ -100,10 +100,10 @@ try {
   await until(() => js("!!document.querySelector('#av-menu [data-lang=\"zh\"]')"), 5000, '頭像選單有中文選項');
   await js("document.querySelector('#av-menu [data-lang=\"zh\"]').click(); true");
   await until(() => js("document.documentElement.lang === 'zh-Hant' && document.readyState === 'complete'"), 15000, '切回中文');
-  await until(() => js("!!document.querySelector('.av-btn')"), 15000, '中文主畫面');
+  await until(() => js("document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 15000, '中文主畫面');
   assert.equal(await js("localStorage.getItem('aigile-lang')"), 'zh');
   await js('window.__staleI18n = 1; location.reload(); true');
-  await until(() => js("!window.__staleI18n && document.readyState === 'complete' && !!document.querySelector('.av-btn')"), 15000, '重新整理');
+  await until(() => js("!window.__staleI18n && document.readyState === 'complete' && document.querySelector('#app')?.hidden === false && document.querySelector('#boot')?.hidden === true && !!document.querySelector('.av-btn')?.innerHTML"), 15000, '重新整理');
   assert.equal(await js('document.documentElement.lang'), 'zh-Hant', '記住中文');
   console.log('i18n-ui-test：全部通過');
 } catch (e) {

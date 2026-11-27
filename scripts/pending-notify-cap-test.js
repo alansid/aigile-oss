@@ -59,7 +59,9 @@ try {
   const longAgo = new Date(Date.now() - 8 * 86400_000).toISOString();
   await db.run('UPDATE notifications SET created_at = ? WHERE message_id IN (?, ?)', longAgo, m2.messageId, m3.messageId);
   const m4 = (await say(aiTok, { text: '給林志明的新通知', recipientIds: [bossId] })).body;
-  assert.equal(await app.autoAckPending(), 0, '不是台灣 03:00 那次排程就不做（一天只做一次）');
+  // 剛好在台灣 03:00～03:10 跑時排程本來就會做，這一項只在其他時間檢查（不然半夜跑全套會假失敗）
+  const t = new Date();
+  if (!(t.getUTCHours() === 19 && t.getUTCMinutes() < 10)) assert.equal(await app.autoAckPending(), 0, '不是台灣 03:00 那次排程就不做（一天只做一次）');
   const n = await app.autoAckPending(true);
   assert.equal(n, 2, '確認了 2 則：已離開成員的、人類 8 天前的');
   const st = async (rid, mid) => (await db.get('SELECT status FROM notifications WHERE recipient_id = ? AND message_id = ?', rid, mid)).status;
