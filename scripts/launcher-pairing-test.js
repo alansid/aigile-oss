@@ -135,5 +135,123 @@ try {
   await until(()=>js('!document.querySelector(".ma-launch-dialog [data-offline]").hidden'));
   assert.ok(await js('document.querySelector(".ma-launch-dialog [type=submit]").disabled'));
   await screenshot('offline');
+  await js('document.querySelector(".ma-launch-dialog").close()');
+  const removeUrl = '/api/launchers/' + device.launcherId + '/unregister-folder';
+  const binding = {jobId: localJob.id, folder};
+  const checkBinding = () => call(second.token, '/api/me/launcher-binding', 'POST', binding);
+  const previousGeneration = state.launchers[0].folderUsage[0].generation;
+  assert.equal((await kit.call(owner.token, removeUrl, 'POST', {folder,generation:previousGeneration,confirmedAiIds:[]})).body.error.code,'UPGRADE_REQUIRED');
+  const generation = (await call(owner.token,'/api/launcher')).launchers[0].folderUsage[0].generation;
+  const confirmed = { folder, generation, confirmedAiIds: [first.participantId, second.participantId] };
+  const outsider = await call(null, '/api/join', 'POST', { name: 'AnotherOwner', role: 'PG' });
+  assert.equal((await kit.call(outsider.token, removeUrl, 'POST', confirmed)).status, 404);
+  kit.sql("UPDATE launcher_jobs SET status='opened', window_closed_at=NULL WHERE launcher_id=?",device.launcherId);
+  assert.equal((await kit.call(owner.token, removeUrl, 'POST', confirmed)).status, 409);
+  await js('document.querySelector("[data-manage]").click()');
+  await js('document.querySelector("button[data-device][data-folder]").click()');
+  await until(()=>js('!!document.querySelector(".ma-unregister[open]")'));
+  await js('document.querySelector(".ma-unregister input").click()');
+  assert.ok(await js('document.querySelector(".ma-unregister [type=submit]").disabled'));
+  for (const width of [1280, 375]) {
+    await cdp('Emulation.setDeviceMetricsOverride',{width,height:850,deviceScaleFactor:1,mobile:false});
+    assert.ok(await js('document.querySelector(".ma-unregister").scrollWidth <= document.querySelector(".ma-unregister").clientWidth + 1'));
+    await screenshot('manual-close-' + width);
+  }
+  kit.sql("UPDATE launcher_jobs SET window_closed_at=? WHERE launcher_id=?",Date.now(),device.launcherId);
+  await js('document.querySelector(".ma-unregister [data-recheck]").click()');
+  await until(()=>js('!document.querySelector(".ma-unregister [data-recheck]")'));
+  await js('document.querySelector(".ma-unregister").close()');
+  const latest = await call(owner.token, '/api/launcher');
+  confirmed.confirmedAiIds = latest.launchers[0].ais.filter(a=>a.folder === folder).map(a=>a.aiId);
+  assert.equal((await checkBinding()).bound, confirmed.confirmedAiIds.includes(second.participantId));
+  kit.sql("UPDATE launcher_jobs SET status='opened',window_closed_at=NULL,stop_hash='fixture',ai_id=? WHERE id=?",first.participantId,localJob.id);
+  const stopping = await call(owner.token,removeUrl,'POST',{...confirmed,sessionIds:[localJob.id]});
+  assert.ok(stopping.stopping && stopping.removalId);
+  const receiptUrl = '/api/launchers/'+device.launcherId+'/folder-removals/'+stopping.removalId;
+  assert.equal((await call(owner.token,'/api/launcher')).launchers[0].folderUsage[0].removalId,stopping.removalId);
+  assert.equal((await call(owner.token,receiptUrl)).stopping,true);
+  assert.equal((await kit.call(owner.token,'/api/my-ais/'+second.participantId+'/launch','POST',{launcherId:device.launcherId,folder,tool:'claude'})).body.error.code,'REMOVAL_PENDING');
+  assert.equal((await kit.call(outsider.token,receiptUrl+'/withdraw','POST',{})).status,404);
+  await call(owner.token,receiptUrl+'/withdraw','POST',{});
+  kit.sql("UPDATE launcher_jobs SET window_closed_at=?,ai_id=? WHERE id=?",Date.now(),second.participantId,localJob.id);
+  await call(device.token,'/api/launcher/poll');
+  assert.equal((await kit.call(owner.token,receiptUrl)).status,404);
+  assert.ok((await call(owner.token,'/api/launcher')).launchers[0].folders.includes(folder));
+
+  assert.equal((await kit.call(owner.token, removeUrl, 'POST', {...confirmed,confirmedAiIds:['different']})).status, 409);
+  assert.equal((await call(owner.token,removeUrl,'POST',confirmed)).untied, confirmed.confirmedAiIds.length);
+  const cleared = await call(owner.token, '/api/launcher');
+  assert.equal((await checkBinding()).bound, false);
+  assert.deepEqual(cleared.launchers[0].folders, []);
+  const pendingRemoval = (await call(device.token, '/api/launcher/poll')).removals[0];
+  assert.equal(pendingRemoval.generation, generation);
+  await promisify(execFile)(process.execPath,[path.join(pkg,'bin/aigile-launcher.mjs'),'add'],{cwd:folder,env});
+  const replacement = (await call(owner.token, '/api/launcher')).launchers[0].folderUsage[0];
+  assert.notEqual(replacement.generation,generation);
+  assert.equal((await kit.call(owner.token,removeUrl,'POST',confirmed)).status,409);
+  const {pollOnce} = await import(pathToFileURL(path.join(pkg,'src/launcher-core.js')).href);
+  await pollOnce({home:config,spawnTerminal:()=>assert.fail('unexpected launch')});
+  assert.deepEqual((await call(device.token,'/api/launcher/poll')).removals,[]);
+  const listed = await promisify(execFile)(process.execPath,[path.join(pkg,'bin/aigile-launcher.mjs'),'list'],{cwd:folder,env});
+  assert.ok(listed.stdout.includes(folder));
+  await call(owner.token,removeUrl,'POST',{folder,generation:replacement.generation,confirmedAiIds:[]});
+  await pollOnce({home:config,spawnTerminal:()=>assert.fail('unexpected launch')});
+  const afterRemoval = await promisify(execFile)(process.execPath,[path.join(pkg,'bin/aigile-launcher.mjs'),'list','--json'],{cwd:folder,env});
+  assert.deepEqual(JSON.parse(afterRemoval.stdout).items,[]);
+  assert.ok(fs.existsSync(agentRoot));
+  await promisify(execFile)(process.execPath,[path.join(pkg,'bin/aigile-launcher.mjs'),'add'],{cwd:folder,env});
+  const fakeCli = path.join(localRoot,'fixture-cli.mjs');
+  fs.writeFileSync(fakeCli,'setInterval(() => {}, 1000)');
+  // The existing fixture watcher is already running under this fixture's credential.
+  fs.writeFileSync(path.join(agentRoot,'watcher.pid'),String(process.pid));
+  const launch = await call(owner.token,'/api/my-ais/'+second.participantId+'/launch','POST',{launcherId:device.launcherId,folder,tool:'claude'});
+  const job = (await call(device.token,'/api/launcher/poll')).jobs.find(j=>j.id===launch.job.id);
+  let terminal;
+  await executeLaunchJob(job,{home:config,base:kit.BASE,token:device.token,spawnTerminal:async spec=>{
+    terminal = promisify(execFile)(spec.cmd,spec.args,{cwd:folder,env:{...env,AIGILE_CLAUDE_BIN:fakeCli},timeout:30000});
+    terminal.catch(()=>{});
+  }});
+  const snapshot = async () => (await call(owner.token,'/api/launcher')).launchers[0];
+  await until(async ()=>(await snapshot()).ais.some(a=>a.aiId===second.participantId && a.canStop),15000,'authenticated session');
+  const current = await snapshot();
+  const removeSession = {folder,generation:current.folderUsage[0].generation,confirmedAiIds:[second.participantId],sessionIds:[job.id]};
+  const wrongKey = await kit.call(device.token,'/api/launcher/jobs/'+job.id+'/session','POST',{key:'0'.repeat(64),closed:true});
+  assert.equal(wrongKey.status,409);
+  await cdp('Page.reload');
+  await until(()=>js('!!document.querySelector("[data-manage]")'));
+  await js('document.querySelector("[data-manage]").click()');
+  for (const width of [375,1280]) {
+    await cdp('Emulation.setDeviceMetricsOverride',{width,height:850,deviceScaleFactor:1,mobile:false});
+    await js('document.querySelector(".ma-computer").scrollIntoView({block:"center"})');
+    assert.ok(await js('document.documentElement.scrollWidth<=innerWidth+1'));
+    await screenshot('folder-management-'+width);
+  }
+  await js('document.querySelector("button[data-device][data-folder]").click()');
+  await until(()=>js('!!document.querySelector(".ma-unregister[open]")'));
+  await js('document.querySelector(".ma-unregister input").click()');
+  assert.equal(await js('document.querySelector(".ma-unregister [type=submit]").disabled'),false);
+  for (const width of [1280,375]) {
+    await cdp('Emulation.setDeviceMetricsOverride',{width,height:850,deviceScaleFactor:1,mobile:false});
+    await screenshot('stop-confirm-'+width);
+  }
+  await js('document.querySelector(".ma-unregister form").requestSubmit()');
+  await terminal;
+  await until(async ()=>(await snapshot()).folders.length===0,15000,'automatic unregistration after confirmed exit');
+  assert.ok(fs.existsSync(fakeCli));
+  // A missing legacy folder can be removed only after the owner confirms every listed window.
+  const moved = folder + '-moved';
+  kit.sql("INSERT INTO launcher_folders (launcher_id,folder,generation) VALUES (?,?,'legacy')",device.launcherId,moved);
+  kit.sql("UPDATE launcher_jobs SET folder=?, status='opened',window_closed_at=NULL WHERE id=?",moved,job.id);
+  const legacy = {folder:moved,generation:'legacy',confirmedAiIds:[],sessionIds:[]};
+  assert.equal((await kit.call(owner.token,removeUrl,'POST',legacy)).body.error.code,'UPGRADE_REQUIRED');
+  assert.equal((await kit.call(owner.token,removeUrl,'POST',{...legacy,manuallyClosed:true})).status,409);
+  await cdp('Page.reload');
+  await until(()=>js('!!document.querySelector("[data-manage]")'));
+  await js('document.querySelector("[data-manage]").click()');
+  await js('Array.from(document.querySelectorAll("button[data-device][data-folder]")).find(b=>b.dataset.folder.endsWith("-moved")).click()');
+  await until(()=>js('!!document.querySelector("[name=manuallyClosed]")'));
+  assert.ok(await js('document.querySelector(".ma-unregister [type=submit]").disabled'));
+  await js('document.querySelector("[name=manuallyClosed]").click(); document.querySelector(".ma-unregister form").requestSubmit()');
+  await until(async()=>!(await snapshot()).folders.includes(moved));
   console.log('Launcher browser pairing, shared folder, unbind and responsive layout passed');
 } finally { await kit.stop(); }

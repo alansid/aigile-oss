@@ -8281,7 +8281,7 @@
         ${maAvatar(ai)}
         <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
           <div class="ma-meta">${[markQ(ai.role || '', q), ai.cloud ? cloudModelLine(ai.cloud) : ''].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
-        ${!ai.cloud && ai.launcher?.registered ? `<small>${esc([ai.launcher.launcherName,ai.launcher.folder,ai.launcher.tool].join(' · '))}</small>` : ''}
+        ${!ai.cloud && ai.launcher?.registered ? `<small class="ma-row-location">${esc([ai.launcher.launcherName,ai.launcher.folder,ai.launcher.tool].join(' · '))}</small>` : ''}
         ${ai.launchError ? `<small class="error" role="status">${esc(ai.launchError)}</small>` : ''}
         <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
       </div>
@@ -8350,17 +8350,135 @@
     const devicesBar = document.createElement('div');
     devicesBar.className = 'ma-devices';
     body.querySelector('#ai-list').after(devicesBar);
+    let managingDevices = false;
+    const folderName = folder => folder.split(/[\\/]/).filter(Boolean).at(-1) || folder;
+    function folderTime(value) {
+      const date = new Date(value), now = new Date();
+      const en = document.documentElement.lang.startsWith('en');
+      const locale = en ? 'en-US' : 'zh-TW';
+      const time = date.toLocaleTimeString(locale, {hour:en ? 'numeric' : '2-digit',minute:'2-digit',hourCycle:en ? 'h12' : 'h23'});
+      if (date.toDateString() === now.toDateString()) return (en ? 'Today ' : '今天 ') + time;
+      const day = date.toLocaleDateString(locale, {month:en ? 'short' : 'numeric',day:'numeric',...(date.getFullYear() !== now.getFullYear() && {year:'numeric'})});
+      return day + (en ? ', ' : ' ') + time;
+    }
+    function folderRow(device, folder) {
+      const users = device.ais.filter(a => a.folder === folder);
+      const usage = device.folderUsage?.find(row => row.folder === folder);
+      const last = usage?.lastUsedAt;
+      return `<div class="ma-folder-row"><div><b>${esc(folderName(folder))}</b><code>${esc(folder)}</code>
+        ${users.length ? users.map(a=>`<span class="pill-tag ${a.running ? 'green' : 'blue'}">${esc(a.name)}</span>`).join(' ') : '沒有 AI 在用'}
+        ${usage?.removalId ? '<strong>正在取消登記，等候視窗關閉</strong>' : ''}
+        <small>上次使用 <time>${last ? esc(folderTime(last)) : '—'}</time></small></div>
+        <details><summary aria-label="資料夾選單">⋯</summary><button class="btn small" data-copy-path data-folder="${esc(folder)}">複製路徑</button>
+        <button class="btn small danger-text" data-device="${esc(device.id)}" data-folder="${esc(folder)}" ${usage?.removalId ? 'data-withdraw="'+esc(usage.removalId)+'"' : ''}>${usage?.removalId ? '撤回取消登記' : '取消登記…'}</button></details></div>`;
+    }
+    function unregisterDialog(device, folder) {
+      const generation = device.folderUsage.find(row=>row.folder===folder)?.generation;
+      const needsUpgrade = !/^gen_/.test(generation || '');
+      const dialog = document.createElement('dialog');
+      dialog.className = 'ma-launch-dialog ma-unregister';
+      let users = device.ais.filter(a=>a.folder === folder);
+      function render(message = '') {
+        const running = users.filter(a=>!needsUpgrade && a.running && a.canStop).map(a=>a.name);
+        const manualClose = users.filter(a=>a.running && (needsUpgrade || !a.canStop));
+        for (const session of device.openSessions || []) {
+          if (session.folder === folder && !users.some(a=>a.aiId===session.aiId) &&
+              !manualClose.some(a=>a.aiId===session.aiId)) manualClose.push(session);
+        }
+        const unboundWindows = manualClose.filter(m=>!users.some(a=>a.aiId===m.aiId));
+        dialog.innerHTML = `<form><div class="ma-launch-body"><h2>取消登記這個資料夾？</h2>
+          <b>${esc(device.name)}</b><code>${esc(folder)}</code>
+          <p class="ma-keep-files">✓ 電腦上的資料夾和檔案都會保留，不會刪除。</p>
+          ${users.length ? `<div class="ma-untie">
+            <p>⚠ 還有 ${users.length} 隻 AI 綁在這個資料夾：</p>
+            ${users.map(a=>`<p><b>${esc(a.name)}</b>
+              <span class="pill-tag ${a.running || manualClose.includes(a) ? 'green' : 'blue'}">${a.running || manualClose.includes(a) ? '執行中' : '沒在跑'}</span>
+              ${manualClose.includes(a) ? '<small>請先在電腦上關掉這個視窗</small>' : ''}</p>`).join('')}
+            ${users.length ? `<label><input type="checkbox" name="untie"> <span>${users.length === 1 ? '同時解除它的綁定' : '同時解除它們的綁定'}</span>
+            ${running.length ? `<span>（${esc(running.join('、'))} 會停止）</span>` : ''}</label>` : ''}
+            </div>` : ''}
+          ${unboundWindows.map(a=>`<p><b>${esc(a.name)}</b> · <span>已解除綁定，視窗仍在執行。</span></p>`).join('')}
+          ${manualClose.length && !needsUpgrade ? '<small>在電腦上關掉上面的視窗後，按「重新檢查」。</small><button type="button" class="btn small" data-recheck>重新檢查</button>' : ''}
+          ${needsUpgrade ? '<p>舊版登記請先更新啟動器。若資料夾已搬走或不存在，請手動關閉這個資料夾的 AI 視窗和 watcher，再勾選下方確認。</p><label><input type="checkbox" name="manuallyClosed"> <span>資料夾已搬走或不存在，我已關閉它的所有 AI 視窗和 watcher</span></label>' : ''}
+          <small>取消後，AI 不能再選這個資料夾。要再用，到那個資料夾執行 npx aigile-cli 重新登記。</small>
+          ${device.online ? '' : '<small class="ma-offline-note">這台電腦離線中，電腦上的登記紀錄會在下次連上時一起清掉。</small>'}
+          <p role="alert" class="error">${esc(message)}</p></div><footer><div><button type="button" class="btn">取消</button>
+          <button class="btn danger" type="submit" ${users.length || manualClose.length || needsUpgrade ? 'disabled' : ''}>取消登記</button></div></footer></form>`;
+        const form = dialog.querySelector('form'), submit = form.querySelector('[type=submit]');
+        form.querySelector('footer [type=button]').onclick = () => dialog.close();
+        const recheck = form.querySelector('[data-recheck]');
+        if (recheck) recheck.onclick = async () => {
+          recheck.disabled = true;
+          try {
+            const latest = await api('/api/launcher');
+            const fresh = latest.launchers.find(d=>d.id===device.id);
+            if (!fresh?.folderUsage.some(f=>f.folder===folder && f.generation===generation)) { dialog.close(); return; }
+            device = fresh;
+            users = fresh.ais.filter(a=>a.folder===folder);
+            render();
+          } catch (err) { render(err.message); }
+        };
+        form.onchange = () => {
+          const closed = needsUpgrade ? form.elements.manuallyClosed.checked : manualClose.length === 0;
+          submit.disabled = !closed || (users.length > 0 && !form.elements.untie.checked);
+        };
+        form.onsubmit = async event => {
+          event.preventDefault();
+          if (submit.disabled) return;
+          submit.disabled = true;
+          try {
+            const request = () => api('/api/launchers/'+encodeURIComponent(device.id)+'/unregister-folder',{method:'POST',body:{folder,generation,confirmedAiIds:users.map(a=>a.aiId),manuallyClosed:form.elements.manuallyClosed?.checked === true,sessionIds:needsUpgrade ? device.openSessions.filter(s=>s.folder===folder).map(s=>s.sessionId) : users.flatMap(a=>a.sessionIds || [])}});
+            let result = await request();
+            while (result.stopping && dialog.open) {
+              form.querySelector('[role=alert]').textContent = '正在等候工作階段停止。';
+              await new Promise(resolve=>setTimeout(resolve,2000));
+              if (!dialog.open) return;
+              result = await api('/api/launchers/'+encodeURIComponent(device.id)+'/folder-removals/'+encodeURIComponent(result.removalId));
+            }
+            if (!dialog.open) { await draw(); return; }
+            dialog.close();
+            toast(result.untied ? `已取消登記 ${folderName(folder)}，並解除 ${result.untied} 隻 AI 的綁定。電腦上的檔案沒動。` : `已取消登記 ${folderName(folder)}。電腦上的檔案沒動。`,5000);
+          } catch (err) {
+            if (err.code === 'FOLDER_CHANGED') {
+              const current = await api('/api/launcher').catch(() => null);
+              const fresh = current?.launchers.find(d=>d.id===device.id);
+              if (fresh?.folderUsage.some(f=>f.folder===folder && f.generation===generation)) {
+                device = fresh;
+                users = fresh.ais.filter(a=>a.folder===folder);
+              } else if (current) { dialog.close(); toast(err.message); return; }
+            }
+            render(`沒取消成功：${err.message}。再試一次。`);
+          }
+        };
+      }
+      render(); dialog.onclose = () => { dialog.remove(); draw(); }; document.body.append(dialog); dialog.showModal();
+    }
     devicesBar.onclick = async event => {
       const button = event.target.closest('button');
       if (!button) return;
       if (button.hasAttribute('data-manage')) {
         const list = devicesBar.querySelector('[data-device-list]');
-        list.hidden = !list.hidden; button.setAttribute('aria-expanded', String(!list.hidden)); return;
+        list.hidden = !list.hidden; managingDevices = !list.hidden; button.setAttribute('aria-expanded', String(!list.hidden)); return;
+      }
+      if (button.hasAttribute('data-copy-path')) {
+        try { await navigator.clipboard.writeText(button.dataset.folder); } catch (err) { toast(err.message); }
+        return;
       }
       const device = launcher.launchers.find(c => c.id === button.dataset.device);
       if (!device) return;
       try {
         const route = '/api/launchers/' + encodeURIComponent(device.id);
+        if (button.dataset.withdraw) {
+          await api(route+'/folder-removals/'+encodeURIComponent(button.dataset.withdraw)+'/withdraw',{method:'POST'});
+          await draw(); return;
+        }
+        if (button.dataset.folder) {
+          const folder = button.dataset.folder;
+          const latest = await api('/api/launcher');
+          const current = latest.launchers.find(item => item.id === device.id);
+          if (!current?.folders.includes(folder)) return draw();
+          return unregisterDialog(current, folder);
+        }
         if (button.hasAttribute('data-rename')) {
           const name = prompt('電腦名稱',device.name);
           if (!name || name.trim() === device.name) return;
@@ -8409,8 +8527,12 @@
       }
       state.myAiCount = items.filter(a => a.status !== 'deleted').length; drawAvatarMenu();
       if (scope) items = items.filter(a => (a.projects || []).includes(scope) || state.projMeta.crossRoleIds.includes(a.participantId));
-      devicesBar.innerHTML = launcher.launchers.length ? `<span>我的電腦</span> · ${launcher.launchers.map(c=>esc(c.name)).join('、')} <button class="btn small" data-manage aria-expanded="false">管理</button>
-        <div data-device-list hidden>${launcher.launchers.map(c=>`<p><b>${esc(c.name)}</b> · ${c.online ? '在線' : '離線'} <button class="btn small" data-device="${esc(c.id)}" data-rename>改名</button> <button class="btn small" data-device="${esc(c.id)}">移除</button></p>`).join('')}</div>` : '';
+      const systemName = {win32:'Windows',darwin:'macOS',linux:'Linux'};
+      devicesBar.innerHTML = launcher.launchers.length ? `<div class="ma-computers-head"><strong>我的電腦</strong><button class="btn small" data-manage aria-expanded="${managingDevices}">管理</button></div>
+        <div data-device-list ${managingDevices ? '' : 'hidden'}><p>配對過的電腦和登記的資料夾。取消登記只移除登記，不會刪電腦上的檔案。</p>
+        ${launcher.launchers.map(c=>`<section class="ma-computer"><header><div><b>${esc(c.name)}</b><small>${esc(systemName[c.platform] || c.platform)} · <span>${c.online ? '在線' : '離線'}</span></small></div>
+          <div class="ma-computer-actions"><button class="btn small" data-device="${esc(c.id)}" data-rename>改名</button><button class="btn small" data-device="${esc(c.id)}">移除電腦</button></div></header>
+          ${c.folders.length ? c.folders.map(f=>folderRow(c,f)).join('') : '<p>這台電腦沒有登記的資料夾。在要用的資料夾執行 npx aigile-cli 就會登記。</p>'}</section>`).join('')}</div>` : '';
       clearTimeout(launchRefresh);
       if (items.some(ai => ai.launcher?.pendingJob)) launchRefresh = setTimeout(() => {
         if (body.isConnected) draw().catch(err => toast(err.message));

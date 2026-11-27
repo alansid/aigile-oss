@@ -4518,3 +4518,32 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 :root[data-theme="dark"] .lk-st[data-st="進行中"] { background: #172554; color: #bfdbfe; }
 :root[data-theme="dark"] .lk-st[data-st="受阻"] { background: #450a0a; color: #fecaca; }
 :root[data-theme="dark"] .lk-st[data-st="已完成"], :root[data-theme="dark"] .lk-st[data-st="已封存"] { background: #052e16; color: #bbf7d0; }
+
+.ma-folder-row { display:flex; justify-content:space-between; align-items:start; gap:1rem; padding:.75rem; border-top:1px solid var(--border); }
+.ma-folder-row > div { min-width:0; }
+.ma-folder-row code,.ma-folder-row small { display:block; overflow-wrap:anywhere; color:var(--muted); }
+.ma-folder-row summary { cursor:pointer; }
+.ma-folder-row summary { list-style:none; }
+.ma-folder-row summary::-webkit-details-marker { display:none; }
+.ma-unregister .ma-launch-body code { white-space:normal; overflow-wrap:anywhere; padding:.65rem; background:var(--surface-2); }
+.ma-keep-files { color:var(--ok-text); }
+.ma-untie { background:#fff2bb; color:#533500; padding:.75rem; border-radius:.5rem; }
+.ma-untie label { display:block; }
+.ma-untie input { width:auto; }
+@media(max-width:480px){.ma-unregister footer div { flex-direction:column-reverse; } }
+
+.ma-computers-head,.ma-computer header,.ma-computer-actions { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
+.ma-computer { margin:.65rem 0; padding:.7rem; border:1px solid var(--border); border-radius:.6rem; min-width:0; }
+.ma-computer header small,.ma-offline-note,.ma-untie small { display:block; }
+.ma-computer-actions button { white-space:nowrap; }
+.ma-folder-row code { white-space:normal; word-break:break-word; }
+.ma-offline-note { color:var(--muted); }
+.ma-offline-note::before { content:"ⓘ "; }
+@media (max-width:480px) {
+  .ma-row-location { display:none; }
+  .ma-row { display:grid; grid-template-columns:auto minmax(0,1fr); }
+  .ma-row .ma-right { grid-column:2; justify-content:flex-end; }
+  .ma-computer header { flex-wrap:wrap; }
+  .ma-folder-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.4rem; padding:.65rem 0; }
+  .ma-devices,.ma-devices [data-device-list],.ma-folder-row { min-width:0; max-width:100%; }
+}

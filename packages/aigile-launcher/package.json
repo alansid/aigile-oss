@@ -1,6 +1,6 @@
 {
   "name": "aigile-cli",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Aigile-Switch 本機 AI 啟動器（配對、資料夾白名單登記、網頁開新終端機啟動 AI）",
   "license": "MIT",
   "type": "module",

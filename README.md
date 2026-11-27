@@ -407,3 +407,7 @@ node scripts/readme-shots.mjs   # 重拍 README 截圖（docs/images/readme/，�
 ## 授權
 
 [MIT](LICENSE)
+
+### 啟動器的舊資料夾
+
+若資料夾已搬走且舊 watcher 無法驗證，請先手動關閉該 AI 的視窗與 watcher，或重新開機。移除整台電腦並重新配對是最後手段，會影響這台電腦的其他登記。

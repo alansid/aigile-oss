@@ -594,6 +594,8 @@ CREATE TABLE IF NOT EXISTS launcher_jobs (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   window_closed_at INTEGER,
+  stop_hash TEXT,
+  stop_requested_at INTEGER,
   setup_claimed_at INTEGER,
   finished_at INTEGER
 );
@@ -618,8 +620,22 @@ CREATE INDEX IF NOT EXISTS idx_launcher_browser_created ON launcher_browser_requ
 CREATE TABLE IF NOT EXISTS launcher_folders (
   launcher_id TEXT NOT NULL,
   folder TEXT NOT NULL,
+  generation TEXT NOT NULL DEFAULT 'legacy',
   PRIMARY KEY (launcher_id, folder)
 );
+
+CREATE TABLE IF NOT EXISTS launcher_folder_removals (
+  id TEXT PRIMARY KEY,
+  launcher_id TEXT NOT NULL,
+  folder TEXT NOT NULL,
+  generation TEXT NOT NULL,
+  requested_at INTEGER NOT NULL,
+  confirmed_ais TEXT NOT NULL,
+  completed_at INTEGER,
+  synced_at INTEGER,
+  UNIQUE (launcher_id, folder, generation)
+);
+CREATE INDEX IF NOT EXISTS idx_launcher_folder_sync ON launcher_folder_removals (launcher_id, synced_at);
 
 CREATE TABLE IF NOT EXISTS launcher_pair_workspaces (
   secret_hash TEXT PRIMARY KEY,

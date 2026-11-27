@@ -1487,7 +1487,7 @@ ${ending}`;
     const js = await joinSettings();
     if (DEFAULT_ADMIN && !admin) throw new ApiError(503, 'ADMIN_SETUP_FAILED', '無法初始化預設管理員');
     const defaultCredentials = DEFAULT_ADMIN && !!(await db.get("SELECT 1 AS x FROM app_settings WHERE key >= 'must_change_cred:' AND key < 'must_change_cred;' LIMIT 1")); // 預設管理員還沒改帳密：登入頁提示去看 README（不寫出密碼）
-    return { ok: true, launcherVersions: { min: '1.1.0', max: '1.1.0' }, roomCodeRequired: js.roomCodeSet, setup: !admin, openJoin: js.openJoin, ...(defaultCredentials ? { defaultCredentials: true } : {}), loginMethods: login.methods, live: !!live, ...(TURNSTILE ? { turnstileSiteKey: TS_SITE, captchaAfterFails: TS_AFTER } : {}) }; // site key 本來就公開 // 公開端點不回管理員姓名
+    return { ok: true, launcherVersions: { min: '1.1.0', max: '1.2.0' }, roomCodeRequired: js.roomCodeSet, setup: !admin, openJoin: js.openJoin, ...(defaultCredentials ? { defaultCredentials: true } : {}), loginMethods: login.methods, live: !!live, ...(TURNSTILE ? { turnstileSiteKey: TS_SITE, captchaAfterFails: TS_AFTER } : {}) }; // site key 本來就公開 // 公開端點不回管理員姓名
   }, { open: true });
   route('GET', '/api/roles', () => ({ items: ROLES, fields: SETTING_FIELDS }), { open: true });
   const feedbackRepo = String(config.feedbackRepo ?? 'alansid/aigile-oss').trim();

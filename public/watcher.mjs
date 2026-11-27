@@ -188,6 +188,19 @@ async function check(why) {
   const fresh = ids.filter(n => n.wake !== false && !woken.has(n.notificationId)).map(n => n.notificationId);
   ids = ids.map(n => n.notificationId);
   if (!fresh.length) { writeBell({ pending }); return log(`[${why}] 還有 ${pending} 則待處理${fyi ? `（${fyi} 則只是知會）` : ''}，沒有新的要處理，不叫醒`); }
+  if (env.AIGILE_TOKEN_FILE) {
+    const dir = path.dirname(env.AIGILE_TOKEN_FILE);
+    if (existsSync(path.join(dir, 'launcher-origin'))) {
+      try {
+        const binding = readFileSync(path.join(dir, 'launcher-binding.json'), 'utf8');
+        const result = await fetch(BASE + '/api/me/launcher-binding', {
+          method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+          body: binding, redirect: 'error', signal: AbortSignal.timeout(10000),
+        });
+        if (!result.ok || (await result.json()).bound !== true) return log('資料夾綁定未確認，本次略過叫醒。');
+      } catch (err) { return log(err.code === 'ENOENT' ? '缺少 launcher-binding.json。請關閉這個 AI 視窗與舊 watcher，從最新版啟動器重新啟動 AI。' : '無法確認資料夾綁定，本次略過叫醒。'); }
+    }
+  }
   if (WATCH_ONLY) { fresh.forEach(id => woken.add(id)); ring(pending); return log(`[${why}] 有 ${pending} 則待處理，已寫門鈴檔（只記錄模式，不執行喚醒指令）`); }
   const waiting = BELL_FILE && waitAlive();
   if (uiKind === 'codex' && waiting) {

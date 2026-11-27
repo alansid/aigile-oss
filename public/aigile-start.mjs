@@ -45,7 +45,7 @@ try {
     if (!/^[A-Z0-9]+_[A-Z0-9]+$/.test(AGENT) || !/^ljob_[a-z0-9_-]+$/i.test(launcherJob)) fail('身分', '啟動授權格式錯誤', '請重新按啟動');
     // A selected workspace may already contain links. Never follow them when
     // writing the credential or the setup files on behalf of the owner.
-    for (const target of ['.aigile', DIR, W, ...['.token', 'watcher.env', 'launcher-origin', 'onboarding.md', 'codex-checkin.pending', 'antigravity-checkin.pending'].map(name => path.join(DIR, name))]) {
+    for (const target of ['.aigile', DIR, W, ...['.token', 'watcher.env', 'launcher-origin', 'launcher-binding.json', 'onboarding.md', 'codex-checkin.pending', 'antigravity-checkin.pending'].map(name => path.join(DIR, name))]) {
       const st = fs.lstatSync(target, { throwIfNoEntry: false });
       if (st && (st.isSymbolicLink() || (st.isFile() && st.nlink > 1))) fail('工作區', '接入路徑含有連結', '請選擇一般工作資料夾');
     }
@@ -103,6 +103,7 @@ try {
         fail('工作區', '這個資料夾已有其他接入身分', '請在另一個資料夾配對');
       }
       fs.writeFileSync(originFile, BASE, { mode: 0o600 });
+      fs.writeFileSync(path.join(DIR, 'launcher-binding.json'), JSON.stringify({jobId: launcherJob, folder: fs.realpathSync(process.cwd())}), {mode: 0o600});
     }
     first = /（初次接入）/.test(lines[0] || '');
     if (first && (TOOL === 'codex' || TOOL === 'antigravity')) fs.writeFileSync(pendingCheckin, AGENT);
@@ -281,6 +282,52 @@ try {
   } else {
     prompt = '先核對這個對話可用的 Aigile MCP 工具。If no Aigile MCP tools are visible, stop and report the empty tool list to your administrator; do not switch transports. ' + prompt;
   }
+  // Control only the live child we started directly. Shell wrappers keep the manual-close path.
+  async function runInteractive(bin, list, options) {
+    if (!launcherJob || options.shell) return spawnSync(bin, list, options);
+    const deviceHome = process.env.AIGILE_LAUNCHER_HOME || path.join(os.homedir(), '.aigile-launcher');
+    const device = JSON.parse(fs.readFileSync(path.join(deviceHome, 'config.json'), 'utf8'));
+    if (device.base !== BASE) throw new Error('Launcher origin changed');
+    const key = crypto.randomBytes(32).toString('hex');
+    const session = async closed => {
+      const response = await fetch(BASE + '/api/launcher/jobs/' + encodeURIComponent(launcherJob) + '/session', {
+        method: 'POST', redirect:'error', signal:AbortSignal.timeout(5000),
+        headers:{Authorization:'Bearer '+device.token,'Content-Type':'application/json'},
+        body:JSON.stringify({key,closed}),
+      });
+      if (!response.ok) throw new Error('Session HTTP ' + response.status);
+      return (await response.json()).stop === true;
+    };
+    const child = spawn(bin, list, options);
+    let stopped = false, finished = false, checking = false;
+    const poll = async () => {
+      if (checking || finished) return;
+      checking = true;
+      try {
+        if (await session(false) && !finished && child.exitCode === null && child.signalCode === null) {
+          stopped = child.kill('SIGTERM');
+        }
+      } catch {} finally { checking = false; }
+    };
+    child.once('spawn', poll);
+    const timer = setInterval(poll, 2000);
+    try {
+      return await new Promise(resolve => {
+        child.once('error', error => { finished = true; resolve({error,status:null}); });
+        child.once('exit', status => { finished = true; resolve({status: stopped && status === null ? 0 : status}); });
+      });
+    } finally {
+      clearInterval(timer);
+      if (child.pid) {
+        const receipts = path.join(deviceHome,'closed-sessions');
+        fs.mkdirSync(receipts,{recursive:true,mode:0o700});
+        const receipt = path.join(receipts,launcherJob);
+        fs.writeFileSync(receipt+'.tmp',key,{mode:0o600});
+        fs.renameSync(receipt+'.tmp',receipt);
+        try { await session(true); fs.rmSync(receipt,{force:true}); } catch {}
+      }
+    }
+  }
   const say = prompt.replace(/"/g, "'");
   if (NO_LAUNCH) { out(`✓ 待命提示：${prompt}`); out(`完成（--no-launch：沒有開 ${{ codex: 'Codex', antigravity: 'Antigravity CLI', copilot: 'Copilot CLI' }[TOOL] || 'Claude Code'}）。`); }
   else if (TOOL === 'antigravity') {
@@ -291,10 +338,10 @@ try {
     const binIsPath = fs.existsSync(bin);
     const list = ['-i', prompt];
     const r = /\.m?js$/i.test(bin) && binIsPath
-      ? spawnSync(process.execPath, [bin, ...list], { stdio: 'inherit', env })
+      ? await runInteractive(process.execPath, [bin, ...list], { stdio: 'inherit', env })
       : /\.(?:cmd|bat)$/i.test(bin) || (!binIsPath && /\s/.test(bin))
         ? spawnSync(`${binIsPath ? `"${bin}"` : bin} -i "${say}"`, { stdio: 'inherit', env, shell: true })
-        : spawnSync(bin, list, { stdio: 'inherit', env });
+        : await runInteractive(bin, list, { stdio: 'inherit', env });
     unlock();
     if (r.error || r.status === null) fail('Antigravity CLI', `開不起來（${r.error?.message || '找不到 agy 指令'}）`, '確認已安裝 Antigravity CLI（agy 指令）並登入過，再貼一次');
     out('✓ Antigravity CLI 已關，有新通知會等下次開視窗再處理');
@@ -320,10 +367,10 @@ try {
       startWatcher();
       out('此 CLI 使用一般前景視窗，由等待腳本接收門鈴。');
       prompt += ' 收完訊息後在這個前景視窗執行等待腳本：' + wait;
-      r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...sb, prompt], { stdio: 'inherit', env })
+      r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? await runInteractive(process.execPath, [bin, ...sb, prompt], { stdio: 'inherit', env })
         : process.platform === 'win32' || (!binIsPath && /\s/.test(bin))
           ? spawnSync(`${binIsPath ? `"${bin}"` : bin} ${sb.join(' ')} "${prompt.replace(/"/g, "'")}"`, { stdio: 'inherit', env, shell: true })
-          : spawnSync(bin, [...sb, prompt], { stdio: 'inherit', env });
+          : await runInteractive(bin, [...sb, prompt], { stdio: 'inherit', env });
     }
     unlock();
     if (r.error || r.status === null) fail('Codex', `開不起來（${r.error?.message || '找不到 codex 指令'}）`, '確認已安裝 Codex CLI（codex 指令），再貼一次');
@@ -341,17 +388,17 @@ try {
     const env = { ...process.env, AIGILE_AGENT: AGENT };
     const mcpArg = '@' + posix(path.resolve(mcpFile)); // 絕對路徑：不靠 copilot 從哪個資料夾解讀
     const list = args.includes('--no-mcp') ? ['-i', prompt] : ['--additional-mcp-config', mcpArg, '-i', prompt];
-    const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, ...list], { stdio: 'inherit', env })
+    const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? await runInteractive(process.execPath, [bin, ...list], { stdio: 'inherit', env })
       : process.platform === 'win32'
         ? spawnSync(`${fs.existsSync(bin) ? `"${bin}"` : bin} ${args.includes('--no-mcp') ? '' : '--additional-mcp-config "' + mcpArg + '"'} -i "${say}"`, { stdio: 'inherit', env, shell: true })
-        : spawnSync(bin, list, { stdio: 'inherit', env });
+        : await runInteractive(bin, list, { stdio: 'inherit', env });
     if (r.error || r.status === null) fail('Copilot CLI', `開不起來（${r.error?.message || '找不到 copilot 指令'}）`, '確認已安裝 GitHub Copilot CLI（copilot 指令）並登入過，再貼一次');
     process.exitCode = r.status;
   } else {
     out('✓ 開 Claude Code（帶 AIGILE_AGENT，通用 MCP 認得你）');
     const bin = process.env.AIGILE_CLAUDE_BIN || 'claude';
     const env = { ...process.env, AIGILE_AGENT: AGENT };
-    const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? spawnSync(process.execPath, [bin, prompt], { stdio: 'inherit', env })
+    const r = /\.m?js$/i.test(bin) && fs.existsSync(bin) ? await runInteractive(process.execPath, [bin, prompt], { stdio: 'inherit', env })
       : spawnSync(`${bin} "${say}"`, { stdio: 'inherit', env, shell: true });
     if (r.error || r.status === null) fail('Claude Code', `開不起來（${r.error?.message || '找不到 claude 指令'}）`, '確認已安裝 Claude Code（claude 指令），再貼一次');
     process.exitCode = r.status;

@@ -40,11 +40,46 @@ function writePrivateJson(file, data) {
 
 export const readConfig = (home = launcherHome()) => readJsonFile(path.join(home, 'config.json'), null);
 export const writeConfig = (cfg, home = launcherHome()) => writePrivateJson(path.join(home, 'config.json'), cfg);
+function isRegistered(record, home) {
+  if (!record?.folder) return false;
+  const key = removalKey(record.folder, record.generation || 'legacy');
+  return !fs.existsSync(path.join(home, 'removed-folders', key));
+}
+
+function removalKey(folder, generation) {
+  return createHash('sha256').update(JSON.stringify([normPath(folder), generation])).digest('hex');
+}
+
+// An existing launcher workspace may still have a pre-upgrade watcher.
+function folderControlVersion(folder, base, home) {
+  const agents = path.join(folder, '.aigile');
+  if (!fs.existsSync(agents)) return 1;
+  const digest = createHash('sha256').update(normPath(folder)).digest('hex');
+  const previous = readJsonFile(path.join(home,'folders',digest+'.json'),null);
+  const modern = /^gen_/.test(previous?.generation || '');
+  for (const child of fs.readdirSync(agents,{withFileTypes:true})) {
+    if (!child.isDirectory() || !/^[A-Z0-9]+_[A-Z0-9]+$/.test(child.name)) continue;
+    const dir = path.join(agents,child.name), origin = path.join(dir,'launcher-origin');
+    if (!fs.existsSync(origin) || fs.readFileSync(origin,'utf8').trim() !== base) continue;
+    const binding = readJsonFile(path.join(dir,'launcher-binding.json'),null);
+    if (!binding?.jobId || !pathEqual(binding.folder,folder)) return 0;
+    const watcher = path.join(agents,'watcher','watcher.mjs');
+    const bundled = path.join(path.dirname(bundledStarter),'watcher.mjs');
+    if (!fs.existsSync(watcher) || !fs.readFileSync(watcher).equals(fs.readFileSync(bundled))) return 0;
+    if (!modern && fs.existsSync(path.join(dir,'watcher.pid'))) {
+      const pid = Number(fs.readFileSync(path.join(dir,'watcher.pid'),'utf8'));
+      if (!Number.isSafeInteger(pid) || pid < 1) return 0;
+      try { process.kill(pid,0); return 0; } catch (err) { if (err.code !== 'ESRCH') return 0; }
+    }
+  }
+  return 1;
+}
+
 function registeredFolders(home) {
   const dir = path.join(home,'folders');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
-    .map(name => readJsonFile(path.join(dir,name), null)).filter(record => record?.folder);
+    .map(name => readJsonFile(path.join(dir,name), null)).filter(record => isRegistered(record, home));
 }
 
 export function appendLocalLog(entry, home = launcherHome()) {
@@ -189,7 +224,7 @@ export async function executeLaunchJob(job, { home = launcherHome(), base = '', 
   if (typeof job.folder !== 'string' || !path.isAbsolute(job.folder)) return ack('refused', 'folder not registered');
   const digest = createHash('sha256').update(normPath(job.folder)).digest('hex');
   const local = readJsonFile(path.join(home, 'folders', digest + '.json'), null);
-  if (!local || !pathEqual(local.folder, job.folder)) return ack('refused', 'folder not registered');
+  if (!isRegistered(local, home) || !pathEqual(local.folder, job.folder)) return ack('refused', 'folder not registered');
   if (!fs.existsSync(local.folder) || !fs.statSync(local.folder).isDirectory() || !pathEqual(fs.realpathSync(local.folder), local.folder)) return ack('refused', 'folder missing');
   if (!ALLOWED_TOOLS.includes(job.tool)) return ack('refused', 'tool not allowed');
   const entry = { folder: local.folder, agent: job.agent, tool: job.tool };
@@ -215,6 +250,19 @@ export async function executeLaunchJob(job, { home = launcherHome(), base = '', 
 export async function pollOnce({ home = launcherHome(), fetchFn = fetch, spawnTerminal = defaultSpawnTerminal } = {}) {
   const cfg = readConfig(home);
   if (!cfg?.base || !cfg?.token) throw new Error('還沒配對這台電腦，請先執行 npx aigile-cli <站台網址>');
+  const receipts = path.join(home,'closed-sessions');
+  if (fs.existsSync(receipts)) {
+    for (const id of fs.readdirSync(receipts).filter(name=>/^ljob_[a-z0-9_-]+$/i.test(name))) {
+      const file = path.join(receipts,id);
+      let key;
+      try { key = fs.readFileSync(file,'utf8'); } catch (err) { if (err.code === 'ENOENT') continue; throw err; }
+      const ack = await fetchFn(cfg.base+'/api/launcher/jobs/'+id+'/session',{
+        method:'POST',redirect:'error',signal:AbortSignal.timeout(10000),
+        headers:{Authorization:'Bearer '+cfg.token,'Content-Type':'application/json'},body:JSON.stringify({key,closed:true}),
+      });
+      if (ack.ok) fs.rmSync(file,{force:true});
+    }
+  }
   const windows = path.join(home, 'windows');
   if (fs.existsSync(windows)) {
     for (const id of fs.readdirSync(windows).filter(name => /^ljob_[a-z0-9_-]+$/i.test(name))) {
@@ -236,6 +284,16 @@ export async function pollOnce({ home = launcherHome(), fetchFn = fetch, spawnTe
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const data = await r.json();
   const results = [];
+  for (const item of data.removals || []) {
+    if (!/^rem_[A-Za-z0-9]+$/.test(item.id) || typeof item.folder !== 'string' ||
+        !path.isAbsolute(item.folder) || typeof item.generation !== 'string') continue;
+    const key = removalKey(item.folder, item.generation);
+    writePrivateJson(path.join(home, 'removed-folders', key), { generation: item.generation });
+    const ack = await fetchFn(cfg.base + '/api/launcher/removals/' + item.id + '/ack', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + cfg.token }, signal: AbortSignal.timeout(10000),
+    }).catch(() => null);
+    if (!ack?.ok) console.warn('資料夾同步確認失敗，下次輪詢重試。');
+  }
   for (const job of data.jobs || []) {
     results.push(await executeLaunchJob(job, { home, base: cfg.base, token: cfg.token, spawnTerminal, fetchFn }));
   }
@@ -362,7 +420,7 @@ export async function main(argv, { env = process.env, fetchFn = fetch, spawnTerm
       redirect: 'error',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...consent, ...(device?.base === base && device.token ? { deviceToken: device.token } : {}), name, platform: process.platform, workspace: fs.realpathSync(process.cwd()) }),
+      body: JSON.stringify({ ...consent, folderControl: folderControlVersion(fs.realpathSync(process.cwd()),base,home), ...(device?.base === base && device.token ? { deviceToken: device.token } : {}), name, platform: process.platform, workspace: fs.realpathSync(process.cwd()) }),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d?.error?.message || `配對失敗（HTTP ${r.status}）`);
@@ -370,7 +428,8 @@ export async function main(argv, { env = process.env, fetchFn = fetch, spawnTerm
     writeConfig(cfg, home);
     const folder = fs.realpathSync(process.cwd());
     const digest = createHash('sha256').update(normPath(folder)).digest('hex');
-    writePrivateJson(path.join(home, 'folders', digest + '.json'), { folder });
+    writePrivateJson(path.join(home, 'folders', digest + '.json'), { folder, generation: d.generation || 'legacy' });
+    if (!/^gen_/.test(d.generation || '')) console.warn('目前是舊版登記。請關閉此資料夾的 AI 視窗與舊 watcher，用最新版啟動器重新啟動 AI，確認產生 launcher-binding.json 後再執行 add。若資料夾已搬走，請手動關閉該 AI 視窗，或重新開機。');
     installAutostart({ home, env });
     if (!opts['no-daemon']) startDaemonBg(home);
     console.log(`✓ 已配對「${d.name}」（開機自動啟動已設定）。`);
@@ -383,13 +442,15 @@ export async function main(argv, { env = process.env, fetchFn = fetch, spawnTerm
     if (!selected) throw new Error(profiles.length ? '請指定已配對的站台網址' : '請先在這個資料夾執行 npx aigile-cli <站台網址> 配對');
     const folder = fs.realpathSync(process.cwd());
     const digest = createHash('sha256').update(normPath(folder)).digest('hex');
-    writePrivateJson(path.join(selected.home, 'folders', digest + '.json'), { folder });
     const response = await fetchFn(selected.cfg.base + '/api/launcher/folders', {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
       headers: { Authorization: 'Bearer ' + selected.cfg.token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder }),
+      body: JSON.stringify({ folder, folderControl: folderControlVersion(folder,selected.cfg.base,selected.home) }),
     });
     if (!response.ok) throw new Error('資料夾同步失敗，請重跑 add（HTTP ' + response.status + '）');
+    const registration = await response.json();
+    writePrivateJson(path.join(selected.home, 'folders', digest + '.json'), { folder, generation: registration.generation || 'legacy' });
+    if (!/^gen_/.test(registration.generation || '')) console.warn('目前是舊版登記。請關閉此資料夾的 AI 視窗與舊 watcher，用最新版啟動器重新啟動 AI，確認產生 launcher-binding.json 後再執行 add。若資料夾已搬走，請手動關閉該 AI 視窗，或重新開機。');
     console.log('已登記資料夾：' + folder);
     return 0;
   }
@@ -397,7 +458,7 @@ export async function main(argv, { env = process.env, fetchFn = fetch, spawnTerm
   if (!pos.length) {
     const folder = fs.realpathSync(process.cwd());
     const digest = createHash('sha256').update(normPath(folder)).digest('hex');
-    const profiles = siteProfiles(home).filter(p => pathEqual(readJsonFile(path.join(p.home,'folders',digest + '.json'),null)?.folder, folder));
+    const profiles = siteProfiles(home).filter(p => isRegistered(readJsonFile(path.join(p.home,'folders',digest + '.json'),null), p.home));
     if (profiles.length === 1) { startDaemonBg(profiles[0].home); return 0; }
     if (profiles.length > 1) throw new Error('請用 npx aigile-cli start <站台網址> 選擇站台');
   }

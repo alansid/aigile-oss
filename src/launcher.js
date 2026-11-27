@@ -115,7 +115,17 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
       aisByLauncher.set(r.launcher_id, list);
     }
 
-    const folders = await db.all('SELECT f.launcher_id, f.folder FROM launcher_folders f JOIN launchers l ON l.id = f.launcher_id WHERE l.owner_id = ? AND l.revoked_at IS NULL ORDER BY f.folder', me.id);
+    const folders = await db.all(`SELECT f.launcher_id, f.folder, f.generation, MAX(j.created_at) AS last_used, (SELECT r.id FROM launcher_folder_removals r WHERE r.launcher_id=f.launcher_id AND r.folder=f.folder AND r.generation=f.generation AND r.completed_at IS NULL) AS removal_id
+      FROM launcher_folders f JOIN launchers l ON l.id = f.launcher_id
+      LEFT JOIN launcher_jobs j ON j.launcher_id = f.launcher_id AND j.folder = f.folder AND j.status = 'opened'
+      WHERE l.owner_id = ? AND l.revoked_at IS NULL GROUP BY f.launcher_id, f.folder, f.generation ORDER BY f.folder`, me.id);
+    const openWindows = await db.all("SELECT id, launcher_id, folder, ai_id, stop_hash FROM launcher_jobs WHERE owner_id = ? AND status = 'opened' AND window_closed_at IS NULL", me.id);
+    for (const [id, entries] of aisByLauncher) for (const entry of entries) {
+      const sessions = openWindows.filter(w => w.launcher_id === id && w.folder === entry.folder && w.ai_id === entry.aiId);
+      entry.running = sessions.length > 0;
+      entry.canStop = sessions.length > 0 && sessions.every(w => !!w.stop_hash);
+      entry.sessionIds = sessions.map(w => w.id);
+    }
     const compMap = new Map(computers.map(c => [c.id, c]));
     const pendingRows = await db.all("SELECT * FROM launcher_jobs WHERE owner_id = ? AND (status = 'pending' OR (status = 'opened' AND setup_claimed_at IS NULL)) ORDER BY created_at DESC", me.id);
     const pendingByAi = new Map();
@@ -171,6 +181,10 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
         lastSeenAt: c.last_seen_at ? new Date(c.last_seen_at).toISOString() : null,
         createdAt: new Date(c.created_at).toISOString(),
         ais: aisByLauncher.get(c.id) || [],
+        openSessions: openWindows.filter(w => w.launcher_id === c.id).map(w => ({
+          sessionId: w.id, aiId: w.ai_id, folder: w.folder, name: people.get(w.ai_id)?.name || w.ai_id,
+        })),
+        folderUsage: folders.filter(f => f.launcher_id === c.id).map(f => ({folder:f.folder,generation:f.generation,removalId:f.removal_id,lastUsedAt:f.last_used ? new Date(f.last_used).toISOString() : null})),
         folders: folders.filter(f => f.launcher_id === c.id).map(f => f.folder),
       })),
       ais,
@@ -185,6 +199,18 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
     if (!lock) return { alert: null };
     const totals = await db.get('SELECT COUNT(*) AS failures, COUNT(DISTINCT ip_key) AS sources FROM launcher_pair_failures WHERE failed_at > ? AND failed_at <= ?', lock.last_at - PAIR_TTL_MS, lock.last_at);
     return { alert: { until: lock.locked_until, ...totals } };
+  });
+
+  route('POST', '/api/me/launcher-binding', async ({ me, req }) => {
+    if (me.kind !== 'ai') throw new ApiError(403, 'FORBIDDEN', 'AI only');
+    const { jobId, folder } = await readJson(req);
+    if (typeof jobId !== 'string' || typeof folder !== 'string') throw invalid('Invalid launcher binding');
+    const binding = await db.get(`SELECT j.id FROM launcher_jobs j
+      JOIN launchers l ON l.id = j.launcher_id AND l.owner_id = j.owner_id AND l.revoked_at IS NULL
+      JOIN launcher_regs r ON r.launcher_id = j.launcher_id AND r.folder = j.folder AND r.ai_id = j.ai_id
+      JOIN launcher_folders f ON f.launcher_id = r.launcher_id AND f.folder = r.folder
+      WHERE j.id = ? AND j.ai_id = ? AND j.owner_id = ? AND j.folder = ?`, jobId, me.id, me.owner_id, folder);
+    return { bound: !!binding };
   });
 
   route('GET', '/api/launcher', async ({ me, ctx }) => {
@@ -254,6 +280,122 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
     return { code: row?.code || null };
   }, { open: true });
 
+  // Serialize changes to this device's registration in both SQLite and PostgreSQL.
+  const lockDevice = id => ['UPDATE launchers SET name = name WHERE id = ?', [id]];
+
+  const registerFolderSql = `INSERT INTO launcher_folders (launcher_id, folder, generation)
+    VALUES (?, ?, ?) ON CONFLICT (launcher_id, folder) DO UPDATE SET generation = CASE
+    WHEN SUBSTR(launcher_folders.generation, 1, 4) = SUBSTR(excluded.generation, 1, 4)
+    THEN launcher_folders.generation ELSE excluded.generation END`;
+
+  // Reconcile from durable intent, including when the browser was closed while a session was stopping.
+  async function finishRemoval(ownerId, deviceId, folder, generation, expectedId) {
+    const receipt = await db.get('SELECT * FROM launcher_folder_removals WHERE launcher_id = ? AND folder = ? AND generation = ?', deviceId, folder, generation);
+    if (expectedId && receipt?.id !== expectedId) return null;
+    if (!receipt || receipt.completed_at) return receipt;
+    const confirmed = JSON.parse(receipt.confirmed_ais);
+    const match = confirmed.length ? ' AND ai_id NOT IN (' + confirmed.map(() => '?').join(',') + ')' : '';
+    const args = [deviceId, folder];
+    const ready = 'EXISTS (SELECT 1 FROM launcher_folder_removals WHERE id = ? AND completed_at IS NOT NULL)';
+    await db.batch([lockDevice(deviceId), [
+      `UPDATE launcher_folder_removals SET completed_at = ? WHERE id = ? AND completed_at IS NULL
+       AND EXISTS (SELECT 1 FROM launchers WHERE id = ? AND owner_id = ? AND revoked_at IS NULL)
+       AND EXISTS (SELECT 1 FROM launcher_folders WHERE launcher_id = ? AND folder = ? AND generation = ?)
+       AND (SELECT COUNT(*) FROM launcher_regs WHERE launcher_id = ? AND folder = ?) = ?
+       AND NOT EXISTS (SELECT 1 FROM launcher_regs WHERE launcher_id = ? AND folder = ?${match})
+       AND NOT EXISTS (SELECT 1 FROM launcher_jobs WHERE launcher_id = ? AND folder = ? AND
+         (status = 'pending' OR (status = 'opened' AND window_closed_at IS NULL)))`,
+      [Date.now(),receipt.id,deviceId,ownerId,...args,generation,...args,confirmed.length,...args,...confirmed,...args],
+    ], ['DELETE FROM launcher_regs WHERE launcher_id = ? AND folder = ? AND '+ready+' AND EXISTS (SELECT 1 FROM launcher_folders WHERE launcher_id = ? AND folder = ? AND generation = ?)', [...args,receipt.id,...args,generation]],
+      ['DELETE FROM launcher_folders WHERE launcher_id = ? AND folder = ? AND generation = ? AND '+ready,[...args,generation,receipt.id]]]);
+    return db.get('SELECT * FROM launcher_folder_removals WHERE id = ?',receipt.id);
+  }
+
+  function withdrawRemoval(deviceId, folder, id) {
+    const args = [deviceId,folder];
+    const pending = 'launcher_id = ? AND folder = ? AND completed_at IS NULL' + (id ? ' AND id = ?' : '');
+    const receiptArgs = id ? [...args,id] : args;
+    return [
+      ['UPDATE launcher_jobs SET stop_requested_at = NULL WHERE launcher_id = ? AND folder = ? AND window_closed_at IS NULL AND EXISTS (SELECT 1 FROM launcher_folder_removals WHERE '+pending+')',[...args,...receiptArgs]],
+      ['DELETE FROM launcher_folder_removals WHERE '+pending,receiptArgs],
+    ];
+  }
+
+  async function ownerRemoval(me, params) {
+    requireHuman(me);
+    const receipt = await db.get('SELECT r.* FROM launcher_folder_removals r JOIN launchers l ON l.id=r.launcher_id WHERE r.id=? AND l.id=? AND l.owner_id=? AND l.revoked_at IS NULL',params.removal,params.id,me.id);
+    if (!receipt) throw new ApiError(404,'NOT_FOUND','找不到這筆取消登記要求。');
+    return receipt;
+  }
+
+  route('GET','/api/launchers/:id/folder-removals/:removal',async ({me,params}) => {
+    const receipt = await ownerRemoval(me,params);
+    const result = await finishRemoval(me.id,params.id,receipt.folder,receipt.generation,receipt.id);
+    if (!result) throw new ApiError(409,'FOLDER_CHANGED','這筆取消登記要求已撤回。');
+    return result.completed_at ? {untied:JSON.parse(result.confirmed_ais).length} : {stopping:true,removalId:receipt.id};
+  });
+
+  route('POST','/api/launchers/:id/folder-removals/:removal/withdraw',async ({me,params}) => {
+    const receipt = await ownerRemoval(me,params);
+    await db.batch([lockDevice(params.id),...withdrawRemoval(params.id,receipt.folder,receipt.id)]);
+    if (await db.get('SELECT id FROM launcher_folder_removals WHERE id=?',receipt.id)) throw new ApiError(409,'FOLDER_CHANGED','已完成取消登記。');
+    return {withdrawn:true};
+  });
+
+  route('POST', '/api/launchers/:id/unregister-folder', async ({ me, params, req, ctx }) => {
+    requireHuman(me);
+    const { folder, generation, confirmedAiIds, manuallyClosed, sessionIds = [] } = await readJson(req);
+    if (typeof folder !== 'string' || typeof generation !== 'string' || !Array.isArray(confirmedAiIds) ||
+        !Array.isArray(sessionIds) || sessionIds.some(id => typeof id !== 'string') || confirmedAiIds.some(id => typeof id !== 'string')) throw invalid('Invalid folder confirmation');
+    const device = (await launcherStateFor(me, ctx)).launchers.find(l => l.id === params.id);
+    if (!device) throw new ApiError(404, 'NOT_FOUND', '找不到這台電腦');
+    const legacy = !/^gen_/.test(generation);
+    const manual = legacy && manuallyClosed === true;
+    if (legacy && !manual) throw new ApiError(409, 'UPGRADE_REQUIRED', '請先在這台電腦更新啟動器並重新登記資料夾。');
+    const confirmed = [...new Set(confirmedAiIds)].sort();
+    const previous = await db.get('SELECT * FROM launcher_folder_removals WHERE launcher_id = ? AND folder = ? AND generation = ?', device.id, folder, generation);
+    if (previous?.completed_at && !device.folders.includes(folder) && previous.confirmed_ais === JSON.stringify(confirmed)) return {untied:confirmed.length};
+    const args = [device.id, folder];
+    const sessions = [...new Set(sessionIds)];
+    const list = values => values.map(()=>'?').join(',');
+    const match = confirmed.length ? ' AND ai_id NOT IN (' + list(confirmed) + ')' : '';
+    const canStop = sessions.length && confirmed.length;
+    // Manual confirmation covers only the legacy windows shown to this owner.
+    const unsupported = manual && sessions.length ? ` AND id NOT IN (${list(sessions)})` : canStop ? ` AND (stop_hash IS NULL OR id NOT IN (${list(sessions)}) OR ai_id NOT IN (${list(confirmed)}))` : '';
+    const id = randId('rem');
+    const stamp = JSON.stringify(confirmed);
+    const changes = [lockDevice(device.id), [
+      `INSERT INTO launcher_folder_removals (id, launcher_id, folder, generation, requested_at, confirmed_ais)
+       SELECT ?, f.launcher_id, f.folder, f.generation, ?, ? FROM launcher_folders f
+       JOIN launchers l ON l.id = f.launcher_id WHERE l.id = ? AND f.folder = ?
+       AND f.generation = ? AND l.owner_id = ? AND l.revoked_at IS NULL
+       AND (SELECT COUNT(*) FROM launcher_regs WHERE launcher_id = ? AND folder = ?) = ?
+       AND NOT EXISTS (SELECT 1 FROM launcher_regs WHERE launcher_id = ? AND folder = ?${match})
+       AND NOT EXISTS (SELECT 1 FROM launcher_jobs WHERE launcher_id = ? AND folder = ? AND
+         (status = 'pending' OR (status = 'opened' AND window_closed_at IS NULL${unsupported})))
+       ON CONFLICT (launcher_id,folder,generation) DO NOTHING`,
+      [id,Date.now(),stamp,...args,generation,me.id,...args,confirmed.length,...args,...confirmed,...args,...(manual ? sessions : canStop ? [...sessions,...confirmed] : [])],
+    ]];
+    if (manual && sessions.length) changes.push([
+      `UPDATE launcher_jobs SET window_closed_at = ? WHERE launcher_id = ? AND folder = ? AND status = 'opened'
+       AND window_closed_at IS NULL AND id IN (${list(sessions)})
+       AND EXISTS (SELECT 1 FROM launcher_folder_removals WHERE id = ?)`,[Date.now(),...args,...sessions,id],
+    ]);
+    if (!manual && canStop) changes.push([
+      `UPDATE launcher_jobs SET stop_requested_at = COALESCE(stop_requested_at, ?) WHERE launcher_id = ? AND folder = ?
+       AND id IN (${list(sessions)}) AND stop_hash IS NOT NULL AND window_closed_at IS NULL
+       AND EXISTS (SELECT 1 FROM launcher_folder_removals WHERE id = ?)`,[Date.now(),...args,...sessions,id],
+    ]);
+    await db.batch(changes);
+    const accepted = await db.get('SELECT id FROM launcher_folder_removals WHERE launcher_id=? AND folder=? AND generation=? AND confirmed_ais=? AND completed_at IS NULL',...args,generation,stamp);
+    if (!accepted) {
+      throw new ApiError(409, 'FOLDER_CHANGED', '資料夾或視窗狀態已變更，請重新確認。');
+    }
+    const result = await finishRemoval(me.id,device.id,folder,generation,accepted.id);
+    if (!result) throw new ApiError(409,'FOLDER_CHANGED','這筆取消登記要求已撤回。');
+    return result?.completed_at ? {untied:confirmed.length} : {stopping:true,removalId:accepted.id};
+  });
+
   route('PATCH', '/api/launchers/:id', async ({ me, params, req }) => {
     requireHuman(me);
     const { name } = await readJson(req);
@@ -292,9 +434,12 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
       throw invalid('請選擇已登記的電腦與資料夾');
     }
     const reg = explicit
-      ? await db.get('SELECT f.folder, l.id AS l_id, l.name AS l_name, l.last_seen_at AS l_seen, l.revoked_at AS l_revoked FROM launcher_folders f JOIN launchers l ON l.id = f.launcher_id WHERE l.owner_id = ? AND l.id = ? AND f.folder = ? AND l.revoked_at IS NULL', me.id, target.launcherId, target.folder)
-      : await db.get('SELECT r.*, l.id AS l_id, l.name AS l_name, l.last_seen_at AS l_seen, l.revoked_at AS l_revoked FROM launcher_regs r JOIN launchers l ON l.id = r.launcher_id WHERE r.ai_id = ? AND l.owner_id = ? AND l.revoked_at IS NULL ORDER BY r.updated_at DESC LIMIT 1', ai.id, me.id);
+      ? await db.get('SELECT f.folder, f.generation, l.id AS l_id, l.name AS l_name, l.last_seen_at AS l_seen, l.revoked_at AS l_revoked FROM launcher_folders f JOIN launchers l ON l.id = f.launcher_id WHERE l.owner_id = ? AND l.id = ? AND f.folder = ? AND l.revoked_at IS NULL', me.id, target.launcherId, target.folder)
+      : await db.get('SELECT r.*, f.generation, l.id AS l_id, l.name AS l_name, l.last_seen_at AS l_seen, l.revoked_at AS l_revoked FROM launcher_regs r JOIN launcher_folders f ON f.launcher_id = r.launcher_id AND f.folder = r.folder JOIN launchers l ON l.id = r.launcher_id WHERE r.ai_id = ? AND l.owner_id = ? AND l.revoked_at IS NULL ORDER BY r.updated_at DESC LIMIT 1', ai.id, me.id);
     if (!reg) throw new ApiError(409, 'WORKSPACE_CHANGED', '請選擇已登記的電腦與資料夾');
+    const removalPending = () => db.get('SELECT id FROM launcher_folder_removals WHERE launcher_id=? AND folder=? AND completed_at IS NULL',reg.l_id,reg.folder);
+    const stopping = () => new ApiError(409,'REMOVAL_PENDING','資料夾正在取消登記，請先撤回再啟動。');
+    if (await removalPending()) throw stopping();
     if (explicit) { reg.tool = target.tool; reg.agent = agentDir(ai); }
     if (!ALLOWED_TOOLS.includes(reg.tool)) throw invalid('請選擇支援的工具');
     await assertToolOn(reg.tool);
@@ -315,16 +460,19 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
     await expireOldJobs(me.id, now);
     const pending = await db.get("SELECT id FROM launcher_jobs WHERE ai_id = ? AND status = 'pending'", ai.id);
     if (pending) throw new ApiError(409, 'ALREADY_PENDING', '這隻 AI 正在啟動');
-    const changes = [[
-      "INSERT INTO launcher_jobs (id, owner_id, ai_id, launcher_id, agent, folder, tool, status, detail, created_at, updated_at) SELECT ?,?,?,?,?,?,?,'pending','',?,? WHERE NOT EXISTS (SELECT 1 FROM launcher_jobs WHERE ai_id = ? AND status = 'pending')",
-      [jobId, me.id, ai.id, reg.l_id, reg.agent, reg.folder, reg.tool, now, now, ai.id],
+    const changes = [lockDevice(reg.l_id), [
+      "INSERT INTO launcher_jobs (id, owner_id, ai_id, launcher_id, agent, folder, tool, status, detail, created_at, updated_at) SELECT ?,?,?,?,?,?,?,'pending','',?,? WHERE EXISTS (SELECT 1 FROM launcher_folders WHERE launcher_id = ? AND folder = ? AND generation = ?) AND NOT EXISTS (SELECT 1 FROM launcher_folder_removals WHERE launcher_id=? AND folder=? AND completed_at IS NULL) AND NOT EXISTS (SELECT 1 FROM launcher_jobs WHERE ai_id = ? AND status = 'pending')",
+      [jobId, me.id, ai.id, reg.l_id, reg.agent, reg.folder, reg.tool, now, now, reg.l_id, reg.folder, reg.generation, reg.l_id, reg.folder, ai.id],
     ]];
     if (explicit) {
       changes.push(['DELETE FROM launcher_regs WHERE ai_id = ? AND EXISTS (SELECT 1 FROM launcher_jobs WHERE id = ?)', [ai.id, jobId]],
         ['INSERT INTO launcher_regs (launcher_id, ai_id, agent, folder, tool, updated_at) SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM launcher_jobs WHERE id = ?)', [reg.l_id, ai.id, reg.agent, reg.folder, reg.tool, now, jobId]]);
     }
     await db.batch(changes);
-    if (!await db.get('SELECT id FROM launcher_jobs WHERE id = ?', jobId)) throw new ApiError(409, 'ALREADY_PENDING', '這隻 AI 正在啟動');
+    if (!await db.get('SELECT id FROM launcher_jobs WHERE id = ?', jobId)) {
+      if (await removalPending()) throw stopping();
+      throw new ApiError(409, 'ALREADY_PENDING', '這隻 AI 正在啟動');
+    }
     if (live) live.toPeople(['ln:' + reg.l_id], 'launch', { jobId, aiId: ai.id, at: now });
     if (notifyLauncher) notifyLauncher(reg.l_id, jobId, now);
 
@@ -405,7 +553,8 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
       'INSERT INTO launchers (id, owner_id, name, platform, token_hash, created_at, last_seen_at) VALUES (?,?,?,?,?,?,?)',
       [id, claim.owner_id, name, platform, await sha256(token), now, now],
     ]];
-    stmts.push(['INSERT INTO launcher_folders (launcher_id, folder) VALUES (?,?) ON CONFLICT DO NOTHING', [id, body.workspace]]);
+    if (existing) stmts.push(...withdrawRemoval(id,body.workspace));
+    stmts.push([registerFolderSql, [id, body.workspace, randId(body.folderControl === 1 ? 'gen' : 'old')]]);
     if (ai) {
       stmts.push(['DELETE FROM launcher_regs WHERE ai_id = ?', [ai.id]],
         ['INSERT INTO launcher_regs (launcher_id, ai_id, agent, folder, tool, updated_at) VALUES (?,?,?,?,?,?)', [id, ai.id, agentDir(ai), body.workspace, claim.tool, now]]);
@@ -420,7 +569,8 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
       ]);
     }
     await db.batch(stmts);
-    return { __status: 201, launcherId: id, token, name: existing?.name || name, aiId: claim.ai_id, tool: claim.tool, ownerName: owner?.name || '', base };
+    const registration = await db.get('SELECT generation FROM launcher_folders WHERE launcher_id = ? AND folder = ?', id, body.workspace);
+    return { __status: 201, generation:registration?.generation, launcherId: id, token, name: existing?.name || name, aiId: claim.ai_id, tool: claim.tool, ownerName: owner?.name || '', base };
   }, { open: true });
 
   route('GET', '/api/launcher/me', async ({ req, ctx }) => {
@@ -434,15 +584,24 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
 
   route('POST', '/api/launcher/folders', async ({ req }) => {
     const ln = await requireLauncher(req);
-    const { folder } = await readJson(req);
+    const { folder, folderControl } = await readJson(req);
     if (typeof folder !== 'string' || !folder.trim() || folder.length > 500) throw invalid('資料夾路徑無效');
-    await db.run('INSERT INTO launcher_folders (launcher_id, folder) VALUES (?, ?) ON CONFLICT DO NOTHING', ln.id, folder);
-    return { folder };
+    await db.batch([lockDevice(ln.id),...withdrawRemoval(ln.id,folder),[registerFolderSql,[ln.id,folder,randId(folderControl === 1 ? 'gen' : 'old')]]]);
+    return db.get('SELECT folder, generation FROM launcher_folders WHERE launcher_id = ? AND folder = ?', ln.id, folder);
+  }, { open: true });
+
+  route('POST', '/api/launcher/removals/:id/ack', async ({ req, params }) => {
+    const ln = await requireLauncher(req);
+    const result = await db.run('UPDATE launcher_folder_removals SET synced_at = COALESCE(synced_at, ?) WHERE id = ? AND launcher_id = ? AND completed_at IS NOT NULL', Date.now(), params.id, ln.id);
+    if (!result.changes) throw new ApiError(404, 'NOT_FOUND', '找不到取消紀錄');
+    return { ok: true };
   }, { open: true });
 
   route('GET', '/api/launcher/poll', async ({ req }) => {
     const ln = await requireLauncher(req);
     const now = Date.now();
+    const pendingRemovals = await db.all('SELECT folder,generation FROM launcher_folder_removals WHERE launcher_id = ? AND completed_at IS NULL',ln.id);
+    for (const r of pendingRemovals) await finishRemoval(ln.owner_id,ln.id,r.folder,r.generation);
     const jobs = await db.all(
       "SELECT id, ai_id, agent, folder, tool, created_at FROM launcher_jobs WHERE launcher_id = ? AND status = 'pending' AND created_at > ? ORDER BY created_at ASC LIMIT 10",
       ln.id, now - JOB_MAX_POLL_AGE_MS,
@@ -451,6 +610,7 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
     return {
       launcherId: ln.id,
       live: !!live,
+      removals: await db.all('SELECT id, folder, generation FROM launcher_folder_removals WHERE launcher_id = ? AND completed_at IS NOT NULL AND synced_at IS NULL ORDER BY requested_at LIMIT 50', ln.id),
       jobs: jobs.map(j => ({ id: j.id, action: 'launch', transport, aiId: j.ai_id, agent: j.agent, folder: j.folder, tool: j.tool, createdAt: j.created_at })),
     };
   }, { open: true });
@@ -485,9 +645,23 @@ export function registerLauncher({ assertToolOn, launchTransport, localLauncherP
     return new Response(await launcherSetupText(ai, base, job.tool, setupRequest.currentToken), { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
   }, { open: true });
 
+  route('POST', '/api/launcher/jobs/:id/session', async ({ req, params }) => {
+    const device = await requireLauncher(req);
+    const { key, closed } = await readJson(req);
+    if (typeof key !== 'string' || !/^[0-9a-f]{64}$/.test(key)) throw invalid('Invalid session key');
+    const hash = await sha256(key);
+    const session = await db.get(`UPDATE launcher_jobs SET stop_hash = ?,
+      window_closed_at = CASE WHEN ? = 1 THEN COALESCE(window_closed_at, ?) ELSE window_closed_at END
+      WHERE id = ? AND launcher_id = ? AND setup_claimed_at IS NOT NULL AND status IN ('pending','opened')
+      AND (stop_hash = ? OR (stop_hash IS NULL AND window_closed_at IS NULL)) RETURNING stop_requested_at`,
+      hash, closed === true ? 1 : 0, Date.now(), params.id, device.id, hash);
+    if (!session) throw new ApiError(409, 'SESSION_CHANGED', 'Invalid session');
+    return { stop: session.stop_requested_at != null };
+  }, { open: true });
+
   route('POST', '/api/launcher/jobs/:id/closed', async ({ req, params }) => {
     const device = await requireLauncher(req);
-    const result = await db.run("UPDATE launcher_jobs SET window_closed_at = COALESCE(window_closed_at, ?) WHERE id = ? AND launcher_id = ? AND status = 'opened'", Date.now(), params.id, device.id);
+    const result = await db.run("UPDATE launcher_jobs SET window_closed_at = COALESCE(window_closed_at, ?) WHERE id = ? AND launcher_id = ? AND status = 'opened' AND stop_hash IS NULL", Date.now(), params.id, device.id);
     if (!result.changes) throw new ApiError(404, 'NOT_FOUND', '找不到已開啟的視窗');
     return { closed: true };
   }, { open: true });
