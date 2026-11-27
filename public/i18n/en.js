@@ -4352,5 +4352,7 @@ window.AIGILE_EN = {
     "{0} 和 {1} 已經連過了；要改種類請先移除再加。": "{0} and {1} are already linked. To change the type, remove the link and add it again.",
     "{0} 已經在等 {1}，加了會變成互相等，不能加。": "{0} is already waiting on {1}; linking them would make them wait on each other.",
     "{0} 和 {1} 沒有關聯。": "{0} and {1} are not linked.",
+    "卡片在編輯期間已更新狀態或通知對象，請確認後再送出。": "Card status or recipients changed in the background while editing; please review and send again.",
+    "卡片在編輯期間已於背景更新，請確認最新狀態與對象後再送出。": "Card updated in the background while editing; please check the latest status and target before sending.",
   },
 };

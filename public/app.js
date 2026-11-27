@@ -3687,6 +3687,17 @@
     const errEl = root.querySelector('[data-inl-err]');
     const label = btn.innerHTML; // 按鈕裡可能有「建議」標籤
     errEl.textContent = '';
+    const inCompose = !!root.closest('.dcompose');
+    if (inCompose && work.drawerPending && work.composeCard && work.detail && key.startsWith('k:')) {
+      const recIds = c => cardRecipients(key, c).map(r => r.id).join(',');
+      if (work.detail.type === NOTE || recIds(work.composeCard) !== recIds(work.detail) || closedSt(work.detail.status) !== closedSt(work.composeCard.status)) {
+        flushDrawerCompose(work.detail);
+        const newErr = document.querySelector(`[data-inl-root="${CSS.escape(key)}"] [data-inl-err]`);
+        if (newErr) newErr.textContent = '卡片在編輯期間已更新狀態或通知對象，請確認後再送出。';
+        return;
+      }
+    }
+    if (inCompose) work.drawerSending = (work.drawerSending || 0) + 1;
     root.querySelectorAll('button, textarea').forEach(x => { x.disabled = true; });
     btn.textContent = '送出中…';
     const others = ids => [...new Set(ids)].filter(x => x && x !== meId());
@@ -3750,6 +3761,8 @@
       inlNeedRefresh(key);
       btn.innerHTML = label;
       errEl.textContent = '送出失敗：' + err.message + '（內容還在，可以再試一次）';
+    } finally {
+      if (inCompose) work.drawerSending = Math.max(0, (work.drawerSending || 0) - 1);
     }
   }
   function decisionBox(c) {
@@ -3837,7 +3850,7 @@
     if (archMoved) await refreshArchivedCount(); // 有卡被封存或重新打開，已封存數字跟著更新
     renderWork();
     if (state.page === 'messages' && d.items.length) { const box = $('#messages'), top = box.scrollTop; renderMessages(false); box.scrollTop = top; }
-    if (work.openId && d.items.some(c => c.cardId === work.openId) && !work.editing) openCard(work.openId);
+    if (work.openId && d.items.some(c => c.cardId === work.openId) && !work.editing) openCard(work.openId, null, { bg: true });
   }
 
   // AI 建議區塊
@@ -5221,20 +5234,23 @@
   }
 
   // 卡片詳情（桌面右側抽屜、手機底部滑出）
-  async function openCard(id, trigger) {
+  async function openCard(id, trigger, { bg = false } = {}) {
+    const reqId = id;
     let d;
     try { d = await api(`/api/cards/${encodeURIComponent(id)}`); } catch (err) { return toast(err.code === 'CARD_FORBIDDEN' ? `${id} 屬於其他專案，你沒有權限查看` : err.code === 'NOT_FOUND' ? `找不到 ${id}，可能輸入錯誤或已刪除` : err.message); }
+    if (bg && (!work.openId || (work.openId !== reqId && work.openId !== d.cardId) || !$('#card-drawer'))) return;
     if (trigger) work.returnFocus = trigger;
     rememberLinks(d);
     // 相關訊息不在目前載入範圍的先抓回來，抽屜才看得到內容（不插進訊息串）
     const missMsgs = (d.messageIds || []).filter(mid => !state.byId.has(mid)).slice(0, 20);
     if (missMsgs.length) await Promise.all(missMsgs.map(mid => api(`/api/messages/${encodeURIComponent(mid)}`).then(m => { state.byId.set(mid, m); }).catch(() => {})));
+    if (bg && (!work.openId || (work.openId !== reqId && work.openId !== d.cardId) || !$('#card-drawer'))) return;
     id = d.cardId || id; // 點舊的 C-xxx 也存成專案卡號
     putCard({ ...d, log: undefined, messageIds: undefined });
     const reopen = work.openId === id && $('#card-drawer');
     work.openId = id; work.detail = d;
     if (!reopen) work.editing = false;
-    renderDrawer(!reopen);
+    renderDrawer(!reopen, { bg });
   }
   const canHandover = d => d.type !== '決策' && !closedSt(d.status) && d.owner && (state.me.memberType === 'human' || d.owner.participantId === meId());
   // 交接歷程：從紀錄裡「交接 A → B：說明」整理成 PO → UX → PG
@@ -5541,6 +5557,11 @@
     if (sj) { const id = sj.dataset.staleJump; closeCard(); showPage('messages'); jumpTo(id); }
   });
   function closeCard() {
+    clearTimeout(work.drawerFlushTimer);
+    work.drawerFlushTimer = 0;
+    work.drawerPending = false;
+    work.drawerSending = 0;
+    work.composeCard = null;
     $('#card-drawer')?.remove();
     document.body.classList.remove('drawer-docked');
     work.openId = null; work.detail = null; work.editing = false;
@@ -5736,6 +5757,7 @@
     const d = work.detail;
     const key = Object.keys(work.cretry || {}).find(k => k.endsWith(':' + d.cardId)) || '', r = work.cretry?.[key];
     if (!r) return;
+    work.drawerSending = (work.drawerSending || 0) + 1;
     btn.disabled = true; btn.textContent = '上傳中…';
     try {
       await attUploadCard(key, d, r.noteId, (k, n) => { btn.textContent = `上傳中 ${k} / ${n}…`; });
@@ -5746,6 +5768,8 @@
       r.msg = `附件還是沒存上：${e.message}`;
       btn.disabled = false; btn.textContent = '重試上傳附件';
       const err = $('#cmp-err'); if (err) err.textContent = r.msg;
+    } finally {
+      work.drawerSending = Math.max(0, (work.drawerSending || 0) - 1);
     }
   }
   // 送出紀錄／交接／退回：先做主要動作，再把附件存成卡片附件；失敗留在原地顯示原因
@@ -5757,6 +5781,17 @@
     if (!text) { err.textContent = kind === 'note' ? '紀錄不能空白' : kind === 'ho' ? '請寫做到哪' : '請寫退回原因'; document.querySelector(`[data-cdraft="${CSS.escape(key)}"]`)?.focus(); return; }
     const bad = attProblem(key);
     if (bad) { err.textContent = bad; return; }
+    if (work.drawerPending && work.composeCard) {
+      const c0 = work.composeCard;
+      const changed = d.version !== c0.version || d.status !== c0.status || (d.owner?.participantId || '') !== (c0.owner?.participantId || '');
+      if (changed && (kind !== 'note' || d.type !== c0.type || closedSt(d.status))) {
+        flushDrawerCompose(d);
+        const newErr = $('#cmp-err');
+        if (newErr) newErr.textContent = '卡片在編輯期間已於背景更新，請確認最新狀態與對象後再送出。';
+        return;
+      }
+    }
+    work.drawerSending = (work.drawerSending || 0) + 1;
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = '送出中…';
     const st = attMap.get(key); if (st) { st.busy = true; attRefresh(key); }
@@ -5791,9 +5826,53 @@
       err.textContent = e.message;
       btn.disabled = false; btn.textContent = label;
       if (st) { st.busy = false; attRefresh(key); }
+    } finally {
+      work.drawerSending = Math.max(0, (work.drawerSending || 0) - 1);
     }
   }
-  function renderDrawer(focus) {
+  const drawerBusy = h => {
+    const ae = document.activeElement;
+    return !!h && !!(work.drawerSending || (ae && h.querySelector('.dcompose')?.contains(ae)) || h.querySelector('.dcompose .mention-list:not([hidden]), .dcompose #cmp-err:not(:empty), .dcompose [data-inl-err]:not(:empty)'));
+  };
+  function bindDrawerCompose(host, d) {
+    host.querySelectorAll('[data-inl-text^="k:"]').forEach(ta => { const c = work.cards.get(ta.dataset.inlText.slice(2)); const list = ta.parentElement.querySelector('.mention-list'); if (c && list) attachMention(ta, list, { candidates: cardMentionCandidates(c), project: c.project, selfId: c.cardId }); });
+    host.querySelectorAll('.dcompose [data-cdraft]').forEach(ta => { const list = ta.parentElement.querySelector('.mention-list'); if (list) attachMention(ta, list, { candidates: null, project: d.project, selfId: d.cardId }); });
+  }
+  function flushDrawerCompose(d) {
+    const host = $('#card-drawer');
+    if (!host || !d || work.editing) return false;
+    const dc = host.querySelector('.dcompose'), html = composerHtml(d);
+    work.drawerPending = false;
+    work.composeCard = d;
+    clearTimeout(work.drawerFlushTimer);
+    work.drawerFlushTimer = 0;
+    if (dc) {
+      if (html) dc.outerHTML = html;
+      else dc.remove();
+    } else if (html) {
+      host.querySelector('.drawer')?.insertAdjacentHTML('beforeend', html);
+    }
+    bindDrawerCompose(host, d);
+    return true;
+  }
+  function saveComposeFocus(h) {
+    const ae = document.activeElement;
+    if (!h || !ae || !h.contains(ae) || !ae.closest('.dcompose')) return null;
+    const sel = ae.dataset?.inlText ? `[data-inl-text="${CSS.escape(ae.dataset.inlText)}"]`
+      : ae.dataset?.cdraft ? `[data-cdraft="${CSS.escape(ae.dataset.cdraft)}"]`
+      : ae.matches?.('[data-ho-to]') ? '[data-ho-to]' : '';
+    if (ae.dataset?.inlText) work.drafts[ae.dataset.inlText] = ae.value;
+    else if (ae.dataset?.cdraft) work.drafts[ae.dataset.cdraft] = ae.value;
+    return sel ? { sel, start: ae.selectionStart, end: ae.selectionEnd, dir: ae.selectionDirection } : null;
+  }
+  function restoreComposeFocus(h, saved) {
+    if (!h || !saved) return;
+    const el = h.querySelector(saved.sel);
+    if (!el) return;
+    el.focus();
+    if (typeof saved.start === 'number' && typeof el.setSelectionRange === 'function') el.setSelectionRange(saved.start, saved.end ?? saved.start, saved.dir || 'none');
+  }
+  function renderDrawer(focus, { bg = false } = {}) {
     const d = work.detail;
     const people = [...state.participants.values()].filter(p => p.status !== 'disabled');
     const opts = (cur, none) => `<option value="">${none}</option>` + people.map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
@@ -5804,61 +5883,12 @@
       const open = work.openMsgs?.has(mid), long = m.text.length > 120;
       return `<div class="dmsg${open ? ' open' : ''}"><button type="button" class="dmsg-main" data-dmsg-toggle="${esc(mid)}" aria-expanded="${!!open}"><b>${esc(m.author.name)}</b> <span class="muted small">${shortTime(m.createdAt)}</span><span class="dmsg-text">${esc(open || !long ? m.text : m.text.slice(0, 120) + '…')}</span></button><button type="button" class="link small dmsg-go" data-jump-msg="${esc(mid)}">到訊息</button></div>`;
     }).join('');
-    let host = $('#card-drawer');
-    if (!host) {
-      host = document.createElement('div');
-      host.id = 'card-drawer';
-      host.className = 'drawer-root';
-      document.body.append(host);
-      host.addEventListener('click', e => { if (!decisionClick(e)) drawerClick(e); });
-      host.addEventListener('input', decisionInput);
-      // 輸入區草稿（紀錄、交接、退回）跟著卡片留著；交接對象改了就更新按鈕和說明
-      host.addEventListener('input', e => { const k = e.target.dataset?.cdraft; if (k) work.drafts[k] = e.target.value; });
-      host.addEventListener('change', e => {
-        if (!e.target.matches?.('[data-ho-to]')) return;
-        const d = work.detail; work.drafts['hto:' + d.cardId] = e.target.value;
-        const to = hoTarget(d), root = e.target.closest('.dcompose');
-        root.querySelector('[data-act="ho-go"]').textContent = `交接給 ${to?.name || '…'}`;
-        root.querySelector('.ho-hint').textContent = hoHint(to);
-      });
-      // 拖檔案進輸入區＝加進附件格（存成卡片附件），並顯示拖曳提示框
-      host.addEventListener('dragover', e => {
-        const root = e.target.closest?.('.dcompose');
-        if (!root || !e.dataTransfer?.types?.includes('Files')) return;
-        e.preventDefault();
-        root.classList.add('drop-target', 'drop-over');
-        root.dataset.dropHint = window.aigileI18n?.tr?.('放開檔案以加入卡片附件') || '放開檔案以加入卡片附件';
-      });
-      host.addEventListener('dragleave', e => {
-        const root = e.target.closest?.('.dcompose');
-        if (root && !root.contains(e.relatedTarget)) root.classList.remove('drop-over');
-      });
-      host.addEventListener('drop', e => {
-        const root = e.target.closest?.('.dcompose');
-        if (root) root.classList.remove('drop-over');
-        if (!root || !e.dataTransfer?.files?.length) return;
-        e.preventDefault();
-        const key = root.querySelector('[data-att-key]')?.dataset.attKey;
-        if (!key || attMap.get(key)?.busy) return;
-        attAdd(attOf(key), [...e.dataTransfer.files]); attRefresh(key);
-      });
-      host.addEventListener('keydown', inlineKey);
-      host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
-      host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
-    }
-    const docked = dockedMode();
-    host.classList.toggle('docked', docked);
-    document.body.classList.toggle('drawer-docked', docked);
-    host.innerHTML = `
-      ${docked ? '' : '<div class="drawer-overlay"></div>'}<!-- 點灰底不關，用 × 或 Esc 關 -->
-      <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
-        <div class="drawer-head">
+    const headInner = () => `
           <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span>
             ${d.type === NOTE ? '<details class="lock-line"><summary>🔒 AI 看不到這張卡，除非你給它卡號。<span class="lock-more">說明 ▾</span></summary><p>AI 不會主動看到這張卡。下面的紀錄只存在卡片上，<b>不會發到群組</b>；你給 AI 卡號，它才讀得到卡片和紀錄。</p></details>' : ''}</div>
-          <div class="drawer-acts">${work.editing || meRO(d.project) ? '' : '<button class="icon-btn drawer-edit" type="button" data-act="edit" title="編輯" aria-label="編輯">✎</button>'}<button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button></div>
-        </div>
-        <div class="drawer-body">
+          <div class="drawer-acts">${work.editing || meRO(d.project) ? '' : '<button class="icon-btn drawer-edit" type="button" data-act="edit" title="編輯" aria-label="編輯">✎</button>'}<button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button></div>`;
+    const bodyInner = () => `
           ${d.type === NOTE ? `${d.mergedInto ? `<div class="merged-line">${mergedHtml(d)}</div>` : ''}` : ''}
           ${d.mergedFrom?.length ? `<div class="merged-line">整理自 ${d.mergedFrom.map(x => `<button type="button" class="merged-into" data-card="${esc(x)}">🔒${esc(x)}</button>`).join('、')}</div>` : ''}
           <div class="drawer-status">
@@ -5907,8 +5937,80 @@
           ${cardFieldsHtml(d)}`}
           ${cardFilesHtml(d)}
           ${linksHtml(d)}
-          ${timelineHtml(d)}
-        </div>
+          ${timelineHtml(d)}`;
+    let host = $('#card-drawer');
+    if (bg && !focus && !work.editing && host && drawerBusy(host)) {
+      const head = host.querySelector('.drawer-head'), body = host.querySelector('.drawer-body');
+      if (head && body) {
+        head.innerHTML = headInner();
+        body.innerHTML = bodyInner();
+        bindCardFiles(host, d);
+        work.drawerPending = true;
+        return;
+      }
+    }
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'card-drawer';
+      host.className = 'drawer-root';
+      document.body.append(host);
+      host.addEventListener('click', e => { if (!decisionClick(e)) drawerClick(e); });
+      host.addEventListener('input', decisionInput);
+      // 輸入區草稿（紀錄、交接、退回）跟著卡片留著；交接對象改了就更新按鈕和說明
+      host.addEventListener('input', e => { const k = e.target.dataset?.cdraft; if (k) work.drafts[k] = e.target.value; });
+      host.addEventListener('change', e => {
+        if (!e.target.matches?.('[data-ho-to]')) return;
+        const d = work.detail; work.drafts['hto:' + d.cardId] = e.target.value;
+        const to = hoTarget(d), root = e.target.closest('.dcompose');
+        root.querySelector('[data-act="ho-go"]').textContent = `交接給 ${to?.name || '…'}`;
+        root.querySelector('.ho-hint').textContent = hoHint(to);
+      });
+      // 拖檔案進輸入區＝加進附件格（存成卡片附件），並顯示拖曳提示框
+      host.addEventListener('dragover', e => {
+        const root = e.target.closest?.('.dcompose');
+        if (!root || !e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        root.classList.add('drop-target', 'drop-over');
+        root.dataset.dropHint = window.aigileI18n?.tr?.('放開檔案以加入卡片附件') || '放開檔案以加入卡片附件';
+      });
+      host.addEventListener('dragleave', e => {
+        const root = e.target.closest?.('.dcompose');
+        if (root && !root.contains(e.relatedTarget)) root.classList.remove('drop-over');
+      });
+      host.addEventListener('drop', e => {
+        const root = e.target.closest?.('.dcompose');
+        if (root) root.classList.remove('drop-over');
+        if (!root || !e.dataTransfer?.files?.length) return;
+        e.preventDefault();
+        const key = root.querySelector('[data-att-key]')?.dataset.attKey;
+        if (!key || attMap.get(key)?.busy) return;
+        attAdd(attOf(key), [...e.dataTransfer.files]); attRefresh(key);
+      });
+      host.addEventListener('keydown', inlineKey);
+      host.addEventListener('change', e => { if (e.target.id === 'd-status') patchCard(work.openId, { status: e.target.value }); });
+      host.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root')) { e.stopPropagation(); closeCard(); } });
+      host.addEventListener('focusout', e => {
+        if (!e.target.closest?.('.dcompose') || e.relatedTarget?.closest?.('.dcompose')) return;
+        clearTimeout(work.drawerFlushTimer);
+        work.drawerFlushTimer = setTimeout(() => {
+          work.drawerFlushTimer = 0;
+          if (work.drawerPending && work.openId && work.detail && !work.editing && !drawerBusy(host)) flushDrawerCompose(work.detail);
+        }, 180);
+      });
+    }
+    clearTimeout(work.drawerFlushTimer);
+    work.drawerFlushTimer = 0;
+    work.drawerPending = false;
+    work.composeCard = d;
+    const savedFocus = focus ? null : saveComposeFocus(host);
+    const docked = dockedMode();
+    host.classList.toggle('docked', docked);
+    document.body.classList.toggle('drawer-docked', docked);
+    host.innerHTML = `
+      ${docked ? '' : '<div class="drawer-overlay"></div>'}<!-- 點灰底不關，用 × 或 Esc 關 -->
+      <aside class="drawer" role="dialog" aria-modal="${docked ? 'false' : 'true'}" aria-labelledby="drawer-title">
+        <div class="drawer-head">${headInner()}</div>
+        <div class="drawer-body">${bodyInner()}</div>
         ${state.page === 'messages' && d.type === NOTE ? `<div class="drawer-foot"><button class="btn primary" type="button" data-act="open-work">在工作頁開啟</button><button class="btn" type="button" data-act="copy-id">複製卡號</button></div>` : ''}
         ${composerHtml(d)}
       </aside>`;
@@ -5940,9 +6042,9 @@
       }
       if (await patchCard(work.openId, data)) { work.editing = false; openCard(work.openId); toast('已儲存'); }
     });
-    host.querySelectorAll('[data-inl-text^="k:"]').forEach(ta => { const c = work.cards.get(ta.dataset.inlText.slice(2)); const list = ta.parentElement.querySelector('.mention-list'); if (c && list) attachMention(ta, list, { candidates: cardMentionCandidates(c), project: c.project, selfId: c.cardId }); });
-    host.querySelectorAll('.dcompose [data-cdraft]').forEach(ta => { const list = ta.parentElement.querySelector('.mention-list'); if (list) attachMention(ta, list, { candidates: null, project: d.project, selfId: d.cardId }); });
+    bindDrawerCompose(host, d);
     if (focus) host.querySelector('.modal-x').focus();
+    else restoreComposeFocus(host, savedFocus);
   }
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && work.openId && document.body.classList.contains('drawer-docked') && !$('#modal-root').firstElementChild && !document.querySelector('.confirm-root') && !document.querySelector('#tag-menu:not([hidden])')) closeCard();
