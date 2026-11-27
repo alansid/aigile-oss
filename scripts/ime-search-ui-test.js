@@ -33,33 +33,34 @@ try {
   };
 
   await login(boss.token);
-  // 1. 工作頁搜尋卡片（桌面頂欄：1400 以上測 [data-tb-card-q]，1280 點 [data-tb-filter] 測 [data-tb-fp-card-q]）
+  // 1. 工作頁搜尋卡片（展開列：1400 與 1280 都點 [data-tb-filter] 展開 #work-flt-drawer 裡的 #card-q）
   await size(1400, 800);
   await go('/p/main/work');
-  assert.equal(await ime('[data-tb-card-q]', '.crow:not(.arch), .ctile', '工作頁 1400 頂欄'), 1, '1400 頂欄搜尋只剩「中文搜尋卡」');
+  await until(() => js("!!document.querySelector('[data-tb-filter]')"), 5000, '1400 出現篩選鈕');
+  await js("document.querySelector('[data-tb-filter]').click(); true");
+  await until(() => js("!document.querySelector('#work-flt-drawer')?.hidden && !!document.querySelector('#card-q')"), 5000, '1400 展開篩選列');
+  assert.equal(await ime('#card-q', '.crow:not(.arch), .ctile', '工作頁 1400 展開列'), 1, '1400 展開列搜尋只剩「中文搜尋卡」');
   // 英文沒有組字：每打一個字就篩（不能變慢、不能等 compositionend）
-  await js("(() => { const q = document.querySelector('[data-tb-card-q]'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await js("(() => { const q = document.querySelector('#card-q'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
   await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '清空回 3 張');
-  await js("document.querySelector('[data-tb-card-q]').focus(); true");
+  await js("document.querySelector('#card-q').focus(); true");
   await cdp('Input.insertText', { text: 'e' });
   await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 1"), 3000, '英文即時篩選');
-  assert.equal(await js("document.querySelector('[data-tb-card-q]').value"), 'e');
+  assert.equal(await js("document.querySelector('#card-q').value"), 'e');
 
-  // 1280 窄桌機：篩選收進「篩選 ▾」，點 [data-tb-filter] 測 [data-tb-fp-card-q]
-  await js("(() => { const q = document.querySelector('[data-tb-card-q]'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  // 1280 窄桌機：同樣展開列測 #card-q 與清除篩選
+  await js("(() => { const q = document.querySelector('#card-q'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
   await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '切 1280 前清空回 3 張');
   await size(1280, 800);
-  await until(() => js("!!document.querySelector('[data-tb-filter]')"), 5000, '1280 出現篩選鈕');
-  await js("document.querySelector('[data-tb-filter]').click(); true");
-  await until(() => js("!document.querySelector('#tb-filter-pop')?.hidden && !!document.querySelector('[data-tb-fp-card-q]')"), 5000, '1280 打開篩選面板');
-  assert.equal(await ime('[data-tb-fp-card-q]', '.crow:not(.arch), .ctile', '工作頁 1280 篩選面板'), 1, '1280 篩選面板搜尋只剩「中文搜尋卡」');
-  await js("(() => { const q = document.querySelector('[data-tb-fp-card-q]'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
+  await until(() => js("!!document.querySelector('[data-tb-filter]') && !document.querySelector('#work-flt-drawer')?.hidden"), 5000, '1280 保持展開列');
+  assert.equal(await ime('#card-q', '.crow:not(.arch), .ctile', '工作頁 1280 展開列'), 1, '1280 展開列搜尋只剩「中文搜尋卡」');
+  await js("(() => { const q = document.querySelector('#card-q'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return true; })()");
   await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '1280 清空回 3 張');
-  await js("document.querySelector('[data-tb-fp-card-q]').focus(); true");
+  await js("document.querySelector('#card-q').focus(); true");
   await cdp('Input.insertText', { text: 'e' });
   await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 1"), 3000, '1280 英文即時篩選');
-  assert.equal(await js("document.querySelector('[data-tb-fp-card-q]').value"), 'e');
-  await js("document.querySelector('[data-tb-fp-clear]').click(); true");
+  assert.equal(await js("document.querySelector('#card-q').value"), 'e');
+  await js("document.querySelector('#work-flt-drawer [data-flt-clear]').click(); true");
   await until(() => js("document.querySelectorAll('.crow:not(.arch), .ctile').length === 3"), 5000, '清除篩選回 3 張');
   await size(1400, 700);
 

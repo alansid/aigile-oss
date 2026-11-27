@@ -271,6 +271,19 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   }
   const withStale = (v, c, stale) => (stale.get(c.seq)?.lastUpdatedAt === c.updated_at ? { ...v, staleHint: stale.get(c.seq) } : v);
 
+  async function latestMsgTimes(seqs) {
+    const out = new Map();
+    if (!seqs.length) return out;
+    const rows = await db.all(
+      `SELECT cm.card_seq AS seq, MAX(m.created_at) AS at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
+       WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%' GROUP BY cm.card_seq`,
+      JSON.stringify(seqs),
+    );
+    for (const r of rows) if (r.at) out.set(r.seq, r.at);
+    return out;
+  }
+  const maxAt = (...xs) => xs.filter(Boolean).sort().at(-1) || null;
+
   // 卡片列表（合併搜尋 /api/search 也用；quota: false 由呼叫端算次數）
   async function listCards({ ctx, me, url }, { quota = true } = {}) {
     await maybeArchive(ctx);
@@ -324,10 +337,13 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const withNotes = q.get('type') === NOTE; // 主動查人類紀錄：一次拿全部，含紀錄
     const noteMap = withNotes && out.length ? new Map() : null;
     if (noteMap) for (const l of await db.all('SELECT card_seq, at, by_id, text FROM card_log WHERE via = ? AND card_seq IN (SELECT value FROM json_each(?)) ORDER BY id', NOTE_LOG, JSON.stringify(out.map(c => c.seq)))) { if (!noteMap.has(l.card_seq)) noteMap.set(l.card_seq, []); noteMap.get(l.card_seq).push(noteView(people, l)); }
-    const claims = await claimsOf(db, out.filter(c => !CLOSED_ST.includes(c.status) && c.type !== '決策' && c.type !== NOTE).map(c => c.seq)); // 誰正在做（只看未結案的）
-    const reports = await reportsOf(out);
-    const sums = await linkSums(out, me); // 看板標記（等誰、擋住幾張）
-    return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), ...(sums.has(c.seq) ? { linkSum: sums.get(c.seq) } : {}), ...(claims.get(c.seq) ? { claim: mark(people, claims.get(c.seq).by, claims.get(c.seq).at) } : {}), ...(reports.has(c.seq) ? { report: reports.get(c.seq) } : {}), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
+    const [claims, reports, sums, msgTimes] = await Promise.all([
+      claimsOf(db, out.filter(c => !CLOSED_ST.includes(c.status) && c.type !== '決策' && c.type !== NOTE).map(c => c.seq)), // 誰正在做（只看未結案的）
+      reportsOf(out),
+      linkSums(out, me), // 看板標記（等誰、擋住幾張）
+      latestMsgTimes(out.map(c => c.seq)), // 看板最後有動靜時間（含 24 小時內關聯留言）
+    ]);
+    return { items: out.map(c => ({ ...withStale(view(c, people), c, stale), lastActivityAt: maxAt(c.updated_at, msgTimes.get(c.seq), stale.get(c.seq)?.latestMessageAt), ...(sums.has(c.seq) ? { linkSum: sums.get(c.seq) } : {}), ...(claims.get(c.seq) ? { claim: mark(people, claims.get(c.seq).by, claims.get(c.seq).at) } : {}), ...(reports.has(c.seq) ? { report: reports.get(c.seq) } : {}), ...(noteMap ? { notes: noteMap.get(c.seq) || [] } : {}) })), hasMore, ...(counts ? { counts } : {}), nextSince: items.reduce((m, c) => (c.updated_at > m ? c.updated_at : m), q.get('since') || '') || null };
   }
   route('GET', '/api/cards', args => listCards(args));
   // 等人驗收的卡（待確認、有等誰、不是決策），找負責人最後一則 [完成] 或 [交接]，網頁「看回報」直接跳過去
@@ -349,9 +365,10 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const people = await peopleMap(ctx);
     // 只有人類紀錄卡會「已整理到」；只查這些卡的紀錄，不掃整張 card_log
     const mergedFrom = c.type === NOTE ? [] : (await db.all("SELECT seq, project, proj_no FROM cards WHERE seq IN (SELECT card_seq FROM card_log WHERE card_seq IN (SELECT seq FROM cards WHERE type = ?) AND text IN (?, ?)) ORDER BY seq", NOTE, `已整理到 ${cardNo(c.seq)}`, `已整理到 ${pub(c)}`)).map(pub);
-    const [log, msgs] = await Promise.all([
+    const [log, msgs, msgTimes] = await Promise.all([
       db.all('SELECT at, by_id, via, text FROM card_log WHERE card_seq = ? ORDER BY id DESC LIMIT 200', c.seq),
       db.all('SELECT message_id FROM card_msgs WHERE card_seq = ? ORDER BY rowid', c.seq),
+      latestMsgTimes([c.seq]),
     ]);
     // 正在做的人與最近一次結構化交接放最前面，下一位讀卡最先看到
     const cl = CLOSED_ST.includes(c.status) || c.type === '決策' ? null : (await claimsOf(db, [c.seq])).get(c.seq);
@@ -372,7 +389,7 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
         uploader: ref(people, d.uploader_id), noteId: d.note_id,
         downloadUrl: `/api/projects/${encodeURIComponent(c.project)}/docs/${encodeURIComponent(d.id)}`,
       })),
-      ...v, messageIds: msgs.map(m => m.message_id), ...await reportsOf([c]).then(r => (r.has(c.seq) ? { report: r.get(c.seq) } : {})),
+      ...v, lastActivityAt: maxAt(v.updatedAt, msgTimes.get(c.seq), v.staleHint?.latestMessageAt), messageIds: msgs.map(m => m.message_id), ...await reportsOf([c]).then(r => (r.has(c.seq) ? { report: r.get(c.seq) } : {})),
       log: log.filter(l => l.via !== NOTE_LOG && l.via !== HANDOVER_LOG).map(l => ({ at: l.at, by: l.by_id === 'system' ? { participantId: 'system', name: '系統', memberType: 'system' } : ref(people, l.by_id), via: l.via, text: l.text })),
       ...(c.type !== '決策' ? { notes: (await notesOf(c.seq)).map(l => noteView(people, l)) } : {}),
       ...(mergedFrom.length ? { mergedFrom } : {}),

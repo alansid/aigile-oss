@@ -36,21 +36,19 @@ try {
   await sleep(300);
   assert.equal(await js("!!document.querySelector('#crumbs')"), false, '已拿掉麵包屑');
   assert.equal(await js("document.querySelector('#topbar-title').textContent"), '訊息', '頂欄顯示頁名');
-  assert.equal(await js("document.querySelector('[data-tb-collapse]').textContent"), '«', '1520 預設展開顯示 «');
+  assert.equal(await js("!document.querySelector('[data-tb-collapse]')"), true, '拿掉 «／» 收合鈕');
+  assert.equal(await js("document.querySelector('[data-tb-filter]').textContent"), '篩選 ▾', '預設收合顯示篩選 ▾');
+  assert.equal(await js("document.querySelector('#msg-flt-drawer').hidden"), true, '進頁預設收合篩選列');
   assert.equal(await js("getComputedStyle(document.querySelector('#filter-bar')).display"), 'none', '桌面隱藏舊 filter-bar');
 
-  await js("document.querySelector('[data-tb-collapse]').click(); true");
-  await until(() => js("document.querySelector('[data-tb-collapse]')?.textContent === '»'"), 3000, '收合變 »');
-  assert.equal(await js("document.activeElement?.matches('[data-tb-collapse]')"), true, '按 « 後焦點留在 »');
-  assert.equal(await js("document.querySelector('[data-tb-filter]').getAttribute('aria-controls')"), 'tb-filter-pop', '篩選鈕有 aria-controls');
   await js("document.querySelector('[data-tb-filter]').click(); true");
-  await until(() => js("!document.querySelector('#tb-filter-pop').hidden"), 3000, '打開篩選面板');
+  await until(() => js("!document.querySelector('#msg-flt-drawer').hidden"), 3000, '展開篩選列');
+  assert.equal(await js("document.querySelector('[data-tb-filter]').getAttribute('aria-controls')"), 'msg-flt-drawer', '篩選鈕有 aria-controls');
   await js("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); true");
-  assert.equal(await js("document.querySelector('#tb-filter-pop').hidden && document.activeElement?.matches('[data-tb-filter]')"), true, 'Esc 關掉面板並回焦點');
-  await js("document.querySelector('[data-tb-collapse]').click(); true");
+  assert.equal(await js("document.querySelector('#msg-flt-drawer').hidden && document.activeElement?.matches('[data-tb-filter]')"), true, 'Esc 關掉展開列並回焦點');
 
   await size(1280, 860);
-  await until(() => js("!!document.querySelector('[data-tb-filter]')"), 4000, '1280 自動收合');
+  await until(() => js("!!document.querySelector('[data-tb-filter]')"), 4000, '1280 顯示篩選鈕');
   assert.equal(await js("document.querySelector('[data-tb-collapse]')?.getClientRects().length || 0"), 0, '1280 不顯示 »');
 
   assert.equal(await js("!!document.querySelector('.topbar [data-dm-toggle] svg.dm-ico') && getComputedStyle(document.querySelector('.topbar [data-dm-toggle]')).opacity === '1'"), true, '私訊圖示深色非停用態');
@@ -62,18 +60,16 @@ try {
 
   // 2. 英文介面驗證
   await size(1520, 900);
-  await js("localStorage.setItem('aigile-lang', 'en'); localStorage.setItem('aigile-filters-collapsed', '0'); true");
+  await js("localStorage.setItem('aigile-lang', 'en'); true");
   await login(boss.token, '/p/main/messages');
-  await until(() => js("document.documentElement.lang === 'en' && document.querySelector('#topbar-title')?.textContent === 'Messages' && !!document.querySelector('[data-tb-collapse]')"), 15000, '英文訊息頁');
+  await until(() => js("document.documentElement.lang === 'en' && document.querySelector('#topbar-title')?.textContent === 'Messages' && !!document.querySelector('[data-tb-filter]')"), 15000, '英文訊息頁');
   await sleep(300);
-  await js("document.querySelector('[data-tb-collapse]').dispatchEvent(new PointerEvent('pointerover', { bubbles: true })); true");
-  await until(() => js("!document.querySelector('.tb-hint').hidden"), 3000, '英文 tooltip');
-  assert.equal(await js("document.querySelector('.tb-hint').textContent"), 'Collapse filters', '英文 « tooltip');
+  assert.equal(await js("document.querySelector('[data-tb-filter]').textContent"), 'Filter ▾', '英文顯示 Filter ▾');
   await shot('topbar-展開-en-1520');
   await js("document.querySelector('.topbar .help-btn').dispatchEvent(new PointerEvent('pointerover', { bubbles: true })); true");
   assert.equal(await js("document.querySelector('.tb-hint').textContent"), 'Help', '英文 ? tooltip 為 Help');
-  await js("document.querySelector('[data-tb-collapse]').click(); true");
-  await until(() => js("document.querySelector('[data-tb-filter]')?.textContent === 'Filter ▾'"), 3000, '英文收合變 Filter ▾');
+  await js("document.querySelector('[data-tb-filter]').click(); true");
+  await until(() => js("document.querySelector('[data-tb-filter]')?.textContent === 'Filter ▴' && !document.querySelector('#msg-flt-drawer').hidden"), 3000, '英文展開變 Filter ▴');
   await js("document.querySelector('[data-nav=\"work\"]').click(); true");
   await until(() => js("document.querySelector('#topbar-title')?.textContent === 'Board'"), 5000, '英文看板頁名為 Board');
 

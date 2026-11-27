@@ -24,7 +24,7 @@
     olderCursor: null,
     replyTo: null,
     onlyMine: store.get(FILTER_KEY) === '1',
-    filter: { scope: store.get(FILTER_KEY) === '1' ? 'related' : 'all', member: '', tag: '' },
+    filter: { scope: store.get(FILTER_KEY) === '1' ? 'related' : 'all', member: '', tag: '', time: '', dateFrom: '', dateTo: '' },
     expanded: new Set(),  // 已展開全文的長訊息
     collapsed: new Set(), // 已收合回覆的訊息
     open: new Set(),      // 從一行／精簡點開的訊息
@@ -1933,11 +1933,11 @@
     const d = e.target.closest('[data-role-dismiss]');
     if (d) { store.set(`aigile-role-hint:${meId()}:${d.dataset.roleDismiss}`, '1'); drawRoleBanner(); }
   });
-  // 桌面單排整合頂欄（頁名＋該頁篩選＋收合鈕＋搜尋／圖示／頭像）；手機頂欄維持原本兩層不動
-  const TOPBAR_FILTERS_KEY = 'aigile-filters-collapsed';
-  const topbarNarrowMq = matchMedia('(max-width: 1399px)');
+  // 桌面單排整合頂欄＋下方整排展開篩選與已套用標籤（每次進頁面都收著）
+  store.del('aigile-filters-collapsed');
   const topbarDesktopMq = matchMedia('(min-width: 900px)');
-  const filtersCollapsed = () => topbarNarrowMq.matches || store.get(TOPBAR_FILTERS_KEY) === '1';
+  const FLT_ICO = '<svg class="flt-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12L9.5 8.5V13l-3-1.5V8.5L2 3z"/></svg>';
+  let filterRowOpen = false;
   let teamSearchQ = '';
   function applyTeamSearch(box = $('#page-work')) {
     const q = teamSearchQ.trim().toLowerCase();
@@ -1945,6 +1945,66 @@
       row.hidden = !!q && !row.dataset.personSearch.includes(q);
     });
   }
+  const EN_MO = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const EN_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const pad2 = n => String(n).padStart(2, '0');
+  const localYmd = (d = new Date()) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const parseYmd = s => {
+    const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(String(s || '').trim());
+    if (!m) return null;
+    const y = +m[1], mo = +m[2], d = +m[3], dt = new Date(y, mo - 1, d);
+    return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d ? `${y}-${pad2(mo)}-${pad2(d)}` : null;
+  };
+  const slashYmd = ymd => (ymd ? ymd.replace(/-/g, '/') : '');
+  const shortYmd = ymd => {
+    if (!ymd) return '';
+    const [, m, d] = ymd.split('-').map(Number);
+    return L(`${m}/${d}`, `${EN_MO[m - 1]} ${d}`);
+  };
+  const dayStartMs = ymd => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d, 0, 0, 0, 0).getTime(); };
+  const dayEndMs = ymd => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59, 999).getTime(); };
+  function timeBounds(time, dateFrom, dateTo) {
+    const now = new Date();
+    if (time === 'today') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(), to: Infinity };
+    if (time === '3d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2).getTime(), to: Infinity };
+    if (time === '7d') return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).getTime(), to: Infinity };
+    if (time === 'custom') {
+      const f = parseYmd(dateFrom), t = parseYmd(dateTo);
+      if (!f && !t) return null;
+      return { from: f ? dayStartMs(f) : -Infinity, to: t ? dayEndMs(t) : Infinity };
+    }
+    return null;
+  }
+  function matchTimeAt(iso, time, dateFrom, dateTo) {
+    const b = timeBounds(time, dateFrom, dateTo);
+    if (!b) return true;
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) && ms >= b.from && ms <= b.to;
+  }
+  const agoYmd = daysAgo => {
+    const n = new Date();
+    return localYmd(new Date(n.getFullYear(), n.getMonth(), n.getDate() - daysAgo));
+  };
+  function timeLabel(time, dateFrom, dateTo, forMenu = false) {
+    if (time === 'today') return L('今天', 'Today');
+    if (time === '3d') return L('最近 3 天', 'Last 3 days');
+    if (time === '7d') return L('最近 7 天', 'Last 7 days');
+    if (time === 'custom') {
+      const f = parseYmd(dateFrom), t = parseYmd(dateTo);
+      if (f && t && f !== t) return L(`${shortYmd(f)}～${shortYmd(t)}`, `${shortYmd(f)} – ${shortYmd(t)}`);
+      if (f || t) return shortYmd(f || t);
+      return forMenu ? L('自訂日期…', 'Custom range…') : L('自訂日期', 'Custom range');
+    }
+    return L('全部', 'All time');
+  }
+  function timeSummaryLabel(time, dateFrom, dateTo) {
+    if (time === 'today') return L(`今天（${shortYmd(agoYmd(0))}）`, `Today (${shortYmd(agoYmd(0))})`);
+    if (time === '3d') return L(`最近 3 天（${shortYmd(agoYmd(2))}～${shortYmd(agoYmd(0))}）`, `Last 3 days (${shortYmd(agoYmd(2))} – ${shortYmd(agoYmd(0))})`);
+    if (time === '7d') return L(`最近 7 天（${shortYmd(agoYmd(6))}～${shortYmd(agoYmd(0))}）`, `Last 7 days (${shortYmd(agoYmd(6))} – ${shortYmd(agoYmd(0))})`);
+    if (time === 'custom') return timeLabel('custom', dateFrom, dateTo);
+    return '';
+  }
+  const trUi = s => window.aigileI18n?.tr?.(s) || s;
   const tbHint = document.createElement('div');
   tbHint.className = 'tb-hint';
   tbHint.hidden = true;
@@ -1954,7 +2014,7 @@
     if (!raw) return '';
     if (raw === '說明') return L('說明', 'Help');
     if (raw === '私訊') return L('私訊', 'DMs');
-    return window.aigileI18n?.tr?.(raw) || raw;
+    return trUi(raw);
   }
   function showTbHint(e) {
     const btn = e.target.closest?.('[data-tb-tip]');
@@ -1971,7 +2031,6 @@
   topbarEl?.addEventListener('pointerover', showTbHint);
   topbarEl?.addEventListener('focusin', showTbHint);
   for (const ev of ['pointerout', 'focusout', 'click']) topbarEl?.addEventListener(ev, () => { tbHint.hidden = true; }, true);
-  window.addEventListener('resize', () => { tbHint.hidden = true; if (topbarEl && !$('#tb-filter-pop')?.hidden) closeTbFilterPop(); });
 
   function setTopSearch(open, focus = false) {
     const form = $('.topbar .tb-search'), tog = form?.querySelector('[data-tb-search-toggle]'), box = form?.querySelector('.tb-search-box');
@@ -1983,113 +2042,474 @@
     tbHint.hidden = true;
     if (open && focus) { const inp = box.querySelector('input'); inp?.focus(); inp?.select(); }
   }
-  $('.topbar [data-tb-search-toggle]')?.addEventListener('click', () => { closeTbFilterPop(); setTopSearch(true, true); });
+  $('.topbar [data-tb-search-toggle]')?.addEventListener('click', () => { closeFilterPopups(); setTopSearch(true, true); });
   $('.topbar .tb-search input')?.addEventListener('keydown', e => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setTopSearch(false); $('.topbar [data-tb-search-toggle]')?.focus(); }
   });
+
+  const tbMsgPeople = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+  const tbWorkPeople = () => projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
+  function activeFilters(page = state.page) {
+    const out = [];
+    if (page === 'messages') {
+      const f = state.filter;
+      if (f.member) out.push({ key: 'member', k: '成員', v: state.participants.get(f.member)?.name || f.member });
+      if (f.tag) out.push({ key: 'tag', k: '類型', v: trUi(f.tag) });
+      if (f.time && (f.time !== 'custom' || parseYmd(f.dateFrom) || parseYmd(f.dateTo))) out.push({ key: 'time', k: '時間', v: timeLabel(f.time, f.dateFrom, f.dateTo) });
+    } else if (page === 'work') {
+      if (work.q.trim()) out.push({ key: 'q', k: '搜尋', v: work.q.trim() });
+      if (work.owner) out.push({ key: 'owner', k: '負責人', v: state.participants.get(work.owner)?.name || work.owner });
+      if (work.type) out.push({ key: 'type', k: '類型', v: trUi(work.type) });
+      if (work.time && (work.time !== 'custom' || parseYmd(work.dateFrom) || parseYmd(work.dateTo))) out.push({ key: 'time', k: '時間', v: timeLabel(work.time, work.dateFrom, work.dateTo) });
+    } else if (page === 'team') {
+      if (teamSearchQ.trim()) out.push({ key: 'teamQ', k: '搜尋', v: teamSearchQ.trim() });
+    } else if (page === 'releases' && rel.tab === 'list') {
+      if (rel.q.trim()) out.push({ key: 'relQ', k: '搜尋', v: rel.q.trim() });
+    }
+    return out;
+  }
+  const hasFilterRow = (page = state.page) => ['messages', 'work', 'team'].includes(page) || (page === 'releases' && rel.tab === 'list');
+  const fltBtnLabel = (n, open) => trUi(n ? `篩選 · ${n} ${open ? '▴' : '▾'}` : `篩選 ${open ? '▴' : '▾'}`);
+  function fltTimeState(page = state.page) {
+    return page === 'work'
+      ? { time: work.time, dateFrom: work.dateFrom, dateTo: work.dateTo }
+      : { time: state.filter.time, dateFrom: state.filter.dateFrom, dateTo: state.filter.dateTo };
+  }
+  function applyTimeSelection(page, { time, dateFrom = '', dateTo = '' }) {
+    if (page === 'work') {
+      Object.assign(work, { time, dateFrom, dateTo });
+      renderWork();
+    } else {
+      setFilter({ time, dateFrom, dateTo });
+    }
+  }
+  function clearOneFilter(key, page = state.page) {
+    if (page === 'messages') {
+      if (key === 'member') setFilter({ member: '' });
+      else if (key === 'tag') setFilter({ tag: '' });
+      else if (key === 'time') setFilter({ time: '', dateFrom: '', dateTo: '' });
+    } else if (page === 'work') {
+      if (key === 'q') { work.q = ''; searchArchived(); }
+      else if (key === 'owner') work.owner = '';
+      else if (key === 'type') work.type = '';
+      else if (key === 'time') { work.time = ''; work.dateFrom = ''; work.dateTo = ''; }
+      renderWork();
+    } else if (page === 'team') {
+      teamSearchQ = ''; applyTeamSearch(); syncFilterUi();
+    } else if (page === 'releases') {
+      rel.q = ''; rel.hit = ''; drawReleases();
+    }
+  }
+  function clearAllFilters(page = state.page) {
+    closeFilterPopups();
+    if (page === 'messages') setFilter({ member: '', tag: '', time: '', dateFrom: '', dateTo: '' });
+    else if (page === 'work') { work.q = ''; work.owner = ''; work.type = ''; work.time = ''; work.dateFrom = ''; work.dateTo = ''; renderWork(); }
+    else if (page === 'team') { teamSearchQ = ''; applyTeamSearch(); syncFilterUi(); }
+    else if (page === 'releases') { rel.q = ''; rel.hit = ''; drawReleases(); }
+  }
+  let datePopState = null;
+  function closeFilterPopups() {
+    const tm = $('#tb-time-menu'), dp = $('#tb-date-pop');
+    if (tm && !tm.hidden) { tm.hidden = true; tm.innerHTML = ''; }
+    if (dp && !dp.hidden) { dp.hidden = true; dp.innerHTML = ''; }
+    datePopState = null;
+    document.querySelectorAll('[data-flt-time-btn]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+  }
+  function placePopup(el, anchor, estW = 200) {
+    const r = anchor.getBoundingClientRect(), w = el.offsetWidth || estW;
+    el.style.left = Math.max(8, Math.min(innerWidth - w - 8, Math.round(r.left))) + 'px';
+    el.style.top = Math.round(r.bottom + 6) + 'px';
+  }
+  function openTimeMenu(btn) {
+    const tm = $('#tb-time-menu');
+    if (!tm || !btn) return;
+    if (!tm.hidden) { closeFilterPopups(); return; }
+    closeFilterPopups();
+    const page = state.page, ts = fltTimeState(page);
+    const items = [['', L('全部', 'All time')], ['today', L('今天', 'Today')], ['3d', L('最近 3 天', 'Last 3 days')], ['7d', L('最近 7 天', 'Last 7 days')]];
+    tm.innerHTML = items.map(([k, label]) => `<button type="button" class="tb-tm-item" role="menuitemradio" aria-checked="${ts.time === k}" data-tm-val="${k}"><span class="tb-tm-chk">${ts.time === k ? '✓' : ''}</span><span>${esc(label)}</span></button>`).join('')
+      + `<hr><button type="button" class="tb-tm-item" role="menuitem" data-tm-val="custom"><span class="tb-tm-chk">${ts.time === 'custom' ? '✓' : ''}</span><span>${esc(L('自訂日期…', 'Custom range…'))}</span></button>`;
+    tm.dataset.page = page;
+    tm.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    placePopup(tm, btn, 174);
+    (tm.querySelector('[aria-checked="true"]') || tm.firstElementChild)?.focus();
+  }
+  function renderDatePop(keepInputs = false) {
+    const dp = $('#tb-date-pop'), s = datePopState;
+    if (!dp || !s) return;
+    const { year, month, from, to, activeField } = s;
+    const firstDow = new Date(year, month, 1).getDay(), daysInMo = new Date(year, month + 1, 0).getDate();
+    const prevDays = new Date(year, month, 0).getDate();
+    const cells = [];
+    for (let i = firstDow - 1; i >= 0; i--) {
+      const dt = new Date(year, month - 1, prevDays - i);
+      cells.push({ ymd: localYmd(dt), d: dt.getDate(), out: true });
+    }
+    for (let d = 1; d <= daysInMo; d++) cells.push({ ymd: `${year}-${pad2(month + 1)}-${pad2(d)}`, d, out: false });
+    while (cells.length % 7 !== 0) {
+      const dt = new Date(year, month + 1, cells.length - firstDow - daysInMo + 1);
+      cells.push({ ymd: localYmd(dt), d: dt.getDate(), out: true });
+    }
+    const lo = from && to ? (from <= to ? from : to) : from || to, hi = from && to ? (from <= to ? to : from) : from || to;
+    const dows = [L('日', 'S'), L('一', 'M'), L('二', 'T'), L('三', 'W'), L('四', 'T'), L('五', 'F'), L('六', 'S')];
+    const calHtml = `
+      <div class="dp-nav">
+        <button type="button" data-dp-nav="-1" aria-label="上個月">‹</button>
+        <span>${esc(L(`${year} 年 ${month + 1} 月`, `${EN_MONTHS[month]} ${year}`))}</span>
+        <button type="button" data-dp-nav="1" aria-label="下個月">›</button>
+      </div>
+      <div class="dp-grid">
+        ${dows.map(w => `<span class="dp-dow">${w}</span>`).join('')}
+        ${cells.map(c => {
+          const edge = (lo && c.ymd === lo) || (hi && c.ymd === hi);
+          const inRange = !edge && lo && hi && c.ymd > lo && c.ymd < hi;
+          return `<button type="button" class="dp-day${c.out ? ' out' : ''}${edge ? ' edge' : ''}${inRange ? ' in-range' : ''}" data-dp-day="${c.ymd}">${c.d}</button>`;
+        }).join('')}
+      </div>`;
+    if (keepInputs && dp.querySelector('.dp-cal-body')) {
+      dp.querySelector('.dp-cal-body').innerHTML = calHtml;
+      dp.querySelector('[data-dp-from]')?.closest('.dp-box')?.classList.toggle('active', activeField === 'from');
+      dp.querySelector('[data-dp-to]')?.closest('.dp-box')?.classList.toggle('active', activeField === 'to');
+      return;
+    }
+    dp.innerHTML = `
+      <div class="dp-inputs">
+        <label class="dp-box${activeField === 'from' ? ' active' : ''}"><span>從</span><input type="text" data-dp-from value="${esc(slashYmd(from))}" placeholder="YYYY/MM/DD" aria-label="開始日期"></label>
+        <span class="muted">-</span>
+        <label class="dp-box${activeField === 'to' ? ' active' : ''}"><span>到</span><input type="text" data-dp-to value="${esc(slashYmd(to))}" placeholder="YYYY/MM/DD" aria-label="結束日期"></label>
+      </div>
+      <div class="dp-cal-body">${calHtml}</div>
+      <p class="dp-hint">點第一天，再點最後一天；也可以直接打日期。</p>
+      <div class="dp-foot">
+        <button type="button" class="link small dp-clear" data-dp-clear>清除</button>
+        <button type="button" class="btn small" data-dp-cancel>取消</button>
+        <button type="button" class="btn small primary" data-dp-apply>套用</button>
+      </div>`;
+  }
+  function openDatePop(anchor, page = state.page) {
+    const dp = $('#tb-date-pop');
+    if (!dp) return;
+    const ts = fltTimeState(page);
+    const seed = parseYmd(ts.dateTo) || parseYmd(ts.dateFrom) || localYmd();
+    const [sy, sm] = seed.split('-').map(Number);
+    datePopState = { page, year: sy, month: sm - 1, from: parseYmd(ts.dateFrom) || '', to: parseYmd(ts.dateTo) || '', activeField: 'from' };
+    renderDatePop();
+    dp.hidden = false;
+    if (anchor) placePopup(dp, anchor, 296);
+    dp.querySelector('[data-dp-from]')?.focus();
+  }
+  function activeDrawerEl(page = state.page) {
+    return page === 'messages' ? $('#msg-flt-drawer') : $('#work-flt-drawer');
+  }
+  function activeAppliedEl(page = state.page) {
+    return page === 'messages' ? $('#msg-flt-applied') : $('#work-flt-applied');
+  }
+  function selPillHtml(lbl, selAttrs, ariaLbl, firstOpt = '', optsHtml = '') {
+    const first = firstOpt ? `<option value="">${esc(firstOpt)}</option>` : '';
+    return `<div class="flt-pill flt-sel-pill"><span class="flt-lbl">${esc(lbl)}</span><span class="flt-val" data-sel-val>${esc(firstOpt)}</span><span class="flt-caret" aria-hidden="true">▾</span><select ${selAttrs} aria-label="${esc(ariaLbl)}">${first}${optsHtml}</select></div>`;
+  }
+  function syncSelPill(sel, on, rawOpt = false) {
+    if (!sel) return;
+    const pill = sel.closest('.flt-pill'), valEl = pill?.querySelector('[data-sel-val]');
+    pill?.classList.toggle('on', !!on);
+    if (!valEl) return;
+    const raw = sel.selectedOptions?.[0]?.textContent || sel.options?.[sel.selectedIndex]?.textContent || '';
+    if (rawOpt && sel.value) { valEl.setAttribute('data-nt', ''); valEl.textContent = raw; }
+    else { valEl.removeAttribute('data-nt'); valEl.textContent = trUi(raw); }
+  }
+  function timeCtrlHtml(ts) {
+    const tOn = !!(ts.time && (ts.time !== 'custom' || parseYmd(ts.dateFrom) || parseYmd(ts.dateTo)));
+    const lbl = timeLabel(ts.time, ts.dateFrom, ts.dateTo);
+    const custom = ts.time === 'custom';
+    if (topbarDesktopMq.matches) {
+      return `<button type="button" class="flt-pill flt-pill-btn${tOn ? ' on' : ''}" data-flt-time-btn aria-haspopup="menu" aria-expanded="false"><span class="flt-lbl">時間</span><span data-flt-time-val>${esc(lbl)}</span> <span class="flt-caret" aria-hidden="true">▾</span></button>`;
+    }
+    return selPillHtml('時間', 'data-flt-time-sel', '時間', '', `
+      <option value=""${!ts.time ? ' selected' : ''}>${esc(L('全部', 'All time'))}</option>
+      <option value="today"${ts.time === 'today' ? ' selected' : ''}>今天</option>
+      <option value="3d"${ts.time === '3d' ? ' selected' : ''}>最近 3 天</option>
+      <option value="7d"${ts.time === '7d' ? ' selected' : ''}>最近 7 天</option>
+      <option value="custom"${ts.time === 'custom' ? ' selected' : ''}>自訂日期</option>`)
+      + (custom ? `<div class="flt-m-custom">
+      <label>從<input type="date" data-flt-m-from value="${esc(parseYmd(ts.dateFrom) || '')}" aria-label="開始日期"></label>
+      <label>到<input type="date" data-flt-m-to value="${esc(parseYmd(ts.dateTo) || '')}" aria-label="結束日期"></label>
+    </div>` : '');
+  }
+  function syncFilterUi(page = state.page) {
+    const can = hasFilterRow(page), list = can ? activeFilters(page) : [], n = list.length;
+    const label = fltBtnLabel(n, filterRowOpen);
+    const tbBtn = $('#tb-page [data-tb-filter]');
+    if (tbBtn) {
+      tbBtn.classList.toggle('active', n > 0);
+      tbBtn.setAttribute('aria-expanded', String(filterRowOpen));
+      tbBtn.innerHTML = `${FLT_ICO}<span>${esc(label)}</span>`;
+    }
+    const fo = $('#f-open');
+    if (fo) {
+      const mLabel = !topbarDesktopMq.matches && document.documentElement.lang === 'en'
+        ? (n ? `${n} ${filterRowOpen ? '▴' : '▾'}` : (filterRowOpen ? '▴' : '▾'))
+        : label;
+      fo.classList.toggle('active', n > 0);
+      fo.setAttribute('aria-expanded', String(filterRowOpen));
+      fo.innerHTML = `${FLT_ICO}<span>${esc(mLabel)}</span>`;
+    }
+    document.querySelectorAll('.m-flt-btn[data-flt-toggle]').forEach(b => {
+      b.classList.toggle('active', n > 0);
+      b.setAttribute('aria-expanded', String(filterRowOpen));
+      b.innerHTML = `${FLT_ICO}<span>${esc(label)}</span>`;
+    });
+
+    const drawer = activeDrawerEl(page), applied = activeAppliedEl(page);
+    if (!can) {
+      if (drawer) drawer.hidden = true;
+      if (applied) applied.hidden = true;
+      return;
+    }
+    if (drawer) {
+      const mobile = !topbarDesktopMq.matches ? 'm' : 'd';
+      const sub = page === 'messages' ? `${mobile}|${state.filter.time === 'custom' ? 1 : 0}`
+        : page === 'work' ? `${mobile}|${work.time === 'custom' ? 1 : 0}` : mobile;
+      const rebuild = drawer.dataset.page !== page || drawer.dataset.sub !== sub;
+      const ts = fltTimeState(page);
+      const actionsHtml = `<div class="flt-actions"><button type="button" class="link small" data-flt-clear${n ? '' : ' hidden'}>清除篩選</button><button type="button" class="flt-hide-btn" data-flt-hide>收起 ▴</button></div>`;
+      if (rebuild) {
+        drawer.dataset.page = page;
+        drawer.dataset.sub = sub;
+        if (page === 'messages') {
+          const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
+          drawer.innerHTML = `
+            ${selPillHtml(L('成員', 'Member'), 'data-flt-member', '成員', L('所有成員', 'All members'))}
+            ${selPillHtml('類型', 'data-flt-tag', '訊息類型', '所有類型', tags.map(t => `<option>${t}</option>`).join(''))}
+            ${timeCtrlHtml(ts)}
+            <span class="flt-div" aria-hidden="true"></span>
+            <div class="flt-row-opts">
+              <div class="seg-scope flt-seg" role="group" aria-label="顯示"><button type="button" data-msg-view="slim" aria-pressed="${slimMode()}">精簡</button><button type="button" data-msg-view="full" aria-pressed="${!slimMode()}">完整</button></div>
+              <label class="chk flt-chk"><input type="checkbox" data-flt-ainow><span>AI 現況</span></label>
+            </div>
+            ${actionsHtml}`;
+        } else if (page === 'work') {
+          drawer.innerHTML = `
+            <input id="card-q" class="flt-q${work.q.trim() ? ' on' : ''}" type="search" placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片" value="${esc(work.q)}">
+            ${selPillHtml('負責人', 'id="card-owner"', '負責人', L('所有負責人', 'All owners'))}
+            ${selPillHtml('類型', 'id="card-type"', '類型', '所有類型', ['工作', '阻塞', '決策', NOTE].map(t => `<option>${t}</option>`).join(''))}
+            ${timeCtrlHtml(ts)}
+            ${actionsHtml}`;
+        } else if (page === 'team') {
+          drawer.innerHTML = `
+            <input class="flt-q${teamSearchQ.trim() ? ' on' : ''}" type="search" data-flt-team-q placeholder="搜尋名字、角色或代號" aria-label="搜尋成員" value="${esc(teamSearchQ)}">
+            ${actionsHtml}`;
+        } else if (page === 'releases') {
+          drawer.innerHTML = `
+            <input class="flt-q${rel.q.trim() ? ' on' : ''}" type="search" data-flt-rel-q placeholder="找版本、卡號或關鍵字（例：MAIN-12、1.0.5、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}">
+            ${actionsHtml}`;
+        }
+      }
+      // 同步目前值（不換掉正在打字的 input，保住輸入法組字與焦點）
+      if (page === 'messages') {
+        const f = state.filter, people = tbMsgPeople(), dups = dupNameSet(people);
+        const mSel = drawer.querySelector('[data-flt-member]');
+        if (mSel) {
+          mSel.innerHTML = `<option value="">${esc(L('所有成員', 'All members'))}</option>` + people.map(x => `<option value="${esc(x.participantId)}">${esc(nameCodeText(x, dups))}</option>`).join('');
+          mSel.value = f.member;
+          syncSelPill(mSel, !!f.member, true);
+        }
+        const tSel = drawer.querySelector('[data-flt-tag]');
+        if (tSel) { tSel.value = f.tag; syncSelPill(tSel, !!f.tag); }
+        drawer.querySelectorAll('[data-msg-view]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.msgView === 'slim') === slimMode())));
+        const an = drawer.querySelector('[data-flt-ainow]'); if (an) an.checked = aiNowOn();
+      } else if (page === 'work') {
+        const q = drawer.querySelector('#card-q');
+        if (q) { if (document.activeElement !== q && q.value !== work.q) q.value = work.q; q.classList.toggle('on', !!work.q.trim()); }
+        const own = drawer.querySelector('#card-owner');
+        if (own) {
+          own.innerHTML = `<option value="">${esc(L('所有負責人', 'All owners'))}</option>` + tbWorkPeople().map(x => `<option value="${esc(x.participantId)}">${esc(x.name)}</option>`).join('');
+          own.value = work.owner;
+          syncSelPill(own, !!work.owner, true);
+        }
+        const tp = drawer.querySelector('#card-type');
+        if (tp) { tp.value = work.type; syncSelPill(tp, !!work.type); }
+      } else if (page === 'team') {
+        const q = drawer.querySelector('[data-flt-team-q]');
+        if (q) { if (document.activeElement !== q && q.value !== teamSearchQ) q.value = teamSearchQ; q.classList.toggle('on', !!teamSearchQ.trim()); }
+      } else if (page === 'releases') {
+        const rq = drawer.querySelector('[data-flt-rel-q]');
+        if (rq) { if (document.activeElement !== rq && rq.value !== rel.q) rq.value = rel.q; rq.classList.toggle('on', !!rel.q.trim()); }
+      }
+      const tVal = drawer.querySelector('[data-flt-time-val]');
+      const tBtn = drawer.querySelector('[data-flt-time-btn]');
+      const tSel = drawer.querySelector('[data-flt-time-sel]');
+      const tOn = !!(ts.time && (ts.time !== 'custom' || parseYmd(ts.dateFrom) || parseYmd(ts.dateTo)));
+      if (tVal) tVal.textContent = timeLabel(ts.time, ts.dateFrom, ts.dateTo);
+      if (tBtn) tBtn.classList.toggle('on', tOn);
+      if (tSel) { tSel.value = ts.time || ''; syncSelPill(tSel, tOn); }
+      const clr = drawer.querySelector('[data-flt-clear]'); if (clr) clr.hidden = !n;
+      drawer.hidden = !filterRowOpen;
+    }
+
+    if (applied) {
+      if (filterRowOpen || !n) {
+        applied.hidden = true;
+        applied.innerHTML = '';
+      } else {
+        applied.hidden = false;
+        applied.innerHTML = `<span class="flt-app-lbl">已套用</span>`
+          + list.map(x => `<span class="flt-chip"><span class="flt-chip-k">${esc(L(`${x.k}：`, `${trUi(x.k)}: `))}</span><span data-nt>${esc(x.v)}</span><button type="button" class="flt-chip-x" data-flt-rm="${esc(x.key)}" aria-label="${esc(L(`移除 ${x.k} 篩選`, `Remove ${trUi(x.k)} filter`))}">×</button></span>`).join('')
+          + `<button type="button" class="link small" data-flt-clear>${esc(L('清除', 'Clear'))}</button>`;
+      }
+    }
+  }
+  function setFilterRowOpen(open, focusTarget = false) {
+    filterRowOpen = !!open;
+    if (!filterRowOpen) closeFilterPopups();
+    syncFilterUi();
+    if (filterRowOpen && focusTarget) {
+      activeDrawerEl()?.querySelector('input, select, button')?.focus();
+    } else if (!filterRowOpen && focusTarget) {
+      const btn = topbarDesktopMq.matches ? $('#tb-page [data-tb-filter]') : ($('#page-messages:not([hidden]) #f-open') || $('#page-work .m-flt-btn[data-flt-toggle]'));
+      btn?.focus();
+    }
+  }
   document.addEventListener('keydown', e => {
-    const pop = $('#tb-filter-pop');
-    if (e.key === 'Escape' && pop && !pop.hidden) { e.preventDefault(); closeTbFilterPop(); $('#tb-page [data-tb-filter]')?.focus(); }
+    if (e.key !== 'Escape') return;
+    const dp = $('#tb-date-pop'), tm = $('#tb-time-menu');
+    if (dp && !dp.hidden) { e.preventDefault(); e.stopPropagation(); closeFilterPopups(); activeDrawerEl()?.querySelector('[data-flt-time-btn]')?.focus(); return; }
+    if (tm && !tm.hidden) { e.preventDefault(); e.stopPropagation(); closeFilterPopups(); activeDrawerEl()?.querySelector('[data-flt-time-btn]')?.focus(); return; }
+    if (filterRowOpen && hasFilterRow() && !document.querySelector('#modal-root .modal, .confirm-root, #card-drawer')) {
+      e.preventDefault();
+      setFilterRowOpen(false, true);
+    }
   });
   document.addEventListener('click', e => {
     if ($('.topbar .tb-search.open') && !e.target.closest('.topbar .tb-search')) setTopSearch(false);
-    const pop = $('#tb-filter-pop'), path = e.composedPath?.() || [];
-    if (pop && !pop.hidden && !e.target.closest('#tb-filter-pop') && !e.target.closest('[data-tb-filter]') && !path.includes(pop)) closeTbFilterPop();
+    const tm = $('#tb-time-menu'), dp = $('#tb-date-pop'), path = e.composedPath?.() || [];
+    if (tm && !tm.hidden && !e.target.closest('#tb-time-menu') && !e.target.closest('[data-flt-time-btn]') && !path.includes(tm)) closeFilterPopups();
+    if (dp && !dp.hidden && !e.target.closest('#tb-date-pop') && !e.target.closest('[data-flt-time-btn]') && !e.target.closest('#tb-time-menu') && !path.includes(dp) && !path.includes(tm)) closeFilterPopups();
+    const rm = e.target.closest('[data-flt-rm]');
+    if (rm) return clearOneFilter(rm.dataset.fltRm);
+    if (e.target.closest('[data-flt-clear]')) return clearAllFilters();
+    if (e.target.closest('[data-flt-hide]')) return setFilterRowOpen(false, true);
+    const mTog = e.target.closest('.m-flt-btn[data-flt-toggle]');
+    if (mTog) return setFilterRowOpen(!filterRowOpen, filterRowOpen);
+    const tbBtn = e.target.closest('[data-flt-time-btn]');
+    if (tbBtn) return openTimeMenu(tbBtn);
   });
-
-  const collapseBtnHtml = collapsed => (topbarNarrowMq.matches ? ''
-    : `<button type="button" class="tb-collapse-btn" data-tb-collapse aria-expanded="${!collapsed}" aria-label="${collapsed ? '展開篩選' : '收合篩選'}" data-tb-tip="${collapsed ? '展開篩選' : '收合篩選'}">${collapsed ? '»' : '«'}</button>`);
-  const tbMsgPeople = () => [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
-  const tbWorkPeople = () => projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
-  function tbCollapseCount(page) {
-    if (page === 'messages') return filterCount();
-    if (page === 'work') return (work.q.trim() ? 1 : 0) + (work.owner ? 1 : 0) + (work.type ? 1 : 0);
-    if (page === 'team') return teamSearchQ.trim() ? 1 : 0;
-    if (page === 'releases') return rel.q.trim() ? 1 : 0;
-    return 0;
-  }
-  const tbFilterBtnLabel = n => (n ? `篩選 · ${n} ▾` : '篩選 ▾');
-  function closeTbFilterPop() {
-    const pop = $('#tb-filter-pop');
-    if (!pop || pop.hidden) return;
-    pop.hidden = true;
-    pop.innerHTML = '';
-    const btn = $('#tb-page [data-tb-filter]');
-    if (btn) btn.setAttribute('aria-expanded', 'false');
-  }
-  function drawTbFilterPopBody() {
-    const pop = $('#tb-filter-pop');
-    if (!pop) return;
-    const p = state.page;
-    if (p === 'messages') {
-      const f = state.filter, people = tbMsgPeople(), dups = dupNameSet(people);
-      const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
-      pop.innerHTML = `
-        <label class="tb-fp-field"><span>成員</span><select data-tb-fp-member><option value="">所有成員</option>${people.map(x => `<option value="${esc(x.participantId)}"${f.member === x.participantId ? ' selected' : ''}>${esc(nameCodeText(x, dups))}</option>`).join('')}</select></label>
-        <label class="tb-fp-field"><span>訊息類型</span><select data-tb-fp-tag><option value="">所有類型</option>${tags.map(t => `<option${f.tag === t ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
-        <div class="tb-fp-field"><span>顯示</span><div class="seg-scope full" role="group" aria-label="顯示">
-          <button type="button" data-msg-view="slim" aria-pressed="${slimMode()}">精簡</button>
-          <button type="button" data-msg-view="full" aria-pressed="${!slimMode()}">完整</button>
-        </div></div>
-        <label class="chk"><input type="checkbox" data-tb-fp-ainow ${aiNowOn() ? 'checked' : ''}> 顯示「AI 現況」（記在這台裝置）</label>
-        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
-    } else if (p === 'work') {
-      const people = tbWorkPeople();
-      pop.innerHTML = `
-        <label class="tb-fp-field"><span>搜尋卡片</span><input type="search" data-tb-fp-card-q placeholder="搜尋標題、下一步或編號" value="${esc(work.q)}"></label>
-        <label class="tb-fp-field"><span>負責人</span><select data-tb-fp-card-owner><option value="">所有負責人</option>${people.map(x => `<option value="${esc(x.participantId)}"${work.owner === x.participantId ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
-        <label class="tb-fp-field"><span>類型</span><select data-tb-fp-card-type><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option${work.type === t ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
-        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
-    } else if (p === 'team') {
-      pop.innerHTML = `
-        <label class="tb-fp-field"><span>搜尋成員</span><input type="search" data-tb-fp-team-q placeholder="搜尋名字、角色或代號" value="${esc(teamSearchQ)}"></label>
-        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
-    } else if (p === 'releases') {
-      pop.innerHTML = `
-        <label class="tb-fp-field"><span>找版本或卡號</span><input type="search" data-tb-fp-rel-q placeholder="找版本、卡號或關鍵字（例：MAIN-12、1.0.5、快取）" value="${esc(rel.q)}"></label>
-        <div class="tb-fp-foot"><button type="button" class="btn small" data-tb-fp-clear>清除篩選</button></div>`;
+  $('#tb-time-menu')?.addEventListener('click', e => {
+    const item = e.target.closest('[data-tm-val]');
+    if (!item) return;
+    e.stopPropagation();
+    const val = item.dataset.tmVal, page = $('#tb-time-menu').dataset.page || state.page;
+    const anchor = activeDrawerEl(page)?.querySelector('[data-flt-time-btn]');
+    if (val === 'custom') {
+      closeFilterPopups();
+      return openDatePop(anchor, page);
     }
-  }
-  function openTbFilterPop(btn) {
-    const pop = $('#tb-filter-pop');
-    if (!pop || !btn) return;
-    if (!pop.hidden) { closeTbFilterPop(); return; }
-    setTopSearch(false);
-    drawTbFilterPopBody();
-    pop.hidden = false;
-    btn.setAttribute('aria-expanded', 'true');
-    const r = btn.getBoundingClientRect(), pw = pop.offsetWidth || 296;
-    pop.style.left = Math.max(8, Math.min(innerWidth - pw - 8, Math.round(r.left))) + 'px';
-    pop.style.top = Math.round(r.bottom + 6) + 'px';
-    (pop.querySelector('input, select, button') || pop).focus();
-  }
+    closeFilterPopups();
+    applyTimeSelection(page, { time: val, dateFrom: '', dateTo: '' });
+  });
+  $('#tb-date-pop')?.addEventListener('click', e => {
+    const s = datePopState;
+    if (!s) return;
+    const nav = e.target.closest('[data-dp-nav]');
+    if (nav) {
+      const dt = new Date(s.year, s.month + Number(nav.dataset.dpNav), 1);
+      s.year = dt.getFullYear(); s.month = dt.getMonth();
+      return renderDatePop();
+    }
+    const day = e.target.closest('[data-dp-day]');
+    if (day) {
+      const ymd = day.dataset.dpDay;
+      if (!s.from || (s.from && s.to)) { s.from = ymd; s.to = ''; s.activeField = 'to'; }
+      else if (ymd < s.from) { s.to = s.from; s.from = ymd; s.activeField = 'from'; }
+      else { s.to = ymd; s.activeField = 'from'; }
+      return renderDatePop();
+    }
+    if (e.target.closest('[data-dp-clear]')) {
+      const page = s.page;
+      closeFilterPopups();
+      return applyTimeSelection(page, { time: '', dateFrom: '', dateTo: '' });
+    }
+    if (e.target.closest('[data-dp-cancel]')) {
+      const page = s.page;
+      closeFilterPopups();
+      activeDrawerEl(page)?.querySelector('[data-flt-time-btn]')?.focus();
+      return;
+    }
+    if (e.target.closest('[data-dp-apply]')) {
+      const page = s.page;
+      let f = parseYmd(s.from), t = parseYmd(s.to);
+      if (f && t && f > t) [f, t] = [t, f];
+      if (!f && t) f = t;
+      if (f && !t) t = f;
+      closeFilterPopups();
+      if (!f && !t) return applyTimeSelection(page, { time: '', dateFrom: '', dateTo: '' });
+      return applyTimeSelection(page, { time: 'custom', dateFrom: f, dateTo: t });
+    }
+  });
+  $('#tb-date-pop')?.addEventListener('input', e => {
+    const s = datePopState;
+    if (!s) return;
+    if (e.target.matches('[data-dp-from], [data-dp-to]')) {
+      const isFrom = e.target.matches('[data-dp-from]');
+      s.activeField = isFrom ? 'from' : 'to';
+      const parsed = parseYmd(e.target.value);
+      if (parsed) {
+        s[isFrom ? 'from' : 'to'] = parsed;
+        const [y, m] = parsed.split('-').map(Number);
+        s.year = y; s.month = m - 1;
+        renderDatePop(true);
+      }
+    }
+  });
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (!t.closest?.('#msg-flt-drawer, #work-flt-drawer')) return;
+    if (t.matches('[data-flt-member]')) setFilter({ member: t.value });
+    else if (t.matches('[data-flt-tag]')) setFilter({ tag: t.value });
+    else if (t.matches('[data-flt-ainow]')) { store.set(AINOW_KEY, t.checked ? '1' : '0'); syncFilterBar(); }
+    else if (t.matches('[data-flt-time-sel]')) {
+      const page = state.page, val = t.value;
+      if (val === 'custom') {
+        const cur = fltTimeState(page), def = parseYmd(cur.dateFrom) || localYmd();
+        applyTimeSelection(page, { time: 'custom', dateFrom: def, dateTo: parseYmd(cur.dateTo) || def });
+      } else {
+        applyTimeSelection(page, { time: val, dateFrom: '', dateTo: '' });
+      }
+    } else if (t.matches('[data-flt-m-from], [data-flt-m-to]')) {
+      const page = state.page, drawer = activeDrawerEl(page);
+      let f = parseYmd(drawer?.querySelector('[data-flt-m-from]')?.value), to = parseYmd(drawer?.querySelector('[data-flt-m-to]')?.value);
+      if (f && to && f > to) [f, to] = [to, f];
+      applyTimeSelection(page, { time: 'custom', dateFrom: f || to || '', dateTo: to || f || '' });
+    }
+  });
+  document.addEventListener('click', e => {
+    const mv = e.target.closest('#msg-flt-drawer [data-msg-view]');
+    if (mv) setView(mv.dataset.msgView);
+  });
+  document.addEventListener('input', e => {
+    const t = e.target;
+    if (t.matches('[data-flt-team-q]')) { teamSearchQ = t.value; applyTeamSearch(); syncFilterUi('team'); }
+    else if (t.matches('[data-flt-rel-q]')) { rel.q = t.value; rel.hit = ''; drawReleases(); }
+  });
+  window.addEventListener('resize', () => { tbHint.hidden = true; closeFilterPopups(); syncFilterUi(); });
+
   function drawTopbarPage(force = false) {
     const host = $('#tb-page');
     if (!host) return;
-    const p = state.page || 'messages', col = filtersCollapsed(), pj = projectView();
+    const p = state.page || 'messages', pj = projectView();
     const sub = p === 'files' ? `${pj}:${filesUi.tab}` : p === 'perm' ? `${perm.tab}:${perm.adm || ''}:${isAdmin() ? 1 : 0}:${state.projMeta?.adminName || ''}` : p === 'releases' ? rel.tab : '';
-    const sig = `${p}|${pj}|${col ? 1 : 0}|${topbarNarrowMq.matches ? 1 : 0}|${sub}`;
-    const filterBtn = () => {
-      const n = tbCollapseCount(p);
-      return `<button type="button" class="tb-filter-btn${n ? ' active' : ''}" data-tb-filter aria-expanded="false" aria-controls="tb-filter-pop">${esc(tbFilterBtnLabel(n))}</button>${collapseBtnHtml(true)}`;
-    };
+    const sig = `${p}|${pj}|${sub}`;
+    const filterBtn = () => `<button type="button" class="tb-filter-btn" data-tb-filter aria-expanded="${filterRowOpen}" aria-controls="${p === 'messages' ? 'msg-flt-drawer' : 'work-flt-drawer'}">${FLT_ICO}<span>${esc(fltBtnLabel(activeFilters(p).length, filterRowOpen))}</span></button>`;
     if (force || host._sig !== sig) {
       host._sig = sig;
       if (p === 'messages') {
-        const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
         host.innerHTML = `
           <div class="seg-scope tb-scope" role="group" aria-label="範圍">
             <button type="button" data-scope="all" aria-pressed="true">全部</button>
             <button type="button" data-scope="mine" aria-pressed="false">給我的</button>
             <button type="button" data-scope="related" aria-pressed="false">與我相關</button>
           </div>
-          ${col ? filterBtn() : `
-            <select class="tb-sel" data-tb-f-member aria-label="成員"><option value="">所有成員</option></select>
-            <select class="tb-sel" data-tb-f-tag aria-label="訊息類型"><option value="">所有類型</option>${tags.map(t => `<option>${t}</option>`).join('')}</select>
-            <div class="seg-scope" role="group" aria-label="顯示"><button type="button" data-msg-view="slim" aria-pressed="false">精簡</button><button type="button" data-msg-view="full" aria-pressed="true">完整</button></div>
-            <label class="chk tb-chk"><input type="checkbox" data-tb-ainow><span>AI 現況</span></label>
-            ${collapseBtnHtml(false)}
-          `}`;
+          ${filterBtn()}`;
       } else if (p === 'work') {
         host.innerHTML = `
           <span class="tb-sub" data-tb-work-count></span>
@@ -2098,16 +2518,11 @@
             <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
           </div>
           <button class="btn small primary tb-card-new" type="button" data-tb-card-new>＋ 新增卡片</button>
-          ${col ? filterBtn() : `
-            <input class="tb-inp" type="search" data-tb-card-q placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片">
-            <select class="tb-sel" data-tb-card-owner aria-label="負責人"><option value="">所有負責人</option></select>
-            <select class="tb-sel" data-tb-card-type aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option>${t}</option>`).join('')}</select>
-            ${collapseBtnHtml(false)}
-          `}`;
+          ${filterBtn()}`;
       } else if (p === 'inbox') {
         host.innerHTML = '<span class="tb-sub" data-tb-inbox-count></span>';
       } else if (p === 'team') {
-        host.innerHTML = col ? filterBtn() : `<input class="tb-inp" type="search" data-tb-team-search placeholder="搜尋名字、角色或代號" aria-label="搜尋名字、角色或代號">${collapseBtnHtml(false)}`;
+        host.innerHTML = filterBtn();
       } else if (p === 'files') {
         const hasDocs = PROJECTS.includes(pj), tab = hasDocs ? filesUi.tab : 'att';
         const tabs = hasDocs ? `<div class="seg-scope" role="tablist" aria-label="文件分頁">${[['kb', '📚 知識庫'], ['docs', '專案文件'], ['att', '訊息附件']].map(([k, t]) => `<button type="button" role="tab" data-tb-files-tab="${k}" aria-selected="${tab === k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : '';
@@ -2115,7 +2530,7 @@
       } else if (p === 'releases') {
         host.innerHTML = `<span class="tb-sub">v${esc(APP_VERSION)}</span>
           <div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>
-          ${rel.tab === 'list' ? (col ? filterBtn() : `<input class="tb-inp" type="search" data-tb-rel-q placeholder="找版本、卡號或關鍵字（例：MAIN-12、1.0.5、快取）" aria-label="找版本或卡號">${collapseBtnHtml(false)}`) : ''}`;
+          ${rel.tab === 'list' ? filterBtn() : ''}`;
       } else if (p === 'perm') {
         const admin = isAdmin(), onAdm = perm.tab === 'admin', onLead = perm.tab === 'leadproj', admName = state.projMeta?.adminName || '';
         if (onLead) {
@@ -2138,57 +2553,31 @@
     const host = $('#tb-page');
     if (!host) return;
     const p = state.page || 'messages';
-    const fbBtn = host.querySelector('[data-tb-filter]');
-    if (fbBtn) {
-      const n = tbCollapseCount(p);
-      fbBtn.classList.toggle('active', n > 0);
-      fbBtn.textContent = window.aigileI18n?.tr?.(tbFilterBtnLabel(n)) || tbFilterBtnLabel(n);
-    }
     if (p === 'messages') {
-      const f = state.filter, people = tbMsgPeople(), dups = dupNameSet(people);
+      const f = state.filter;
       host.querySelectorAll('[data-scope]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === f.scope)));
-      host.querySelectorAll('[data-msg-view]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.msgView === 'slim') === slimMode())));
-      const sel = host.querySelector('[data-tb-f-member]');
-      if (sel) { sel.innerHTML = `<option value="">${esc(L('所有成員', 'All members'))}</option>` + people.map(x => `<option value="${esc(x.participantId)}">${esc(nameCodeText(x, dups))}</option>`).join(''); sel.value = f.member; }
-      const tag = host.querySelector('[data-tb-f-tag]'); if (tag) tag.value = f.tag;
-      const an = host.querySelector('[data-tb-ainow]'); if (an) an.checked = aiNowOn();
       drawMineCount();
     } else if (p === 'work') {
       const cnt = host.querySelector('[data-tb-work-count]');
       if (cnt && work.loaded) {
         const shownOpen = visibleCards().filter(c => !closedSt(c.status)).length, pv = projectView();
         const serverOpen = (pv === 'hub' || pv === 'cross' ? work.openCount : work.openByProject?.[pv]) ?? work.openCount;
-        cnt.textContent = !(work.q || work.owner || work.type) && work.openHidden > 0 && serverOpen > shownOpen
+        cnt.textContent = !(work.q || work.owner || work.type || work.time) && work.openHidden > 0 && serverOpen > shownOpen
           ? L(`顯示 ${shownOpen}／共 ${serverOpen} 張未完成`, `Showing ${shownOpen} of ${serverOpen} open cards`)
           : L(`${shownOpen} 張未完成`, `${shownOpen} open cards`);
         cnt.title = cnt.textContent;
       }
       host.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === work.view)));
-      const q = host.querySelector('[data-tb-card-q]'); if (q && document.activeElement !== q) q.value = work.q;
-      const own = host.querySelector('[data-tb-card-owner]');
-      if (own) { own.innerHTML = `<option value="">${esc(L('所有負責人', 'All assignees'))}</option>` + tbWorkPeople().map(x => `<option value="${esc(x.participantId)}">${esc(x.name)}</option>`).join(''); own.value = work.owner; }
-      const tp = host.querySelector('[data-tb-card-type]'); if (tp) tp.value = work.type;
     } else if (p === 'inbox') {
       const cnt = host.querySelector('[data-tb-inbox-count]');
       if (cnt) { const n = todoByView()[projectView()] || 0; cnt.textContent = n ? L(`${n} 件`, `${n} items`) : L('目前沒有', 'Nothing right now'); cnt.title = cnt.textContent; }
-    } else if (p === 'team') {
-      const q = host.querySelector('[data-tb-team-search]'); if (q && document.activeElement !== q) q.value = teamSearchQ;
-    } else if (p === 'releases') {
-      const rq = host.querySelector('[data-tb-rel-q]'); if (rq && document.activeElement !== rq) rq.value = rel.q;
     }
+    syncFilterUi(p);
   }
   $('#tb-page')?.addEventListener('click', e => {
-    const col = e.target.closest('[data-tb-collapse]');
-    if (col) {
-      store.set(TOPBAR_FILTERS_KEY, store.get(TOPBAR_FILTERS_KEY) === '1' ? '0' : '1');
-      closeTbFilterPop(); tbHint.hidden = true; drawTopbarPage(true);
-      ($('#tb-page [data-tb-collapse]') || $('#tb-page [data-tb-filter]'))?.focus();
-      return;
-    }
     const fbBtn = e.target.closest('[data-tb-filter]');
-    if (fbBtn) return openTbFilterPop(fbBtn);
+    if (fbBtn) return setFilterRowOpen(!filterRowOpen, false);
     const sc = e.target.closest('[data-scope]'); if (sc) return setFilter({ scope: sc.dataset.scope });
-    const mv = e.target.closest('[data-msg-view]'); if (mv) return setView(mv.dataset.msgView);
     const wv = e.target.closest('[data-view]'); if (wv) { work.view = wv.dataset.view; store.set(VIEW_KEY, work.view); return renderWork(); }
     if (e.target.closest('[data-tb-card-new]')) return openNewCard();
     const ft = e.target.closest('[data-tb-files-tab]'); if (ft) { filesUi.tab = ft.dataset.tbFilesTab; return openFiles(); }
@@ -2196,50 +2585,7 @@
     const pmPg = e.target.closest('[data-pm-page]'); if (pmPg) return openPermTab(pmPg.dataset.pmPage);
     const pmTab = e.target.closest('[data-pm-tab]'); if (pmTab) { perm.tab = pmTab.dataset.pmTab; if (perm.tab === 'skills') skv.data = null; if (state.page === 'perm') loadInvites(); Object.assign(perm, { picker: false, addOpen: false, mobileDetail: false, moreOpen: null }); return drawPerm(); }
   });
-  $('#tb-page')?.addEventListener('change', e => {
-    const t = e.target;
-    if (t.matches('[data-tb-f-member]')) setFilter({ member: t.value });
-    else if (t.matches('[data-tb-f-tag]')) setFilter({ tag: t.value });
-    else if (t.matches('[data-tb-ainow]')) { store.set(AINOW_KEY, t.checked ? '1' : '0'); syncFilterBar(); }
-    else if (t.matches('[data-tb-card-owner]')) { work.owner = t.value; renderWork(); }
-    else if (t.matches('[data-tb-card-type]')) { work.type = t.value; renderWork(); }
-  });
-  $('#tb-page')?.addEventListener('input', e => {
-    const t = e.target;
-    if (t.matches('[data-tb-card-q]')) { work.q = t.value; searchArchived(); renderWork(); }
-    else if (t.matches('[data-tb-team-search]')) { teamSearchQ = t.value; applyTeamSearch(); }
-    else if (t.matches('[data-tb-rel-q]')) { rel.q = t.value; rel.hit = ''; drawReleases(); }
-  });
-  $('#tb-filter-pop')?.addEventListener('click', e => {
-    const mv = e.target.closest('[data-msg-view]');
-    if (mv) { setView(mv.dataset.msgView); e.target.closest('.seg-scope')?.querySelectorAll('[data-msg-view]').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.msgView === 'slim') === slimMode()))); return; }
-    if (e.target.closest('[data-tb-fp-clear]')) {
-      if (state.page === 'messages') { setFilter({ scope: 'all', member: '', tag: '' }); drawTbFilterPopBody(); }
-      else if (state.page === 'work') { work.q = ''; work.owner = ''; work.type = ''; renderWork(); drawTbFilterPopBody(); }
-      else if (state.page === 'team') { teamSearchQ = ''; applyTeamSearch(); syncTbValues(); drawTbFilterPopBody(); }
-      else if (state.page === 'releases') { rel.q = ''; rel.hit = ''; drawReleases(); drawTbFilterPopBody(); }
-      const pop = $('#tb-filter-pop');
-      (pop?.querySelector('input, select, button') || pop)?.focus();
-    }
-  });
-  $('#tb-filter-pop')?.addEventListener('change', e => {
-    const t = e.target;
-    if (t.matches('[data-tb-fp-member]')) setFilter({ member: t.value });
-    else if (t.matches('[data-tb-fp-tag]')) setFilter({ tag: t.value });
-    else if (t.matches('[data-tb-fp-ainow]')) { store.set(AINOW_KEY, t.checked ? '1' : '0'); syncFilterBar(); }
-    else if (t.matches('[data-tb-fp-card-owner]')) { work.owner = t.value; renderWork(); }
-    else if (t.matches('[data-tb-fp-card-type]')) { work.type = t.value; renderWork(); }
-  });
-  $('#tb-filter-pop')?.addEventListener('input', e => {
-    const t = e.target;
-    if (t.matches('[data-tb-fp-card-q]')) { work.q = t.value; searchArchived(); renderWork(); }
-    else if (t.matches('[data-tb-fp-team-q]')) { teamSearchQ = t.value; applyTeamSearch(); syncTbValues(); }
-    else if (t.matches('[data-tb-fp-rel-q]')) { rel.q = t.value; rel.hit = ''; drawReleases(); }
-  });
-  $('#tb-filter-pop')?.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTbFilterPop(); $('#tb-page [data-tb-filter]')?.focus(); }
-  });
-  topbarNarrowMq.addEventListener('change', () => { closeTbFilterPop(); drawTopbarPage(true); });
+  topbarDesktopMq.addEventListener?.('change', () => { closeFilterPopups(); syncFilterUi(); });
 
   // 頂端頁名＋手機頂欄「‹」與標題、第一層的「要你處理 N」、輸入框的「發到」
   function drawChrome() {
@@ -2332,7 +2678,7 @@
   // 切換所在：k＝hub／專案 id／cross；切專案時留在同一頁（工作頁在跨專案頻道沒有，改到訊息）
   function setProjectView(k, page) {
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); setProjectView(k, page); });
-    if (state.page !== 'perm') closeTbFilterPop();
+    if (state.page !== 'perm') closeFilterPopups();
     if (k !== state.view && myProjects().includes(k)) recordProjectVisit(k);
     state.view = k;
     teamSearchQ = '';
@@ -2345,7 +2691,7 @@
   }
   window.addEventListener('popstate', () => {
     if (!state.me) return;
-    closeTbFilterPop();
+    closeFilterPopups();
     const r = parseRoute();
     if (r.view && state.view !== r.view && myProjects().includes(r.view)) recordProjectVisit(r.view);
     state.view = r.view || 'hub';
@@ -2390,9 +2736,10 @@
     if (f.scope === 'related' && !related(m)) return false;
     if (f.member && m.author.participantId !== f.member) return false;
     if (f.tag && !tagOf(m.text).includes(f.tag)) return false;
+    if (!matchTimeAt(m.createdAt, f.time, f.dateFrom, f.dateTo)) return false;
     return !hiddenByThread(m);
   }
-  const filtering = () => state.filter.scope !== 'all' || state.filter.member || state.filter.tag;
+  const filtering = () => state.filter.scope !== 'all' || !!activeFilters('messages').length;
   function syncFilterBar() {
     const f = state.filter;
     document.querySelectorAll('[data-scope]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === f.scope)));
@@ -2405,68 +2752,44 @@
     sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, fdups))}</option>`).join('');
     sel.value = f.member;
     $('#f-clear').hidden = !filtering();
-    const fo = $('#f-open'); if (fo) { const n = filterCount(); fo.textContent = n ? `篩選 · ${n}` : '篩選 ▾'; }
     const an = $('#f-ainow'); if (an) an.checked = aiNowOn();
     syncTbValues();
     drawAiNow();
   }
-  // 範圍「全部／給我的／與我相關」在手機頂部，篩選按鈕只算成員、標籤
-  const filterCount = () => (state.filter.member ? 1 : 0) + (state.filter.tag ? 1 : 0);
+  // 範圍「全部／給我的／與我相關」在手機頂部，篩選按鈕算成員、類型與時間
+  const filterCount = () => activeFilters('messages').length;
+  let msgRangeLoading = false;
+  async function ensureMsgTimeWindow() {
+    const f = state.filter, b = timeBounds(f.time, f.dateFrom, f.dateTo);
+    if (!b || !Number.isFinite(b.from) || state.ctx || !state.hasOlder || msgRangeLoading) return;
+    msgRangeLoading = true;
+    try {
+      for (let i = 0; i < 3 && state.hasOlder && state.messages.length < WIN_MAX; i++) {
+        const first = state.messages[0];
+        if (!first || Date.parse(first.createdAt) <= b.from) break;
+        const d = await api(`/api/messages?limit=100&span=48&beforeId=${encodeURIComponent(first.messageId)}`);
+        const fresh = d.items.filter(m => !state.messages.some(x => x.messageId === m.messageId));
+        if (!fresh.length) { state.hasOlder = false; break; }
+        setMessages(fresh.concat(state.messages));
+        Object.assign(state, { hasOlder: d.hasMore, winExpanded: true, winTruncated: false, lastOlderAt: Date.now() });
+      }
+      renderMessages(false);
+    } catch {} finally { msgRangeLoading = false; }
+  }
   function setFilter(patch) {
     Object.assign(state.filter, patch);
     state.onlyMine = state.filter.scope === 'related';
     store.set(FILTER_KEY, state.onlyMine ? '1' : '0');
     syncFilterBar();
     renderMessages(true);
+    if (patch.time || patch.dateFrom || patch.dateTo) ensureMsgTimeWindow();
   }
-  // 手機版：把範圍、成員、標籤合成一個「篩選」底部面板
-  function filterSummary() {
-    const f = state.filter, p = f.member ? state.participants.get(f.member)?.name : '';
-    return [p || '', f.tag || ''].filter(Boolean).join(' · ');
-  }
-  function openFilterSheet() {
-    const f = state.filter;
-    const people = [...state.participants.values()].filter(p => p.status !== 'disabled' && inViewPerson(p.participantId)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
-    const fsDups = dupNameSet(people);
-    const tags = ['需確認', '決策紀錄', '接單', '進度', '完成', '受阻', '交接', '回覆'];
-    const draft = { scope: f.scope, member: f.member, tag: f.tag, view: slimMode() ? 'slim' : 'full' };
-    const body = openModal('篩選', `
-      <div class="stack">
-        <div class="field"><span class="field-label" id="fs-scope">範圍</span>
-          <div class="seg-scope full" role="group" aria-labelledby="fs-scope" id="fs-scope-g"></div></div>
-        <label>成員<select id="fs-member"><option value="">所有成員</option>${people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, fsDups))}</option>`).join('')}</select></label>
-        <label>訊息類型<select id="fs-tag"><option value="">所有類型</option>${tags.map(t => `<option>${t}</option>`).join('')}</select></label>
-        <div class="field"><span class="field-label" id="fs-view">顯示</span>
-          <div class="seg-scope full" role="group" aria-labelledby="fs-view" id="fs-view-g"></div>
-          <span class="muted small">精簡：AI 訊息只露第一句，點了看全文。記在這台裝置。</span></div>
-        <label class="chk"><input type="checkbox" id="fs-ainow" ${aiNowOn() ? 'checked' : ''}> 顯示「AI 現況」（記在這台裝置）</label>
-      </div>`, { size: 'narrow', foot: '<button class="btn" type="button" id="fs-clear">清除</button><button class="btn primary grow" type="button" id="fs-apply">套用</button>' });
-    const draw = () => {
-      body.querySelector('#fs-scope-g').innerHTML = [['all', '全部'], ['mine', '給我的'], ['related', '與我相關']].map(([k, t]) => `<button type="button" data-fs-scope="${k}" aria-pressed="${draft.scope === k}">${t}</button>`).join('');
-      body.querySelector('#fs-view-g').innerHTML = [['slim', '精簡'], ['full', '完整']].map(([k, t]) => `<button type="button" data-fs-view="${k}" aria-pressed="${draft.view === k}">${t}</button>`).join('');
-      body.querySelector('#fs-member').value = draft.member;
-      body.querySelector('#fs-tag').value = draft.tag;
-    };
-    draw();
-    body.addEventListener('click', e => {
-      const sc = e.target.closest('[data-fs-scope]'); if (sc) { draft.scope = sc.dataset.fsScope; draw(); }
-      const vw = e.target.closest('[data-fs-view]'); if (vw) { draft.view = vw.dataset.fsView; draw(); }
-    });
-    body.querySelector('#fs-member').onchange = e => { draft.member = e.target.value; };
-    body.querySelector('#fs-tag').onchange = e => { draft.tag = e.target.value; };
-    body.modal.querySelector('#fs-clear').onclick = () => { Object.assign(draft, { scope: 'all', member: '', tag: '' }); draw(); };
-    body.modal.querySelector('#fs-apply').onclick = () => {
-      closeModal();
-      if (draft.view !== (slimMode() ? 'slim' : 'full')) store.set(MSG_VIEW_KEY, draft.view);
-      setFilter({ scope: draft.scope, member: draft.member, tag: draft.tag });
-    };
-  }
-  $('#f-open').onclick = openFilterSheet;
+  $('#f-open').onclick = () => setFilterRowOpen(!filterRowOpen, false);
   document.querySelectorAll('[data-scope]').forEach(b => { b.onclick = () => setFilter({ scope: b.dataset.scope }); });
   document.querySelectorAll('[data-msg-view]').forEach(b => { b.onclick = () => setView(b.dataset.msgView); });
   $('#f-member').onchange = e => setFilter({ member: e.target.value });
   $('#f-tag').onchange = e => setFilter({ tag: e.target.value });
-  $('#f-clear').onclick = () => setFilter({ scope: 'all', member: '', tag: '' });
+  $('#f-clear').onclick = () => setFilter({ scope: 'all', member: '', tag: '', time: '', dateFrom: '', dateTo: '' });
 
   const nearBottom = () => { const el = $('#messages'); return el.scrollHeight - el.scrollTop - el.clientHeight < 120; };
   const scrollBottom = () => { const el = $('#messages'); el.scrollTop = el.scrollHeight; };
@@ -2502,10 +2825,19 @@
         ${c.hasOlder ? '<button type="button" class="link small" id="ctx-older">再往前</button>' : '<span class="muted small">這是最早的訊息</span>'}
         <button type="button" class="link small" id="ctx-latest">回到最新 ↓${c.pending ? `（${c.pending} 則新訊息）` : ''}</button></div>`;
     }
-    const first = state.messages[0];
+    const first = state.messages[0], fs = state.filter, tBounds = timeBounds(fs.time, fs.dateFrom, fs.dateTo);
+    const timeOn = !!(fs.time && (fs.time !== 'custom' || parseYmd(fs.dateFrom) || parseYmd(fs.dateTo)));
+    const rangeExhausted = timeOn && (!state.hasOlder || (first && Number.isFinite(tBounds?.from) && Date.parse(first.createdAt) <= tBounds.from));
     if (!list.length && !filtering()) return ''; // 這個頻道 0 則（例如跨專案頻道，載入的都是別的專案）不放大按鈕；空白提示裡有小連結
-    const top = state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">${state.mobileWin ? `↑ 載入更早 ${MOBILE_N} 則` : `↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）`}</button>`
-      : state.messages.length ? '<div class="msg-start muted small">這是最早的訊息</div>' : '';
+    const top = timeOn
+      ? (rangeExhausted ? (state.messages.length ? `<div class="msg-start muted small">${esc(L('這段時間沒有更早的訊息', 'No earlier messages in this range'))}</div>` : '')
+        : state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">${state.mobileWin ? `↑ 載入更早 ${MOBILE_N} 則` : `↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）`}</button>` : '')
+      : (state.hasOlder && first ? `<button type="button" class="load-older" id="load-older">${state.mobileWin ? `↑ 載入更早 ${MOBILE_N} 則` : `↑ 載入更早的訊息（${esc(hm(first.createdAt))} 以前）`}</button>`
+        : state.messages.length ? '<div class="msg-start muted small">這是最早的訊息</div>' : '');
+    if (timeOn) {
+      const cntTxt = L(`${list.length} 則`, list.length === 1 ? '1 message' : `${list.length} messages`);
+      return top + (state.messages.length ? `<div class="win-divider"><span data-nt><span>${esc(timeSummaryLabel(fs.time, fs.dateFrom, fs.dateTo))}</span><span> · ${esc(cntTxt)}</span></span></div>` : '');
+    }
     const since = !first ? '' : state.mobileWin ? `從 ${hm(first.createdAt)} 起` : state.winExpanded || !state.winFrom ? `從 ${hm(first.createdAt)} 起`
       : first.createdAt < state.winFrom ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時不足 ${WIN_MIN} 則，往前補）`
       : state.winTruncated ? `從 ${hm(first.createdAt)} 起（最近 ${WIN_H} 小時還有更早的）`
@@ -2514,10 +2846,12 @@
   }
   function renderMessages(toBottom) {
     state.mineIds = state.filter.scope === 'mine' ? mineAskIds() : null; // 「給我的」一次算好
-    const list = state.messages.filter(visible);
+    const list = state.messages.filter(visible), fs = state.filter, tBounds = timeBounds(fs.time, fs.dateFrom, fs.dateTo);
+    const timeOn = !!(fs.time && (fs.time !== 'custom' || parseYmd(fs.dateFrom) || parseYmd(fs.dateTo)));
+    const first = state.messages[0], canLoadRange = !timeOn || (state.hasOlder && (!first || !Number.isFinite(tBounds?.from) || Date.parse(first.createdAt) > tBounds.from));
     $('#f-count').textContent = filtering() ? `符合 ${list.length} 則` : '';
     const empty = filtering()
-      ? `${state.ctx ? '這段沒有符合篩選條件的訊息。' : `最近 ${WIN_H} 小時沒有符合的訊息`}${!state.ctx && state.hasOlder ? ' · <button type="button" class="link" id="load-older-empty">載入更早</button>' : ''}`
+      ? `${state.ctx ? '這段沒有符合篩選條件的訊息。' : timeOn ? esc(L(`${timeSummaryLabel(fs.time, fs.dateFrom, fs.dateTo)} 沒有符合的訊息`, `No messages match (${timeSummaryLabel(fs.time, fs.dateFrom, fs.dateTo)})`)) : `最近 ${WIN_H} 小時沒有符合的訊息`}${!state.ctx && state.hasOlder && canLoadRange ? ' · <button type="button" class="link" id="load-older-empty">載入更早</button>' : ''}`
       : !state.ctx && state.hasOlder ? '最近沒有訊息 · <button type="button" class="link" id="load-older-empty">載入更早</button>' : '還沒有訊息。打個招呼，或到「我的 AI」新增助手。';
     const tail = state.ctx && state.ctx.hasNewer ? '<button type="button" class="load-older" id="ctx-newer">再往後</button>' : '';
     $('#messages').classList.toggle('slim-view', slimMode()); // 精簡每則不要框
@@ -2549,7 +2883,7 @@
   }
   // 自動收起：只在人在最底下、且 10 分鐘內沒按過「載入更早」時，才移掉超過 12 小時的；最多保留 300 則。往上看時絕不刪
   function trimWindow() {
-    if (state.ctx || !nearBottom() || Date.now() - state.lastOlderAt < OLDER_HOLD_MS) return;
+    if (state.ctx || state.filter.time || !nearBottom() || Date.now() - state.lastOlderAt < OLDER_HOLD_MS) return;
     const cutoff = new Date(Date.now() - WIN_H * 3600_000).toISOString();
     let keep = state.messages.filter(m => m.createdAt >= cutoff);
     if (keep.length < WIN_MIN) keep = state.messages.slice(-WIN_MIN);
@@ -3373,7 +3707,7 @@
   const VIEW_KEY = 'aigile-switch-work-view';
   const work = {
     cards: new Map(), since: null, loaded: false, lastSync: 0,
-    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), askSel: new Set(), confSel: new Set(), verSel: new Set(), doneSel: new Set(), q: '', owner: '', type: '', filter: 'open', mCol: '進行中',
+    view: store.get(VIEW_KEY) === 'B' ? 'B' : 'A', sel: new Set(), askSel: new Set(), confSel: new Set(), verSel: new Set(), doneSel: new Set(), q: '', owner: '', type: '', time: '', dateFrom: '', dateTo: '', filter: 'open', mCol: '進行中',
     showArchived: false, openId: null, detail: null, editing: false, dragId: null,
   };
   const isMeRef = r => r && r.participantId === meId();
@@ -4034,7 +4368,9 @@
         return;
       }
       box.innerHTML = `<div class="project-page project-team"><header class="work-title"><h2>${pageText('團隊', 'Team')}</h2><span>${esc(projName(project))} · ${pageText('只列這個專案的人', 'Only people in this project')}</span>
-        <input type="search" data-team-search placeholder="${pageText('搜尋名字、角色或代號', 'Search name, role or code')}"></header>
+        <button type="button" class="btn m-flt-btn" data-flt-toggle aria-expanded="false" aria-controls="work-flt-drawer">${FLT_ICO}<span>篩選 ▾</span></button></header>
+        <div id="work-flt-drawer" class="flt-drawer" aria-label="篩選條件" hidden></div>
+        <div id="work-flt-applied" class="flt-applied" aria-label="已套用篩選" hidden></div>
         <div class="project-summary">${t.totals}${todoByView()[project] ? `<button class="link" data-nav="inbox">${pageText('要你處理', 'Needs you')} ${todoByView()[project]} ›</button>` : `<small>${pageText('沒有要你處理的事', 'Nothing needs you')}</small>`}</div>
         <h3>${pageText('需要注意', 'Needs attention')} <small>${pageText('最近 7 天、這個專案', 'Last 7 days, this project')}</small></h3>
         <div class="project-alerts">${t.alerts.slice(0, 3).join('') || pageText('目前沒有人卡住。', 'Nobody is stuck right now.')}${t.alerts.length > 3 ? `<details><summary>${pageText('再看', 'Show more')} ${t.alerts.length - 3}</summary>${t.alerts.slice(3).join('')}</details>` : ''}</div>
@@ -4042,9 +4378,7 @@
         <div class="team-columns"><b>${pageText('成員', 'Member')}</b><b>${pageText('狀態', 'Status')}</b><b>${pageText('在做什麼', 'Working on')}</b><b>${pageText('最後出現', 'Last seen')}</b></div>${t.active.map((m) => teamRow(m, project, false, tdups)).join('')}
         <details class="inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true, tdups)).join('')}</details>
         <details><summary>${pageText('狀態怎麼判斷？', 'How is status decided?')}</summary>${pageText('優先看負責的卡，再看最新訊息。AI 超過 20 分鐘沒出現算可能斷線，開著等待腳本放寬到 60 分鐘。', 'Cards take priority over tagged messages. An AI may be offline after 20 minutes, or 60 minutes with a watcher.')}</details></div>`;
-      box.querySelector('[data-team-search]').value = teamSearchQ;
       applyTeamSearch(box);
-      box.querySelector('[data-team-search]').oninput = (e) => { teamSearchQ = e.target.value; applyTeamSearch(box); syncTbValues(); };
       drawTopbarPage();
     } catch (err) {
       if (state.page === page && projectView() === project) box.textContent = err.message;
@@ -4101,7 +4435,8 @@
   function showPage(page, { replace = false, noHistory = false } = {}) {
     if (state.page === 'perm' && page !== 'perm' && permDirty()) return permLeave(() => { perm.draft.clear(); showPage(page, { replace, noHistory }); }); // 有未儲存的變更先提醒
     if (work.openId) closeCard();
-    closeTbFilterPop();
+    filterRowOpen = false;
+    closeFilterPopups();
     const v = projectView();
     if (page === 'dm') { page = 'messages'; setTimeout(() => dmPanel(true), 0); } // 私訊改面板，舊網址照樣打開
     state.page = isTop(page) ? page : v === 'hub' ? 'hub' : ['work', 'inbox', 'team', 'files', 'overview'].includes(page) && !(v === 'cross' && ['work','overview'].includes(page)) ? page : 'messages';
@@ -4149,14 +4484,16 @@
     if (b.dataset.nav === 'messages') $('#input').focus();
   });
 
+  const cardActivityAt = c => [c.lastActivityAt, c.updatedAt, c.staleHint?.latestMessageAt, c.claim?.at, c.report?.at, c.done?.at, c.verified?.at, c.decision?.at].filter(Boolean).sort().at(-1) || c.createdAt;
   function visibleCards() {
     const q = work.q.trim().toLowerCase();
     return [...work.cards.values()].filter(c =>
       cardInView(c)
       && (!work.type || c.type === work.type)
       && (!work.owner || c.owner?.participantId === work.owner)
-      && (!q || [c.title, c.next, c.cardId, c.legacyId].some(v => (v || '').toLowerCase().includes(q))))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      && (!q || [c.title, c.next, c.cardId, c.legacyId].some(v => (v || '').toLowerCase().includes(q)))
+      && matchTimeAt(cardActivityAt(c), work.time, work.dateFrom, work.dateTo))
+      .sort((a, b) => cardActivityAt(b).localeCompare(cardActivityAt(a)));
   }
 
   // 看板放不下時顯示「還有 N 欄」；左右兩邊都有，點了捲到那一邊的底，捲到底就收起
@@ -4217,34 +4554,39 @@
     }
     if (state.page === 'hub') { keepTop(hubHtml()); drawTopbarPage(); return; }
     const all = visibleCards();
-    const people = projPeople(projectView() === 'hub' || projectView() === 'cross' ? '' : projectView());
-    const keep = document.activeElement?.id;
     const shownOpen = all.filter(c => !closedSt(c.status)).length;
     const pv = projectView();
     const serverOpen = (pv === 'hub' || pv === 'cross' ? work.openCount : work.openByProject?.[pv]) ?? work.openCount;
-    const openTitle = !(work.q || work.owner || work.type) && work.openHidden > 0 && serverOpen > shownOpen
+    const openTitle = !(work.q || work.owner || work.type || work.time) && work.openHidden > 0 && serverOpen > shownOpen
       ? L(`顯示 ${shownOpen}／共 ${serverOpen} 張未完成`, `Showing ${shownOpen} of ${serverOpen} open cards`)
       : L(`${shownOpen} 張未完成`, `${shownOpen} open cards`);
-    box.innerHTML = `
-      <div class="work-head">
-        <div class="work-title"><h2>工作</h2><span class="muted small">${openTitle}</span></div>
-        <div class="seg-scope" role="group" aria-label="檢視方式">
-          <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
-          <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
-        </div>
-        <button class="btn primary" type="button" id="card-new">＋ 新增卡片</button>
-      </div>
-      <div class="work-filters">
-        <input id="card-q" type="search" placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片" value="${esc(work.q)}">
-        <select id="card-owner" aria-label="負責人"><option value="">所有負責人</option>${people.map(p => `<option value="${esc(p.participantId)}" ${work.owner === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
-        <select id="card-type" aria-label="類型"><option value="">所有類型</option>${['工作', '阻塞', '決策', NOTE].map(t => `<option ${work.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
-      </div>
+    const bodyHtml = `
       ${work.type === NOTE && all.some(c => c.type === NOTE && !closedSt(c.status)) ? (() => { const ns = all.filter(c => c.type === NOTE && !closedSt(c.status)); return `<div class="note-ask"><span class="muted small">AI 不會主動看到人類紀錄；收集夠了可以一次請 AI 讀完整理。</span><button type="button" class="btn primary small" data-ask-ai="${esc(ns.map(c => c.cardId).join(','))}">請 AI 整理這 ${ns.length} 張</button></div>`; })() : ''}
       ${work.view === 'B' ? boardHtml(all) : overviewHtml(all)}`;
+    let wb = box.querySelector('#work-body[data-wb-page="work"]');
+    if (!wb) {
+      box.innerHTML = `
+        <div class="work-head">
+          <div class="work-title"><h2>工作</h2><span class="muted small" data-work-open-cnt>${openTitle}</span></div>
+          <div class="seg-scope" role="group" aria-label="檢視方式">
+            <button type="button" data-view="A" aria-pressed="${work.view === 'A'}">工作總覽</button>
+            <button type="button" data-view="B" aria-pressed="${work.view === 'B'}">看板</button>
+          </div>
+          <button class="btn primary" type="button" id="card-new">＋ 新增卡片</button>
+          <button type="button" class="btn m-flt-btn" data-flt-toggle aria-expanded="false" aria-controls="work-flt-drawer">${FLT_ICO}<span>篩選 ▾</span></button>
+        </div>
+        <div id="work-flt-drawer" class="flt-drawer" aria-label="篩選條件" hidden></div>
+        <div id="work-flt-applied" class="flt-applied" aria-label="已套用篩選" hidden></div>
+        <div id="work-body" data-wb-page="work"></div>`;
+      wb = box.querySelector('#work-body');
+    } else {
+      const cntEl = box.querySelector('[data-work-open-cnt]'); if (cntEl) cntEl.textContent = openTitle;
+      box.querySelectorAll('.work-head [data-view]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.view === work.view)));
+    }
+    wb.innerHTML = bodyHtml;
     box.classList.toggle('is-board', work.view === 'B'); // 看板：高度＝頁面剩餘高度，欄內各自捲動
     if (work.view === 'B') boardMore();
     drawTopbarPage();
-    if (keep === 'card-q') { const q = $('#card-q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
   }
 
   function overviewHtml(all) {
@@ -4290,7 +4632,7 @@
             <span class="crow-main"><span class="crow-title">${typeTag(c)}${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${c.next ? '下一步：' + esc(c.next) : c.status === '待整理' ? '尚未整理下一步' : '—'}${c.claim ? ' · 正在做：' + esc(c.claim.by?.name || '') : ''}</span></span>
             <span class="crow-st">${c.type === NOTE ? noteStPill(c) : c.status === '待確認' ? confirmPill(c) : stPill(c.status)}${ownerHtml(c)}</span>
             <span class="crow-wait small ${isMeRef(c.waitFor) && !(c.status === '已完成' && c.verified) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc((c.status === '已完成' && c.verified ? '' : waitText(c)) || '—')}</span>
-            <span class="crow-time muted small">${shortTime(c.updatedAt)}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
+            <span class="crow-time muted small"${work.time && (work.time !== 'custom' || parseYmd(work.dateFrom) || parseYmd(work.dateTo)) ? ` title="${esc(L('最後有動靜', 'Last activity'))}" data-nt>${esc(dayTime(cardActivityAt(c)))}` : `>${shortTime(c.updatedAt)}`}${c.status === '已封存' ? archTag(c) : doneTag(c) || markHtml(c)}</span>
           </button>${work.filter === '已完成' ? doneLineEnd(c) : ''}`).join('') : `<p class="muted">${work.filter === '已封存' && work.archived.loading ? '載入中…' : '沒有符合條件的卡片。'}</p>`}
         ${archMore}
       </div>
@@ -4883,7 +5225,7 @@
         ${linkBlocksTag(c)}
         ${c.next ? `<span class="muted small">下一步：${esc(c.next)}</span>` : ''}
         ${waitText(c) ? `<span class="cwait ${isMeRef(c.waitFor) ? 'me' : c.status === '受阻' ? 'bad' : ''}">${esc(waitText(c))}</span>` : ''}
-        <div class="ctile-foot">${ownerHtml(c)}<span class="muted small">${shortTime(c.updatedAt).split(' ')[0]}</span></div>${canVerifyDone(c) ? `<div class="ctile-act"><button type="button" class="btn small primary ctile-ok" data-done-ok="${esc(c.cardId)}" aria-label="${esc(`驗收通過 ${c.key || c.cardId}`)}">通過</button></div>` : selfDoneNote(c)}
+        <div class="ctile-foot">${ownerHtml(c)}<span class="muted small"${work.time && (work.time !== 'custom' || parseYmd(work.dateFrom) || parseYmd(work.dateTo)) ? ` title="${esc(L('最後有動靜', 'Last activity'))}" data-nt>${esc(dayTime(cardActivityAt(c)))}` : `>${shortTime(c.updatedAt).split(' ')[0]}`}</span></div>${canVerifyDone(c) ? `<div class="ctile-act"><button type="button" class="btn small primary ctile-ok" data-done-ok="${esc(c.cardId)}" aria-label="${esc(`驗收通過 ${c.key || c.cardId}`)}">通過</button></div>` : selfDoneNote(c)}
         ${mergedHtml(c)}
       </div>`;
     const mini = c => `<button type="button" class="cmini" data-card="${esc(c.cardId)}" draggable="${wide()}">${cidHtml(c)}<span class="cmini-t">${cardPTag(c)} ${esc(cardTitle(c))}</span><span class="muted small">${esc(mmdd(c.verified?.at || c.done?.at || c.updatedAt))}</span>${doneTag(c)}</button>`;
@@ -5301,7 +5643,7 @@
   function dayTime(iso) {
     const t = new Date(iso), now = new Date(), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
     const y = new Date(now); y.setDate(now.getDate() - 1);
-    return t.toDateString() === now.toDateString() ? '今天 ' + hm : t.toDateString() === y.toDateString() ? '昨天 ' + hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`;
+    return t.toDateString() === now.toDateString() ? L('今天 ', 'Today ') + hm : t.toDateString() === y.toDateString() ? L('昨天 ', 'Yesterday ') + hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`;
   }
   // 「發生了什麼」：同人同秒的多筆合成一句；交接寫成「A 把這張交給 B 驗收／做」，備註收合、版號抽出放小字
   function logGroups(d) {
@@ -7665,7 +8007,7 @@
     if (state.page !== 'releases') return;
     const d = rel.data;
     const tabs = `<div class="seg-scope" role="tablist" aria-label="分頁"><button type="button" role="tab" data-rel-tab="list" aria-selected="${rel.tab === 'list'}" aria-pressed="${rel.tab === 'list'}">版本紀錄</button><button type="button" role="tab" data-rel-tab="flows" aria-selected="${rel.tab === 'flows'}" aria-pressed="${rel.tab === 'flows'}">流程圖</button></div>`;
-    const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">v${esc(APP_VERSION)} · <span>${rel.tab === 'flows' ? '每個功能從開始到完成怎麼走' : '每一版新增了什麼、修好了什麼'}</span></span></div>${tabs}</div>`;
+    const head = `<div class="work-head"><div class="work-title"><h2>版本紀錄</h2><span class="muted small">v${esc(APP_VERSION)} · <span>${rel.tab === 'flows' ? '每個功能從開始到完成怎麼走' : '每一版新增了什麼、修好了什麼'}</span></span></div>${tabs}${rel.tab === 'list' ? `<button type="button" class="btn m-flt-btn" data-flt-toggle aria-expanded="false" aria-controls="work-flt-drawer">${FLT_ICO}<span>篩選 ▾</span></button>` : ''}</div>`;
     drawTopbarPage();
     if (rel.tab === 'flows') { box.innerHTML = head + `<section class="wpanel md-doc">${rel.flows ? mdHtml(rel.flows) : '<p class="muted">流程圖讀不到，請重新整理。</p>'}</section>`; return; }
     if (!d) { box.innerHTML = head + '<p class="muted">版本紀錄讀不到，請重新整理。</p>'; return; }
@@ -7676,9 +8018,15 @@
       ${r.fixes.map(f => `<div class="rel-inc fix">🩹 修正 ${esc(f.cause)}（<button type="button" class="link small" data-rel-ver="${esc(f.causeVersion)}">v${esc(f.causeVersion)}</button>）造成的問題：${esc(f.note)}${f.flow ? `（流程 ${esc(f.flow)}）` : ''}</div>`).join('')}
       ${r.causes.map(c => `<div class="rel-inc cause">⚠ 這版造成的問題，由 ${esc(c.fix)}（<button type="button" class="link small" data-rel-ver="${esc(c.fixVersion)}">v${esc(c.fixVersion)}</button>）修好：${esc(c.note)}</div>`).join('')}
       <ul class="rel-commits">${r.commits.map(c => `<li>${c.sha ? `<code>${esc(c.sha)}</code> ` : ''}${esc(releaseTitle(c))}</li>`).join('')}</ul></article>`;
-    box.innerHTML = head + `<div class="work-filters"><input id="rel-q" type="search" placeholder="找版本、卡號或關鍵字（例：MAIN-12、1.0.5、快取）" aria-label="找版本或卡號" value="${esc(rel.q)}"></div>
-      ${d.incidents?.length && !q ? `<section class="wpanel rel-incidents"><b>事故對照</b>${d.incidents.map(i => `<div class="small">${esc(i.fix)}（v${esc(i.fixVersion)}）← ${esc(i.cause)}（<button type="button" class="link small" data-rel-ver="${esc(i.causeVersion)}">v${esc(i.causeVersion)}</button>）：${esc(i.note)}${i.flow ? `（${esc(i.flow)}）` : ''}</div>`).join('')}</section>` : ''}
+    const bodyHtml = `${d.incidents?.length && !q ? `<section class="wpanel rel-incidents"><b>事故對照</b>${d.incidents.map(i => `<div class="small">${esc(i.fix)}（v${esc(i.fixVersion)}）← ${esc(i.cause)}（<button type="button" class="link small" data-rel-ver="${esc(i.causeVersion)}">v${esc(i.causeVersion)}</button>）：${esc(i.note)}${i.flow ? `（${esc(i.flow)}）` : ''}</div>`).join('')}</section>` : ''}
       <section class="rel-list">${list.map(row).join('') || '<p class="muted">找不到符合的版本。</p>'}</section>`;
+    let wb = box.querySelector('#work-body[data-wb-page="releases"]');
+    if (!wb) {
+      box.innerHTML = head + `<div id="work-flt-drawer" class="flt-drawer" aria-label="篩選條件" hidden></div><div id="work-flt-applied" class="flt-applied" aria-label="已套用篩選" hidden></div><div id="work-body" data-wb-page="releases"></div>`;
+      wb = box.querySelector('#work-body');
+    }
+    wb.innerHTML = bodyHtml;
+    syncFilterUi('releases');
     if (rel.hit) { const el = document.getElementById('v' + rel.hit); if (el) setTimeout(() => el.scrollIntoView({ block: 'center' }), 0); }
   }
   // 卡片抽屜：這張卡在哪幾版上線

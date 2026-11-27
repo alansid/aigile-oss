@@ -144,7 +144,8 @@
           <button type="button" class="av-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="av-menu"></button>
         </div>
       </div>
-      <div id="tb-filter-pop" class="tb-filter-pop" role="dialog" aria-label="篩選" hidden></div>
+      <div id="tb-time-menu" class="tb-time-menu" role="menu" aria-label="時間篩選" hidden></div>
+      <div id="tb-date-pop" class="tb-date-pop" role="dialog" aria-label="自訂日期範圍" hidden></div>
       <div id="av-menu" class="av-menu" role="menu" aria-label="個人選單" hidden></div>
       <header class="mobile-top">
         <button type="button" id="m-back" class="m-back" data-proj="hub" aria-label="回我的專案" hidden>‹</button>
@@ -181,9 +182,11 @@
         <button type="button" id="f-clear" class="btn mini" hidden>清除篩選</button>
         <span id="f-count" class="muted small"></span>
         <div class="m-scope f-mobile" role="group" aria-label="範圍"><button type="button" data-scope="all" aria-pressed="true">全部</button><button type="button" data-scope="mine" aria-pressed="false">給我的</button><button type="button" data-scope="related" aria-pressed="false">與我相關</button></div>
-        <button type="button" id="f-open" class="btn f-mobile" aria-haspopup="dialog">篩選 ▾</button>
+        <button type="button" id="f-open" class="btn f-mobile" aria-expanded="false" aria-controls="msg-flt-drawer">篩選 ▾</button>
         <span id="f-summary" class="muted small f-mobile"></span>
       </div>
+      <div id="msg-flt-drawer" class="flt-drawer" aria-label="篩選條件" hidden></div>
+      <div id="msg-flt-applied" class="flt-applied" aria-label="已套用篩選" hidden></div>
       <div id="ai-now" class="ai-now" hidden></div>
       <main id="messages" class="messages" aria-live="polite"></main>
       <div id="cloud-busy" class="cloud-busy" role="status" hidden></div>
