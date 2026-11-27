@@ -4032,7 +4032,7 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .side-brand-row { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 #side-toggle { flex: none; width: 28px; height: 28px; padding: 0; border: 1px solid var(--sb-line); border-radius: 6px; background: var(--sb-card); color: var(--sb-text); font: inherit; cursor: pointer; }
 .ph-swap .pico { display: none; }
-.side-hint { position: fixed; z-index: 90; padding: 5px 9px; border-radius: 5px; color: white; background: #202938; font-size: 13px; pointer-events: none; }
+.side-hint, .tb-hint { position: fixed; z-index: 90; padding: 5px 9px; border-radius: 5px; color: white; background: #202938; font-size: 13px; pointer-events: none; }
 @media (min-width: 900px) {
   .sidebar { transition: width 150ms ease; }
   .sidebar.narrow { width: 64px; padding-inline: 8px; overflow: visible; }

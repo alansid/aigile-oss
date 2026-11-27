@@ -1946,7 +1946,7 @@
     });
   }
   const tbHint = document.createElement('div');
-  tbHint.className = 'side-hint tb-hint';
+  tbHint.className = 'tb-hint';
   tbHint.hidden = true;
   tbHint.setAttribute('aria-hidden', 'true');
   document.body.append(tbHint);
@@ -7973,8 +7973,9 @@
     const aiName = () => set?.candidates?.find(c => c.participantId === set.aiId)?.name || '';
     const menuItem = () => { const m = $('#pset-menu'); return m && !m.hidden && m.dataset.pj === proj ? m.querySelector('[data-pset-act="kbai"]') : null; };
     const notSynced = () => !!skill?.install && skill.install.installed < skill.install.target;
+    const filesTabEl = k => (shownEl(`[data-tb-files-tab="${k}"]`) ? $(`[data-tb-files-tab="${k}"]`) : $(`[data-files-tab="${k}"]`));
     return [
-      { at: atKb, go: goKb, prep: () => psetOpen(null, false), find: () => $('[data-files-tab="kb"]'),
+      { at: atKb, go: goKb, prep: () => psetOpen(null, false), find: () => filesTabEl('kb'),
         title: '知識庫在「文件」的第一個分頁', text: '只有放進這裡的文件會被 AI 整理、被搜尋，回答會附出處。一般專案文件只存檔。' },
       { at: atKb, go: goKb,
         prep: async () => {
@@ -8006,7 +8007,7 @@
         find: () => $('#kb-form [data-kb-up]') || $('#kb-results .kb-empty-btns'), ready: () => !!$('#kb-results > *'),
         sides: ['right', 'bottom', 'top', 'left'], // 空知識庫兩顆鈕正下方是教學連結：說明框先放右邊，不蓋到它
         title: '把文件放進知識庫', text: '新文件按「⬆ 上傳到知識庫」；已經在專案文件的，到「專案文件」勾選後按「📚 加入知識庫」。放進來的會自動排進整理卡。',
-        alt: { find: () => $('[data-files-tab="docs"]'), text: '已經在專案文件的，到「專案文件」勾選後按「📚 加入知識庫」。放進來的會自動排進整理卡。' } },
+        alt: { find: () => filesTabEl('docs'), text: '已經在專案文件的，到「專案文件」勾選後按「📚 加入知識庫」。放進來的會自動排進整理卡。' } },
       { at: () => state.page === 'inbox' && projectView() === proj, go: () => { closeDrawer(); if ($('#modal-root').firstElementChild) closeModal(); return setProjectView(proj, 'inbox'); },
         find: () => $('.sidebar [data-nav="inbox"]'),
         title: '整理 AI 會來問你', text: '兩份文件規定不一樣時，整理 AI 會發 [需確認] 問你以哪份為準，出現在「要你處理」。選一個，它就照你的答案寫。',

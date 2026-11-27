@@ -66,8 +66,8 @@ try {
   assert.equal(p.title, '知識庫在「文件」的第一個分頁');
   assert.equal(p.text, '只有放進這裡的文件會被 AI 整理、被搜尋，回答會附出處。一般專案文件只存檔。');
   assert.equal(p.page, '/p/main/files', 'B 帶到文件頁');
-  assert.ok(await covers(p.hole, `document.querySelector('[data-files-tab="kb"]')`), 'B 第 1 步框「📚 知識庫」分頁');
-  assert.ok(await js("document.querySelector('[data-files-tab=\"kb\"]').getAttribute('aria-selected') === 'true'"), 'B 停在知識庫分頁');
+  assert.ok(await covers(p.hole, `document.querySelector('[data-tb-files-tab="kb"]')`), 'B 第 1 步框「📚 知識庫」分頁');
+  assert.ok(await js("document.querySelector('[data-tb-files-tab=\"kb\"]').getAttribute('aria-selected') === 'true'"), 'B 停在知識庫分頁');
   assert.deepEqual(p.btns, ['下一步']);
   await shot('B1-1280-知識庫分頁');
 
