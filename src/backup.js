@@ -13,7 +13,7 @@ export const BACKUP_FORMAT_VERSION = 1;
 export const EXPORT_TABLES = ['projects', 'project_descriptions', 'project_events', 'app_settings', 'participants', 'project_preferences', 'ai_state', 'messages', 'message_recipients', 'notifications', 'dms',
   'decision_resolutions', 'cards', 'card_log', 'card_msgs', 'card_links', 'suggestions', 'avatars', 'avatar_proposals',
   'skills', 'skill_allows', 'skill_installs', 'skill_syncs', 'join_requests', 'doc_folders', 'docs', 'card_attachments', 'files', 'file_audit', 'file_chunks',
-  'kb_chunks', 'kb_pages', 'card_reviews', 'review_change_sets', 'ai_models', 'model_connections', 'cloud_agents']; // 雲端 AI：模型設定與每隻的設定帶走，金鑰與 Token 不帶（見 DROP_COLS）； card_reviews：審查紀錄；ai_models：每隻 AI 最近回報的模型；知識庫：kb_chunks 是文件抽出的文字（跟著文件走），kb_pages 是 AI 寫的知識頁（一定帶）
+  'kb_chunks', 'kb_pages', 'human_intro_fields', 'human_intro_suggestions', 'human_intro_notices', 'human_intro_profile_notices', 'card_reviews', 'review_change_sets', 'ai_models', 'model_connections', 'cloud_agents']; // 雲端 AI：模型設定與每隻的設定帶走，金鑰與 Token 不帶（見 DROP_COLS）； card_reviews：審查紀錄；ai_models：每隻 AI 最近回報的模型；知識庫：kb_chunks 是文件抽出的文字（跟著文件走），kb_pages 是 AI 寫的知識頁（一定帶）
 // 不匯出：登入用的（Token、密碼雜湊、裝置、登入碼、邀請、救援連結、登入通知、失敗次數）
 // schema_migrations：每個站自己套過哪些資料庫升級，不跟著備份搬
 // Review manifests are durable. Keep the expiring source-code cache out of backups.

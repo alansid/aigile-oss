@@ -12,6 +12,7 @@ import { registerJoin, joinOpen } from './join.js'; // 申請加入專案
 import { registerDocs, DOC_MAX_TOTAL_BYTES } from './docs.js'; // 專案文件區
 import { registerKbPages } from './kb-pages.js'; // 知識頁、整理卡
 import { registerLauncher } from './launcher.js';
+import { registerHumanIntros } from './human-intros.js';
 import { registerReviews } from './reviews.js'; // 審查者
 import { registerCardTemplates } from './card-templates.js'; // 專案級卡片範本
 import { registerBackup } from './backup.js'; // 備份匯出與匯入
@@ -516,10 +517,17 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
 
   async function serializeNotifications(ctx, rows) {
     if (!rows.length) return [];
+    const changedIds = rows.filter(n => n.reasons.includes('"memberRole"')).map(n => n.message_id);
+    const changes = new Map(changedIds.length ? (await db.all('SELECT * FROM human_intro_notices WHERE message_id IN (SELECT value FROM json_each(?))',JSON.stringify(changedIds))).map(r => [r.message_id,{role:r.new_role,responsibility:r.new_responsibility}]) : []);
     const dmIds = rows.filter(n => n.reasons === '["dm"]').map(n => n.message_id);
     const msgs = new Map((await db.all('SELECT * FROM messages WHERE id IN (SELECT value FROM json_each(?))',
       JSON.stringify(rows.filter(n => n.reasons !== '["dm"]').map(n => n.message_id)))).map(m => [m.id, m]));
     // 私訊通知（只有收件的本人看得到自己的通知）
+    const profileIds = rows.filter(n => n.reasons === '["profileIntro"]').map(n => n.id);
+    if (profileIds.length) {
+      const notices = await db.all('SELECT n.message_id,p.author_id FROM human_intro_profile_notices p JOIN notifications n ON n.id=p.notification_id WHERE n.id IN (SELECT value FROM json_each(?))',JSON.stringify(profileIds));
+      for (const n of notices) msgs.set(n.message_id,{id:n.message_id,author_id:n.author_id,text:'[通知] 已更新你的介紹'});
+    }
     if (dmIds.length) for (const d of await db.all('SELECT * FROM dms WHERE id IN (SELECT value FROM json_each(?))', JSON.stringify(dmIds)))
       msgs.set(d.id, { id: d.id, author_id: d.from_id, ai_id: d.ai_id, reply_to: null, project: d.project, text: d.text, dm: true });
     const people = await peopleMap(ctx, [...msgs.values()].map(m => m.author_id).filter(id => id !== 'system')); // 平台通知不是成員，別為它重讀成員表
@@ -533,6 +541,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       const reasons = JSON.parse(n.reasons);
       return {
         notificationId: n.id,
+        ...(changes.has(m.id) ? {memberRoleChange:changes.get(m.id)} : {}),
         reasons,
         messageId: n.message_id,
         replyToMessageId: m.reply_to,
@@ -913,7 +922,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     const limit = parseLimit(url);
     // 看不到的訊息（例如被移出專案後）的通知不列出
     const scope = await messageScope(me, 'm');
-    const join = scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''; // 私訊通知不看專案範圍
+    const join = scope ? ` AND (n.reasons IN ('["dm"]','["profileIntro"]') OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''; // 私訊通知不看專案範圍
     // order=desc（網頁收件匣用）：先給最新的；預設由舊到新（AI 依序處理）
     const desc = url.searchParams.get('order') === 'desc';
     const sql = status === 'pending'
@@ -3340,10 +3349,10 @@ ${ending}`;
   route('GET', '/api/notifications/count', async ({ me, ctx, url }) => {
     onlyParams(url, ['wake'], 'GET /api/notifications/count');
     const scope = await messageScope(me, 'm');
-    const r = await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''}`, me.id, ...(scope ? scope.args : [])); // 私訊通知也算
+    const r = await db.get(`SELECT COUNT(*) AS c FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons IN ('["dm"]','["profileIntro"]') OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''}`, me.id, ...(scope ? scope.args : [])); // 私訊通知也算
     // （UX 退回）：?wake=1 另回「要叫醒的」數量，知會類（wake:false）不算——等待腳本看這個，否則留著的知會會讓它一啟動就醒、空轉
     if (url.searchParams.get('wake') !== '1' || !r.c) return { pending: r.c, ...(url.searchParams.get('wake') === '1' ? { wake: 0 } : {}) };
-    const rows = await db.all(`SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons = '["dm"]' OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''} ORDER BY n.created_at, n.rowid LIMIT 200`, me.id, ...(scope ? scope.args : []));
+    const rows = await db.all(`SELECT n.* FROM notifications n WHERE n.recipient_id = ? AND n.status = 'pending'${scope ? ` AND (n.reasons IN ('["dm"]','["profileIntro"]') OR EXISTS (SELECT 1 FROM messages m WHERE m.id = n.message_id AND ${scope.sql}))` : ''} ORDER BY n.created_at, n.rowid LIMIT 200`, me.id, ...(scope ? scope.args : []));
     return { pending: r.c, wake: (await serializeNotifications(ctx, rows)).filter(x => x.wake).length };
   });
   route('POST', '/api/notifications/ack', async ({ me, req }) => { const b = await readJson(req); return ackNotifications(me, b.notificationIds, b.cursor); }); // cursor 選填
@@ -3979,6 +3988,7 @@ ${ending}`;
   handle.cloudDrain = opts => cloudApi.drain({ maxSteps: 100, ...opts }); // 測試用：把排好的雲端 AI 跑完
   const cardsApi = registerCards({ route: cardRoute, searchQuota, cardKey, cardSeqByKey, createMessage, readCardReturn, storeCardReturnFile, checkFiles, filesText: (note, files) => filesText(note, files).slice(0, MAX_TEXT), isolatedFrom, canSeeMessage, reviewOf: (c, ctx) => reviewsApi.reviewOf(c, ctx), cardTemplates: cardTemplatesApi, archiveEveryMs: config.archiveEveryMs !== undefined && config.archiveEveryMs !== '' ? Number(config.archiveEveryMs) : 10 * 60_000, projectName: id => nameOf(id), PROJECTS, projectsOf, projectFilter, db, ApiError, invalid, readJson, peopleMap, randId, nowIso, parseLimit, invalidatePeople: invalidateTeam, cardStaleHours: config.cardStaleHours, boardLimit: BOARD_LIMIT });
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）
+  const introSummaries = registerHumanIntros({ route, db, readJson, invalid, requireHuman, assertWritable, projectsOf, nowIso, peopleMap, adminOf, loadLeaders, randId, ApiError, readRole, loadProjectRoles, projEvent, invalidatePeople });
   const reviewsApi = registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager: kbManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, isolatedFrom,
     roleNamesIn: (p, pj) => (p.kind === 'ai' ? [p.role_key, p.role] : [projRoles[p.id]?.[pj]]).filter(Boolean), repoOf: async pj => (await reposMap())[pj] || null, docStorage, audit });
   async function launcherSetupText(ai, base, tool, currentToken) {
@@ -4079,9 +4089,10 @@ ${ending}`;
     })) : [];
     // AI 詳情的「工具・模型」（模型是 AI 接上、送審、審查時自己回報的；列表不顯示）
     const aiTm = await reviewsApi.aiInfo();
+    const intros = await introSummaries(me, people, project);
     const toolModel = m => (m.memberType !== 'ai' ? m : { ...m, aiTool: aiTm.tools.get(m.participantId) || null, aiModel: (r => (r ? { model: r.model, via: r.via, at: r.at } : null))(aiTm.reported.get(m.participantId)) });
-    return { ...d, decisions: project ? decisions.filter(x => x.project === project) : decisions, unanswered,
-      members: roleForProject((await scopeTeamMembers(me, d.members, priv, project)).concat(disabled).map(toolModel).filter(m => inTeam(m.participantId) && sees(m.participantId)).map(scopeMemory).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url, adminOf(people)?.id) }; // 工作記憶依專案可見；C-xxx 角色依專案
+    return { ...d, untrusted_content: [...(d.untrusted_content || []), 'members.intro'], decisions: project ? decisions.filter(x => x.project === project) : decisions, unanswered,
+      members: roleForProject((await scopeTeamMembers(me, d.members, priv, project)).concat(disabled).map(m => intros.has(m.participantId) ? { ...m, intro: intros.get(m.participantId) } : m).map(toolModel).filter(m => inTeam(m.participantId) && sees(m.participantId)).map(scopeMemory).map(m => (m.projectRoles && isolatedFrom(me) && m.participantId !== me.id ? { ...m, projectRoles: Object.fromEntries(Object.entries(m.projectRoles).filter(([k]) => projectsOf(me).includes(k))) } : m)), url, adminOf(people)?.id) }; // 工作記憶依專案可見；C-xxx 角色依專案
   });
   route('POST', '/api/decisions/:id/resolve', async ({ me, params }) => {
     requireHuman(me);

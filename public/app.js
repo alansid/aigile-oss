@@ -4297,7 +4297,7 @@
       return `<button class="link" data-project-card="${esc(s.cardId)}">${esc(s.cardId)} ${esc(s.title)}</button>`;
     if (s?.messageId && teamRank(m) < 3)
       return `<button class="link" data-team-message="${esc(s.messageId)}">${esc(s.title)}</button>`;
-    return m.memberType === 'ai' ? pageText('沒有在做的卡', 'No active card') : '—';
+    return m.memberType === 'ai' ? pageText('沒有在做的卡', 'No active card') : '';
   }
   function teamAiDetails(m) {
     const info = m.aiState, todo = info?.backlog || [];
@@ -4360,9 +4360,24 @@
       ${
         ai
           ? teamAiDetails(m)
-          : esc(role)
+          : (m.intro === undefined ? esc(role) : `<div data-team-intro>${esc(m.intro || pageText('還沒寫介紹。','No introduction yet.'))} ${m.intro ? '' : '<button class="link" data-team-mention="'+esc(mTag)+'">'+pageText('提醒他寫 ›','Remind them ›')+'</button>'}</div><button class="link" hidden data-intro-open="${esc(m.participantId)}">${pageText('編輯介紹','Edit introduction')}</button><div data-member-intro></div>`)
       } <div class="team-actions">${actions} ${ai ? ownedCards : ''}</div>`
       }</section></details>`;
+  }
+  async function showTeamIntro(event) {
+    const row = event.target;
+    if (!row.matches?.('details.project-member[open]')) return;
+    const summary = row.querySelector('[data-team-intro]');
+    if (!summary || summary.dataset.loaded) return;
+    summary.dataset.loaded = '1';
+    try {
+      const profile = await api('/api/participants/'+encodeURIComponent(row.dataset.tmId)+'/intro');
+      const project = projectView();
+      const labels = new Map([['business',pageText('懂','Knows')],['skills',pageText('擅長','Strengths')],['decisions',pageText('能決定','Decides')],['contact',pageText('怎麼問','How to ask')],['responsibility',pageText('在','In ')+projName(project)]]);
+      const fields = [...labels.keys()].map(key => profile.fields.find(r => r.field === key && r.value && (!r.project || r.project === project))).filter(Boolean);
+      row.querySelector('[data-intro-open]').hidden = !profile.canEdit;
+      if (fields.length) summary.innerHTML = '<dl class="intro-read">'+fields.map(r => '<dt>'+esc(labels.get(r.field))+'</dt><dd>'+esc(r.value)+'</dd>').join('')+'</dl>';
+    } catch { delete summary.dataset.loaded; }
   }
   async function renderTeamPage() {
     const box = $('#page-work'),
@@ -4391,6 +4406,7 @@
         <div class="team-columns"><b>${pageText('成員', 'Member')}</b><b>${pageText('狀態', 'Status')}</b><b>${pageText('在做什麼', 'Working on')}</b><b>${pageText('最後出現', 'Last seen')}</b></div>${t.active.map((m) => teamRow(m, project, false, tdups)).join('')}
         <details class="inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true, tdups)).join('')}</details>
         <details><summary>${pageText('狀態怎麼判斷？', 'How is status decided?')}</summary>${pageText('優先看負責的卡，再看最新訊息。AI 超過 20 分鐘沒出現算可能斷線，開著等待腳本放寬到 60 分鐘。', 'Cards take priority over tagged messages. An AI may be offline after 20 minutes, or 60 minutes with a watcher.')}</details></div>`;
+      box.addEventListener('toggle', showTeamIntro, true);
       applyTeamSearch(box);
       drawTopbarPage();
     } catch (err) {
@@ -4398,6 +4414,11 @@
     }
   }
   document.addEventListener('click', (e) => {
+    const intro = e.target.closest('[data-intro-open]');
+    if (intro) {
+      renderIntro(intro.nextElementSibling,'/api/participants/'+encodeURIComponent(intro.dataset.introOpen)+'/intro',projectView());
+      return;
+    }
     const b = e.target.closest('[data-project-card],[data-team-message],[data-team-mention],[data-team-cards]');
     if (!b) return;
     if (b.dataset.projectCard) {
@@ -4764,10 +4785,18 @@
       ${sec.map(secHtml).join('')}
       ${list.length || sec.length ? list.map(n => {
         const who = state.participants.get(n.sender.participantId) || { ...n.sender, memberType: 'human' };
+        const change = n.memberRoleChange;
+        let preview = n.reasons.includes('profileIntro') ? pageText('你的介紹已更新','Your introduction was updated') : n.preview;
+        if (change) {
+          const project = projName(n.project), name = n.sender.name, details = [];
+          if (change.role !== null) details.push(pageText(name+' 改了你在「'+project+'」的角色：'+(change.role || '未設定'), name+' changed your role in "'+project+'": '+(change.role || 'Not set')));
+          if (change.responsibility !== null) details.push(pageText(name+' 改了你在「'+project+'」負責的事：'+(change.responsibility || '未填寫'),name+' changed what you\'re responsible for in "'+project+'": '+(change.responsibility || 'Not set')));
+          preview = details.join(pageText('。',' · '));
+        }
         return `<div class="sugg-row fyi-row" id="fyi-${esc(n.notificationId)}"><span class="ndot" aria-hidden="true"></span>${avatar(who)}
-          <button type="button" class="fyi-main" data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}" aria-label="${esc(`未讀，${n.sender.name}，${fmtTime(n.createdAt)}：${n.preview}。查看`)}">
+          <button type="button" class="fyi-main" ${change ? 'data-role-project="'+esc(n.project)+'"' : ''} ${n.reasons.includes('profileIntro') ? 'data-profile-notice' : ''} data-note-goto="${esc(n.messageId)}" data-n="${esc(n.notificationId)}" aria-label="${esc(`未讀，${n.sender.name}，${fmtTime(n.createdAt)}：${preview}。查看`)}">
             <span class="fyi-top"><b>${esc(n.sender.name)}</b>${n.ask === false ? '<span class="apill fyi me">知會你</span>' : n.reasons.map(r => reason[r] || '').join('')}<span class="msg-time">${fmtTime(n.createdAt)}</span></span>
-            <span class="fyi-text">${esc(n.preview.replace(/\s+/g, ' '))}</span></button>
+            <span class="fyi-text">${esc(preview.replace(/\s+/g, ' '))}</span></button>
           <button type="button" class="fyi-read" data-note-ack="${esc(n.notificationId)}" aria-label="${esc(n.sender.name)} 這則標為已讀">已讀</button></div>`;
       }).join('') : '<p class="muted small">沒有需要你知道的新通知。</p>'}
       ${work.notesMore ? `<p class="muted small notes-more">只顯示最新 50 則，還有 ${work.notesMore} 則較舊的通知。</p>` : ''}</section>`;
@@ -5296,7 +5325,7 @@
     }
     if (t.closest('[data-goto-inbox]')) { showPage('inbox'); return; }
     const ng = t.closest('[data-note-goto]');
-    if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
+    if (ng) { try { await ackNotes([ng.dataset.n]); } catch (err) { return toast(err.message); } if (ng.hasAttribute('data-profile-notice')) return openSettings({tab:'me'}); if (ng.dataset.roleProject) return openMemberRoles(ng.dataset.roleProject); showPage('messages'); return jumpTo(ng.dataset.noteGoto); }
     const pv = t.closest('[data-ask-pv]');
     if (pv) return toggleAskPv(pv);
     const cr = t.closest('[data-cloud-rerun]'), cl = t.closest('[data-cloud-limit]'); // 雲端 AI 到上限：再跑一輪／改每輪上限
@@ -12925,7 +12954,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   function psetItems(pj) {
     const admin = isAdmin(), lead = leadersOf(pj).includes(meId()), it = [];
     if (admin || lead) it.push(['rename', '✏️', '改名'], ['repo', '🔗', '程式庫與分支']);
-    if (admin || lead) it.push(['members', '👥', '成員與本專案角色']);
+    it.push(['memberRoles', '👥', pageText('成員與角色','Members & roles')]);
+    if (admin || lead) it.push(['members', '👥', pageText('管理成員名單','Manage membership')]);
     if (admin || lead) it.push(['kbai', '📚', '知識庫整理 AI', esc(kbAiNames[pj] || '')]); 
     if (admin || lead) it.push(['review', '🔍', '審查']);
     if (admin || lead) it.push(['templates', '📋', '卡片範本', ctplCounts[pj] !== undefined ? `${ctplCounts[pj]} 個` : '']);
@@ -12954,8 +12984,48 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const tp = m.querySelector('[data-pset-act="templates"]');
     if (tp && ctplCounts[pj] === undefined) api(`/api/projects/${encodeURIComponent(pj)}/card-templates`).then(r => { ctplCounts[pj] = (r.templates || []).filter(x => x.enabled !== false).length; if (!m.hidden && m.dataset.pj === pj && !tp.querySelector('.muted')) tp.insertAdjacentHTML('beforeend', `<span class="muted small">${ctplCounts[pj]} 個</span>`); }).catch(() => {});
   }
+  async function openMemberRoles(project) {
+    const t = pageText;
+    const body = openModal(t('成員與角色','Members & roles')+' · '+projName(project), '<div data-role-list role="status">…</div>');
+    const endpoint = '/api/projects/'+encodeURIComponent(project)+'/member-intros';
+    const list = body.querySelector('[data-role-list]');
+    async function draw() {
+      const {members,leaderNames} = await api(endpoint);
+      const headers = [t('成員','Member'),t('角色','Role'),t('在這個專案負責什麼','Responsible for in this project')];
+      const editors = t('能改：本人、管理員、專案負責人','Can edit: member, administrator, project lead');
+      const names = leaderNames.length ? t('（'+leaderNames.join('、')+'）',' ('+leaderNames.join(', ')+')') : '';
+      list.innerHTML = '<p class="role-editors muted small">'+esc(editors+names)+'</p><div class="role-list-head">'+headers.map(h=>'<b>'+esc(h)+'</b>').join('')+'</div>'+
+        members.map((m,i)=>`<section class="intro-member"><div class="role-row"><b title="${esc(m.name)}">${esc(m.name)}</b><span>${m.role ? '<span class="pill-tag blue">'+esc(m.role)+'</span>' : '—'}</span><span class="${m.responsibility ? '' : 'muted'}">${esc(m.responsibility || (m.id === meId() ? t('還沒寫，按編輯補上','Select Edit to add your responsibilities') : '—'))}</span>
+          ${m.canEdit ? '<button class="btn small" data-edit-row="'+i+'">'+t('編輯','Edit')+'</button>' : ''}</div>
+          ${m.updatedAt && m.updatedByOther ? '<small class="muted" data-role-history>'+esc(m.updatedAt.slice(5,10).replace('-','/')+t(' 由 '+m.updatedBy+' 修改',' edited by '+m.updatedBy))+'</small>' : ''}</section>`).join('');
+      list.querySelectorAll('[data-edit-row]').forEach(button => button.onclick = () => {
+        const member = members[Number(button.dataset.editRow)], section = button.closest('section');
+        if (section.querySelector('form')) return;
+        const form = document.createElement('form');
+        form.className = 'stack';
+        form.innerHTML = `<label>${headers[1]}<input name="role" maxlength="10" ${member.kind === 'ai' ? 'readonly' : ''} value="${esc(member.role)}"></label><label>${headers[2]}<textarea name="responsibility" rows="2">${esc(member.responsibility)}</textarea></label><div><button class="btn primary" type="submit">${t('儲存','Save')}</button> <button class="btn" type="button" data-cancel>${t('取消','Cancel')}</button></div>`;
+        section.append(form);
+        button.hidden = true;
+        form.elements.role.focus();
+        form.querySelector('[data-cancel]').onclick = () => {form.remove(); button.hidden=false;};
+        form.onsubmit = async event => {
+          event.preventDefault();
+          const submit = form.querySelector('[type=submit]');
+          if (submit.disabled) return;
+          submit.disabled = true;
+          try {
+            await api(endpoint+'/'+encodeURIComponent(member.id),{method:'PATCH',body:{role:form.elements.role.value,responsibility:form.elements.responsibility.value}});
+            await draw();
+            toast(t('已儲存','Saved'));
+          } catch (err) { toast(err.message); submit.disabled=false; }
+        };
+      });
+    }
+    try { await draw(); } catch (err) { list.textContent=err.message; }
+  }
   async function psetAct(k, pj) {
     try {
+      if (k === 'memberRoles') return openMemberRoles(pj);
       if (k === 'kbai') return kbAiSetting(pj);
       if (k === 'review') return openReviewSettings(pj);
       if (k === 'templates') return openCardTemplates(pj);
@@ -14057,6 +14127,88 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   document.addEventListener('click', e => { const b = e.target.closest?.('[data-set-open]'); if (!b) return; closeModal(); return b.dataset.setOpen === 'devices' ? openDevices() : openApi(); }); // 從個人設定進
   const SET_TABS = [['look', '🎨', '外觀'], ['me', '👤', '個人資料'], ['proj', '📁', '我的專案'], ['acct', '🔐', '帳號與登入']];
   const SET_TAB_KEY = 'aigile-switch-set-tab';
+  const introLabels = {
+    business: ['懂哪些業務或系統', 'Business areas or systems', '例如：帳務對帳', 'Example: account reconciliation'],
+    skills: ['擅長', 'Strengths', '例如：釐清需求', 'Example: clarifying requirements'],
+    decisions: ['能決定的事', 'Decisions I can make', '例如：驗收標準', 'Example: acceptance criteria'],
+    contact: ['怎麼問我比較好', 'How to ask me', '例如：附上卡號和問題', 'Example: include the card and question'],
+    responsibility: ['負責什麼', 'Responsibilities', '', '']
+  };
+  async function renderIntro(host, path, scope = null) {
+    if (!host || host.dataset.loading) return;
+    host.dataset.loading = '1';
+    try {
+      const data = await api(path);
+      if (!host.isConnected) return;
+      const self = path === '/api/me/intro';
+      const items = Object.keys(introLabels).filter(k => k !== 'responsibility').map(field => ({field,project:''}));
+      function input(item,i) {
+        const row = data.fields.find(r => r.field === item.field && r.project === item.project);
+        const words = introLabels[item.field], label = (item.project ? projName(item.project)+' · ' : '') + pageText(words[0],words[1]);
+        item.value = row?.value || '';
+        const canEdit = data.canEdit && (!item.project || data.writable.includes(item.project));
+        return canEdit ? `<label class="field"><b>${esc(label)}</b><span class="intro-input"><textarea data-intro-i="${i}" rows="1" placeholder="${esc(pageText(words[2],words[3]))}">${esc(item.value)}</textarea><small data-count>${Array.from(item.value).length}/200</small></span></label>` :
+          `<div class="field"><b>${esc(label)}</b><p>${esc(item.value || '—')}</p></div>`;
+      }
+      const controls = items.map(input);
+      const recent = data.fields.find(r => !r.project);
+      const hint = pageText('所有共同專案的成員和 AI 都看得到。銀行或客戶業務的細節，請寫在「專案 ⚙ › 成員與角色」。',`Everyone who shares a project with you, people and AIs, can see this. Put bank or customer details in Project ⚙ › Members & roles.`);
+      const suggestions = data.suggestions.map(r => {
+        const label = pageText(...introLabels[r.field].slice(0,2));
+        const field = r.project ? projName(r.project)+' · '+label : label;
+        const title = pageText(r.proposerName+' 建議在「'+field+'」加上「'+r.value+'」',r.proposerName+' suggests adding “'+r.value+'” to '+field);
+        return `<div class="intro-suggestion"><span>✦ ${esc(title)} ${r.reason ? esc(pageText('（'+r.reason+'）','('+r.reason+')')) : ''}</span><span class="intro-choices"><button type="button" class="btn small" data-choice="reject" data-id="${esc(r.id)}">${pageText('不要','Dismiss')}</button><button type="button" class="btn primary small" data-choice="accept" data-id="${esc(r.id)}">${pageText('加上','Accept')}</button></span></div>`;
+      }).join('');
+      host.innerHTML = `<h3>${self ? pageText('我的介紹','My introduction') : pageText('成員介紹','Member introduction')}</h3>${self ? `<p class="muted small">${pageText('寫給團隊和 AI 看：你懂什麼、能決定什麼、怎麼找你。每欄最多 200 字，空著也可以。','Tell your team and AI what you know, what you can decide and how to reach you. Each field is optional, up to 200 characters.')}</p>` : ''}${suggestions}<div class="intro-columns"><div>${controls.slice(0,2).join('')}<details class="intro-extra" open><summary>${pageText('更多欄位','More fields')}</summary>${controls.slice(2,4).join('')}</details><p class="muted small">${esc(hint)}</p>${self && data.projects.length ? '<div class="intro-project-links">'+data.projects.map(p => '<button type="button" class="link" data-intro-project="'+esc(p)+'">'+esc(projName(p)+' ⚙ › '+pageText('成員與角色','Members & roles'))+'</button>').join(' · ')+'</div>' : ''}</div>
+        ${self ? '<aside class="intro-preview"><b>'+pageText('成員看到的介紹','Member preview')+'</b><dl data-human></dl><b>'+pageText('AI 看到的摘要','AI summary')+'</b><p data-ai></p></aside>' : ''}</div>
+        <footer class="intro-footer"><small>${esc(pageText('上次更新','Last updated')+' · '+(recent ? recent.updated_at.slice(0,10)+' · '+recent.updatedByName : '—'))}</small>
+        ${data.canEdit ? '<button type="button" class="btn primary" data-save>'+pageText('儲存','Save')+'</button>' : ''}
+        </footer>`;
+      host.querySelector('.intro-extra').open = !matchMedia('(max-width:600px)').matches;
+      const inputs = [...host.querySelectorAll('textarea')];
+      function refresh() {
+        const values = items.map(r => r.value);
+        let dirty = false, invalid = false;
+        for (const t of inputs) {
+          const i = Number(t.dataset.introI), length = Array.from(t.value).length;
+          values[i] = t.value.trim();
+          t.closest('label').querySelector('[data-count]').textContent = length+'/200';
+          t.style.height = 'auto';
+          if (t.scrollHeight) t.style.height = Math.max(40,t.scrollHeight+2)+'px';
+          t.setAttribute('aria-invalid',String(length > 200));
+          invalid ||= length > 200;
+          dirty ||= values[i] !== items[i].value;
+        }
+        if (self) {
+          const labels = [pageText('懂','Knows'), pageText('擅長','Strengths'), pageText('能決定','Decides'), pageText('怎麼問','How to ask')];
+          host.querySelector('[data-human]').innerHTML = labels.map((label,i) => '<dt>'+esc(label)+'</dt><dd>'+esc(values[i] || '—')+'</dd>').join('');
+          host.querySelector('[data-ai]').textContent = Array.from(values.slice(0,4).filter(Boolean).join(' · ')).slice(0,150).join('') || '—';
+        }
+        if (host.querySelector('[data-save]')) host.querySelector('[data-save]').disabled = invalid || !dirty;
+      }
+      host.querySelector('.intro-extra').ontoggle = refresh;
+      inputs.forEach(t => t.oninput = refresh);
+      refresh();
+      host.onclick = async event => {
+        const link = event.target.closest('[data-intro-project]');
+        if (link) { await openMemberRoles(link.dataset.introProject); return; }
+        const btn = event.target.closest('[data-save],[data-choice]');
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        try {
+          if (btn.hasAttribute('data-save')) {
+            const edits = inputs.map(t => ({...items[Number(t.dataset.introI)],value:t.value.trim()})).filter(e => items.find(r => r.project === e.project && r.field === e.field).value !== e.value);
+            await api(path,{method:'PATCH',body:{edits}});
+          } else {
+            await api('/api/me/intro/suggestions/'+encodeURIComponent(btn.dataset.id),{method:'POST',body:{resolution:btn.dataset.choice}});
+          }
+          await renderIntro(host,path,scope);
+          toast(pageText('已儲存','Saved'));
+        } catch (err) { btn.disabled = false; toast(err.message); }
+      };
+    } catch (err) { host.textContent = err.message; }
+    finally { delete host.dataset.loading; }
+  }
   function openSettings(opts = {}) {
     const theme = store.get(THEME_KEY) || 'system';
     // 個人設定分四頁（電腦左邊分頁、手機上方可滑）；記住上次分頁，捷徑直接開對應分頁
@@ -14090,7 +14242,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <button class="btn small primary" type="button" data-change-avatar>更換</button>
         ${myAisForAvatar().length ? '<button class="btn small" type="button" data-set-av="ask">🖼 請我的 AI 幫我做</button>' : ''}
         <button class="btn small" type="button" data-set-av="revert">↩ 換回上一張</button>
-      </div>`)}
+      </div>${state.me.memberType === "human" ? '<section data-my-intro></section>' : ""}`)}
       ${pane('proj', `
       <div class="field"><span class="field-label">所屬專案</span>
         <p class="muted small">單一專案成員只看自己專案與「全部專案」的訊息與卡片。所屬專案由群組管理員（${esc(state.projMeta.adminName || '')}）在頭像選單的「成員管理」調整，這裡只能看。</p>
@@ -14132,8 +14284,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (k === 'proj') body.querySelectorAll('[data-myrole]').forEach(s => { s.value = savedRole(s.dataset.myrole); s.dataset.v = s.value; s.classList.toggle('empty', !s.value); });
       if (k === 'acct' && pwdForm) { ['current', 'newPassword', 'again'].forEach(n => { pwdForm[n].value = ''; }); pwdForm.username.value = pwdForm.dataset.saved ?? ''; body.querySelector('#pwd-set-err').textContent = ''; }
     };
+    const introHost = body.querySelector('[data-my-intro]');
+    if (cur === 'me') renderIntro(introHost,'/api/me/intro');
     let curTab = cur;
     async function showSetTab(k, focus = false) {
+      if (k === 'me' && introHost && !introHost.children.length) renderIntro(introHost,'/api/me/intro');
       if (k === curTab) return;
       if (dirtyIn(curTab)) {
         const what = curTab === 'proj' ? '我的角色' : '帳號密碼';
