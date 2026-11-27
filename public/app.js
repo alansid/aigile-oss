@@ -3449,11 +3449,12 @@
     }
     const root = $('#modal-root');
     if (!root.firstElementChild) modalReturnFocus = document.activeElement;
+    modalGuard = null;
     root.innerHTML = modalFrame({ title, body: bodyHtml, ...opts });
     const overlay = root.firstElementChild;
     holdBackdrop(overlay);
     overlay.addEventListener('click', e => {
-      if (e.target.closest('[data-close]')) closeModal(); // 點灰底不關，只能按 × 或 Esc
+      if (e.target.closest('[data-close]')) tryCloseModal(); // 點灰底不關，只能按 × 或 Esc
     });
     const modal = overlay.querySelector('.modal');
     (modal.querySelector('.modal-body input:not([type=checkbox]), .modal-body select, .modal-body textarea') || modal.querySelector('.modal-x')).focus();
@@ -3461,7 +3462,10 @@
     body.modal = modal; // 給呼叫端取用標頭與底部按鈕
     return body;
   }
+  let modalGuard = null; // 關彈窗前先問：回傳 true 才關（角色提案改了沒送出）
+  async function tryCloseModal() { if (modalGuard && !(await modalGuard())) return; closeModal(); }
   function closeModal() {
+    modalGuard = null;
     $('#modal-root').innerHTML = '';
     if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
     modalReturnFocus = null;
@@ -3492,7 +3496,7 @@
     });
   }
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && !document.querySelector('.confirm-root') && $('#modal-root').firstElementChild) closeModal();
+    if (e.key === 'Escape' && !document.querySelector('.confirm-root') && $('#modal-root').firstElementChild) tryCloseModal();
   });
   // 彈窗內 Tab 不跑出去
   document.addEventListener('keydown', e => {
@@ -7518,19 +7522,90 @@
   const dmTime = iso => { const t = new Date(iso), hm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; return t.toDateString() === new Date().toDateString() ? hm : `${t.getMonth() + 1}/${t.getDate()} ${hm}`; };
   // 角色提案卡：名稱、代碼、五題可以直接改字；只有該專案 leader／管理員能按「建立角色」
   const RP_FIELDS = [['role', '名稱', 10], ['key', '代碼', 4], ['duties', '主要職責'], ['style', '溝通風格'], ['autonomy', '可自主處理'], ['mustConfirm', '要先問人'], ['handoff', '完成與交接']];
-  const RP_LABEL = { skipped: '已略過', expired: '已過期（24 小時沒處理）' };
+  // 角色提案：私訊裡只放精簡卡，「打開提案」開彈窗看全文、修改、建立；已處理的收成一行，「看內容」開唯讀彈窗
+  const RP_TEXT = RP_FIELDS.slice(2);
   dm.rpEdit = {};
+  const rpOf = id => dm.items.find(it => it.roleProposal?.proposalId === id)?.roleProposal;
+  const rpVal = (p, k) => (dm.rpEdit[p.proposalId] || {})[k] ?? p.draft[k] ?? '';
+  const rpDirty = p => RP_FIELDS.some(([k]) => rpVal(p, k) !== (p.draft[k] ?? ''));
+  const rpDone = p => p.status === 'created' ? `✓ 已建立「${esc(p.draft.role)}」（${esc(p.createdKey || p.draft.key)}）`
+    : p.status === 'skipped' ? `已略過 · 角色提案「${esc(p.draft.role)}」` : `已過期（24 小時沒處理）· 「${esc(p.draft.role)}」`;
+  const rpUntil = p => `<span class="muted small rp-until">${esc(fmtTime(p.expiresAt).replace(/:[0-9]{2}$/, ''))} 前有效</span>`; // 只寫到分
   function rpCard(d) {
-    const p = d.roleProposal, ed = dm.rpEdit[p.proposalId] || {}, v = k => ed[k] ?? p.draft[k] ?? '';
-    const edit = p.canCreate, pending = p.status === 'pending', human = state.me?.memberType === 'human';
-    const field = ([k, t, max]) => edit
-      ? `<label class="rp-f"><span>${t}</span>${max ? `<input data-rp-f="${k}" maxlength="${max}" value="${esc(v(k))}"${k === 'key' ? ' autocapitalize="characters"' : ''}>` : `<textarea data-rp-f="${k}" rows="2" maxlength="1000">${esc(v(k))}</textarea>`}</label>`
-      : `<div class="rp-f"><span>${t}</span><b>${esc(v(k))}</b></div>`;
-    const acts = edit ? `<div class="ap-acts"><button type="button" class="btn small primary" data-rp-create="${esc(p.proposalId)}">建立角色</button><button type="button" class="btn small" data-rp-skip="${esc(p.proposalId)}">不要</button><span class="muted small">${esc(fmtTime(p.expiresAt))} 前有效</span></div>`
-      : pending && human ? `<div class="ap-acts"><span class="muted small">只有「${esc(p.projectName)}」的 leader／管理員能按「建立角色」</span><button type="button" class="btn small" data-rp-skip="${esc(p.proposalId)}">不要</button></div>`
-      : p.status === 'created' ? `<span class="muted small">✓ 已建立「${esc(p.draft.role)}」（${esc(p.createdKey || p.draft.key)}），在${esc(p.projectName)}的角色選單</span>` : `<span class="muted small">${RP_LABEL[p.status] || ''}</span>`;
-    return `<div class="rp-card${pending ? '' : ' done'}" data-rp-card="${esc(p.proposalId)}"><div class="rp-head">🧩 角色提案 · 只用在「${esc(p.projectName)}」</div>
-      <div class="rp-body">${RP_FIELDS.map(field).join('')}</div>${pending && p.conflict ? `<p class="rp-conflict" role="alert">⚠ ${esc(p.conflict)}</p>` : ''}${acts}</div>`;
+    const p = d.roleProposal, id = esc(p.proposalId), human = state.me?.memberType === 'human';
+    if (p.status !== 'pending') return `<div class="rp-card done" data-rp-card="${id}"><span class="rp-done">${rpDone(p)}</span><button type="button" class="link small" data-rp-open="${id}" aria-haspopup="dialog">看內容 ▾</button></div>`;
+    return `<div class="rp-card" data-rp-card="${id}"><div class="rp-head">🧩 角色提案 · 只用在「${esc(p.projectName)}」</div>
+      <div class="rp-main"><div class="rp-name"><b>${esc(rpVal(p, 'role'))}</b><span class="rp-key">${esc(rpVal(p, 'key'))}</span></div>
+        <p class="rp-sum">${esc(rpVal(p, 'duties'))}</p><div class="rp-chips">${RP_TEXT.map(([, t]) => `<span>${t}</span>`).join('')}</div></div>
+      <div class="ap-acts"><button type="button" class="btn small primary" data-rp-open="${id}" aria-haspopup="dialog">打開提案</button>${human ? `<button type="button" class="btn small" data-rp-skip="${id}">不要</button>` : ''}${rpUntil(p)}</div></div>`;
+  }
+  let rpm = null; // 開著的提案彈窗：{ id, edit }
+  function openRp(id) {
+    const p = rpOf(id);
+    if (!p) return;
+    rpm = { id, edit: !!(p.canCreate && p.conflict) }; // 代碼衝突：直接進修改
+    openModal(p.draft.role, '', { size: 'form rp-modal', foot: ' ' });
+    modalGuard = async () => { // 改了沒送出，關之前先問
+      const q = rpOf(id);
+      if (!q || !rpm?.edit || !rpDirty(q)) return true;
+      const ok = await confirmDialog({ title: '要放棄修改嗎？', message: '剛剛改的內容還沒送出，關掉就不見了。', confirmText: '放棄修改', cancelText: '繼續修改', danger: true });
+      if (ok) { delete dm.rpEdit[id]; drawDm(); }
+      return ok;
+    };
+    drawRp();
+  }
+  function drawRp(focusKey) {
+    const modal = $('#modal-root .rp-modal'), p = rpm && rpOf(rpm.id);
+    if (!modal || !p) return;
+    const id = esc(p.proposalId), pending = p.status === 'pending', can = pending && p.canCreate, edit = can && rpm.edit, human = state.me?.memberType === 'human';
+    modal.dataset.rpCard = p.proposalId;
+    modal.classList.toggle('rp-editing', !!edit);
+    modal.querySelector('.modal-titles').innerHTML = `<p class="rp-kicker">🧩 角色提案 · 只用在「${esc(p.projectName)}」</p>${edit
+      ? `<h2 id="modal-title" class="sr-only">修改角色提案</h2><div class="rp-nk"><label><span>名稱</span><input data-rp-f="role" maxlength="10" value="${esc(rpVal(p, 'role'))}"></label><label><span>代碼 · 2～4 個英文字母</span><input data-rp-f="key" maxlength="4" autocapitalize="characters" value="${esc(rpVal(p, 'key'))}"></label></div>${p.conflict ? `<p class="rp-conflict" role="alert">⚠ ${esc(p.conflict)}</p>` : ''}`
+      : `<h2 id="modal-title" class="rp-title">${esc(rpVal(p, 'role'))} <span class="rp-key">${esc(rpVal(p, 'key'))}</span></h2>`}`;
+    let acts = modal.querySelector('.modal-actions');
+    if (!acts) { acts = document.createElement('div'); acts.className = 'modal-actions'; modal.querySelector('.modal-titles').after(acts); }
+    acts.innerHTML = edit ? '' : `<button type="button" class="btn small" data-rp-all hidden>全部展開</button>${can ? '<button type="button" class="btn small" data-rp-edit>✎ 修改</button>' : ''}`;
+    modal.querySelector('.modal-body').innerHTML = RP_TEXT.map(([k, t]) => edit
+      ? `<label class="rp-sec"><span class="rp-lab">${t}</span><textarea data-rp-f="${k}" maxlength="1000" rows="2">${esc(rpVal(p, k))}</textarea><span class="rp-cnt">${rpVal(p, k).length}/1000</span></label>`
+      : `<section class="rp-sec"><h3 class="rp-lab">${t}</h3><p class="rp-txt" data-rp-txt="${k}">${esc(rpVal(p, k))}</p><button type="button" class="link small rp-more" data-rp-more="${k}" hidden>展開 ▾</button></section>`).join('');
+    const foot = modal.querySelector('.modal-foot');
+    foot.classList.add('rp-foot');
+    foot.innerHTML = can ? `<button type="button" class="btn small primary" data-rp-create="${id}">建立角色</button>${edit ? '<button type="button" class="btn small" data-rp-cancel>取消修改</button>' : `<button type="button" class="btn small" data-rp-skip="${id}">不要</button>`}${rpUntil(p)}`
+      : pending && human ? `<span class="muted small">只有「${esc(p.projectName)}」的負責人／管理員能按「建立角色」</span><button type="button" class="btn small" data-rp-skip="${id}">不要</button>`
+      : pending ? rpUntil(p) : `<span class="muted small">${rpDone(p)}</span>`;
+    if (edit) {
+      modal.querySelectorAll('textarea[data-rp-f]').forEach(rpGrow);
+      modal.querySelectorAll('[data-rp-f]').forEach(x => rpMark(x, p));
+      rpAlign(modal);
+      const f = modal.querySelector(`[data-rp-f="${focusKey || (p.conflict ? 'key' : 'role')}"]`);
+      if (f) { f.focus(); if (p.conflict && !focusKey) f.select(); }
+    } else { modal.querySelector('.modal-head').style.paddingRight = ''; rpMeasure(modal); (modal.querySelector('[data-rp-edit]') || modal.querySelector('.modal-x')).focus(); }
+  }
+  const rpMark = (f, p) => { // 改過的段：標籤後加藍點
+    const lab = f.closest('label')?.querySelector('span'), dot = lab?.querySelector('.rp-dot'), ch = f.value !== (p.draft[f.dataset.rpF] ?? '');
+    if (lab && ch && !dot) lab.insertAdjacentHTML('beforeend', '<i class="rp-dot" title="改過"></i>'); else if (!ch && dot) dot.remove();
+  };
+  const rpAlign = modal => { // 頭列右邊留跟下面捲軸一樣寬，名稱代碼才會跟五段對齊
+    const mb = modal.querySelector('.modal-body');
+    modal.querySelector('.modal-head').style.paddingRight = `${parseFloat(getComputedStyle(mb).paddingRight) + mb.offsetWidth - mb.clientWidth}px`;
+  };
+  addEventListener('resize', () => { // 彈窗開著時寬度變了：重算「展開」、輸入框高度與對齊，展開狀態不變
+    const m = $('#modal-root .rp-modal');
+    if (!m) return;
+    if (m.classList.contains('rp-editing')) { m.querySelectorAll('textarea[data-rp-f]').forEach(rpGrow); rpAlign(m); } else rpMeasure(m);
+  });
+  const rpGrow = t => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 2 + 'px'; }; // 跟著字長高、不出捲軸
+  function rpMeasure(modal) { // 超過 3 行才截斷並出現「展開」；有被截的段，標題列出現「全部展開」
+    let cut = false;
+    modal.querySelectorAll('[data-rp-txt]').forEach(el => {
+      const lh = parseFloat(getComputedStyle(el).lineHeight) || 22, long = el.scrollHeight > lh * 3 + 2, open = el.classList.contains('open');
+      const b = modal.querySelector(`[data-rp-more="${el.dataset.rpTxt}"]`);
+      b.hidden = !long; b.textContent = open ? '收起 ▴' : '展開 ▾'; b.setAttribute('aria-expanded', String(open));
+      if (long && !open) cut = true;
+    });
+    const all = modal.querySelector('[data-rp-all]');
+    if (all) all.hidden = !cut;
   }
   function dmBubble(d, next) {
     const showT = !next || next.from.participantId !== d.from.participantId || !!next.proposal || !!d.proposal || !!next.roleProposal || !!d.roleProposal;
@@ -7549,15 +7624,13 @@
     const list = $('#dm-list');
     if (!list) return false;
     const near = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-    const focus = document.activeElement?.closest?.('[data-rp-f]') ? { id: document.activeElement.closest('[data-rp-card]').dataset.rpCard, f: document.activeElement.dataset.rpF, s: document.activeElement.selectionStart } : null;
     list.innerHTML = dm.items.map((d, i) => dmBubble(d, dm.items[i + 1])).join('') || '<p class="muted small dm-empty">還沒有私訊。有新私訊會叫醒它。</p>';
     const mb = state.team?.members.find(m => m.participantId === dm.aiId), now = mb ? aiNowOf(mb) : { kind: 'off' };
     $('#dm-status').textContent = now.kind === 'work' ? `在做${now.cardId ? ' ' + ckey(now.cardId) : ''}，下次醒來會先看私訊` : now.kind === 'idle' ? '待命，有新私訊會叫醒它' : '目前離線，上線後會看到';
     const ta = $('#dm-input'), sb = $('#dm-send');
     ta.disabled = sb.disabled = !dm.canSend;
     $('#dm-note').textContent = dm.canSend ? '' : dm.reason;
-    if (near && !focus) list.scrollTop = list.scrollHeight;
-    if (focus) { const el = list.querySelector(`[data-rp-card="${CSS.escape(focus.id)}"] [data-rp-f="${focus.f}"]`); if (el) { el.focus(); try { el.setSelectionRange(focus.s, focus.s); } catch {} } }
+    if (near) list.scrollTop = list.scrollHeight;
     list.querySelectorAll('[data-ap-img]').forEach(el => apImg(el.dataset.apImg).then(u => { if (u) { el.style.backgroundImage = `url("${u}")`; el.classList.add('img-on'); } }));
     return true;
   }
@@ -7682,6 +7755,9 @@
     const id = f.closest('[data-rp-card]').dataset.rpCard;
     if (f.dataset.rpF === 'key') { const s = f.selectionStart; f.value = f.value.toUpperCase(); f.setSelectionRange(s, s); }
     (dm.rpEdit[id] = dm.rpEdit[id] || {})[f.dataset.rpF] = f.value;
+    const p = rpOf(id);
+    if (p) rpMark(f, p);
+    if (f.tagName === 'TEXTAREA') { rpGrow(f); const c = f.parentElement.querySelector('.rp-cnt'); if (c) c.textContent = `${f.value.length}/1000`; }
   });
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape' || !dmIsOpen() || !e.target.closest?.('#dm-panel') || document.querySelector('#modal-root .modal, .confirm-root')) return;
@@ -7719,20 +7795,33 @@
     const w = e.target.closest?.('[data-dm-wb]');
     if (w) { dm.wb = { id: w.dataset.dmWb, card: w.dataset.cardId }; drawDm(); return $('#dm-wb-text')?.focus(); }
     if (e.target.closest?.('[data-dm-wb-cancel]')) { dm.wb = null; return drawDm(); }
+    const ro = e.target.closest?.('[data-rp-open]');
+    if (ro) return openRp(ro.dataset.rpOpen);
+    if (e.target.closest?.('[data-rp-edit]') && rpm) { rpm.edit = true; return drawRp(); }
+    if (e.target.closest?.('[data-rp-cancel]') && rpm) { delete dm.rpEdit[rpm.id]; rpm.edit = false; drawRp(); return drawDm(); }
+    const rmo = e.target.closest?.('[data-rp-more]');
+    if (rmo) { rmo.closest('.modal').querySelector(`[data-rp-txt="${rmo.dataset.rpMore}"]`).classList.toggle('open'); return rpMeasure(rmo.closest('.modal')); }
+    const rall = e.target.closest?.('[data-rp-all]');
+    if (rall) { const m = rall.closest('.modal'); m.querySelectorAll('[data-rp-txt]').forEach(el => el.classList.add('open')); rpMeasure(m); return m.querySelector('[data-rp-edit]')?.focus(); }
     const rp = e.target.closest?.('[data-rp-create], [data-rp-skip]');
     if (rp) {
       const create = !!rp.dataset.rpCreate, id = rp.dataset.rpCreate || rp.dataset.rpSkip;
-      const card = rp.closest('[data-rp-card]'), body = {};
-      if (create) card.querySelectorAll('[data-rp-f]').forEach(f => { body[f.dataset.rpF] = f.value.trim(); });
+      const p0 = rpOf(id), body = {};
+      if (create && p0) for (const [k] of RP_FIELDS) body[k] = rpVal(p0, k).trim(); // 沒改的段送原文
       rp.disabled = true;
       try {
         const r = await api(`/api/role-proposals/${encodeURIComponent(id)}/${create ? 'create' : 'skip'}`, { method: 'POST', body });
         for (const it of dm.items) if (it.roleProposal?.proposalId === id) it.roleProposal = r.proposal;
         delete dm.rpEdit[id];
+        if (rpm?.id === id) { rpm = null; closeModal(); }
         if (dmSumFromItems()) drawDmSide();
         if (create) { await loadProjectList(); toast(`已建立「${r.proposal.draft.role}」，只在${r.proposal.projectName}的角色選單`); } else toast('已略過');
         drawDm();
-      } catch (err) { rp.disabled = false; toast(err.message); }
+      } catch (err) {
+        rp.disabled = false; toast(err.message);
+        const p1 = rpOf(id);
+        if (err.code === 'ROLE_CONFLICT' && p1 && rpm?.id === id) { p1.conflict = err.message; rpm.edit = true; drawRp(); } // 代碼衝突：切到修改、游標放代碼
+      }
       return;
     }
     const ap = e.target.closest?.('[data-ap-apply], [data-ap-skip]');
