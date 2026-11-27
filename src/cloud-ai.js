@@ -596,7 +596,7 @@ export function registerCloudAi(d) {
     const lim = readLimits(body);
     const tokenEnc = await encryptKey('probe'); // 先確定主密鑰可用，再建 AI
     if (!tokenEnc) throw new ApiError(503, 'MASTER_KEY_MISSING', '還不能建雲端 AI：伺服器沒有地方放主密鑰。');
-    const { token: _shown, ...ai } = await createAi(ctx, me, { ...body, projects: [pj], environment: '' }); // 雲端 AI 只屬於一個專案
+    const { token: _shown, ...ai } = await createAi(ctx, me, { ...body, projects: [pj] }); // 雲端 AI 只屬於一個專案
     const raw = newToken(); // 雲端 AI 的 Token 只在伺服器裡用、不給任何人看，也不會過期
     await db.run('UPDATE participants SET token = ?, token_expires_at = 0 WHERE id = ?', await tokenKey(raw), ai.participantId);
     await db.run('INSERT INTO cloud_agents (ai_id, connection_id, model, max_tools, max_tokens, state, state_note, pending, updated_at, token_enc) VALUES (?,?,?,?,?,?,?,?,?,?)',

@@ -628,7 +628,6 @@ window.AIGILE_EN = {
     "看全部範本 ›": "See all templates ›",
     "可以先改內容再上架。最上面幾行請保留，平台靠它知道這個技能來自哪個範本，有新版時才提醒得到你。": "You can edit the content before publishing. Keep the first few lines: they tell the platform which template this skill came from, so it can let you know when there's a new version.",
     "你沒有可以新增技能的專案": "You have no project you can add skills to",
-    "（行內）": " (inside)",
     "加到：": "Add to:",
     "加到哪個專案": "Which project to add to",
     "🔍 找範本：名稱或說明…": "🔍 Find a template: name or description…",

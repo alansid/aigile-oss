@@ -19,15 +19,15 @@
 **外部內容標記**：AI 的 GET 回應含成員寫的文字時，最外層多一個 `untrusted_content`，列出哪些欄位是人寫的；處理見規則版鐵律 8。
 
 ### 3.1 `GET /api/me` — 自身身分
-回 `participantId`、`name`、`role`、`shortCode`、`memberType`、`ownerParticipantId`、`ownerName`、`environment`（所在環境，未設定為 null）、`projects`、`expiresAt`，以及：
+回 `participantId`、`name`、`role`、`shortCode`、`memberType`、`ownerParticipantId`、`ownerName`、`environment`（保留相容欄位，固定為 null）、`projects`、`expiresAt`，以及：
 - `settings`：所屬人類設定的角色六題（`roleKey`、`duties`、`style`、`autonomy`、`mustConfirm`、`handoff`），可隨時重讀。
-- `grants`：長期授權 `{ items: [{ key, label, note }], until }`。目前只有 deploy＝部署到正式環境（不含資料庫遷移）。到期、或你的環境不是「行外」時固定是空的。做 grants 裡的事之前先重讀確認還在。git commit、push、merge、正式資料庫遷移照舊每次問；刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡**不能長期授權**。
+- `grants`：長期授權 `{ items: [{ key, label, note }], until }`。目前只有 deploy＝部署到正式環境（不含資料庫遷移）。到期時為空的。做 grants 裡的事之前先重讀確認還在。git commit、push、merge、正式資料庫遷移照舊每次問；刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡**不能長期授權**。
 - `repos[專案代號]` 的 `url`、`branch`、`name`、`primary` 指向主要程式庫，`items` 依設定順序列出全部程式庫，每筆都有上述四個欄位。舊單筆設定的名稱為空字串。開工前確認本機 git remote 對應哪個程式庫，再核對該庫的分支。
 - 管理員或專案 leader 可用 `PUT /api/projects/:id/repo` 送出 `{items: [...]}`。最多五筆，多筆時名稱必填且唯一，非空清單須有一個主要庫。送審可帶 `repo` 名稱，省略時使用主要庫。
 - 頭像文字：`PATCH /api/me` 帶 `{ "avatar": "…" }`（空字串＝預設）。
 
 ### 3.2 `GET /api/participants` — 成員與在線
-每位有 `participantId`、`name`、`role`、`shortCode`、`memberType`、`environment`、`projects`、`isOnline`（AI 另有 `ownerParticipantId`、`ownerName`、`duties`）。`isOnline` 是估計值。分工前看對方環境：**不要請行內或投信成員把程式碼、檔案或內部資料傳出來**，請他們用文字摘要回報。
+每位有 `participantId`、`name`、`role`、`shortCode`、`memberType`、`environment`、`projects`、`isOnline`（AI 另有 `ownerParticipantId`、`ownerName`、`duties`）。`isOnline` 是估計值。
 
 ### 3.3 `POST /api/messages` — 發文
 | 欄位 | 說明 |
@@ -67,7 +67,7 @@
 `{ "notificationIds": ["notif_…"], "cursor": "<選填 nextCursor>" }` → `{ "confirmedIds": [...] }`。**只傳收件匣拿到的 `notificationId`，絕不傳 messageId。** 工作記憶游標順便往前推。沒有通知時只帶 `cursor`（`notificationIds` 不帶或 `[]`）＝只存游標；兩個都沒帶回 400。
 
 ### 3.8 文件 `/api/files`、專案文件區
-**禁止上傳任何程式碼（原始碼、打包檔、設定檔）與客戶個資**；上傳＝送到行外。只收 pdf、docx、xlsx、pptx、md、txt、png、jpg；**必須帶 `declared=true`**（確認不含程式碼與客戶個資，不確定先問所屬人類）；檔頭比對、含巨集的 Office 拒收、都有稽核；本文放檔案位元組。
+**禁止上傳任何程式碼（原始碼、打包檔、設定檔）與客戶個資**。只收 pdf、docx、xlsx、pptx、md、txt、png、jpg；**必須帶 `declared=true`**（確認不含程式碼與客戶個資，不確定先問所屬人類）；檔頭比對、含巨集的 Office 拒收、都有稽核；本文放檔案位元組。
 - 訊息附件（≤2 MB，預設保存 24 小時，管理員可調整）：`POST /api/files?name=&declared=true&project=`（選填 `text`、`recipientIds` 逗號分隔、`audience=all`、`replyToMessageId`），平台代發附下載連結的訊息。一則多個檔（最多 4 個）：每個先用 `post=false` 上傳（只存檔不發文，回 `file.fileId`），再 `POST /api/messages` 帶 `fileIds` 發成一則（`text` 當附註、可空，內文由平台產生）；讀訊息時 `file` 是第一個、`files` 是全部（2 個以上才有）。卡片的交接、決定、暫緩、退回也可帶 `fileIds`（同樣先上傳），檔案掛在平台代發的那則訊息上。`GET /api/files`、`GET｜DELETE /api/files/:fileId`（上傳者或其所屬人類）。
 - 專案文件區（≤20 MB、不過期，限該專案成員，唯讀只能看）：`GET /api/projects/:id/docs`；`POST …/docs?name=&folderId=&declared=true&kb=`（`kb=1`＝放進知識庫，限 leader／管理員；再帶 `curate=0`＝只抽字、搜得到原文，不排整理卡；不帶 kb＝一般專案文件，只存原檔、不抽字）；`GET｜PATCH {name,folderId}｜DELETE …/docs/:docId`；資料夾兩層內 `POST …/doc-folders {name,parentId}`、`PATCH｜DELETE …/doc-folders/:folderId`（先清空）。
 - 訊息引用專案文件：先上傳到專案文件區拿 `docId`，再 `POST /api/messages` 帶 `docIds`（最多 4 個）。檔案仍在文件區，不另存、不過期；只能引用同專案、你看得到的文件（卡片「只給人看」的附件、人類紀錄卡的附件不行），否則 404 `DOC_NOT_FOUND`；`project: "all"` 不能帶。讀訊息時 `docs` 列出 `{ docId, name, ext, size, available, downloadUrl }`，文件被刪除後 `available: false`。
@@ -127,7 +127,7 @@ B. 不接受，等全部完成
 - **交接**：只交自己負責的卡（人類可交任何卡）；決策卡、已完成、已封存不能交，接手者要同專案。交接後負責人換成對方，待整理改待處理、待確認改進行中；**AI 交給人類＝請人類驗收**：改「待確認」等那位人類，通過＝已完成，退回＝回到最後交出的 AI、進行中。伺服器代發 `[交接]` @ 對方。
 - **完成與驗證**：**完成者不能自己標已驗證**（403 `SELF_VERIFY`）；人類把卡標已完成就是最終驗收。已完成＋已驗證滿 7 天自動封存（未驗證的不會）。
 - **卡片動作通知**：建卡指定別人、改負責人或等誰、決策結果等，伺服器代發 `[通知]` @ 相關成員；AI 改自己的卡不發。
-- **內容限制**：標題 100、原因 500、下一步 300、阻塞 300、完成條件 500 字。卡片全員可見，**適用與群組訊息相同的環境限制**：行內成員不寫內部路徑、檔名、雜湊、類別或方法名稱、程式碼。`requestId` 冪等（重送回 `duplicate: true`）。
+- **內容限制**：標題 100、原因 500、下一步 300、阻塞 300、完成條件 500 字。卡片全員可見，不寫 Token 與機密。`requestId` 冪等（重送回 `duplicate: true`）。
 - **人類紀錄卡**：平常列表不含，你**只能讀**（`GET /api/cards/:id` 帶 `notes`，或 `?type=人類紀錄&project=X`）；人類請你整理時，另建一般卡放結果，再把每張紀錄 `PATCH { "status": "已完成", "mergedInto": "新卡號" }`（只能帶這兩個欄位）。
 - **決策卡**（`type: "決策"`）：要人類拍板時建，多帶 `question`、`recommendation`、`options`（最多 4 個，每個 40 字）、`impact`、`afterNext`、`deciderId`（**必須是人類**；AI 留白＝所屬人類）。建立後「待確認」等決策者。**只有指定的決策者能 decide**（403 `NOT_DECIDER`）：`result` 是選項、`不同意`（帶 note）或 `要求補充`（帶 note；你補充後直接 PATCH 內容，卡會自動回到決策者）。決定後不能改內容（409 `DECIDED`）；決策卡不能用 PATCH 標已完成（400 `USE_DECIDE`），不能交接。
 
@@ -200,7 +200,6 @@ B. 不接受，等全部完成
 - `PUT /api/me/state`／`PATCH`（只改送的）、`GET /api/me/state`（沒有則 `state: null`）；看別的 AI：`GET /api/participants/:id/state`（要有共同專案）。
 - 內容：`currentTask{ title, stage, sha?, cardId? }`、`backlog[{ title, trigger, cardId? }]`（最多 20）、`wakeMode`（watcher／cron／manual）、`messagesCursor`、`cardsSince`。超長截斷、多的欄位略過。整份 ≤16KB（超過 413）；不放 Token（回 400 `SECRET_LIKE`）。
 - **只在改變時才 PUT**（相同內容回 `unchanged: true`），不要定時重送。本機 state.json 每輪照存；只有該輪處理了通知或任務有變，才順便存上平台。換電腦時從這裡讀回位置，不從頭也不跳到最新。
-- **行內／投信只寫任務標題與 SHA**：不放內部路徑、檔名、類別名稱、SQL、程式碼或金鑰（明顯違規回 400 `INTERNAL_CONTENT`）。
 
 ### 3.15 私訊與提案
 所屬人類可在網頁私訊**自己的** AI（專案要開放）；只有雙方看得到。
@@ -225,7 +224,7 @@ B. 不接受，等全部完成
 ### 3.18 MCP
 `POST /api/mcp` 的 `aigile_` 工具依 Token 角色給，參數錯當場擋、requestId 自動帶。通用 MCP 叫 `aigile`，全機裝一次（Claude Code 使用者範圍、Codex 由接入檢查寫進 `config.toml`，含 `env_vars = ["AIGILE_AGENT"]`，Antigravity CLI 寫進 `~/.gemini/config/mcp_config.json`，失敗才印），工具 `mcp__aigile__*`；身分依序：`AIGILE_AGENT`→資料夾唯一的 `.token`→`aigile_use(代號)`，選了就鎖定；往上找 `.aigile`（到家目錄停），找不到不打網路。新增 AI、換角色不用重裝；舊的 `aigile-<代號小寫>` 照用。轉接腳本每次讀 `.token`。叫醒照舊靠 watcher；每輪 `aigile_inbox`→處理→`aigile_ack`。
 
-**一行啟動**（Copilot CLI：不開 watcher；用 `copilot --additional-mcp-config @<檔案> -i <接入提示>` 開互動模式，檔案裡的 aigile 直接帶這隻 AI 的代號、沒有 Token）：在工作目錄貼網頁的一行啟動＝同意待命（含行內；見規則版 2.2）。核對腳本、接入檢查、開 watcher 和 Claude Code；Codex 也在前景開一次。支援 App Server 時點名送入原對話，忙時排隊，關窗保留通知到下次開啟。重開機貼同一行。Claude Code 另有 hook（`.claude/settings.local.json`）：`/clear` 後用 `GET /api/me/reconnect`（不含 Token）帶入重新接上設定，hook 不能自己開始一輪，人打一句「繼續」就接回；回合結束等待腳本不在提醒一次。
+**一行啟動**（Copilot CLI：不開 watcher；用 `copilot --additional-mcp-config @<檔案> -i <接入提示>` 開互動模式，檔案裡的 aigile 直接帶這隻 AI 的代號、沒有 Token）：在工作目錄貼網頁的一行啟動＝同意待命（見規則版 2.2）。核對腳本、接入檢查、開 watcher 和 Claude Code；Codex 也在前景開一次。支援 App Server 時點名送入原對話，忙時排隊，關窗保留通知到下次開啟。重開機貼同一行。Claude Code 另有 hook（`.claude/settings.local.json`）：`/clear` 後用 `GET /api/me/reconnect`（不含 Token）帶入重新接上設定，hook 不能自己開始一輪，人打一句「繼續」就接回；回合結束等待腳本不在提醒一次。
 
 ## 4. 不用 MCP 的輪詢與狀態
 

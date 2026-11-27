@@ -4309,7 +4309,7 @@
     const wakes = m.wakesToday || 0;
     const last = m.lastWakeAt ? pageText('，最近一次 ', ', last at ') + shortTime(m.lastWakeAt).split(' ').pop() : '';
     const expiry = m.tokenExpiresAt && shortTime(m.tokenExpiresAt).split(' ')[0];
-    const owner = [m.ownerName, m.environment].filter(Boolean).map(esc).join(' · ');
+    const owner = m.ownerName ? esc(m.ownerName) : '';
     // 工具・模型：模型是 AI 接上、送審、審查時自己回報的；只放在詳情，列表不顯示
     const via = { checkin: ['簽到', 'when signing in'], request: ['送審', 'when sending for review'], review: ['審查', 'when reviewing'] }[m.aiModel?.via] || ['回報', 'when reporting'];
     const tool = esc(m.aiTool ? RV_TOOL[m.aiTool] || m.aiTool : pageText('工具不明', 'Unknown tool'));
@@ -7959,7 +7959,7 @@
       const h = health(mb);
       const tokenCls = mb.tokenExpired ? 'bad' : mb.tokenExpiringSoon ? 'warn' : '';
       return `<div class="tm-row" data-tm-id="${esc(mb.participantId)}">
-        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b data-nt>${nameCodeHtml(mb, tdups)}</b><span class="muted small"><span>${esc(roleIn(mb, pv))}</span>${mb.memberType === 'ai' ? ' · AI' : ''}</span></div></div>
+        <div class="tm-who"><span class="dot h-${h.cls}"></span><div><b data-nt>${nameCodeHtml(mb, tdups)}</b><span class="muted small">${roleIn(mb, pv) ? `<span>${esc(roleIn(mb, pv))}</span>${mb.memberType === 'ai' ? ' · AI' : ''}` : (mb.memberType === 'ai' ? 'AI' : '')}</span></div></div>
         <div class="tm-conn"><span class="tm-health h-${h.cls}">${h.text}</span><span class="muted small">最後上線 ${agoText(mb.lastSeenAt)}</span>${wakeLine(mb)}</div>
         <div class="tm-state"><span class="tm-lbl muted small">目前工作</span>${mb.status ? `<span class="st st-${mb.status.state}">${STATE_LABEL[mb.status.state]}</span> <button type="button" class="link" ${mb.status.cardId ? `data-open-card="${esc(mb.status.cardId)}"` : `data-jump-team="${esc(mb.status.messageId)}"`}>${esc(mb.status.title || '（無標題）')}</button>${mb.status.cardCount > 1 ? `<span class="muted small"> · 共 ${mb.status.cardCount} 張</span>` : ''}${mb.status.source === 'card' ? '<span class="muted small"> · 取自卡片</span>' : ''}` : '<span class="muted">—</span>'}</div>
         <div class="tm-pend muted small${mb.pendingCount ? '' : ' zero'}">${mb.pendingCount ? `未讀 ${mb.pendingCount} 則 · 最久 ${agoText(mb.oldestPendingAt).replace('前', '')}` : '未讀 0'}</div>
@@ -8834,7 +8834,7 @@
       <div class="ma-row${maWarn(ai) ? ' warn' : ''}${active ? '' : ' off'}" data-act="row" data-id="${id}" role="button" tabindex="0" aria-expanded="${!!tab}">
         ${maAvatar(ai)}
         <div class="ma-main"><div class="ma-nm"><b>${markQ(ai.name, q)}</b>${q && ai.shortCode && ai.shortCode.toLowerCase().includes(q) ? `<span class="muted small">#${markQ(ai.shortCode, q)}</span>` : ''}<span class="ma-st ${stCls}"><span class="dot" aria-hidden="true"></span>${stText}</span>${active && ai.skillsWaiting ? `<span class="pill-tag yellow ma-skw">技能 ${ai.skillsWaiting} 等你允許</span>` : ''}</div>
-          <div class="ma-meta">${[markQ(ai.role || '', q), ai.cloud ? cloudModelLine(ai.cloud) : ''].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${ai.role ? ' · ' : ''}${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
+          <div class="ma-meta">${[markQ(ai.role || '', q), ai.cloud ? cloudModelLine(ai.cloud) : ''].filter(Boolean).join(' · ')}${pjTags ? `<span class="ma-pjs">${pjTags}</span>` : ''}${maWarn(ai) && level !== 'expired' ? `<span class="ma-mtok warn-text">${esc(maWhen(ai.expiresAt))} 到期</span>` : active && level !== 'expired' ? `<span class="ma-mtok">Token 到 ${esc(mmdd(ai.expiresAt))}</span>` : ''}${active && maToolClosed(ai) ? `<span class="ma-mtok warn-text">${esc(toolName(maToolClosed(ai)))} 已被管理員關閉</span>` : ''}</div></div>
         ${!ai.cloud && ai.launcher?.registered ? `<small class="ma-row-location">${esc([ai.launcher.launcherName,ai.launcher.folder,ai.launcher.tool].join(' · '))}</small>` : ''}
         ${ai.launchError ? `<small class="error" role="status">${esc(ai.launchError)}</small>` : ''}
         <div class="ma-right"><span class="ma-tokw">${tokTxt}</span>${main}<button type="button" class="ma-more" data-act="menu" data-id="${id}" aria-label="更多動作" aria-haspopup="menu" aria-expanded="${!!menu}">⋯</button>${menuHtml}</div>
@@ -9797,7 +9797,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (!pjs.length) return toast('你沒有可以新增技能的專案');
     const tpls = skv.tpls || [], many = tpls.length >= SK_TPL_MANY;
     const st = { target: pjs.some(p => p.id === pj) ? pj : pjs[0].id, q: '', cat: '', all: !!opt.all, unused: false, sel: '', peek: new Set() };
-    const pjOpts = () => pjs.map(x => `<option value="${esc(x.id)}"${x.id === st.target ? ' selected' : ''}>${esc(x.name)}${x.inside ? '（行內）' : ''}</option>`).join('');
+    const pjOpts = () => pjs.map(x => `<option value="${esc(x.id)}"${x.id === st.target ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
     const top = many
       ? `<div class="sk-new-top"><label class="sk-new-pj"><span>加到：</span><select id="sk-new-pj" aria-label="加到哪個專案">${pjOpts()}</select></label><input type="search" id="sk-new-q" class="sk-new-q" placeholder="🔍 找範本：名稱或說明…" aria-label="找範本"></div>`
       : `<label class="field sk-up-step">1. 加到哪個專案<select id="sk-new-pj">${pjOpts()}</select></label>`;
@@ -10322,7 +10322,6 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       form.runtime.value = where;
       box.querySelectorAll('[data-where]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.where === where)));
       box.querySelector('.cloud-fields').hidden = where !== 'cloud';
-      const envF = body.querySelector('.env-field'); if (envF) envF.hidden = where === 'cloud';
       sync();
     };
     box.addEventListener('click', e => { const b = e.target.closest('[data-where]'); if (b && !b.disabled) pick(b.dataset.where); });
@@ -10469,7 +10468,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (data.runtime === 'cloud') {
         const pj = data.cloudProject, ch = (await whereOpts)?.projects?.find(p => p.project === pj)?.choices?.[Number(data.cloudChoice)];
         if (!ch) return showErr('請選一個模型', form.cloudChoice);
-        Object.assign(data, { project: pj, connectionId: ch.connectionId, model: ch.model, maxTools: Number(data.maxTools), maxTokens: Number(data.maxTokens), environment: '' });
+        Object.assign(data, { project: pj, connectionId: ch.connectionId, model: ch.model, maxTools: Number(data.maxTools), maxTokens: Number(data.maxTokens) });
       } else for (const k of ['runtime', 'maxTools', 'maxTokens']) delete data[k];
       delete data.cloudChoice; delete data.cloudProject;
       const picked = data.runtime === 'cloud' ? [data.project] : [...form.querySelectorAll('input[name="proj"]:checked:not(:disabled)')].map(i => i.value); // 雲端 AI 只屬於選的那個專案

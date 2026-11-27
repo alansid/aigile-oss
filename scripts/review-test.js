@@ -334,6 +334,7 @@ try {
   assert.equal((await req(cx.token,endpoint,'POST',packet)).status,409);
   assert.equal((await req(pg.token,endpoint,'POST',packet)).status,200);
   let snap = (await req(liu.token,endpoint)).body.manifest;
+  assert.notEqual(snap.contentAllowed, false);
   assert.deepEqual(snap.files[0].lines,packet.files[0].lines);
   await db.run('UPDATE review_change_parts SET expires_at = ? WHERE round_id = ?',0,sent.body.messageId);
   snap = (await req(liu.token,endpoint)).body.manifest;

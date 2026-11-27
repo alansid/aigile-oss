@@ -303,7 +303,6 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       flush();
     }
   }
-  const restrictsContent = (people, pj) => [...people.values()].some(p => p.status === 'active' && projectsOf(p).includes(pj) && ['行內','投信'].includes(p.env));
   const canonicalRepo = url => String(url || '').replace(/\/$/, '').replace(/\.git$/, '').toLowerCase();
   function configuredOrigins(config, origins) {
     return Array.isArray(origins) && origins.length >= 1 && origins.length <= 2 && new Set(origins).size === origins.length &&
@@ -318,7 +317,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const { fallback, origins } = requestDetails(round.req.comment);
     const cfg = await cfgOf(c.project);
     if (!cfg.localFallback || !fallback || !configuredOrigins(await repoOf(c.project),origins)) throw new ApiError(403,'FALLBACK_OFF','專案沒有允許這次補傳');
-    const content = fallback === 'content' && cfg.diffUpload && !restrictsContent(await peopleMap(ctx),c.project);
+    const content = fallback === 'content' && cfg.diffUpload;
     const body = await readJson(req, 3 * 1024 * 1024);
     const snapshot = localSnapshot(body,round.req.version,origins,content,invalid);
     const stmts = [];
@@ -354,7 +353,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     if (!row) return { manifest: null };
     const manifest = JSON.parse(row.manifest);
     manifest.contentExpired = Number.isFinite(manifest.expiresAt) && manifest.expiresAt <= Date.now();
-    if (restrictsContent(await peopleMap(ctx),c.project) || !(await cfgOf(c.project)).diffUpload) manifest.contentAllowed = false;
+    if (!(await cfgOf(c.project)).diffUpload) manifest.contentAllowed = false;
     if (manifest.contentExpired || manifest.contentAllowed === false) return { manifest };
     const parts = await db.all('SELECT file_index, lines FROM review_change_parts WHERE card_seq = ? AND round_id = ? AND expires_at > ? ORDER BY file_index, part', c.seq, params.roundId, Date.now());
     for (const part of parts) {
@@ -426,9 +425,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       try {
         if (!selected?.url) throw new Error('這個專案沒有設定程式庫');
         if (body.origin !== undefined && (!body.origin || String(selected.url).replace(/\/$/, '').replace(/\.git$/, '').toLowerCase() !== body.origin)) throw new Error('本機 origin 與專案程式庫無法核對，請檢查工作樹與程式庫設定');
-        const restricted = restrictsContent(people,c.project);
-        if (cfg.localFallback && configuredOrigins(config,body.origins)) fallback = restricted || !cfg.diffUpload ? 'summary' : 'content';
-        if (restricted) throw new Error('受限專案須設定只回傳檔名與行數的行內 Git 連線');
+        if (cfg.localFallback && configuredOrigins(config,body.origins)) fallback = !cfg.diffUpload ? 'summary' : 'content';
         fetched = await fetchChanges(selected, version, { allowContent: cfg.diffUpload });
         fallback = null;
       } catch (error) {

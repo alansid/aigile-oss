@@ -192,7 +192,9 @@ try {
   assert.equal((await kit.call(liu.token, `${MC}/${conn.id}/test`, 'POST', {})).body.ok, true, '修好後測試連線成功');
   await until(async () => (await kit.call(liu.token, '/api/my-ais')).body.items.find(x => x.participantId === aiId).cloud.state === 'ready', 15000, '自動恢復');
   await login(liu.token, '/my-ai');
-  await until(() => js("!!document.querySelector('#ai-new')"), 15000, "行 152");
+  await until(() => js("!!document.querySelector('#ai-new') && !!document.querySelector('.ma-meta')"), 15000, "行 152");
+  assert.ok(await noHScroll(), '375 我的 AI 列表不橫向捲動');
+  assert.ok(await js("[...document.querySelectorAll('.ma-meta')].every(m => !/·\\s*$/.test(m.innerText.trim()))"), '375 我的 AI 列表副標無尾巴「·」');
   await click('#ai-new');
   await until(() => js("document.querySelector('[data-where=\"cloud\"]') && !document.querySelector('[data-where=\"cloud\"]').disabled"), 8000, "行 154");
   await click('[data-where="cloud"]');

@@ -13,7 +13,7 @@ const src = js.slice(a, b);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const avatar = p => `<span class="avatar">${esc(p.avatar || p.role)}</span>`;
 const env = { esc, avatar, tokenLevel: () => '', fmtTime: x => x, mmdd: () => '10/28', state: { projMeta: { crossRoleIds: [] } }, PROJECTS: ['預設專案'],
-  projTag: p => `<span class="ptag">${p}</span>`, CONVO_OPTS: [['', '依所在環境（建議）']], CONVO_HINT: { '': '', auto: '', keep: '' }, grantsBlock: () => '', markQ: t => esc(t), innerHeight: 700, innerWidth: 1200,
+  projTag: p => `<span class="ptag">${p}</span>`, CONVO_OPTS: [['', '預設：太長才換新（建議）']], CONVO_HINT: { '': '', auto: '', keep: '' }, grantsBlock: () => '', markQ: t => esc(t), innerHeight: 700, innerWidth: 1200,
   maTool: () => '', maToolClosed: () => '' }; // 工具沒被管理員關掉
 const fn = new Function(...Object.keys(env), `${src}; return { myAiRowHtml: typeof myAiRowHtml === 'function' ? myAiRowHtml : null, maPlaceMenu: typeof maPlaceMenu === 'function' ? maPlaceMenu : null };`);
 const { myAiRowHtml, maPlaceMenu } = fn(...Object.values(env));
@@ -28,6 +28,11 @@ try {
   // 3. 角色、環境都空：第二行不以「·」開頭
   const meta = /<div class="ma-meta">([\s\S]*?)<\/div>/.exec(myAiRowHtml(ai({ projects: ['預設專案'] })))[1];
   assert.ok(!/^\s*(<span[^>]*>)?\s*·/.test(meta), '第二行開頭沒有「·」：' + meta);
+  // 4. 有角色＋專案標籤：標籤前不留「·」；兩段非空文字間保留「·」
+  const roleMeta = /<div class="ma-meta">([\s\S]*?)<\/div>/.exec(myAiRowHtml(ai({ roleKey: 'PG', role: '程式開發', projects: ['預設專案'] })))[1];
+  assert.equal(roleMeta, '程式開發<span class="ma-pjs"><span class="ptag">預設專案</span></span><span class="ma-mtok">Token 到 10/28</span>', '角色與專案標籤之間沒有多餘「·」');
+  const cloudMeta = /<div class="ma-meta">([\s\S]*?)<\/div>/.exec(myAiRowHtml(ai({ roleKey: 'PG', role: '程式開發', cloud: { kindLabel: 'OpenAI', model: 'gpt-5' }, projects: ['預設專案'] })))[1];
+  assert.equal(cloudMeta, '程式開發 · <span class="ma-cloud">☁️ 雲端 · OpenAI · gpt-5</span><span class="ma-pjs"><span class="ptag">預設專案</span></span><span class="ma-mtok">Token 到 10/28</span>', '非空文字間保留「·」，專案標籤前不留「·」');
   // 1. 選單用浮層：最下面一列（按鈕在視窗底部）往上開；上面一列往下開
   assert.ok(maPlaceMenu, '有放選單位置的函式');
   const place = btnTop => {
