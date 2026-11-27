@@ -439,6 +439,9 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
   });
 
   const askOf = m => { try { return m.reply_from ? new Set(JSON.parse(m.reply_from)) : null; } catch { return null; } };
+  // 文件不能出現在群組訊息的條件（發文時擋、讀訊息時也擋）：卡片「只給人看」的附件、人類紀錄卡的附件、掛在別專案卡上的附件。
+  // 讀的時候也要套，卡片之後改了可見性，舊訊息才不會露出檔名
+  const DOC_HIDDEN_SQL = "EXISTS (SELECT 1 FROM card_attachments a JOIN cards c ON c.seq = a.card_seq WHERE a.doc_id = d.id AND (c.project <> d.project OR a.human_only = 1 OR c.type = '人類紀錄'))";
   async function serializeMessages(ctx, rows) {
     if (!rows.length) return [];
     const recRows = await db.all(
@@ -460,6 +463,13 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     const filesByMsg = new Map();
     for (const x of moreRows) { if (!filesByMsg.has(x.message_id)) filesByMsg.set(x.message_id, []); filesByMsg.get(x.message_id).push(x); }
     const filesOf = m => filesByMsg.get(m.id).map(x => fileView(x));
+    // 引用的專案文件（不另存、不過期）；文件區刪掉、搬出這個專案、後來被設成只給人看就顯示 available=false
+    const docIdsOf = m => { try { const a = m.doc_ids ? JSON.parse(m.doc_ids) : null; return Array.isArray(a) && a.length ? a : null; } catch { return null; } };
+    const allDocIds = [...new Set(rows.flatMap(m => docIdsOf(m) || []))];
+    const docRows = allDocIds.length ? await db.all(`SELECT d.id, d.project, d.name, d.ext, d.size, d.deleted_at, CASE WHEN ${DOC_HIDDEN_SQL} THEN 1 ELSE 0 END AS hidden FROM docs d WHERE d.id IN (SELECT value FROM json_each(?))`, JSON.stringify(allDocIds)) : [];
+    const docsById = new Map(docRows.map(d => [d.id, d]));
+    const docRef = (m, id) => { const d = docsById.get(id); return d && !d.deleted_at && !Number(d.hidden) && d.project === m.project
+      ? { docId: d.id, name: d.name, ext: d.ext, size: d.size, available: true, downloadUrl: `/api/projects/${encodeURIComponent(d.project)}/docs/${d.id}` } : { docId: id, available: false }; };
     const byMsg = new Map();
     for (const r of recRows) {
       if (!byMsg.has(r.message_id)) byMsg.set(r.message_id, []);
@@ -479,6 +489,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       project: m.project || null,
       file: m.file_id ? fileView(filesById.get(m.file_id), m.file_id) : null,
       ...(filesByMsg.get(m.id)?.length > 1 ? { files: filesOf(m) } : {}), // 只有多個檔才帶（單檔跟 file 一樣，不重複佔 AI 的上下文）
+      ...(docIdsOf(m) ? { docs: docIdsOf(m).map(id => docRef(m, id)) } : {}), // 沒引用就不帶
       createdAt: m.created_at,
       ...(AUTO_MSG_RE.test(m.request_id || '') ? { auto: true } : {}), // 平台自動組的通知（卡片異動、退回、交接…）：網頁英文介面照固定句型翻，內容不動
       ...(resBy.has(m.id) ? { resolution: resolutionView(resBy.get(m.id), people) } : {}),
@@ -629,7 +640,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
 
   // ---------- 訊息 ----------
   // checkProject：成員發文時檢查收件人是否屬於訊息的專案；伺服器代發的通知不檢查
-  async function createMessage(ctx, me, body, { fileId = null, fileIds = null, checkProject = false, systemNotice = false } = {}) {
+  async function createMessage(ctx, me, body, { fileId = null, fileIds = null, docIds = null, checkProject = false, systemNotice = false } = {}) {
     if (fileIds?.length) fileId = fileIds[0]; // 多檔時 messages.file_id 放第一個
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text || text.length > MAX_TEXT) throw invalid(`text 需為 1～${MAX_TEXT} 字`);
@@ -655,6 +666,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
 
     const hashParts = [text, [...new Set(rawIds)].sort(), replyToId, audience, fileIds?.length > 1 ? fileIds : fileId];
     if (rawAsk) hashParts.push(rawAsk);
+    if (docIds) hashParts.push({ docIds }); // 沒引用文件時雜湊跟舊版一樣
     const payloadHash = await sha256(JSON.stringify(hashParts));
     const dup = await db.get('SELECT * FROM messages WHERE author_id = ? AND request_id = ?', me.id, requestId);
     if (dup) {
@@ -712,6 +724,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       if (named && project !== named.id) throw new ApiError(400, 'PROJECT_TEXT_MISMATCH', `訊息開頭寫【${named.name}】，project 必須帶 ${named.id}（目前是${project ? '「' + nameOf(project) + '」' : '全部專案'}）。真的要發給全部專案，請把開頭改成【全部專案】。`);
     }
     if (!systemNotice) await assertWritable(me, project); // （平台自動發的通知，例如「X 已加入」，不擋）
+    if (docIds) await checkDocs(me, docIds, project);
 
     // 解析正文中的 @名字·短代碼 與未消歧 @名字（同名者 >= 2 且未寫短代碼也沒在 recipientIds／replyFrom 指定 → 400 AMBIGUOUS_MENTION）
     const scopeMembers = [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && (!project || projectsOf(p).includes(project)));
@@ -776,8 +789,8 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
       reasons.set(replyTo.author_id, [...(reasons.get(replyTo.author_id) || []), 'reply']);
     }
     const stmts = [[
-      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project, reply_from)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt, project, ask ? JSON.stringify(ask) : null]]];
+      `INSERT INTO messages (id, author_id, text, reply_to, request_id, audience, payload_hash, file_id, created_at, project, reply_from, doc_ids)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [id, me.id, text, replyTo?.id ?? null, requestId, audience, payloadHash, fileId, createdAt, project, ask ? JSON.stringify(ask) : null, docIds ? JSON.stringify(docIds) : null]]];
     for (const fid of fileIds?.length ? fileIds : fileId ? [fileId] : []) stmts.push(['UPDATE files SET message_id = ? WHERE id = ?', [id, fid]]);
     for (const rid of recipientIds) stmts.push(['INSERT INTO message_recipients (message_id, participant_id) VALUES (?,?)', [id, rid]]);
     for (const [rid, rs] of reasons) {
@@ -3274,7 +3287,7 @@ ${ending}`;
     }
     const fileIds = body.fileIds !== undefined && body.fileIds !== null ? await attachableFiles(me, body) : null;
     await reviewsApi.checkCommitAsk(me, typeof body.text === 'string' ? body.text : '', card); // 專案開了審查，卡片沒通過就不能請人同意 commit
-    const r = await createMessage(ctx, me, body, { checkProject: true, fileIds });
+    const r = await createMessage(ctx, me, body, { checkProject: true, fileIds, docIds: readDocIds(body.docIds) });
     let cardLinked = cardMismatch ? false : undefined;
     if (cardSeq) {
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
@@ -3581,6 +3594,25 @@ ${ending}`;
       if (f.message_id && f.message_id !== dup?.id) throw new ApiError(409, 'FILE_ALREADY_POSTED', `檔案 ${f.name} 已經掛在別的訊息上`);
     }
     return files;
+  }
+  // 發文引用專案文件區的檔（docIds，最多 4 個）：圖仍存在文件區，不另存、不過期。
+  // 只能引用這則訊息所屬專案、自己看得到的文件；卡片「只給人看」的附件與人類紀錄卡的附件不能貼到群組（AI 也會看到）
+  const MAX_MSG_DOCS = 4;
+  function readDocIds(v) {
+    if (v === undefined || v === null) return null;
+    if (!Array.isArray(v) || !v.length || v.some(x => typeof x !== 'string' || !x || x.length > 64)) throw invalid(`docIds 需為 1～${MAX_MSG_DOCS} 個 docId 的陣列`);
+    if (new Set(v).size !== v.length) throw invalid('docIds 不可重複');
+    if (v.length > MAX_MSG_DOCS) throw new ApiError(400, 'TOO_MANY_DOCS', `一則訊息最多引用 ${MAX_MSG_DOCS} 個文件`);
+    return v;
+  }
+  async function checkDocs(me, docIds, project) {
+    if (!project) throw invalid('docIds 要搭配單一專案的訊息（project 不能是 all）：文件屬於專案文件區');
+    if (!projectsOf(me).includes(project)) throw new ApiError(404, 'DOC_NOT_FOUND', `你不在「${nameOf(project)}」，不能引用它的文件`);
+    const rows = await db.all(`SELECT d.id FROM docs d WHERE d.id IN (SELECT value FROM json_each(?)) AND d.project = ? AND d.deleted_at IS NULL
+      AND NOT ${DOC_HIDDEN_SQL}`, JSON.stringify(docIds), project);
+    const found = new Set(rows.map(r => r.id));
+    const miss = docIds.find(id => !found.has(id));
+    if (miss) throw new ApiError(404, 'DOC_NOT_FOUND', `找不到可以引用的文件 ${miss}：要在「${nameOf(project)}」的文件區、還沒刪除（只給人看的卡片附件不能貼到群組）`);
   }
   async function attachableFiles(me, body) {
     const files = await checkFiles(me, body.fileIds, typeof body.requestId === 'string' ? body.requestId.trim() : '');

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS messages (
   file_id TEXT,                            -- 附帶的上傳文件
   reply_from TEXT,                         -- 要回覆的人（JSON 陣列，收件人子集合）；NULL＝沒標
   project TEXT,                            -- 所屬專案（原本只靠 migration 0012 補，新站會少）
+  doc_ids TEXT,                            -- 引用的專案文件（JSON 陣列 docId，最多 4 個）；NULL＝沒有
   created_at TEXT NOT NULL,
   UNIQUE (author_id, request_id)
 );

@@ -58,10 +58,11 @@ export const MCP_TOOLS = [
     inputSchema: obj({ messageId: str('msg_ 開頭的訊息 ID', { pattern: '^msg_' }), context: { type: 'boolean', description: '要不要前後訊息' }, n: { type: 'integer', minimum: 1, maximum: 20, description: '前後各幾則，預設 5' }, full: { type: 'boolean', description: '回完整欄位（舊格式），預設 false＝精簡' } }, ['messageId']) },
   { name: 'aigile_ack', description: '確認通知（處理完才確認）。只收 notif_ 開頭的 notificationId，絕不傳 messageId。帶 cursor（aigile_inbox 回的 nextCursor）會一併把工作記憶的 messagesCursor 推到那裡；沒帶就推到這次確認的最新那則（只往前不往後）。沒有通知時只帶 cursor＝只存游標。失敗只重試 ACK，不要重發文。',
     inputSchema: obj({ notificationIds: { ...ids('notificationId 清單（沒有通知可不帶，只帶 cursor）', '^notif_'), maxItems: 100 }, cursor: str('aigile_inbox 回的 nextCursor（沒有通知時只帶它＝只存游標）', { pattern: '^cur_' }) }) },
-  { name: 'aigile_post', description: '在群組發文。text 開頭標 [接單]／[進度]／[完成]／[需確認]／[受阻]／[交接]／[通知]，第一段一句白話結論；要通知誰放 recipientIds（正文 @ 不會通知）；replyFrom 標要誰回覆（最多一位，只是告知帶 []）。帶 cardId 會掛到卡上，[接單]／[進度] 帶 cardId＝認領。requestId 不帶會依內容自動產生（重試同內容不會重複）。回傳只有 messageId、sequence 與 warnings（full=true 回整則）；有 warnings 要看。',
+  { name: 'aigile_post', description: '在群組發文。text 開頭標 [接單]／[進度]／[完成]／[需確認]／[受阻]／[交接]／[通知]，第一段一句白話結論；要通知誰放 recipientIds（正文 @ 不會通知）；replyFrom 標要誰回覆（最多一位，只是告知帶 []）。帶 cardId 會掛到卡上，[接單]／[進度] 帶 cardId＝認領。要附截圖：先用 aigile_doc_upload 放進專案文件區，再把 docId 放 docIds（最多 4 個，同專案），訊息直接顯示縮圖、點開看大圖，不用再寫檔名。requestId 不帶會依內容自動產生（重試同內容不會重複）。回傳只有 messageId、sequence 與 warnings（full=true 回整則）；有 warnings 要看。',
     inputSchema: obj({ project: str('專案 API 代號（例：平台），公告與跨團隊協調才用 all'), text: str('內文，盡量 600 字內', { minLength: 1, maxLength: 4000 }),
       recipientIds: ids('要通知的 participantId', '^p_'), replyFrom: { ...ids('要誰回覆（最多一位）', '^p_'), maxItems: 1 }, cardId: CARD_ID,
-      replyToMessageId: str('回覆哪則訊息', { pattern: '^msg_' }), requestId: str('冪等鍵（選填）', { maxLength: 128 }), full: { type: 'boolean', description: '回完整欄位（舊格式），預設 false＝精簡' } }, ['project', 'text']) },
+      replyToMessageId: str('回覆哪則訊息', { pattern: '^msg_' }), docIds: { ...ids('附上專案文件區的檔（docId，最多 4 個，要跟 project 同專案）：圖片顯示縮圖、其他顯示檔名', '^doc_'), maxItems: 4 },
+      requestId: str('冪等鍵（選填）', { maxLength: 128 }), full: { type: 'boolean', description: '回完整欄位（舊格式），預設 false＝精簡' } }, ['project', 'text']) },
   { name: 'aigile_card_get', description: `讀一張卡：最前面是 claim（誰在做）與 handover（上一棒交接四欄）；有前置卡還沒完成時帶 waitingHint（只提醒、不擋接單），links 列前置卡／這張擋住／關聯卡；另有紀錄與關聯訊息。${UNTRUSTED}`,
     inputSchema: obj({ cardId: CARD_ID }, ['cardId']) },
   // 審查者：專案開了審查時，做完先送審，通過了才找人同意 commit；被退回照意見改、改完重新送審
@@ -106,7 +107,7 @@ export const MCP_TOOLS = [
       question: str('決策問題（決策卡）'), options: { type: 'array', maxItems: 6, items: { type: 'string', maxLength: 200 }, description: '決策選項（決策卡，2～6 個）' }, recommendation: str('建議方案（決策卡）'), impact: str('影響（決策卡）'), afterNext: str('決定後做什麼（決策卡）'),
       template: str('卡片範本名稱（選填，例如 Bug 回報、功能；套用預設類型、標題前綴與未填的預填內容，並回報檢核結果）', { maxLength: 60 }),
       requestId: str('冪等鍵（選填）', { maxLength: 128 }) }, ['project', 'title']) },
-  { name: 'aigile_doc_upload', description: '上傳文件到專案文件區（≤20 MB、不過期）。禁止上傳程式碼（原始碼、打包檔、設定檔）與客戶個資；declared 一定要 true＝確認不含這些，不確定先問所屬人類。只收 pdf、docx、xlsx、pptx、md、txt、png、jpg。本機檔案給 path（本機轉接腳本讀檔直接上傳）；短的 md／txt 也可以直接給 content。kb=true＝放進知識庫（只有專案 leader／管理員能放，AI 上傳的請 leader 在專案文件勾選加入），預設 false＝一般專案文件，只存原檔。',
+  { name: 'aigile_doc_upload', description: '上傳文件到專案文件區（≤20 MB、不過期）。禁止上傳程式碼（原始碼、打包檔、設定檔）與客戶個資；declared 一定要 true＝確認不含這些，不確定先問所屬人類。只收 pdf、docx、xlsx、pptx、md、txt、png、jpg。本機檔案給 path（本機轉接腳本讀檔直接上傳）；短的 md／txt 也可以直接給 content。kb=true＝放進知識庫（只有專案 leader／管理員能放，AI 上傳的請 leader 在專案文件勾選加入），預設 false＝一般專案文件，只存原檔。回傳的 docId 放進 aigile_post 的 docIds，訊息就會直接顯示（例如交截圖）。',
     inputSchema: obj({ project: str('專案代號（例：平台）'), name: str('檔名（含副檔名）', { minLength: 1, maxLength: 200 }), path: str('本機檔案路徑（經本機轉接腳本）'), content: str('文字內容（md／txt 用，最多 100 KB）', { maxLength: 100_000 }),
       folderId: str('資料夾 ID（選填）'), declared: { type: 'boolean', enum: [true], description: '確認不含程式碼與客戶個資，必須是 true' }, kb: { type: 'boolean', description: '放進知識庫（預設 false；只有 leader／管理員能放）' }, curate: { type: 'boolean', description: '搭配 kb：讓 AI 整理成知識頁（預設 true；false＝只抽字、搜得到原文，不排整理卡）' } }, ['project', 'name', 'declared']) },
   { name: 'aigile_history', description: `讀歷史訊息（精簡格式：每則 from、at、前 ${HIST_CHARS} 字）。給 cardId 讀那張卡關聯的訊息；不給就讀最近 hours 小時（預設 24、最多 168），before 帶上次回的 olderCursor 往前翻。要全文用 aigile_read。${UNTRUSTED}`,
@@ -136,6 +137,7 @@ export function slimMessage(x) {
     ...(x.file ? { file: { fileId: x.file.fileId, name: x.file.name, available: x.file.available } } : {}),
     // 一則掛多個檔時列出全部（file 仍是第一個，舊版照讀）；下載 GET /api/files/:fileId
     ...(x.files?.length > 1 ? { files: x.files.map(f => ({ fileId: f.fileId, name: f.name, available: f.available })) } : {}),
+    ...(x.docs?.length ? { docs: x.docs.map(d => ({ docId: d.docId, name: d.name, available: d.available })) } : {}), // 讀原檔用 aigile_doc_read
     at: x.createdAt, text: x.text, ...(x.truncated ? { truncated: true } : {}),
     ...(x.resolution ? { resolution: x.resolution } : {}), // [需確認] 被人類標已處理（未回覆）＝暫緩
   };
@@ -234,7 +236,7 @@ async function runTool(name, a, { api, me }) {
     }
     case 'aigile_ack': return ok(await api('POST', '/api/notifications/ack', { notificationIds: a.notificationIds ?? [], ...(a.cursor ? { cursor: a.cursor } : {}) }));
     case 'aigile_post': {
-      const body = { project: a.project, text: a.text, recipientIds: a.recipientIds || [], ...(a.replyFrom ? { replyFrom: a.replyFrom } : {}), ...(a.cardId ? { cardId: a.cardId } : {}), ...(a.replyToMessageId ? { replyToMessageId: a.replyToMessageId } : {}) };
+      const body = { project: a.project, text: a.text, recipientIds: a.recipientIds || [], ...(a.replyFrom ? { replyFrom: a.replyFrom } : {}), ...(a.cardId ? { cardId: a.cardId } : {}), ...(a.replyToMessageId ? { replyToMessageId: a.replyToMessageId } : {}), ...(a.docIds?.length ? { docIds: a.docIds } : {}) };
       body.requestId = a.requestId || 'mcp_' + (await sha(JSON.stringify(body))).slice(0, 24);
       const r = await api('POST', '/api/messages', body);
       return a.full ? ok(r) : slimPost(ok(r), r.status);

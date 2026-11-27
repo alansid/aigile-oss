@@ -1501,7 +1501,7 @@
         ${statusTags(m, toMe, replyMe)}
         ${cardRefHtml(m, prevCard)}
         ${kid ? kidSr(m) : m.replyToMessageId ? `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${nameCodeHtml(state.participants.get(parent.author.participantId) || parent.author, dups)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>` : ''}
-        ${m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, ai) : textHtml(m)}
+        ${m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, ai) : textHtml(m)}${docsHtml(m)}
         ${authHtml(m)}
         <div class="msg-foot${linkedCapsules(m) || state.open.has(m.messageId) || (!m.file && !ai && isLong(m.text)) || repliesOf(m.messageId).length ? '' : ' acts-only'}">
           <button class="reply-btn" type="button" data-reply="${esc(m.messageId)}">回覆</button>
@@ -1574,7 +1574,7 @@
       : `<button class="quote" type="button" data-jump="${esc(m.replyToMessageId)}">回覆 ${parent ? `<b>${esc(parent.author.name)}</b>：${esc(parent.text.slice(0, 80))}` : `較早的訊息（${esc(shortId(m.replyToMessageId))}）`}</button>`;
     const cls = ['msg', 'gmsg', isMine(m) ? 'mine' : '', needReply(m) ? 'need-me' : '', isKid(m) ? 'kid' : ''].join(' ');
     const ask = m.replyFrom ? myAskPill(m) : isToMe(m) && m.audience !== 'all' && !isMine(m) ? '<span class="tag me">指定給我</span>' : '';
-    const body = m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m, !!tag); // 名字旁已有標籤
+    const body = (m.file ? fileNoteHtml(m.text) + filesHtml(m) : ai ? aiTextHtml(m, { ...ai, tag: '' }) : textHtml(m, !!tag)) + docsHtml(m); // 名字旁已有標籤
     return `<article class="${cls}" id="msg-${esc(m.messageId)}">
       <div class="gm-head">${avatar(state.participants.get(a.participantId) || a)}<b class="msg-author nm-cut" title="${esc(a.name)}">${esc(a.name)}</b>${tag ? leadPill(tag) : ''}${timeHtml(m)}${ask}${resolvedPill(m)}${unansweredTag(m)}</div>
       ${re}
@@ -10576,10 +10576,31 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     return `<div class="fgrid fg-${fs.length}">${cells}</div>
       <p class="fg-foot muted small"><span>${allImg ? `🖼 ${fs.length} 張截圖` : `📎 ${fs.length} 個檔案`}</span> · <span class="file-ok">✓ 已聲明不含程式碼與個資</span> · <button type="button" class="link small" data-fg-all="${esc(m.messageId)}">全部下載</button></p>`;
   }
-  // 縮圖要帶登入才拿得到：同一頁同一個檔只抓一次（抓＝下載，會記稽核）
+  // 訊息引用的專案文件（docs）：圖片用同一套縮圖格、點開看大圖；其他檔顯示檔名，點了下載。圖仍在文件區，刪了就顯示已刪除
+  function docsHtml(m) {
+    const ds = m.docs || [];
+    if (!ds.length) return '';
+    const imgs = ds.filter(d => d.available && isImgExt(d.ext)), others = ds.filter(d => d.available && !isImgExt(d.ext)), gone = ds.length - imgs.length - others.length;
+    if (!imgs.length && !others.length) return '<div class="file-card gone">📄 文件已從專案文件區刪除</div>';
+    const grid = imgs.length ? `<div class="fgrid fg-${imgs.length} dgrid">${imgs.map((d, i) => `<button type="button" class="fg-cell" data-dg-open="${esc(m.messageId)}" data-i="${i}" aria-label="${esc(imgs.length > 1 ? `第 ${i + 1} 張，共 ${imgs.length} 張：${d.name}，點開放大` : `${d.name}，點開放大`)}"><img alt="" data-thumb="${esc(d.downloadUrl)}"></button>`).join('')}</div>` : '';
+    const list = others.length ? `<div class="doc-refs">${others.map(d => `<button type="button" class="doc-ref" data-doc-dl="${esc(d.downloadUrl)}" data-name="${esc(d.name)}" title="下載"><span aria-hidden="true">${fileIcon(d.ext)}</span><span class="doc-ref-name">${esc(d.name)}</span><span class="muted small">${fmtBytes(d.size)}</span></button>`).join('')}</div>` : '';
+    return `<div class="msg-docs">${grid}${list}${gone ? `<p class="fg-foot muted small">另有 ${gone} 個文件已從專案文件區刪除</p>` : ''}</div>`;
+  }
+  document.addEventListener('click', e => {
+    const dl = e.target.closest('[data-doc-dl]');
+    if (dl) { downloadFrom(dl.dataset.docDl, dl.dataset.name); return; }
+    const o = e.target.closest('[data-dg-open]');
+    if (!o) return;
+    const m = state.byId.get(o.dataset.dgOpen) || state.messages.find(x => x.messageId === o.dataset.dgOpen);
+    const imgs = (m?.docs || []).filter(d => d.available && isImgExt(d.ext));
+    if (!imgs.length) return;
+    const sub = `${m.author?.name || ''} ${fmtTime(m.createdAt)}`.trim();
+    openViewer(imgs.map(d => ({ docPath: d.downloadUrl, name: d.name, ext: d.ext, sub })), Math.min(+o.dataset.i || 0, imgs.length - 1));
+  });
+  // 縮圖要帶登入才拿得到：同一頁同一個檔只抓一次（抓＝下載，會記稽核）；/api/ 開頭＝專案文件的路徑
   const thumbCache = new Map();
   const thumbUrl = id => {
-    if (!thumbCache.has(id)) thumbCache.set(id, fetch(`/api/files/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } })
+    if (!thumbCache.has(id)) thumbCache.set(id, fetch(id.startsWith('/api/') ? id : `/api/files/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${state.token}` } })
       .then(r => (r.ok ? r.blob() : Promise.reject(new Error(r.status)))).then(b => URL.createObjectURL(b)).catch(e => { thumbCache.delete(id); throw e; }));
     return thumbCache.get(id);
   };
@@ -10603,14 +10624,14 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     under.forEach(x => x.classList.add('under-viewer'));
     el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', '看大圖');
     document.body.append(el);
-    const src = it => (it.url ? Promise.resolve(it.url) : it.fileId ? thumbUrl(it.fileId) : Promise.reject(new Error('no')));
+    const src = it => (it.url ? Promise.resolve(it.url) : it.fileId || it.docPath ? thumbUrl(it.fileId || it.docPath) : Promise.reject(new Error('no')));
     const draw = () => {
       const it = items[i], many = items.length > 1;
       el.innerHTML = `<div class="vw-top"><span class="vw-title">${many ? `${i + 1} / ${items.length} · ` : ''}${esc(it.name)}${it.sub ? ` · ${esc(it.sub)}` : ''}</span><span class="grow"></span>
-          ${it.fileId ? `<button type="button" class="vw-btn" data-vw="dl">下載</button>` : ''}${onDelete && it.canDelete ? `<button type="button" class="vw-btn danger" data-vw="del">${items.length > 1 ? '刪除這張' : '刪除'}</button>` : ''}
+          ${it.fileId || it.docPath ? `<button type="button" class="vw-btn" data-vw="dl">下載</button>` : ''}${onDelete && it.canDelete ? `<button type="button" class="vw-btn danger" data-vw="del">${items.length > 1 ? '刪除這張' : '刪除'}</button>` : ''}
           <button type="button" class="vw-btn vw-x" data-vw="x" aria-label="關閉">✕</button></div>
         <div class="vw-stage">${many ? '<button type="button" class="vw-nav prev" data-vw="prev" aria-label="上一張">‹</button>' : ''}
-          ${isImgExt((it.name.split('.').pop() || '').toLowerCase()) ? '<img class="vw-img" alt="">' : `<div class="vw-file"><span aria-hidden="true">${fileIcon((it.name.split('.').pop() || '').toLowerCase())}</span><b>${esc(it.name)}</b><span class="small">不是圖片，按「下載」打開</span></div>`}
+          ${isImgExt((it.ext || (it.name.split('.').pop() || '').toLowerCase())) ? '<img class="vw-img" alt="">' : `<div class="vw-file"><span aria-hidden="true">${fileIcon((it.ext || (it.name.split('.').pop() || '').toLowerCase()))}</span><b>${esc(it.name)}</b><span class="small">不是圖片，按「下載」打開</span></div>`}
           ${many ? '<button type="button" class="vw-nav next" data-vw="next" aria-label="下一張">›</button>' : ''}</div>
         ${many ? `<div class="vw-strip">${items.map((x, k) => `<button type="button" class="vw-th${k === i ? ' sel' : ''}" data-vw-i="${k}" aria-label="${esc(`第 ${k + 1} 張：${x.name}`)}"${k === i ? ' aria-current="true"' : ''}><img alt="" data-vw-src="${k}"></button>`).join('')}</div>` : ''}
         <p class="vw-hint"><span class="k-desk">${many ? '← → 鍵或左右滑動切換 · Esc 關閉' : 'Esc 關閉'}</span><span class="k-mob">${many ? '左右滑動或點縮圖切換' : '按右上 ✕ 關閉'}</span></p>`;
@@ -10634,7 +10655,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (b.dataset.vwI !== undefined) { i = +b.dataset.vwI; return draw(); }
       const k = b.dataset.vw;
       if (k === 'x') close(); else if (k === 'prev') go(-1); else if (k === 'next') go(1);
-      else if (k === 'dl') downloadFile(items[i].fileId, items[i].name);
+      else if (k === 'dl') { if (items[i].docPath) downloadFrom(items[i].docPath, items[i].name); else downloadFile(items[i].fileId, items[i].name); }
       else if (k === 'del' && await onDelete(items[i])) close();
     });
     let x0 = null;
