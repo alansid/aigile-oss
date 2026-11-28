@@ -412,6 +412,7 @@ CREATE TABLE IF NOT EXISTS docs (
   in_kb INTEGER NOT NULL DEFAULT 0     -- 1＝放進知識庫（抽字、整理、被搜）；0＝一般專案文件，只存原檔
 );
 CREATE INDEX IF NOT EXISTS idx_docs ON docs (project, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_docs_name ON docs (project, name); -- 021 讀取成本：同名檢查
 -- 知識庫底層：文件抽出來的純文字分段（可重建）。每段約 1,000～2,000 字
 CREATE TABLE IF NOT EXISTS kb_chunks (
   id TEXT PRIMARY KEY,                 -- kbc_xxx
@@ -509,6 +510,10 @@ CREATE TABLE IF NOT EXISTS card_attachments (
   human_only INTEGER NOT NULL DEFAULT 0 CHECK (human_only IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS idx_card_attachments_card ON card_attachments(card_seq);
+-- 021 讀取成本：每張卡最新關聯訊息、誰正在做、整理自（部分索引的條件要跟 src/cards.js 的查詢一字不差）
+CREATE INDEX IF NOT EXISTS idx_card_msgs_card ON card_msgs (card_seq);
+CREATE INDEX IF NOT EXISTS idx_card_log_claims ON card_log (card_seq, at, by_id, via) WHERE via IN ('認領', '交接');
+CREATE INDEX IF NOT EXISTS idx_card_log_merged ON card_log (text) WHERE text LIKE '已整理到 %';
 -- 卡片關聯（migrations/015_card_links.sql）：blocked_by＝from 要等 to 做完；related 存成 from_seq < to_seq
 CREATE TABLE IF NOT EXISTS card_links (
   from_seq INTEGER NOT NULL REFERENCES cards(seq),

@@ -298,9 +298,28 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
   // 專案：成員可屬於一或兩個；訊息 project 為空＝全部專案（人人可見）；卡片必填
   // 專案清單存在資料表；PROJECTS 是「未封存專案 id」的陣列，原地更新（cards.js 拿的是同一個陣列）
   const PROJECTS = [];
-  let projectRows = [], projectsAt = 0;
+  let projectRows = [], projectsAt = 0, projectsLoadedAt = 0, projectsVerSeen = null, projectsTouched = false;
+  // 讀取成本：雲端（Cloudflare）同時有很多份程式，各自每 60 秒整張重讀。改成跟成員表一樣用版本記號：
+  // 改專案的請求（有呼叫 loadProjects(true) 或 invalidateProjects）結束時把 app_settings 的 projects_ver 換新；
+  // 其他份程式每 60 秒只讀這 1 列，版本沒變就沿用；保險起見最多 10 分鐘還是整張重讀一次。
+  // loadProjects('fresh')：要最新的（專案頁），不等 60 秒、先比版本，沒變就不重讀
+  const projectsVer = async () => (await db.get("SELECT value FROM app_settings WHERE key = 'projects_ver'").catch(() => null))?.value || '';
+  async function bumpProjectsVer() {
+    const v = String(Date.now()) + Math.random().toString(36).slice(2, 6);
+    await db.run("INSERT INTO app_settings (key, value) VALUES ('projects_ver', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", v).catch(() => {});
+    return v;
+  }
+  const PROJECTS_CHECK_MS = Number(config.projectsCheckMs) || 60_000; // 測試可調短
   async function loadProjects(force = false) {
-    if (!force && Date.now() - projectsAt < 60_000 && projectRows.length) return; // 專案很少改，原 10 秒一天讀 8 千多次；改專案時會清除
+    const now = Date.now();
+    if (force === true) projectsTouched = true; // 這個請求會改專案：請求結束時換新版本記號
+    let ver = null;
+    if (force !== true && projectsAt && projectRows.length) {
+      if (force !== 'fresh' && now - projectsAt < PROJECTS_CHECK_MS) return; // 專案很少改，原 10 秒一天讀 8 千多次；改專案時會清除
+      ver = await projectsVer();
+      if (now - projectsLoadedAt < 10 * 60_000 && ver === projectsVerSeen) { projectsAt = now; return; }
+    }
+    if (ver === null) ver = await projectsVer();
     projectRows = await db.all('SELECT * FROM projects ORDER BY created_at, id');
     // 匯入備份中不自動建預設專案：備份的專案還沒寫進來
     if (!projectRows.length && !(await db.get("SELECT 1 AS x FROM app_settings WHERE key = 'restore_state'").catch(() => null))) { // 新站第一次啟動，自動建「預設專案」（之後管理員可改名）
@@ -312,7 +331,8 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
     PROJECTS.length = 0;
     PROJECTS.push(...projectRows.filter(r => !r.archived).map(r => r.id));
     await loadCodes();
-    projectsAt = Date.now();
+    projectsAt = projectsLoadedAt = Date.now();
+    projectsVerSeen = ver;
   }
   // 專案代號（2～5 個英文大寫，卡片顯示 MAIN-12）。設定存 app_settings 的 pcode:<專案>；沒設就取網址英文名的字母
   const CODE_RE = /^[A-Z]{2,5}$/;
@@ -352,7 +372,7 @@ export function createApp({ db, docText, apiRefText = '', flowsText = '', releas
   }
   // 卡號（MAIN-12 或舊的 C-xxx）→ seq；找不到回 null
   const seqOfCardId = async id => { const m = /^C-(\d+)$/i.exec(String(id || '').trim()); return m ? Number(m[1]) - 100 : cardSeqByKey(id); };
-  const invalidateProjects = () => { projectsAt = 0; };
+  const invalidateProjects = () => { projectsAt = 0; projectsTouched = true; }; // 下一次載入時整張重讀；請求結束時換新版本記號
   // 成員所屬專案：欄位是空字串＝沒有任何專案（只看得到「全部專案」）；沒有欄位值（舊資料）＝所有專案
   const projectsOf = p => {
     const raw = p?.projects;
@@ -1840,7 +1860,7 @@ ${ending}`;
   const twDate = isoStr => new Date(Date.parse(isoStr) + 8 * 3600_000).toISOString().slice(0, 10).replace(/-/g, '/');
 
   async function projectViews(ctx) {
-    await loadProjects(true);
+    await loadProjects('fresh'); // 讀取成本：專案頁原本每次都整張重讀（還會讓別份程式也重讀），改成先比版本記號
     const people = await peopleMap(ctx);
     const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status IN ('待整理','待處理','進行中','待確認','受阻') GROUP BY project")).map(r => [r.project, r.n]));
     const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(), slugs = await slugMap();
@@ -4253,7 +4273,7 @@ ${ending}`;
           }
         }
         let out;
-        try { out = await r.handler({ req, url, params, me, ctx, base }); } finally { if (peopleDirty) await bumpPeopleVer(); }
+        try { out = await r.handler({ req, url, params, me, ctx, base }); } finally { if (peopleDirty) await bumpPeopleVer(); if (projectsTouched) { projectsTouched = false; projectsVerSeen = await bumpProjectsVer(); } } // 專案版本記號
         if (me?.mustChangeCredentials && routeKey === 'PUT /api/me/password') { await db.run('DELETE FROM app_settings WHERE key = ?', MUST_KEY(me.id)); credOk.add(me.id); } // 帳號與密碼都改了
         if (live && r.method !== 'GET' && out && typeof out === 'object' && !(out instanceof Response) && typeof out.cardId === 'string' && out.project) await liveCard(ctx, out.cardId, out.project).catch(() => {}); // 卡片有變：推給看得到那個專案的人
         if (out instanceof Response) return out;

@@ -26,11 +26,14 @@ const cardNo = seq => `C-${seq + CARD_NO_BASE}`;
 // 認領與結構化交接：記在 card_log（via＝認領／交接），不加資料表欄位。
 // 每張卡最新的一筆「認領」或「交接」：最新是認領＝那個人正在做；最新是交接＝交出去了，等接手的人 [接單] 再認領
 export const CLAIM_LOG = '認領', HANDOVER_LOG = '交接';
+export const CLAIM_VIA_SQL = `via IN ('${CLAIM_LOG}', '${HANDOVER_LOG}')`; // 跟 migrations/021 的 idx_card_log_claims 條件相同
 export const HANDOVER_FIELDS = ['progress', 'changes', 'nextStep', 'caution']; // 做到哪、改了什麼、下一步、注意
 export async function claimsOf(db, seqs) {
   const m = new Map();
   if (!seqs.length) return m;
-  for (const l of await db.all('SELECT card_seq, at, by_id, via FROM card_log WHERE via IN (?, ?) AND card_seq IN (SELECT value FROM json_each(?)) ORDER BY id', CLAIM_LOG, HANDOVER_LOG, JSON.stringify(seqs)))
+  // 讀取成本：WHERE 的 via 條件要跟 idx_card_log_claims（021）的部分索引條件一字不差，才走得到那個小索引；不在 SQL 排序（排序也算讀取列數）
+  const rows = await db.all(`SELECT id, card_seq, at, by_id, via FROM card_log WHERE ${CLAIM_VIA_SQL} AND card_seq IN (SELECT value FROM json_each(?))`, JSON.stringify(seqs));
+  for (const l of rows.sort((a, b) => a.id - b.id))
     m.set(l.card_seq, l.via === CLAIM_LOG ? { by: l.by_id, at: l.at } : null);
   return m;
 }
@@ -76,7 +79,14 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   const BOARD_LIMIT = boardLimit;
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   let archivedAt = 0;
-  const maybeArchive = async (ctx = {}) => { if (Date.now() - archivedAt < archiveEveryMs) return; archivedAt = Date.now(); await autoArchive(db).catch(e => console.error('autoArchive', e.message)); await retryUnblocks(ctx).catch(e => console.error('retryUnblocks', e.message)); }; // 順便補送沒送成的「前置卡都完成」通知
+  // 讀取成本：雲端同時有很多份程式時，各自每 10 分鐘掃一次已完成卡；改成全站共用上次執行時間（app_settings 1 列）
+  const archiveDue = async () => {
+    const last = Number((await db.get("SELECT value FROM app_settings WHERE key = 'archive_at'").catch(() => null))?.value || 0);
+    if (Date.now() - last < archiveEveryMs) return false;
+    await db.run("INSERT INTO app_settings (key, value) VALUES ('archive_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(Date.now())).catch(() => {});
+    return true;
+  };
+  const maybeArchive = async (ctx = {}) => { if (Date.now() - archivedAt < archiveEveryMs) return; archivedAt = Date.now(); if (!(await archiveDue())) return; await autoArchive(db).catch(e => console.error('autoArchive', e.message)); await retryUnblocks(ctx).catch(e => console.error('retryUnblocks', e.message)); }; // 順便補送沒送成的「前置卡都完成」通知
   // 卡片的專案看專案欄位；舊卡標題的「[專案]」前綴在通知裡去掉，改用【專案】標記
   const plainTitle = t => { const m = /^\s*\[([^\]\n]{1,20})\]\s*/.exec(t); return m && PROJECTS.includes(m[1]) ? t.slice(m[0].length) || t : t; };
   const parseNo = id => {
@@ -238,29 +248,36 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   const STALE_CACHE_MS = Math.min(300_000, STALE_CARD_MS / 60);
   const OPEN_LIST = JSON.stringify(CARD_STATUSES.filter(s => !['已完成', '已封存'].includes(s)));
   let staleCache = { at: 0, map: null };
-  const linkLatest = new Map(); // card_seq → 最新一則非 [通知] 關聯訊息 { id, at }（只留目前「夠久沒更新」的未結卡）
+  // 讀取成本：過時提示與看板動靜都要「每張卡最新一則非 [通知] 的關聯訊息」，共用這份記憶體。
+  // 程式重開（或雲端換新的一份）記憶體一空就要整批補讀；補讀原本把每張卡的關聯訊息全部讀出來，
+  // 改成每張卡順著 idx_card_msgs_card（021，card_seq＋rowid）從最後關聯的往回找、找到第一則非 [通知] 就停（約 1/10）。
+  // 以關聯先後代表新舊（card_msgs 只會新增）；之後只補讀新加的關聯
+  const linkLatest = new Map(); // card_seq → { id, at }；null＝沒有非 [通知] 的關聯訊息
   let linkRowid = null;          // 讀到哪一筆 card_msgs
   const bump = (seq, r) => { const cur = linkLatest.get(seq); if (!cur || r.at > cur.at) linkLatest.set(seq, { id: r.id, at: r.at }); };
-  async function staleHints() {
-    if (staleCache.map && Date.now() - staleCache.at < STALE_CACHE_MS) return staleCache.map;
-    const now = Date.now(), out = new Map();
-    const old = await db.all('SELECT seq, updated_at FROM cards WHERE status IN (SELECT value FROM json_each(?)) AND updated_at < ?', OPEN_LIST, new Date(now - STALE_CARD_MS).toISOString());
-    const oldSeqs = new Set(old.map(c => c.seq));
+  async function latestLinks(seqs) {
     if (linkRowid === null) linkRowid = (await db.get('SELECT COALESCE(MAX(rowid), 0) AS r FROM card_msgs')).r;
     else {
       const fresh = await db.all(`SELECT cm.rowid AS rid, cm.card_seq AS seq, m.id AS id, m.created_at AS at, m.text LIKE '[通知]%' AS sys
         FROM card_msgs cm JOIN messages m ON m.id = cm.message_id WHERE cm.rowid > ?`, linkRowid);
       for (const r of fresh) { linkRowid = Math.max(linkRowid, r.rid); if (!r.sys && linkLatest.has(r.seq)) bump(r.seq, r); }
     }
-    for (const seq of linkLatest.keys()) if (!oldSeqs.has(seq)) linkLatest.delete(seq); // 結案或又更新了就不用記
-    const need = old.filter(c => !linkLatest.has(c.seq)).map(c => c.seq);
+    const need = [...new Set(seqs)].filter(seq => !linkLatest.has(seq));
     if (need.length) {
+      if (linkLatest.size > 3000) linkLatest.clear();
       for (const seq of need) linkLatest.set(seq, null);
-      for (const r of await db.all(`SELECT cm.card_seq AS seq, m.id AS id, m.created_at AS at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
-        WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%'`, JSON.stringify(need))) bump(r.seq, r);
+      const rows = await db.all(`SELECT c.seq AS seq, (SELECT m.created_at || ' ' || m.id FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
+        WHERE cm.card_seq = c.seq AND m.text NOT LIKE '[通知]%' ORDER BY cm.rowid DESC LIMIT 1) AS l FROM cards c WHERE c.seq IN (SELECT value FROM json_each(?))`, JSON.stringify(need));
+      for (const r of rows) if (r.l) { const sp = r.l.indexOf(' '); bump(r.seq, { at: r.l.slice(0, sp), id: r.l.slice(sp + 1) }); }
     }
+    return linkLatest;
+  }
+  async function staleHints() {
+    if (staleCache.map && Date.now() - staleCache.at < STALE_CACHE_MS) return staleCache.map;
+    const now = Date.now(), out = new Map();
+    const old = await db.all('SELECT seq, updated_at FROM cards WHERE status IN (SELECT value FROM json_each(?)) AND updated_at < ?', OPEN_LIST, new Date(now - STALE_CARD_MS).toISOString());
     if (old.length) {
-      const latest = linkLatest;
+      const latest = await latestLinks(old.map(c => c.seq));
       for (const c of old) {
         const l = latest.get(c.seq);
         if (l && Date.parse(l.at) - Date.parse(c.updated_at) > Math.min(60_000, STALE_CARD_MS)) out.set(c.seq, { lastUpdatedAt: c.updated_at, latestMessageAt: l.at, latestMessageId: l.id });
@@ -271,34 +288,11 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
   }
   const withStale = (v, c, stale) => (stale.get(c.seq)?.lastUpdatedAt === c.updated_at ? { ...v, staleHint: stale.get(c.seq) } : v);
 
-  // 看板「最後有動靜」只追新插入的 card_msgs.rowid，讀過的卡記在記憶體，不每次整批重讀
-  const actLatest = new Map();
-  let actRowid = null;
-  const bumpAct = (seq, at) => { if (!at) return; const cur = actLatest.get(seq); if (!cur || at > cur) actLatest.set(seq, at); };
+  // 看板「最後有動靜」（跟過時提示共用 latestLinks）
   async function latestMsgTimes(seqs) {
-    if (!seqs.length) return actLatest;
-    if (actRowid === null) {
-      actRowid = (await db.get('SELECT COALESCE(MAX(rowid), 0) AS r FROM card_msgs')).r;
-    } else {
-      const fresh = await db.all(
-        `SELECT cm.rowid AS rid, cm.card_seq AS seq, m.created_at AS at, m.text LIKE '[通知]%' AS sys
-         FROM card_msgs cm JOIN messages m ON m.id = cm.message_id WHERE cm.rowid > ?`,
-        actRowid,
-      );
-      for (const r of fresh) { actRowid = Math.max(actRowid, r.rid); if (!r.sys && actLatest.has(r.seq)) bumpAct(r.seq, r.at); }
-    }
-    const need = seqs.filter(s => !actLatest.has(s));
-    if (need.length) {
-      if (actLatest.size > 2000) actLatest.clear();
-      for (const s of need) actLatest.set(s, null);
-      const rows = await db.all(
-        `SELECT cm.card_seq AS seq, MAX(m.created_at) AS at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
-         WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND m.text NOT LIKE '[通知]%' GROUP BY cm.card_seq`,
-        JSON.stringify(need),
-      );
-      for (const r of rows) bumpAct(r.seq, r.at);
-    }
-    return actLatest;
+    if (!seqs.length) return new Map();
+    const latest = await latestLinks(seqs);
+    return new Map(seqs.map(seq => [seq, latest.get(seq)?.at || null]));
   }
   const maxAt = (...xs) => xs.filter(Boolean).sort().at(-1) || null;
 
@@ -370,10 +364,12 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     const want = cards.filter(c => c.status === '待確認' && c.type !== '決策' && c.type !== NOTE && c.wait_for_id);
     const out = new Map();
     if (!want.length) return out;
-    const owner = new Map(want.map(c => [c.seq, c.owner_id]));
-    const rows = await db.all(`SELECT cm.card_seq AS seq, m.id, m.author_id, m.text, m.created_at FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
-      WHERE cm.card_seq IN (SELECT value FROM json_each(?)) AND (m.text LIKE '[完成]%' OR m.text LIKE '[交接]%') ORDER BY m.created_at DESC`, JSON.stringify(want.map(c => c.seq)));
-    for (const r of rows) if (!out.has(r.seq) && (r.author_id === owner.get(r.seq) || r.text.startsWith('[交接]'))) out.set(r.seq, { messageId: r.id, at: r.created_at });
+    // 讀取成本：每張卡從最後關聯的訊息往回找（idx_card_msgs_card），找到第一則就停，不把全部關聯訊息連內文讀出來
+    // 回傳「時間 空格 訊息 id」（兩者都不含空格；SQLite 與 PG 同一句）
+    const rows = await db.all(`SELECT c.seq AS seq, (SELECT m.created_at || ' ' || m.id FROM card_msgs cm JOIN messages m ON m.id = cm.message_id
+        WHERE cm.card_seq = c.seq AND (m.text LIKE '[交接]%' OR (m.text LIKE '[完成]%' AND m.author_id = c.owner_id)) ORDER BY cm.rowid DESC LIMIT 1) AS r
+      FROM cards c WHERE c.seq IN (SELECT value FROM json_each(?))`, JSON.stringify(want.map(c => c.seq)));
+    for (const r of rows) if (r.r) { const sp = r.r.indexOf(' '); out.set(r.seq, { messageId: r.r.slice(sp + 1), at: r.r.slice(0, sp) }); }
     return out;
   }
 
@@ -381,8 +377,9 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
     await maybeArchive(ctx);
     const c = (await attachMerged([await load(params.id, me)]))[0];
     const people = await peopleMap(ctx);
-    // 只有人類紀錄卡會「已整理到」；只查這些卡的紀錄，不掃整張 card_log
-    const mergedFrom = c.type === NOTE ? [] : (await db.all("SELECT seq, project, proj_no FROM cards WHERE seq IN (SELECT card_seq FROM card_log WHERE card_seq IN (SELECT seq FROM cards WHERE type = ?) AND text IN (?, ?)) ORDER BY seq", NOTE, `已整理到 ${cardNo(c.seq)}`, `已整理到 ${pub(c)}`)).map(pub);
+    // 只有人類紀錄卡會「已整理到」。讀取成本：cards 沒有 type 索引，原本每次掃整張 cards；
+    // 改用 021 的部分索引 idx_card_log_merged（只收「已整理到 …」的紀錄），LIKE 條件要跟索引條件一字不差
+    const mergedFrom = c.type === NOTE ? [] : (await db.all("SELECT seq, project, proj_no FROM cards WHERE type = ? AND seq IN (SELECT card_seq FROM card_log WHERE text IN (?, ?) AND text LIKE '已整理到 %') ORDER BY seq", NOTE, `已整理到 ${cardNo(c.seq)}`, `已整理到 ${pub(c)}`)).map(pub);
     const [log, msgs, msgTimes] = await Promise.all([
       db.all('SELECT at, by_id, via, text FROM card_log WHERE card_seq = ? ORDER BY id DESC LIMIT 200', c.seq),
       db.all('SELECT message_id FROM card_msgs WHERE card_seq = ? ORDER BY rowid', c.seq),
@@ -399,8 +396,9 @@ export function registerCards({ route, searchQuota = () => {}, cardKey = () => n
       ...(tplName ? { template: tplName } : {}),
       ...(cl ? { claim: mark(people, cl.by, cl.at) } : {}), ...(ho ? { handover: handoverView(people, ho) } : {}),
       ...(wh ? { waitingHint: wh } : {}), ...(lk ? { links: lk } : {}),
+      // 讀取成本：CROSS JOIN（條件寫在 WHERE，PG 也能跑）讓 SQLite 先用 idx_card_attachments_card 找這張卡的附件，不先掃整個專案的文件
       attachments: !projectsOf(me).includes(c.project) || (c.type === NOTE && me.kind !== 'human') ? [] : (await db.all(
-        'SELECT d.id, d.name, d.ext, d.size, d.created_at, d.uploader_id, a.note_id FROM card_attachments a JOIN docs d ON d.id = a.doc_id WHERE a.card_seq = ? AND d.project = ? AND d.deleted_at IS NULL AND (a.human_only = 0 OR ? = 1) ORDER BY d.created_at, d.id',
+        'SELECT d.id, d.name, d.ext, d.size, d.created_at, d.uploader_id, a.note_id FROM card_attachments a CROSS JOIN docs d WHERE d.id = a.doc_id AND a.card_seq = ? AND d.project = ? AND d.deleted_at IS NULL AND (a.human_only = 0 OR ? = 1) ORDER BY d.created_at, d.id',
         c.seq, c.project, me.kind === 'human' ? 1 : 0
       )).map(d => ({
         docId: d.id, name: d.name, ext: d.ext, size: d.size, createdAt: d.created_at,

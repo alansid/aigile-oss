@@ -101,7 +101,7 @@ try {
   await sleep(1200);
   for (let i = 0; i < 3; i++) await link(ca.cardId, i);
   const hints = async () => { await sleep(30); log.length = 0; const r = await call(S, boss.token, '/api/cards?status=open'); await sleep(5); return new Set(r.body.items.filter(c => c.staleHint).map(c => c.cardId)); };
-  const fullQ = () => log.filter(x => /card_seq IN \(SELECT value FROM json_each/.test(x.s));
+  const fullQ = () => log.filter(x => /card_seq IN \(SELECT value FROM json_each|cm\.card_seq = c\.seq AND m\.text NOT LIKE/.test(x.s)); // 補讀改成每張卡往回找
   let h = await hints();
   assert.ok(h.has(ca.cardId) && !h.has(cb.cardId), '甲有新討論 → 可能過時；乙沒有');
   const oldPlan = (await raw.all("EXPLAIN QUERY PLAN SELECT seq, updated_at FROM cards WHERE status IN (SELECT value FROM json_each('[\"待處理\"]')) AND updated_at < '9'")).map(r => r.detail).join(' | ');
