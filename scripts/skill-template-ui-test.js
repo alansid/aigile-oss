@@ -165,7 +165,7 @@ try {
   assert.match(await txt('#sk-up-note'), /會成為「commit-convention」第 3 版/);
   // 「看目前的」預設收起、有展開箭頭；編輯框上有標題講清楚框裡是範本新內容（UX 4c）
   assert.equal(await js("document.querySelector('#sk-ap-cur .sk-ap-old').open"), false, '目前版本預設收起');
-  assert.equal(await js("getComputedStyle(document.querySelector('#sk-ap-cur .sk-ap-old summary'), '::before').content"), '"▸"');
+  assert.ok(await js("(() => { const sum = document.querySelector('#sk-ap-cur .sk-ap-old summary'); const svg = sum?.querySelector(':scope > svg.ui-chev'); const r = svg?.getBoundingClientRect(); return getComputedStyle(sum, '::before').content === 'none' && !!r && r.width > 0 && r.height > 0; })()"), '目前版本摺疊改用 .ui-chev 可見箭頭（非 ::before）');
   assert.equal(await txt('#sk-ap-cur .sk-ap-new'), '新內容（範本第 1 版，可先改）');
   await shot('PLAT-365-4c-更新時對照目前版本-1280.png');
   await click('[data-sksend]');

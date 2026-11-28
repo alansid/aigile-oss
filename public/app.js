@@ -2210,6 +2210,290 @@
   function activeAppliedEl(page = state.page) {
     return page === 'messages' ? $('#msg-flt-applied') : $('#work-flt-applied');
   }
+  // 統一的收合小箭頭與自訂下拉選單（保留原生 <select> 在 DOM 裡維持既有測試與表單行為）
+  const FOLD_ICO = '<svg class="ui-chev" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8L6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const uiTxt = (zh, en) => (window.aigileI18n?.lang === 'en' ? en : zh);
+  const UI_SEL_CSS = '.flt-sel-pill select, select.fb-sel, select.sk-more, select.role-sel, select[data-ui-sel]';
+  let uiSelCtx = null;
+
+  function closeUiSelMenu(restoreFocus = true) {
+    const menu = document.getElementById('ui-sel-menu');
+    if (!menu || menu.hidden) return;
+    menu.hidden = true;
+    const prev = uiSelCtx;
+    uiSelCtx = null;
+    if (prev?.trigger) {
+      prev.trigger.setAttribute('aria-expanded', 'false');
+      if (restoreFocus && prev.trigger.isConnected && !prev.trigger.disabled) prev.trigger.focus();
+    }
+  }
+
+  function uiSelEntries(sel) {
+    const out = [];
+    let firstReset = true;
+    const addOpt = (o, grpLabel = '') => {
+      if (o.hidden) return;
+      const reset = firstReset && o.value === '';
+      firstReset = false;
+      out.push({
+        opt: o,
+        index: o.index,
+        value: o.value,
+        text: (o.textContent || '').replace(/\s*▾$/, '').trim(),
+        selected: !!o.selected,
+        disabled: !!o.disabled,
+        grpLabel,
+        reset,
+      });
+    };
+    for (const ch of sel.children) {
+      if (ch.tagName === 'OPTGROUP') {
+        if (ch.hidden) continue;
+        for (const o of ch.children) if (o.tagName === 'OPTION') addOpt(o, ch.label || '');
+      } else if (ch.tagName === 'OPTION') {
+        addOpt(ch, '');
+      }
+    }
+    return out;
+  }
+
+  function positionUiSelMenu(menu, trigger) {
+    const rect = trigger.getBoundingClientRect();
+    if (window.innerWidth > 640) {
+      menu.style.minWidth = `${Math.max(174, Math.min(280, Math.round(rect.width)))}px`;
+      menu.style.maxWidth = '280px';
+      const mr = menu.getBoundingClientRect();
+      menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - mr.width - 8))}px`;
+      const below = rect.bottom + 4;
+      const top = (below + mr.height <= window.innerHeight - 8 || rect.top - 4 - mr.height < 8)
+        ? Math.min(below, Math.max(8, window.innerHeight - mr.height - 8))
+        : (rect.top - 4 - mr.height);
+      menu.style.top = `${Math.max(8, top)}px`;
+    } else {
+      menu.style.minWidth = '';
+      menu.style.maxWidth = '';
+      menu.style.left = '';
+      const mr = menu.getBoundingClientRect();
+      const below = rect.bottom + 4;
+      const top = (below + mr.height <= window.innerHeight - 8 || rect.top - 4 - mr.height < 8)
+        ? Math.min(below, Math.max(8, window.innerHeight - mr.height - 8))
+        : (rect.top - 4 - mr.height);
+      menu.style.top = `${Math.max(8, top)}px`;
+    }
+  }
+
+  function openUiSelect(sel, trigger) {
+    if (!sel || sel.disabled) return;
+    if (uiSelCtx?.sel === sel) { closeUiSelMenu(true); return; }
+    closeUiSelMenu(false);
+    let menu = document.getElementById('ui-sel-menu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.id = 'ui-sel-menu';
+      menu.className = 'ui-sel-menu';
+      menu.setAttribute('role', 'dialog');
+      menu.hidden = true;
+      document.body.appendChild(menu);
+      menu.addEventListener('click', e => {
+        const b = e.target.closest('.ui-sel-opt');
+        if (!b || b.disabled || !uiSelCtx) return;
+        const s = uiSelCtx.sel;
+        s.selectedIndex = Number(b.dataset.uiIdx);
+        closeUiSelMenu(true);
+        syncUiSelect(s);
+        s.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      menu.addEventListener('focusin', e => {
+        const b = e.target.closest?.('.ui-sel-opt:not(:disabled)');
+        if (b && uiSelCtx) uiSelCtx.syncHi?.(b);
+      });
+    }
+    const all = uiSelEntries(sel);
+    const nonEmptyCount = all.filter(o => o.value !== '').length;
+    const showSearch = nonEmptyCount > 8;
+    const isMember = sel.dataset.uiSearch === 'member';
+    menu.innerHTML = `${showSearch ? `<div class="ui-sel-sw"><input type="search" class="ui-sel-search" placeholder="${esc(isMember ? uiTxt('找成員…', 'Find a member…') : uiTxt('搜尋…', 'Search…'))}" aria-label="${esc(isMember ? uiTxt('找成員', 'Find a member') : uiTxt('搜尋選項', 'Search options'))}"></div>` : ''}<div class="ui-sel-opts" role="listbox"></div>`;
+    const listEl = menu.querySelector('.ui-sel-opts');
+    let hiIdx = -1;
+    const moveHi = next => {
+      const btns = [...listEl.querySelectorAll('.ui-sel-opt:not(:disabled)')];
+      if (!btns.length) return;
+      btns.forEach(b => b.classList.remove('hi'));
+      const b = btns[Math.max(0, Math.min(next, btns.length - 1))];
+      b.classList.add('hi');
+      b.scrollIntoView({ block: 'nearest' });
+      if (!document.activeElement?.classList?.contains('ui-sel-search')) b.focus({ preventScroll: true });
+      hiIdx = btns.indexOf(b);
+    };
+    const renderOpts = (q = '') => {
+      const nq = q.trim().toLowerCase();
+      const matched = nq ? all.filter(o => o.text.toLowerCase().includes(nq) || o.grpLabel.toLowerCase().includes(nq)) : all;
+      let html = '';
+      let lastGrp = '';
+      const hasMoreAfterReset = matched.some(o => !o.reset);
+      for (const o of matched) {
+        if (o.grpLabel && o.grpLabel !== lastGrp) {
+          html += `<div class="ui-sel-grp" data-nt>${esc(o.grpLabel)}</div>`;
+          lastGrp = o.grpLabel;
+        } else if (!o.grpLabel) {
+          lastGrp = '';
+        }
+        const optTxt = isMember && o.value ? o.text : trUi(o.text);
+        html += `<button type="button" class="ui-sel-opt" role="option" data-ui-idx="${o.index}" aria-selected="${o.selected ? 'true' : 'false'}"${o.disabled ? ' disabled' : ''}><span class="ui-sel-chk" aria-hidden="true">${o.selected ? '✓' : ''}</span><span class="ui-sel-opt-t"${isMember && o.value ? ' data-nt' : ''}>${esc(optTxt)}</span></button>`;
+        if (o.reset && hasMoreAfterReset) html += '<hr class="ui-sel-hr">';
+      }
+      if (!matched.length) {
+        html = `<div class="ui-sel-empty">${esc(isMember ? uiTxt('沒有符合的成員', 'No matching members') : uiTxt('沒有符合的選項', 'No matching options'))}</div>`;
+      }
+      listEl.innerHTML = html;
+      const btns = [...listEl.querySelectorAll('.ui-sel-opt:not(:disabled)')];
+      const selPos = !nq ? btns.findIndex(b => b.getAttribute('aria-selected') === 'true') : 0;
+      hiIdx = selPos >= 0 ? selPos : 0;
+      if (btns[hiIdx]) { btns[hiIdx].classList.add('hi'); btns[hiIdx].scrollIntoView({ block: 'nearest' }); }
+    };
+    const syncHi = btn => {
+      const btns = [...listEl.querySelectorAll('.ui-sel-opt:not(:disabled)')];
+      const idx = btns.indexOf(btn);
+      if (idx < 0) return;
+      btns.forEach(x => x.classList.remove('hi'));
+      btn.classList.add('hi');
+      hiIdx = idx;
+    };
+    renderOpts('');
+    uiSelCtx = { sel, trigger, openedAt: Date.now(), moveHi, syncHi, getHi: () => hiIdx };
+    trigger.setAttribute('aria-expanded', 'true');
+    menu.hidden = false;
+    positionUiSelMenu(menu, trigger);
+    const searchEl = menu.querySelector('.ui-sel-search');
+    if (searchEl) {
+      searchEl.addEventListener('input', () => renderOpts(searchEl.value));
+      searchEl.focus({ preventScroll: true });
+    } else {
+      const targetBtn = listEl.querySelector('.ui-sel-opt.hi') || listEl.querySelector('.ui-sel-opt:not(:disabled)');
+      targetBtn?.focus({ preventScroll: true });
+    }
+  }
+
+  function syncUiSelect(sel) {
+    if (!sel) return;
+    const pill = sel.closest('.flt-sel-pill');
+    const wrap = sel.parentElement?.classList.contains('ui-sel') ? sel.parentElement : null;
+    const btn = pill?.querySelector('.ui-sel-hit') || wrap?.querySelector('.ui-sel-btn');
+    if (!btn) return;
+    const opt = sel.selectedOptions?.[0] || sel.options?.[sel.selectedIndex] || sel.options?.[0];
+    const txt = (opt?.textContent || '').replace(/\s*▾$/, '').trim();
+    const lbl = sel.getAttribute('aria-label') || '';
+    btn.disabled = !!sel.disabled;
+    if (pill) {
+      btn.setAttribute('aria-label', lbl ? (txt ? `${lbl}：${txt}` : lbl) : txt);
+    } else {
+      const tEl = btn.querySelector('.ui-sel-txt');
+      const isMemVal = sel.dataset.uiSearch === 'member' && !!sel.value;
+      if (tEl) {
+        if (isMemVal) { tEl.setAttribute('data-nt', ''); tEl.textContent = txt; }
+        else { tEl.removeAttribute('data-nt'); tEl.textContent = trUi(txt); }
+      }
+      if (lbl) btn.setAttribute('aria-label', txt && !txt.includes(lbl) ? `${trUi(lbl)}: ${isMemVal ? txt : trUi(txt)}` : (isMemVal ? txt : trUi(txt || lbl)));
+      btn.classList.toggle('empty', sel.classList.contains('empty'));
+      btn.classList.toggle('chg', sel.classList.contains('chg'));
+    }
+  }
+
+  function enhanceUiSelects(root = document) {
+    const list = [];
+    if (root.matches?.(UI_SEL_CSS)) list.push(root);
+    root.querySelectorAll?.(UI_SEL_CSS).forEach(s => list.push(s));
+    for (const sel of list) {
+      const pill = sel.closest('.flt-sel-pill');
+      if (pill) {
+        pill.classList.add('ui-sel-host');
+        sel.classList.add('ui-sel-native');
+        sel.tabIndex = -1;
+        sel.setAttribute('aria-hidden', 'true');
+        if (!pill.querySelector('.ui-sel-hit')) {
+          const hit = document.createElement('button');
+          hit.type = 'button';
+          hit.className = 'ui-sel-hit';
+          hit.setAttribute('aria-haspopup', 'listbox');
+          hit.setAttribute('aria-expanded', 'false');
+          pill.appendChild(hit);
+          hit.addEventListener('click', () => openUiSelect(sel, hit));
+        }
+      } else {
+        if (!sel.parentElement?.classList.contains('ui-sel')) {
+          const wrap = document.createElement('div');
+          wrap.className = 'ui-sel'
+            + (sel.classList.contains('fb-sel') ? ' ui-sel--fb' : '')
+            + (sel.classList.contains('sk-more') ? ' ui-sel--sk' : '')
+            + (sel.classList.contains('role-sel') ? ' ui-sel--role' : '');
+          sel.parentNode.insertBefore(wrap, sel);
+          wrap.appendChild(sel);
+          sel.classList.add('ui-sel-native');
+          sel.tabIndex = -1;
+          sel.setAttribute('aria-hidden', 'true');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'ui-sel-btn';
+          btn.setAttribute('aria-haspopup', 'listbox');
+          btn.setAttribute('aria-expanded', 'false');
+          btn.innerHTML = '<span class="ui-sel-txt"></span><span class="ui-sel-caret" aria-hidden="true">▾</span>';
+          wrap.appendChild(btn);
+          btn.addEventListener('click', () => openUiSelect(sel, btn));
+        }
+      }
+      syncUiSelect(sel);
+    }
+  }
+
+  function enhanceUiFolds(root = document) {
+    root.querySelectorAll?.('details.ui-fold > summary').forEach(sum => {
+      if (!sum.querySelector(':scope > .ui-chev')) sum.insertAdjacentHTML('afterbegin', FOLD_ICO);
+    });
+  }
+
+  function enhanceUi(root = document) {
+    enhanceUiSelects(root);
+    enhanceUiFolds(root);
+  }
+
+  if (!window.__uiSelWired) {
+    window.__uiSelWired = true;
+    document.addEventListener('pointerdown', e => {
+      const menu = document.getElementById('ui-sel-menu');
+      if (!menu || menu.hidden || !uiSelCtx) return;
+      if (menu.contains(e.target) || e.target === uiSelCtx.trigger) return;
+      closeUiSelMenu(false);
+    }, true);
+    document.addEventListener('keydown', e => {
+      const menu = document.getElementById('ui-sel-menu');
+      if (!menu || menu.hidden || !uiSelCtx) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeUiSelMenu(true); return; }
+      const btns = [...menu.querySelectorAll('.ui-sel-opt:not(:disabled)')];
+      if (!btns.length) return;
+      const inSearch = e.target.classList?.contains('ui-sel-search');
+      if (e.key === 'ArrowDown') { e.preventDefault(); uiSelCtx.moveHi(uiSelCtx.getHi() + 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); uiSelCtx.moveHi(uiSelCtx.getHi() - 1); }
+      else if (e.key === 'Home' && !inSearch) { e.preventDefault(); uiSelCtx.moveHi(0); }
+      else if (e.key === 'End' && !inSearch) { e.preventDefault(); uiSelCtx.moveHi(btns.length - 1); }
+      else if (e.key === 'Enter' && (inSearch || menu.contains(e.target) || e.target === uiSelCtx.trigger)) {
+        e.preventDefault();
+        const focusedOpt = e.target.closest?.('.ui-sel-opt:not(:disabled)');
+        (focusedOpt && menu.contains(focusedOpt) ? focusedOpt : (btns[uiSelCtx.getHi()] || btns[0]))?.click();
+      }
+    }, true);
+    document.addEventListener('change', e => {
+      const s = e.target;
+      if (s?.tagName === 'SELECT' && s.classList.contains('ui-sel-native')) syncUiSelect(s);
+    });
+    window.addEventListener('resize', () => closeUiSelMenu(false));
+    document.addEventListener('scroll', e => {
+      const menu = document.getElementById('ui-sel-menu');
+      if (!menu || menu.hidden || !uiSelCtx) return;
+      if (menu.contains(e.target) || Date.now() - uiSelCtx.openedAt < 180) return;
+      if (e.target === document || e.target === document.documentElement || e.target.contains?.(uiSelCtx.trigger)) closeUiSelMenu(false);
+    }, true);
+  }
+
   function selPillHtml(lbl, selAttrs, ariaLbl, firstOpt = '', optsHtml = '') {
     const first = firstOpt ? `<option value="">${esc(firstOpt)}</option>` : '';
     return `<div class="flt-pill flt-sel-pill"><span class="flt-lbl">${esc(lbl)}</span><span class="flt-val" data-sel-val>${esc(firstOpt)}</span><span class="flt-caret" aria-hidden="true">▾</span><select ${selAttrs} aria-label="${esc(ariaLbl)}">${first}${optsHtml}</select></div>`;
@@ -2218,10 +2502,13 @@
     if (!sel) return;
     const pill = sel.closest('.flt-pill'), valEl = pill?.querySelector('[data-sel-val]');
     pill?.classList.toggle('on', !!on);
-    if (!valEl) return;
-    const raw = sel.selectedOptions?.[0]?.textContent || sel.options?.[sel.selectedIndex]?.textContent || '';
-    if (rawOpt && sel.value) { valEl.setAttribute('data-nt', ''); valEl.textContent = raw; }
-    else { valEl.removeAttribute('data-nt'); valEl.textContent = trUi(raw); }
+    if (valEl) {
+      const raw = sel.selectedOptions?.[0]?.textContent || sel.options?.[sel.selectedIndex]?.textContent || '';
+      if (rawOpt && sel.value) { valEl.setAttribute('data-nt', ''); valEl.textContent = raw; }
+      else { valEl.removeAttribute('data-nt'); valEl.textContent = trUi(raw); }
+    }
+    enhanceUiSelects(pill || sel);
+    syncUiSelect(sel);
   }
   function timeCtrlHtml(ts) {
     const tOn = !!(ts.time && (ts.time !== 'custom' || parseYmd(ts.dateFrom) || parseYmd(ts.dateTo)));
@@ -2296,7 +2583,7 @@
         } else if (page === 'work') {
           drawer.innerHTML = `
             <input id="card-q" class="flt-q${work.q.trim() ? ' on' : ''}" type="search" placeholder="搜尋標題、下一步或編號" aria-label="搜尋卡片" value="${esc(work.q)}">
-            ${selPillHtml('負責人', 'id="card-owner"', '負責人', L('所有負責人', 'All owners'))}
+            ${selPillHtml('負責人', 'id="card-owner" data-ui-search="member"', '負責人', L('所有負責人', 'All owners'))}
             ${selPillHtml('類型', 'id="card-type"', '類型', '所有類型', ['工作', '阻塞', '決策', NOTE].map(t => `<option>${t}</option>`).join(''))}
             ${timeCtrlHtml(ts)}
             ${actionsHtml}`;
@@ -2315,7 +2602,8 @@
         const f = state.filter, people = tbMsgPeople(), dups = dupNameSet(people);
         const mSel = drawer.querySelector('[data-flt-member]');
         if (mSel) {
-          mSel.innerHTML = `<option value="">${esc(L('所有成員', 'All members'))}</option>` + people.map(x => `<option value="${esc(x.participantId)}">${esc(nameCodeText(x, dups))}</option>`).join('');
+          mSel.dataset.uiSearch = 'member';
+          mSel.innerHTML = peopleGroupOpts(null, f.member, L('所有成員', 'All members'), people, { noRole: true });
           mSel.value = f.member;
           syncSelPill(mSel, !!f.member, true);
         }
@@ -2328,7 +2616,8 @@
         if (q) { if (document.activeElement !== q && q.value !== work.q) q.value = work.q; q.classList.toggle('on', !!work.q.trim()); }
         const own = drawer.querySelector('#card-owner');
         if (own) {
-          own.innerHTML = `<option value="">${esc(L('所有負責人', 'All owners'))}</option>` + tbWorkPeople().map(x => `<option value="${esc(x.participantId)}">${esc(x.name)}</option>`).join('');
+          own.dataset.uiSearch = 'member';
+          own.innerHTML = peopleGroupOpts(null, work.owner, L('所有負責人', 'All owners'), tbWorkPeople(), { noRole: true });
           own.value = work.owner;
           syncSelPill(own, !!work.owner, true);
         }
@@ -3452,6 +3741,7 @@
       sc.scrollTop = top;
       const inner = pane.querySelector('.modal'), inBody = pane.querySelector('.modal-body');
       inBody.modal = inner;
+      enhanceUi(inBody);
       return inBody;
     }
     const root = $('#modal-root');
@@ -3464,9 +3754,10 @@
       if (e.target.closest('[data-close]')) tryCloseModal(); // 點灰底不關，只能按 × 或 Esc
     });
     const modal = overlay.querySelector('.modal');
-    (modal.querySelector('.modal-body input:not([type=checkbox]), .modal-body select, .modal-body textarea') || modal.querySelector('.modal-x')).focus();
     const body = overlay.querySelector('.modal-body');
     body.modal = modal; // 給呼叫端取用標頭與底部按鈕
+    enhanceUi(body);
+    (modal.querySelector('.modal-body input:not([type=checkbox]), .modal-body .ui-sel-btn, .modal-body select:not(.ui-sel-native), .modal-body textarea') || modal.querySelector('.modal-x')).focus();
     return body;
   }
   let modalGuard = null; // 關彈窗前先問：回傳 true 才關（角色提案改了沒送出）
@@ -3540,7 +3831,7 @@
       });
     });
   }
-  new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) { hydrateAvatars(n.parentElement || n); } })
+  new MutationObserver(muts => { for (const m of muts) for (const n of m.addedNodes) if (n.nodeType === 1) { const p = n.parentElement || n; hydrateAvatars(p); enhanceUi(p); } })
     .observe(document.body, { childList: true, subtree: true });
 
   // 更換頭像彈窗（疊在目前彈窗上）：上傳圖片並裁切，或用文字／表情符號
@@ -4401,12 +4692,13 @@
         <div id="work-flt-applied" class="flt-applied" aria-label="已套用篩選" hidden></div>
         <div class="project-summary">${t.totals}${todoByView()[project] ? `<button class="link" data-nav="inbox">${pageText('要你處理', 'Needs you')} ${todoByView()[project]} ›</button>` : `<small>${pageText('沒有要你處理的事', 'Nothing needs you')}</small>`}</div>
         <h3>${pageText('需要注意', 'Needs attention')} <small>${pageText('最近 7 天、這個專案', 'Last 7 days, this project')}</small></h3>
-        <div class="project-alerts">${t.alerts.slice(0, 3).join('') || pageText('目前沒有人卡住。', 'Nobody is stuck right now.')}${t.alerts.length > 3 ? `<details><summary>${pageText('再看', 'Show more')} ${t.alerts.length - 3}</summary>${t.alerts.slice(3).join('')}</details>` : ''}</div>
+        <div class="project-alerts">${t.alerts.slice(0, 3).join('') || pageText('目前沒有人卡住。', 'Nobody is stuck right now.')}${t.alerts.length > 3 ? `<div class="project-alerts-rest" hidden>${t.alerts.slice(3).join('')}</div><button type="button" class="ui-fold-btn" data-alerts-more="${t.alerts.length - 3}" aria-expanded="false">${FOLD_ICO}<span>${pageText('再看', 'Show more')} ${t.alerts.length - 3}</span></button>` : ''}</div>
         <h3>${pageText('在用的成員', 'Active members')} (${t.active.length})</h3>
         <div class="team-columns"><b>${pageText('成員', 'Member')}</b><b>${pageText('狀態', 'Status')}</b><b>${pageText('在做什麼', 'Working on')}</b><b>${pageText('最後出現', 'Last seen')}</b></div>${t.active.map((m) => teamRow(m, project, false, tdups)).join('')}
-        <details class="inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true, tdups)).join('')}</details>
-        <details><summary>${pageText('狀態怎麼判斷？', 'How is status decided?')}</summary>${pageText('優先看負責的卡，再看最新訊息。AI 超過 20 分鐘沒出現算可能斷線，開著等待腳本放寬到 60 分鐘。', 'Cards take priority over tagged messages. An AI may be offline after 20 minutes, or 60 minutes with a watcher.')}</details></div>`;
+        <details class="ui-fold inactive-members"><summary>${pageText('沒在用的成員', 'Inactive members')} (${t.inactive.length})</summary>${t.inactive.map((m) => teamRow(m, project, true, tdups)).join('')}</details>
+        <details class="ui-fold"><summary>${pageText('狀態怎麼判斷？', 'How is status decided?')}</summary>${pageText('優先看負責的卡，再看最新訊息。AI 超過 20 分鐘沒出現算可能斷線，開著等待腳本放寬到 60 分鐘。', 'Cards take priority over tagged messages. An AI may be offline after 20 minutes, or 60 minutes with a watcher.')}</details></div>`;
       box.addEventListener('toggle', showTeamIntro, true);
+      enhanceUi(box);
       applyTeamSearch(box);
       drawTopbarPage();
     } catch (err) {
@@ -4414,6 +4706,16 @@
     }
   }
   document.addEventListener('click', (e) => {
+    const alBtn = e.target.closest('[data-alerts-more]');
+    if (alBtn) {
+      const rest = alBtn.previousElementSibling;
+      const open = !!rest?.hidden;
+      if (rest) rest.hidden = !open;
+      alBtn.setAttribute('aria-expanded', String(open));
+      const lbl = alBtn.querySelector('span');
+      if (lbl) lbl.textContent = open ? pageText('收起', 'Show less') : `${pageText('再看', 'Show more')} ${alBtn.dataset.alertsMore}`;
+      return;
+    }
     const intro = e.target.closest('[data-intro-open]');
     if (intro) {
       renderIntro(intro.nextElementSibling,'/api/participants/'+encodeURIComponent(intro.dataset.introOpen)+'/intro',projectView());
@@ -4998,7 +5300,7 @@
         .filter(([, l]) => l.length)
         .map(
           ([k, l]) =>
-            `<h3>${pageText(k, { 最近完成: 'Recently done', 卡住: 'Stuck', 等驗收或決定: 'Awaiting review', 進行中: 'In progress', 還沒開始: 'To do' }[k])}</h3>${l.slice(0, 5).map(row).join('')}${l.length > 5 ? `<details><summary>＋ ${l.length - 5}</summary>${l.slice(5).map(row).join('')}</details>` : ''}`
+            `<h3>${pageText(k, { 最近完成: 'Recently done', 卡住: 'Stuck', 等驗收或決定: 'Awaiting review', 進行中: 'In progress', 還沒開始: 'To do' }[k])}</h3>${l.slice(0, 5).map(row).join('')}${l.length > 5 ? `<details class="ui-fold"><summary>＋ ${l.length - 5}</summary>${l.slice(5).map(row).join('')}</details>` : ''}`
         )
         .join('') +
       (list.length ? '' : `<p>${done ? pageText('最近 14 天沒有完成的卡。', 'No cards completed in the last 14 days.') : pageText('你目前沒有負責、還沒完成的卡。', 'You have no unfinished cards.')}</p>`)
@@ -5714,7 +6016,7 @@
     else if (g.items.some(t => /^標為已完成/.test(t))) { icon = '✓'; body = '標為已完成'; }
     else body = g.items.map(t => `<span>${esc(t.replace(/^狀態 (.+?) → (.+)$/, '把狀態從「$1」改成「$2」').replace(/^.+? 認領了這張卡片$/, '認領了這張卡'))}</span>`).join(g.items.length > 3 ? '<br>' : pageText('，', ', ')); // 同一秒的幾筆各自一段，英文介面才能逐句翻；超過 3 筆每筆一行
     const who = g.by ? shortOf(g.by.name || '') : '系統';
-    return `<li class="tl tl-sys lg ${cls}"><span class="lg-ic" aria-hidden="true">${icon}</span><div class="lg-main"><span><b>${esc(who)}</b> ${body}</span><span class="muted small">${dayTime(g.at)} · <span>系統</span>${ver ? ' · ' + esc(ver) : ''}</span>${note ? `<details class="lg-note"><summary>看交接說明</summary><p>${esc(note)}</p></details>` : ''}</div></li>`;
+    return `<li class="tl tl-sys lg ${cls}"><span class="lg-ic" aria-hidden="true">${icon}</span><div class="lg-main"><span><b>${esc(who)}</b> ${body}</span><span class="muted small">${dayTime(g.at)} · <span>系統</span>${ver ? ' · ' + esc(ver) : ''}</span>${note ? `<details class="ui-fold lg-note"><summary>看交接說明</summary><p>${esc(note)}</p></details>` : ''}</div></li>`;
   }
   // ---------- 卡片關聯（前置卡、這張擋住、關聯卡）；被擋只提醒、不擋接單 ----------
   const LINK_GROUPS = [['blockedBy', '前置卡（這張要等它）'], ['blocks', '這張擋住'], ['related', '關聯卡']];
@@ -5905,7 +6207,7 @@
     const body = openModal('交接卡片', `
       <form id="handover-form" class="stack">
         <div class="info-box">${esc(ckeyOf(d))} ${esc(cardTitle(d))}<br>交接後負責人換成對方，狀態不變，並在群組 @ 對方通知。</div>
-        <label>交給誰<select name="toId" required>${people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, hdups))}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>
+        <label>交給誰<select name="toId" required data-ui-sel data-ui-search="member">${peopleGroupOpts(d.project, '', null, people)}</select></label>
         <div class="field"><label for="ho-note">交接說明（必填）</label>
           <div class="att-box">${attGridHtml(hoKey)}<div class="inl-field"><textarea autocomplete="off" autocorrect="on" id="ho-note" class="inl-text" name="note" rows="3" required maxlength="300" data-att-key="${esc(hoKey)}" placeholder="我做完了什麼、希望對方接著做什麼"></textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>
           ${attDeclHtml(hoKey)}<div class="att-bar">${attPickBtn(hoKey)}${attHint('Enter 換行 · 可直接貼上截圖')}</div></div></div>
@@ -5954,11 +6256,21 @@
   }
   // 負責人、等誰只列該專案的成員（決策者不限）；目前值不在專案內也保留，才看得出原本是誰
   const projPeople = project => [...state.participants.values()].filter(p => p.status !== 'disabled' && (!project || memberIn(p, project)));
-  function peopleOpts(project, cur, none) {
-    const list = projPeople(project), extra = cur && !list.some(p => p.participantId === cur) && state.participants.get(cur);
-    const all = [...list, ...(extra ? [extra] : [])], dups = dupNameSet(all);
-    return `<option value="">${none}</option>` + all.map(p => `<option value="${esc(p.participantId)}" ${cur === p.participantId ? 'selected' : ''}>${esc(nameCodeText(p, dups))}${roleIn(p, project) ? '（' + esc(roleIn(p, project)) + '）' : ''}${p === extra ? '（不在此專案）' : ''}</option>`).join('');
+  function peopleGroupOpts(project, cur, none, items = null, { noRole = false } = {}) {
+    const base = items || projPeople(project);
+    const extra = cur && !base.some(p => p.participantId === cur) && state.participants.get(cur);
+    const all = [...base, ...(extra ? [extra] : [])], dups = dupNameSet(all);
+    const fmt = p => `<option value="${esc(p.participantId)}"${cur === p.participantId ? ' selected' : ''}>${esc(nameCodeText(p, dups))}${!noRole && roleIn(p, project) ? '（' + esc(roleIn(p, project)) + '）' : ''}${p === extra ? '（不在此專案）' : ''}</option>`;
+    const humans = all.filter(p => p.memberType === 'human'), ais = all.filter(p => p.memberType !== 'human');
+    let out = none ? `<option value="">${esc(none)}</option>` : '';
+    if (humans.length && ais.length) {
+      out += `<optgroup label="${esc(uiTxt('人', 'People'))}">${humans.map(fmt).join('')}</optgroup><optgroup label="AI">${ais.map(fmt).join('')}</optgroup>`;
+    } else {
+      out += all.map(fmt).join('');
+    }
+    return out;
   }
+  function peopleOpts(project, cur, none) { return peopleGroupOpts(project, cur, none); }
   // 卡片表單換專案時，負責人、等誰跟著換清單；原本選的人不在新專案就清掉
   document.addEventListener('change', e => {
     const sel = e.target;
@@ -5968,6 +6280,7 @@
       if (!s) continue;
       const cur = s.value, keep = projPeople(sel.value).some(p => p.participantId === cur);
       s.innerHTML = peopleOpts(sel.value, keep ? cur : '', none);
+      syncUiSelect(s);
     }
   });
   // 在訊息頁的桌面版，抽屜與訊息並排（不遮住訊息）；手機與工作頁維持原本的遮罩／底部面板
@@ -6098,7 +6411,7 @@
         `${attHint('可直接貼上或拖進截圖')}<button type="button" class="btn small primary" data-act="add-note">記下（不通知）</button>`);
     } else if (mode === 'handover') {
       const key = 'h:' + id, list = hoPeople(d), to = hoTarget(d), dups = dupNameSet(list);
-      body = `<label class="cfield">給 <select data-ho-to aria-label="交給誰">${list.map(p => `<option value="${esc(p.participantId)}" ${p === to ? 'selected' : ''}>${esc(nameCodeText(p, dups))}${roleIn(p, d.project) ? '（' + esc(roleIn(p, d.project)) + '）' : ''}</option>`).join('')}</select></label>`
+      body = `<label class="cfield">給 <select data-ho-to data-ui-sel data-ui-search="member" aria-label="交給誰">${peopleGroupOpts(d.project, to?.participantId || '', null, list)}</select></label>`
         + box(key, `<div class="inl-field"><textarea class="inl-text" rows="2" maxlength="200" data-cdraft="${esc(key)}" data-att-key="${esc(key)}" placeholder="做到哪：我做完了什麼（必填）" aria-label="做到哪">${cdraft(key)}</textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>`
           + `<div class="inl-field"><textarea class="inl-text ho-next" rows="1" maxlength="90" data-cdraft="hn:${esc(id)}" placeholder="下一步：希望對方接著做什麼（選填）" aria-label="下一步">${cdraft('hn:' + id)}</textarea><ul class="mention-list" role="listbox" aria-label="選擇卡片" hidden></ul></div>`,
           `<span class="muted small ho-hint">${esc(hoHint(to))}</span><button type="button" class="btn small primary" data-act="ho-go" ${to ? '' : 'disabled'}>交接給 ${esc(to?.name || '…')}</button>`);
@@ -6270,7 +6583,7 @@
     const headInner = () => `
           <div class="drawer-titles">${cidHtml(d)}${typeTag(d)}${confirmPill(d)}${d.type === NOTE ? '<span class="ctype note-tag">🔒 人類紀錄</span>' : ''}${cardPTag(d)}<h2 id="drawer-title">${esc(cardTitle(d))}</h2>
             <span class="muted small">建立 ${shortTime(d.createdAt)} · ${esc(d.createdBy?.name || '')}</span>
-            ${d.type === NOTE ? '<details class="lock-line"><summary>🔒 AI 看不到這張卡，除非你給它卡號。<span class="lock-more">說明 ▾</span></summary><p>AI 不會主動看到這張卡。下面的紀錄只存在卡片上，<b>不會發到群組</b>；你給 AI 卡號，它才讀得到卡片和紀錄。</p></details>' : ''}</div>
+            ${d.type === NOTE ? `<details class="ui-fold lock-line"><summary>🔒 AI 看不到這張卡，除非你給它卡號。<span class="lock-more" data-nt>${L('說明', 'More')}</span></summary><p>AI 不會主動看到這張卡。下面的紀錄只存在卡片上，<b>不會發到群組</b>；你給 AI 卡號，它才讀得到卡片和紀錄。</p></details>` : ''}</div>
           <div class="drawer-acts">${work.editing || meRO(d.project) ? '' : '<button class="icon-btn drawer-edit" type="button" data-act="edit" title="編輯" aria-label="編輯">✎</button>'}<button class="icon-btn modal-x" type="button" data-close-drawer aria-label="關閉">×</button></div>`;
     const bodyInner = () => `
           ${d.type === NOTE ? `${d.mergedInto ? `<div class="merged-line">${mergedHtml(d)}</div>` : ''}` : ''}
@@ -6299,20 +6612,20 @@
           ${work.editing ? `
           <form id="card-edit" class="stack">
             <label>標題<input name="title" required maxlength="100" value="${esc(d.title)}"></label>
-            ${d.type === '決策' ? '' : `<label>類型<select name="type">${['工作', '阻塞', NOTE].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`}
+            ${d.type === '決策' ? '' : `<label>類型<select name="type" data-ui-sel>${['工作', '阻塞', NOTE].map(t => `<option ${d.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`}
             ${d.type === '決策' && !d.decision?.result ? `
             <label>決策問題<input name="question" required maxlength="200" value="${esc(d.decision.question)}"></label>
             <label>建議方案<textarea autocomplete="off" autocorrect="on" name="recommendation" rows="2" maxlength="500">${esc(d.decision.recommendation)}</textarea></label>
             <label>選項<textarea autocomplete="off" autocorrect="on" name="options" rows="2" placeholder="每行一個，最多 4 個；留白＝「同意」">${esc((d.decision.options || []).join('\n'))}</textarea></label>
             <label>影響<input name="impact" maxlength="200" value="${esc(d.decision.impact)}"></label>
             <label>決定後<input name="afterNext" maxlength="300" value="${esc(d.decision.afterNext)}"></label>
-            <label>決策者<select name="deciderId">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
-            <label>專案<select name="project">${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
+            <label>決策者<select name="deciderId" data-ui-sel data-ui-search="member">${[...state.participants.values()].filter(p => p.memberType === 'human' && p.status !== 'disabled').map(p => `<option value="${esc(p.participantId)}" ${d.decision.decider?.participantId === p.participantId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>` : ''}
+            <label>專案<select name="project" data-ui-sel>${PROJECTS.map(p => `<option value="${esc(p)}" ${d.project === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
             <label>${d.type === NOTE ? '內容' : '背景／緣由'}<textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500">${esc(d.reason)}</textarea></label>
-            <label>負責人<select name="ownerId">${peopleOpts(d.project, d.owner?.participantId, '未指派')}</select></label>
+            <label>負責人<select name="ownerId" data-ui-sel data-ui-search="member">${peopleOpts(d.project, d.owner?.participantId, '未指派')}</select></label>
             <label>下一步<textarea autocomplete="off" autocorrect="on" name="next" rows="2" maxlength="300">${esc(d.next)}</textarea></label>
             <label>受阻原因<input name="blocker" maxlength="300" placeholder="卡在哪裡、需要誰協助" value="${esc(d.blocker)}"></label>
-            <label>等誰<select name="waitForId">${peopleOpts(d.project, d.waitFor?.participantId, '不用等人')}</select></label>
+            <label>等誰<select name="waitForId" data-ui-sel data-ui-search="member">${peopleOpts(d.project, d.waitFor?.participantId, '不用等人')}</select></label>
             <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500">${esc(d.criteria)}</textarea></label>
             <div class="row end"><button class="btn" type="button" data-act="cancel-edit">取消</button><button class="btn primary" type="submit">儲存</button></div>
           </form>` : `
@@ -6712,14 +7025,14 @@
         </div>
         <label>標題<input name="title" required maxlength="100" placeholder="一句話說明要做什麼"></label>
         ${inProjNew ? `<p class="muted small nc-proj">建在「${esc(projName(p0))}」</p>` : ''}
-        <label ${inProjNew ? 'hidden' : ''}>專案（必填）<select name="project" required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${esc(p)}" ${(inProjNew ? p0 : srcMsg?.project || projectView()) === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
-        <label>負責人<select name="ownerId">${opts('未指派')}</select></label>
+        <label ${inProjNew ? 'hidden' : ''}>專案（必填）<select name="project" data-ui-sel required ${singleProject() ? 'disabled' : ''}>${singleProject() ? '' : '<option value="">請選擇專案</option>'}${myProjects().map(p => `<option value="${esc(p)}" ${(inProjNew ? p0 : srcMsg?.project || projectView()) === p ? 'selected' : ''}>${esc(projName(p))}</option>`).join('')}</select></label>
+        <label>負責人<select name="ownerId" data-ui-sel data-ui-search="member">${opts('未指派')}</select></label>
         <div class="field"><span class="field-label" id="nt-label">類型</span>
           <div class="seg-scope full" role="group" aria-labelledby="nt-label">
             <button type="button" data-nt="工作" aria-pressed="true">工作</button><button type="button" data-nt="阻塞" aria-pressed="false">阻塞</button><button type="button" data-nt="決策" aria-pressed="false">決策</button><button type="button" data-nt="人類紀錄" aria-pressed="false">🔒 人類紀錄</button>
           </div><input type="hidden" name="type" value="工作"></div>
         <div class="lockbar" id="nc-note" hidden><span aria-hidden="true">🔒</span><span><b>AI 不會主動看到</b>：不出現在 AI 的看板、卡片清單、團隊狀態，也不發通知或群組訊息。你在訊息裡給 AI 卡號叫它看，它才讀得到（只能讀、不能改）。</span></div>
-        <details id="nc-more" ${sg || srcMsg || store.get('aigile-switch-nc-more') === '1' ? 'open' : ''}><summary>更多欄位 ▾（原因、狀態、下一步、完成條件、等誰）</summary><div class="stack nc-more-body">
+        <details class="ui-fold" id="nc-more" ${sg || srcMsg || store.get('aigile-switch-nc-more') === '1' ? 'open' : ''}><summary>更多欄位（原因、狀態、下一步、完成條件、等誰）</summary><div class="stack nc-more-body">
         <div id="nc-decision" class="stack" hidden>
           <label>決策問題<input name="question" maxlength="200" placeholder="留白＝同標題"></label>
           <label>建議方案<textarea autocomplete="off" autocorrect="on" name="recommendation" rows="2" maxlength="500" placeholder="你建議怎麼做、為什麼"></textarea></label>
@@ -6727,15 +7040,15 @@
             <span class="field-hint">決策者另外一定能選「不同意」「要求補充」。</span></label>
           <div class="two-col">
             <label>影響<input name="impact" maxlength="200" placeholder="例如：UX、PG"></label>
-            <label>決策者<select name="deciderId">${people.filter(p => p.memberType === 'human').map(p => `<option value="${esc(p.participantId)}" ${p.participantId === meId() ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+            <label>決策者<select name="deciderId" data-ui-sel data-ui-search="member">${people.filter(p => p.memberType === 'human').map(p => `<option value="${esc(p.participantId)}" ${p.participantId === meId() ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
           </div>
           <label>決定後<input name="afterNext" maxlength="300" placeholder="決定後下一步是什麼"></label>
         </div>
         <label><span class="nc-reason-l">原因</span><textarea autocomplete="off" autocorrect="on" name="reason" rows="2" maxlength="500" placeholder="為什麼要做"></textarea></label>
-        <label>狀態<select name="status">${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
+        <label>狀態<select name="status" data-ui-sel>${['待整理', '待處理', '進行中'].map(s => `<option>${s}</option>`).join('')}</select></label>
         <label>下一步<textarea autocomplete="off" autocorrect="on" name="next" rows="2" maxlength="300"></textarea></label>
         <label>完成條件<textarea autocomplete="off" autocorrect="on" name="criteria" rows="2" maxlength="500"></textarea></label>
-        <label>等誰<select name="waitForId">${opts('不用等人')}</select></label>
+        <label>等誰<select name="waitForId" data-ui-sel data-ui-search="member">${opts('不用等人')}</select></label>
         </div></details>
         <div id="nc-tpl-warn" class="ctpl-warn" hidden></div>
         <p class="muted small">卡片內容所有成員都看得到，請勿填入內部路徑、程式碼或客戶個資。</p>
@@ -6806,7 +7119,9 @@
       body.querySelector('.nc-reason-l').textContent = isNote ? '內容' : '原因';
       if (isNote) { body.querySelector('#nc-more').open = true; form.status.value = '進行中'; }
       form.status.closest('label').hidden = isNote; // 人類紀錄建立時一律「收集中」
-      for (const sel of [form.ownerId, form.waitForId]) { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai; o.disabled = isNote && ai; } if (sel.selectedOptions[0]?.disabled) sel.value = ''; }
+      for (const sel of [form.ownerId, form.waitForId]) { for (const o of sel.options) { const ai = state.participants.get(o.value)?.memberType === 'ai'; o.hidden = isNote && ai; o.disabled = isNote && ai; } if (sel.selectedOptions[0]?.disabled) sel.value = ''; syncUiSelect(sel); }
+      syncUiSelect(form.status);
+      syncUiSelect(form.waitForId);
       const subBtn = body.modal.querySelector('button[type="submit"]');
       if (subBtn && !warnedOnce) subBtn.textContent = isNote ? '建立人類紀錄' : '建立卡片';
       body.querySelector('#nc-decision').hidden = t !== '決策';
@@ -6821,6 +7136,7 @@
       if (c.owner) form.ownerId.value = c.owner.participantId;
       if (c.waitFor) form.waitForId.value = c.waitFor.participantId;
       form.status.closest('label').hidden = true; form.status.disabled = true;
+      syncUiSelect(form.ownerId); syncUiSelect(form.waitForId); syncUiSelect(form.status);
       if (c.type === '阻塞') body.querySelector('[data-nt="阻塞"]').click();
     }
     if (srcMsg) {
@@ -8027,7 +8343,7 @@
       </div>`;
     }).join('');
     const body = openModal('團隊狀態', `
-      <details class="help"><summary>狀態怎麼判斷？</summary>
+      <details class="ui-fold help"><summary>狀態怎麼判斷？</summary>
         <p>有負責未完成卡片的人，取自卡片（受阻 > 待確認 > 進行中 > 待處理，並標「取自卡片」）；沒有卡片的人，依最新一則訊息的開頭標籤推斷：[接單]／[進度]＝進行中，[完成]／[回覆]／[交接]＝空閒，[受阻]＝受阻，[需確認]＝等人決定。沒照標籤發文時可能不準。AI 超過 ${t.staleMinutes} 分鐘沒出現會標示「可能斷線」（用 watcher 待命的 AI 放寬到 60 分鐘，並顯示「待命中」）；AI 被指派超過 ${t.unansweredMinutes} 分鐘沒讀取會列入「尚未回應」，同一隻 AI 合併一列（人類不列，請看「要你處理」）。</p>
       </details>
       <p class="muted small">要你決定、確認或採用的事都在<button type="button" class="link" data-goto-inbox>「要你處理」</button>，這裡只看團隊狀況。</p>
@@ -9486,7 +9802,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const runs = s.files.filter(f => skRuns(f.path)), others = s.files.length - runs.length, gone = s.previous ? s.previous.files.filter(o => !s.files.some(f => f.path === o.path)) : [];
     return `<div class="sk-sec"><b class="sk-h">技能包內容</b><p class="small">技能 ${s.pack?.skills ?? 0} 個${s.pack?.agents ? `、agent ${s.pack.agents} 個` : ''} · 文字 ${s.files.length} 個檔 · 會執行的腳本 ${runs.length} 個 · 測試資料 ${Math.max(0, s.scripts - runs.length)} 個（不會執行）</p></div>
       <div class="sk-sec"><b class="sk-h">會執行的腳本${s.previous ? `（跟 v${s.previous.version} 比較）` : ''}</b>${runs.length ? runs.map(f => `<div class="sk-run"><span class="muted small">${esc(skPurpose(f.text) || '（檔案開頭沒有說明）')}</span>${skFileHtml(f, s.previous)}</div>`).join('') : '<p class="muted small">沒有</p>'}</div>
-      <div class="sk-sec"><details class="sk-more-files" data-sk-lazy><summary>其他 ${others} 個檔（說明、測試資料）</summary><div class="sk-lazy"></div></details>
+      <div class="sk-sec"><details class="ui-fold sk-more-files" data-sk-lazy><summary>其他 ${others} 個檔（說明、測試資料）</summary><div class="sk-lazy"></div></details>
         ${gone.map(o => `<p class="small"><code>${esc(o.path)}</code> <span class="pill-tag red">刪除</span></p>`).join('')}</div>`;
   }
   const skFileHtml = (f, prev) => {
@@ -9754,7 +10070,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         v.keys.length ? tag(false, `${v.keys.join('、')} 裡有像金鑰的內容，請拿掉`) : tag(true, '沒看到 Token／金鑰')];
       el.innerHTML = `<div class="sk-up-card"><div class="sk-up-head"><b class="sk-up-name">${esc(v.name || '（plugin.json 沒寫 name）')}</b> <span class="pill-tag blue">技能包</span><button type="button" class="link" data-skrepick>重新選</button></div>
         <div class="sk-up-meta">讀自 .claude-plugin/plugin.json · 文字 ${v.files.length} 個檔 · ${mb} MB</div><div class="sk-up-tags">${tags.join('')}</div>
-        ${v.runs.length ? `<details class="sk-runs" open><summary>會執行的腳本 ${v.runs.length} 個（檔名＋一行用途）</summary><ul>${v.runs.map(x => `<li><code>${esc(x.path)}</code><span class="muted">${esc(x.purpose || '（檔案開頭沒有說明）')}</span></li>`).join('')}</ul></details>` : ''}
+        ${v.runs.length ? `<details class="ui-fold sk-runs" open><summary>會執行的腳本 ${v.runs.length} 個（檔名＋一行用途）</summary><ul>${v.runs.map(x => `<li><code>${esc(x.path)}</code><span class="muted">${esc(x.purpose || '（檔案開頭沒有說明）')}</span></li>`).join('')}</ul></details>` : ''}
         ${v.skipped.length ? `<p class="muted small sk-skip">略過（不是文字檔，不會上傳）：${esc(v.skipped.join('、'))}</p>` : ''}</div>`;
     };
     const drawFoot = () => {
@@ -9826,7 +10142,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       pick = skTargetPicker(() => target, cur || {});
       body.querySelector('#sk-to').innerHTML = pick.html();
       const old = cur?.files.find(f => f.path === 'SKILL.md')?.text;
-      body.querySelector('#sk-ap-cur').innerHTML = cur ? `<div class="sk-alert" role="status">這個專案已經有「${esc(cur.name)}」第 ${cur.version} 版${cur.template ? `（來自範本第 ${cur.template.version} 版）` : ''}。上架後會成為第 ${cur.version + 1} 版、取代原本的 SKILL.md${cur.files.length > 1 ? `，其他 ${cur.files.length - 1} 個檔照留` : ''}；改過的地方請先對照。</div>${old ? `<details class="sk-file sk-ap-old"><summary>看目前的 SKILL.md（第 ${cur.version} 版）</summary><pre class="sk-pre">${esc(old)}</pre></details>` : ''}<b class="sk-ap-new">新內容（範本第 ${tpl.version} 版，可先改）</b>` : '';
+      body.querySelector('#sk-ap-cur').innerHTML = cur ? `<div class="sk-alert" role="status">這個專案已經有「${esc(cur.name)}」第 ${cur.version} 版${cur.template ? `（來自範本第 ${cur.template.version} 版）` : ''}。上架後會成為第 ${cur.version + 1} 版、取代原本的 SKILL.md${cur.files.length > 1 ? `，其他 ${cur.files.length - 1} 個檔照留` : ''}；改過的地方請先對照。</div>${old ? `<details class="ui-fold sk-file sk-ap-old"><summary>看目前的 SKILL.md（第 ${cur.version} 版）</summary><pre class="sk-pre">${esc(old)}</pre></details>` : ''}<b class="sk-ap-new">新內容（範本第 ${tpl.version} 版，可先改）</b>` : '';
       drawFoot();
     };
     body.addEventListener('change', e => {
@@ -10656,7 +10972,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <div class="file-info">
           <b class="file-name">${esc(f.name)}</b>
           <span class="muted small">${fmtBytes(f.size)} <span class="file-ok">✓ 已聲明不含程式碼與個資</span></span>
-          <details class="file-more"><summary>詳細</summary><span class="muted small">到期 ${fmtTime(f.expiresAt)} · SHA-256 ${esc(f.sha256.slice(0, 12))}…（給稽核用）</span></details>
+          <details class="ui-fold file-more"><summary>詳細</summary><span class="muted small">到期 ${fmtTime(f.expiresAt)} · SHA-256 ${esc(f.sha256.slice(0, 12))}…（給稽核用）</span></details>
         </div>
         <button class="btn" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
         ${canDeleteFile(f) ? `<button class="btn danger-outline" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
@@ -11310,7 +11626,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
             <button class="btn small" type="button" data-download="${esc(f.fileId)}" data-name="${esc(f.name)}">下載</button>
             ${canDeleteFile(f) ? `<button class="btn small danger-outline" type="button" data-delete-file="${esc(f.fileId)}">刪除</button>` : ''}
           </div>`).join('') : '<p class="muted">目前沒有文件。按右上角「上傳」或輸入框旁的 📎。</p>'}</div>
-        <details class="audit"><summary>稽核紀錄</summary><div id="audit-list" class="muted small">載入中…</div></details>`;
+        <details class="ui-fold audit"><summary>稽核紀錄</summary><div id="audit-list" class="muted small">載入中…</div></details>`;
       body.querySelector('details.audit').addEventListener('toggle', async e => {
         if (!e.target.open) return;
         const box = body.querySelector('#audit-list');
@@ -11370,7 +11686,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       </div>
       ${pickable ? '<div class="kb-selbar" role="region" aria-label="已勾選的文件" hidden></div>' : ''}
       <p class="muted small">只有本專案成員看得到。單檔 ${fmtBytes(d.maxFileBytes)} 以內，只收 pdf、docx、xlsx、pptx、md、txt、png、jpg，禁止程式碼與客戶個資；資料夾最多 ${d.maxFolderDepth} 層。這個專案已用 ${fmtBytes(d.projectBytes)}（全部專案 ${fmtBytes(d.usedBytes)} / ${fmtBytes(d.limitBytes)}）。</p>
-      <details class="audit"><summary>異動紀錄</summary><div id="docs-log" class="muted small">載入中…</div></details>`;
+      <details class="ui-fold audit"><summary>異動紀錄</summary><div id="docs-log" class="muted small">載入中…</div></details>`;
     box.querySelector('#docs-input').addEventListener('change', e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadDocs(pj, files); });
     const dropFolder = trail.length ? trail[trail.length - 1].name : projName(pj);
     setDropZone(box, {
@@ -12121,8 +12437,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           ${row('本機補傳', sw('localFallback', '允許 Git 主機找不到版本時由送審工具補傳'))}
           ${row('送審附 diff', `${sw('diffUpload', '允許送審時附 diff 檔')}<p class="muted small">關閉時審查者自己到 git 看版本，打開後 diff 存在專案文件。<button type="button" class="link rv-pick-link" data-rv-diff-help>說明</button></p>${diffHelpOpen ? `<p class="muted small rv-diff-more">${set.diffUploadDefault ? '關閉' : '關閉（預設）'}：審查者自己到 git 看這個版本；專案有設程式庫的話，卡片上有「比較」連結。<br>${set.diffUploadDefault ? '打開（預設）' : '打開'}：只有送審能附 diff，存在專案文件、不會自動刪除。其他地方照樣不能上傳程式。<br>改這項會記在審查紀錄。</p>` : ''}`)}
           ${row('人審通過時', optList('humanPass', RV_HUMAN_PASS_OPTS, '人審通過時'))}
-          <details class="rv-fold" data-rv-eligible-fold${eligibleOpen ? ' open' : ''}><summary><span>現在符合的審查者</span><span class="muted small">${wc.summary}</span></summary><div class="rv-fold-body">${wc.html}</div></details>` : ''}
-        ${set.log?.length ? `<details class="rv-fold rv-log" data-rv-log-fold${logOpen ? ' open' : ''}><summary><span>審查紀錄</span><span class="muted small">${set.log.length} 筆</span></summary><div class="rv-fold-body"><ul>${set.log.map(l => `<li>${rvTime(l.at)} · ${esc(l.byName || '')}${/^把/.test(l.text) ? ' ' : '：'}${esc(l.text)}</li>`).join('')}</ul></div></details>` : ''}`;
+          <details class="ui-fold rv-fold" data-rv-eligible-fold${eligibleOpen ? ' open' : ''}><summary><span>現在符合的審查者</span><span class="muted small">${wc.summary}</span></summary><div class="rv-fold-body">${wc.html}</div></details>` : ''}
+        ${set.log?.length ? `<details class="ui-fold rv-fold rv-log" data-rv-log-fold${logOpen ? ' open' : ''}><summary><span>審查紀錄</span><span class="muted small">${set.log.length} 筆</span></summary><div class="rv-fold-body"><ul>${set.log.map(l => `<li>${rvTime(l.at)} · ${esc(l.byName || '')}${/^把/.test(l.text) ? ' ' : '：'}${esc(l.text)}</li>`).join('')}</ul></div></details>` : ''}`;
     };
     const body = openModal('審查設定', '<div class="rv-set"></div><p class="error" role="alert" hidden></p>', {
       size: 'form',
@@ -12960,7 +13276,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     return `<div class="pm-card adm-ttl"><div class="pm-setrow"><label for="adm-ttl">訊息附件保存時間</label><select id="adm-ttl" aria-describedby="adm-ttl-hint">${hs.map(h => `<option value="${h}"${h === t.hours ? ' selected' : ''}>${esc(ttlLabel(h))}${h === t.defaultHours ? L('（預設）', ' (default)') : ''}</option>`).join('')}</select><button type="button" class="btn small primary" data-pp="filettl">儲存</button>
       <span class="muted small" id="adm-ttl-hint">只有訊息附件（在訊息裡上傳的文件、截圖）會在這段時間後自動刪除。專案文件和知識庫都不會自動刪除；知識庫裡的文件就是專案文件，只存一份。改了只影響之後上傳的檔；已經上傳的照上傳當時的設定到期，不會提早或延後刪除。存好立即生效，不用重新啟動或部署。</span>
       <span class="muted small adm-ttl-src">${src}</span></div>
-      <details class="pm-gs-log adm-ttl-log"${perm.ttlLogOpen ? ' open' : ''}><summary>異動紀錄</summary><ul class="pa-log">${logs || '<li class="muted small">還沒有紀錄</li>'}</ul></details></div>`;
+      <details class="ui-fold pm-gs-log adm-ttl-log"${perm.ttlLogOpen ? ' open' : ''}><summary>異動紀錄</summary><ul class="pa-log">${logs || '<li class="muted small">還沒有紀錄</li>'}</ul></details></div>`;
   }
   function admBodyHtml() {
     const narrow = narrowPerm();
@@ -13282,7 +13598,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const ownerInAis = out.filter(a => a.memberType === 'ai' && !listed.has(a.ownerParticipantId) && ownerOf(a) && inProj(ownerOf(a), pj) && match(a));
     if (ownerInAis.length) rows.push('<div class="pm-grp">主人已在這個專案的 AI</div>', ...ownerInAis.map(a => box(a, false)));
     const others = admin ? out.filter(a => a.memberType === 'ai' && !listed.has(a.ownerParticipantId) && !ownerIn(a) && match(a)) : [];
-    if (others.length) rows.push(`<details class="pm-others"><summary class="pm-grp">其他（主人不在${esc(projName(pj))}的 AI，${others.length} 個）</summary>${others.map(a => box(a, false, `主人${ownerOf(a) ? ' ' + ownerOf(a).name : ''}不在${projName(pj)}`)).join('')}</details>`);
+    if (others.length) rows.push(`<details class="ui-fold pm-others"><summary class="pm-grp">其他（主人不在${esc(projName(pj))}的 AI，${others.length} 個）</summary>${others.map(a => box(a, false, `主人${ownerOf(a) ? ' ' + ownerOf(a).name : ''}不在${projName(pj)}`)).join('')}</details>`);
     const pending = perm.draft.size > 0;
     return `<section class="pm-col pm-pick" aria-label="加入${esc(projName(pj))}的成員">
       <div class="pm-dhead"><strong>加入${esc(projName(pj))}的成員</strong></div>
@@ -13360,7 +13676,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           <button type="button" class="switch" role="switch" aria-checked="${gs.openJoin}" aria-labelledby="pm-oj-t" data-pp="openjoin"><span></span></button></div>
         <div class="pm-gs-row pm-gs-code"><div class="pm-gs-t"><b><label for="pm-room-code">群組密碼</label></b><span class="pm-sub">${gs.roomCodeSet ? '<b>已設定</b>：註冊時要輸入；設好後看不到原文，忘了就重設' : '未設定：註冊不用密碼。公開部署建議設一組'}</span>${env('roomCode')}</div>
           <div class="pm-gs-ctl"><input id="pm-room-code" type="password" maxlength="64" autocomplete="new-password" placeholder="${gs.roomCodeSet ? '輸入新密碼' : '4～64 字'}"><button type="button" class="btn small primary" data-pp="roomcode">${gs.roomCodeSet ? '更換' : '設定'}</button>${gs.roomCodeSet ? '<button type="button" class="btn small" data-pp="roomclear">清除</button>' : ''}</div></div>
-        <details class="audit pm-gs-log"${perm.gsLogOpen ? ' open' : ''}><summary>群組異動紀錄</summary><ul class="pa-log">${log}</ul></details>
+        <details class="ui-fold audit pm-gs-log"${perm.gsLogOpen ? ' open' : ''}><summary>群組異動紀錄</summary><ul class="pa-log">${log}</ul></details>
       </div>`;
   }
   async function saveGroupSettings(body, done) {
@@ -13446,7 +13762,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     }
     const list = perm.deletions || [];
     if (!list.length) return '';
-    return `<details class="pm-card pm-dels"><summary>已永久刪除的專案 · ${list.length}</summary><ul class="pm-dels-list">${list.map(d => `<li><b>${esc(d.name)}</b>${d.code ? ` <span class="muted small">${esc(d.code)}</span>` : ''}
+    return `<details class="ui-fold pm-card pm-dels"><summary>已永久刪除的專案 · ${list.length}</summary><ul class="pm-dels-list">${list.map(d => `<li><b>${esc(d.name)}</b>${d.code ? ` <span class="muted small">${esc(d.code)}</span>` : ''}
       <span class="muted small">${esc(d.byName || '')} · ${esc(shortTime(d.at))}</span><span class="muted small">訊息 ${d.counts?.messages ?? 0} 則、卡片 ${d.counts?.cards ?? 0} 張、文件 ${d.counts?.docs ?? 0} 份</span></li>`).join('')}</ul></details>`;
   }
   // 新增專案彈窗：名稱＋程式庫＋分支（選填）一次填完
@@ -14194,7 +14510,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         const title = pageText(r.proposerName+' 建議在「'+field+'」加上「'+r.value+'」',r.proposerName+' suggests adding “'+r.value+'” to '+field);
         return `<div class="intro-suggestion"><span>✦ ${esc(title)} ${r.reason ? esc(pageText('（'+r.reason+'）','('+r.reason+')')) : ''}</span><span class="intro-choices"><button type="button" class="btn small" data-choice="reject" data-id="${esc(r.id)}">${pageText('不要','Dismiss')}</button><button type="button" class="btn primary small" data-choice="accept" data-id="${esc(r.id)}">${pageText('加上','Accept')}</button></span></div>`;
       }).join('');
-      host.innerHTML = `<h3>${self ? pageText('我的介紹','My introduction') : pageText('成員介紹','Member introduction')}</h3>${self ? `<p class="muted small">${pageText('寫給團隊和 AI 看：你懂什麼、能決定什麼、怎麼找你。每欄最多 200 字，空著也可以。','Tell your team and AI what you know, what you can decide and how to reach you. Each field is optional, up to 200 characters.')}</p>` : ''}${suggestions}<div class="intro-columns"><div>${controls.slice(0,2).join('')}<details class="intro-extra" open><summary>${pageText('更多欄位','More fields')}</summary>${controls.slice(2,4).join('')}</details><p class="muted small">${esc(hint)}</p>${self && data.projects.length ? '<div class="intro-project-links">'+data.projects.map(p => '<button type="button" class="link" data-intro-project="'+esc(p)+'">'+esc(projName(p)+' ⚙ › '+pageText('成員與角色','Members & roles'))+'</button>').join(' · ')+'</div>' : ''}</div>
+      host.innerHTML = `<h3>${self ? pageText('我的介紹','My introduction') : pageText('成員介紹','Member introduction')}</h3>${self ? `<p class="muted small">${pageText('寫給團隊和 AI 看：你懂什麼、能決定什麼、怎麼找你。每欄最多 200 字，空著也可以。','Tell your team and AI what you know, what you can decide and how to reach you. Each field is optional, up to 200 characters.')}</p>` : ''}${suggestions}<div class="intro-columns"><div>${controls.slice(0,2).join('')}<details class="ui-fold intro-extra" open><summary>${pageText('更多欄位','More fields')}</summary>${controls.slice(2,4).join('')}</details><p class="muted small">${esc(hint)}</p>${self && data.projects.length ? '<div class="intro-project-links">'+data.projects.map(p => '<button type="button" class="link" data-intro-project="'+esc(p)+'">'+esc(projName(p)+' ⚙ › '+pageText('成員與角色','Members & roles'))+'</button>').join(' · ')+'</div>' : ''}</div>
         ${self ? '<aside class="intro-preview"><b>'+pageText('成員看到的介紹','Member preview')+'</b><dl data-human></dl><b>'+pageText('AI 看到的摘要','AI summary')+'</b><p data-ai></p></aside>' : ''}</div>
         <footer class="intro-footer"><small>${esc(pageText('上次更新','Last updated')+' · '+(recent ? recent.updated_at.slice(0,10)+' · '+recent.updatedByName : '—'))}</small>
         ${data.canEdit ? '<button type="button" class="btn primary" data-save>'+pageText('儲存','Save')+'</button>' : ''}

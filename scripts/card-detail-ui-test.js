@@ -51,9 +51,9 @@ try {
     assert.ok(await js(`(() => { const a = document.querySelector('${D} .drawer-head .drawer-acts'); return !!a && !!a.querySelector('[data-act="edit"][title="編輯"]') && !!a.querySelector('[data-close-drawer]'); })()`), `A ${tag} 編輯和關閉並排在右上角`);
     assert.equal(await js(`document.querySelectorAll('${D} .drawer-body .btn[data-act="edit"]').length`), 0, `A ${tag} 內文不再有「編輯」大按鈕`);
     // B 鎖頭一行；點說明才展開
-    assert.equal(await text(`${D} .lock-line summary`), '🔒 AI 看不到這張卡，除非你給它卡號。說明 ▾', `B ${tag} 鎖頭一行小字`);
+    assert.equal(await text(`${D} .lock-line summary`), '🔒 AI 看不到這張卡，除非你給它卡號。 說明', `B ${tag} 鎖頭一行小字`);
     assert.equal(await js(`document.querySelector('${D} .lock-line').open`), false, `B ${tag} 預設收起`);
-    assert.equal(await js(`document.querySelector('${D} .lock-more').getClientRects().length`), 1, `B ${tag} 「說明 ▾」不拆成兩行`);
+    assert.equal(await js(`document.querySelector('${D} .lock-more').getClientRects().length`), 1, `B ${tag} 「說明」不拆成兩行`);
     assert.equal(await js(`document.querySelectorAll('${D} .lockbar').length`), 0, `B ${tag} 不再有大框`);
     // C 一列＋還沒填
     assert.equal(await text(`${D} .dmeta`), '專案 預設專案 阻塞 沒有', `C ${tag} 人類紀錄卡負責人只放在狀態那行，一列不重複`);
@@ -118,7 +118,7 @@ try {
   await open(empty.cardId);
   await until(() => js("document.documentElement.lang === 'en'"), 15000, 'F 英文介面');
   await sleep(300);
-  assert.equal(await text(`${D} .lock-line summary`), "🔒 AIs can't see this card unless you give them its number.More ▾", 'F 鎖頭一行');
+  assert.equal(await text(`${D} .lock-line summary`), "🔒 AIs can't see this card unless you give them its number. More", 'F 鎖頭一行');
   assert.equal(await text(`${D} .dmeta`), 'Project Default project Blocked None', 'F 一列（負責人在狀態那行）');
   assert.equal(await blankText(), 'Not filled in yet: Details, Next step, Done when ＋ Add', 'F 還沒填');
   assert.match(await text(`${D} .timeline`), /created this card/, 'F 時間軸英文');
