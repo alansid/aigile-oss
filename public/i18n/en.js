@@ -298,6 +298,8 @@ window.AIGILE_EN = {
     "· 用讀取金鑰": "· used the read key",
     "讀取金鑰格式不對（不能有空白或中文，最多 255 字）": "The read key is not valid (no spaces or non-ASCII characters, up to 255 characters)",
     "clearReadKey 要是 true 或 false": "clearReadKey must be true or false",
+    "「{0}」同一個程式庫的幾列填了不同的讀取金鑰，請只填一把": "\"{0}\": rows for the same repository have different read keys. Enter only one key.",
+    "「{0}」同一個程式庫不能一列設定、另一列清除讀取金鑰": "\"{0}\": you cannot set the read key in one row and clear it in another row of the same repository.",
     "＋ 加一個程式庫（最多 5 個）": "+ Add a repository (up to 5)",
     "名稱給人和 AI 看。": "People and AIs see these names.",
     "卡片未指定程式庫時，使用主要程式庫。": "Cards use the primary repository by default.",
