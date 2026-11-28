@@ -122,22 +122,28 @@ process.env.CARD_STALE_HOURS = '0';
     await js("document.querySelector('[data-view=\"B\"]').click(); true");
     await until(() => js(`!!document.querySelector('[data-card="${trig.cardId}"]')`), 15000, '看板載入觸發卡');
 
-    // 先打開編輯表單（畫面上握著舊 version=1），再從伺服器更新 version 並塞進 205 張新變動卡
+    // 先打開編輯表單（畫面上握著舊 version=1），再塞進 205 張新變動卡、從伺服器更新 version。
+    // 變動卡要在 server-bump 之前塞：直接寫庫的 updated_at 是過去時間，bump 的即時通知若先同步，since 就跳過它們
     await js(`document.querySelector('[data-card="${trig.cardId}"]').click(); true`);
     await until(() => js("!!document.querySelector('#card-drawer [data-act=\"edit\"]')"), 8000, '編輯鈕');
     await js("document.querySelector('#card-drawer [data-act=\"edit\"]').click(); true");
     await until(() => js("!!document.querySelector('#card-edit [name=\"next\"]')"), 5000, '編輯表單');
 
-    await call(liu.token, `/api/cards/${trig.cardId}`, 'PATCH', { next: 'server-bump', version: trig.version });
     sql(`WITH RECURSIVE cnt(n) AS (SELECT 3 UNION ALL SELECT n + 1 FROM cnt WHERE n < 207)
       INSERT INTO cards (uid, type, title, owner_id, status, created_by, project, proj_no, version, created_at, updated_at)
       SELECT 'u427s_' || n, '工作', '同步變動卡 #' || n, NULL, '進行中', ?, '預設專案', n, 1, ?, ? FROM cnt`,
       uid, newAt, newAt);
+    assert.equal((await call(liu.token, `/api/cards/${trig.cardId}`, 'PATCH', { next: 'server-bump', version: trig.version })).status, 200, 'server-bump 更新成功');
 
-    // 送出舊 version 觸發 409 CONFLICT → 呼叫 syncCards() 分頁讀完所有變動＋過時卡
-    await js("document.querySelector('#card-edit [name=\"next\"]').value = 'client-stale'; document.querySelector('#card-edit button[type=\"submit\"]').click(); true");
+    // bump 的即時通知觸發 syncCards()：分頁讀完所有變動＋過時卡，看板上的觸發卡也換成新 version
     await until(() => js("document.querySelectorAll('.bcol[data-col=\"進行中\"] [data-card]').length === 206"), 15000, 'since 超過 200 張變動＋過時卡全部同步到（共 206 張進行中）');
     assert.equal(await js("document.querySelectorAll('.bcol[data-col=\"進行中\"] [data-card]').length"), 206, '過時卡存在時第 201 筆之後不漏接');
+    await until(() => js(`document.querySelector('.bcol [data-card="${trig.cardId}"]')?.textContent.includes('server-bump')`), 8000, '看板同步到 server-bump');
+
+    // 編輯表單是在 bump 之前打開的：送出要帶開始編輯時的舊 version，被 409 擋下，不能蓋掉別人的修改
+    await js("document.querySelector('#card-edit [name=\"next\"]').value = 'client-stale'; document.querySelector('#card-edit button[type=\"submit\"]').click(); true");
+    await until(() => js("document.querySelector('#card-edit [name=\"next\"]')?.value === 'server-bump'"), 8000, '409 後編輯表單換成伺服器最新內容');
+    assert.equal((await call(liu.token, `/api/cards/${trig.cardId}`)).body.next, 'server-bump', '舊表單送出被 409 擋下，沒有蓋掉 server-bump');
   } finally {
     delete process.env.CARD_STALE_HOURS;
     await kit.stop();

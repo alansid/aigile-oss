@@ -5897,16 +5897,16 @@
   async function patchCard(id, body, { render = true } = {}) {
     const c = work.cards.get(id);
     try {
-      const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: c?.version } });
+      const r = await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...body, version: body.version ?? c?.version } }); // 編輯表單帶開始編輯時的版本，中途被同步更新也照樣擋下 409
       putCard(r, { keepLinks: true });
       if (render) renderWork(); // 收件匣驗收時由呼叫端先淡出再重畫
       const focusBlocker = body.status === '受阻' && r.status === '受阻';
       if (work.openId === id || focusBlocker) {
-        if (focusBlocker) work.editing = true;
+        if (focusBlocker) { work.editing = true; work.editVer = r.version; }
         work.openId = r.cardId;
         await openCard(r.cardId); // 改專案會換號
         if (focusBlocker) {
-          if (!work.editing) { work.editing = true; renderDrawer(false); }
+          if (!work.editing) { work.editing = true; work.editVer = r.version; renderDrawer(false); }
           const inp = $('#card-edit [name="blocker"]');
           if (inp) { inp.scrollIntoView({ block: 'center' }); inp.focus(); }
         }
@@ -5914,7 +5914,7 @@
       return r;
     } catch (err) {
       toast(err.message);
-      if (err.code === 'CONFLICT') { await syncCards().catch(() => {}); if (work.openId === id) openCard(id); }
+      if (err.code === 'CONFLICT') { await syncCards().catch(() => {}); if (work.openId === id) { await openCard(id); if (work.editing) work.editVer = work.detail?.version; } } // 表單換成最新內容後，改用新版本再送
       return null;
     }
   }
@@ -6737,7 +6737,7 @@
           data.publishNotes = pub;
         }
       }
-      if (await patchCard(work.openId, data)) { work.editing = false; openCard(work.openId); toast('已儲存'); }
+      if (await patchCard(work.openId, { ...data, version: work.editVer })) { work.editing = false; openCard(work.openId); toast('已儲存'); }
     });
     bindDrawerCompose(host, d);
     if (focus) host.querySelector('.modal-x').focus();
@@ -6785,7 +6785,7 @@
     if (a.dataset.act === 'ho-go') return composeSubmit('ho', a);
     if (a.dataset.act === 'back-go') return composeSubmit('back', a);
     if (a.dataset.act === 'set-st') { await patchCard(id, { status: a.dataset.st }); if (a.dataset.st === '已封存') refreshArchivedCount().then(renderWork); return; }
-    if (a.dataset.act === 'edit') { if (meRO(work.detail?.project)) return; work.editing = true; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); } // 唯讀成員不能改卡（依卡片所屬專案）
+    if (a.dataset.act === 'edit') { if (meRO(work.detail?.project)) return; work.editing = true; work.editVer = work.detail?.version; renderDrawer(false); work.detail && $('#card-edit [name=title]')?.focus(); } // 唯讀成員不能改卡（依卡片所屬專案）
     else if (a.dataset.act === 'cancel-edit') { work.editing = false; renderDrawer(false); }
     else if (a.dataset.act === 'rv-request') openReviewRequest(work.detail);
     else if (a.dataset.act === 'done') patchCard(id, { status: '已完成' });
