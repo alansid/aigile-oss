@@ -71,6 +71,8 @@ try {
   assert.match(await txt('.sk-new-rech'), /⭐ 推薦給「預設專案」.*依專案裡 AI 的角色挑/);
   assert.equal(await txt('#sk-new-list [data-sknew-all]'), '看全部 7 個範本 ▾');
   assert.ok(await js("!!document.querySelector('#sk-new-q') && document.querySelectorAll('[data-sknew-cat]').length >= 4"), '有搜尋與分類');
+  await until(() => js("!!document.querySelector('.sk-new-pj #sk-new-pj + .ui-sel-btn')"), 5000, '新增技能共用專案選單');
+  assert.equal(await js("getComputedStyle(document.querySelector('.sk-new-pj .ui-sel-btn')).borderTopWidth"), '0px');
   assert.match(await txt('.sk-new-up'), /上傳自己的 SKILL\.md/);
   await click('[data-sknew-peek="commit-convention"]');
   assert.match(await txt('.sk-new-pre'), /name: commit-convention/, '預覽展開全文');

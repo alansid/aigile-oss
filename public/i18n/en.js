@@ -209,7 +209,8 @@ window.AIGILE_EN = {
     "二進位檔": "Binary file",
     "只顯示已保存的部分差異": "Only the retained part of this diff is shown",
     "這個版本沒有程式差異": "No diff is available for this version",
-
+    "diff 內容": "Diff content",
+    "無法開啟 diff：{0}": "Could not open diff: {0}",
     "上次使用": "Last used",
     "複製路徑": "Copy path",
     "取消登記…": "Unregister…",
@@ -294,6 +295,7 @@ window.AIGILE_EN = {
     "已設定讀取金鑰（留空＝不變）": "Read key saved (leave blank to keep it)",
     "讀取金鑰（私有庫才需要，選填）": "Read key (only for private repositories, optional)",
     "清除金鑰": "Clear key",
+    "儲存後生效": "Applies after saving",
     "· 私有庫": "· private",
     "· 用讀取金鑰": "· used the read key",
     "讀取金鑰格式不對（不能有空白或中文，最多 255 字）": "The read key is not valid (no spaces or non-ASCII characters, up to 255 characters)",

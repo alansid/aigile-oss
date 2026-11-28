@@ -38,6 +38,17 @@ try {
     for (const width of [1280, 375]) {
       await cdp('Emulation.setDeviceMetricsOverride', { width, height: 850, deviceScaleFactor: 1, mobile: false });
       assert.ok(await js("document.querySelector('#repo-form').scrollWidth <= document.querySelector('#repo-form').clientWidth + 1"));
+      const keyUi = await js(`(() => {
+        const row = document.querySelector('.repo-row');
+        const lbl = row.querySelector('.repo-key-label');
+        const inp = row.querySelector('input[name=readKey]');
+        const st = row.querySelector('.repo-keyclear');
+        const lr = lbl.getBoundingClientRect(), ir = inp.getBoundingClientRect();
+        return { text: lbl.textContent.trim(), above: lr.height > 10 && lr.bottom <= ir.top + 1, status: st ? st.textContent.trim() : null };
+      })()`);
+      assert.equal(keyUi.text, lang === 'en' ? 'Read key' : '讀取金鑰');
+      assert.ok(keyUi.above, 'read key label above input at ' + width);
+      assert.equal(keyUi.status, '', 'no misleading 未設定 at ' + width);
       if (width === 1280) assert.equal(await js("document.querySelector('.modal:has(#repo-form)').offsetWidth"), 640);
       if (width === 375) {
         const layout = await js(`(() => {
@@ -55,6 +66,23 @@ try {
       await screenshot(lang + '-' + width);
     }
     await cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 850, deviceScaleFactor: 1, mobile: false });
+    await js(`(() => {
+      const inp = document.querySelector('.repo-row input[name=readKey]');
+      inp.focus();
+      inp.value = 'ghp_fakeDraftKey495';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+    const wantPending = lang === 'en' ? 'Applies after saving' : '儲存後生效';
+    await until(() => js("document.querySelector('.repo-row .repo-keyclear')?.textContent.trim() === " + JSON.stringify(wantPending)), 5000, 'pending read key status');
+    assert.ok(await js("document.activeElement === document.querySelector('.repo-row input[name=readKey]')"), 'typing readKey preserves input focus');
+    await js(`(() => {
+      const inp = document.querySelector('.repo-row input[name=readKey]');
+      inp.value = '';
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+    await until(() => js("document.querySelector('.repo-row .repo-keyclear')?.textContent.trim() === ''"), 5000, 'cleared draft status');
   }
   await js("Promise.all(document.querySelector('.modal').getAnimations().map(animation => animation.finished))");
   const grips = await js("Array.from(document.querySelectorAll('.repo-grip'), el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })");
@@ -72,8 +100,16 @@ try {
   await click('[data-row="0"] [data-remove]');
   assert.equal(await js("document.querySelector('.repo-row input[name=name]').value"), 'Frontend');
   assert.ok(await js("!!document.querySelector('.repo-row [data-primary]:checked')"));
+  await js("const inp=document.querySelector('.repo-row input[name=readKey]');inp.value='ghp_fakeSavedKey495';inp.dispatchEvent(new Event('input',{bubbles:true}));true");
   await click('button[form="repo-form"][type="submit"]');
-  await until(async () => (await kit.call(user.token, '/api/projects')).body.items.find(p => p.id === project)?.repositories.length === 1, 10000, 'persisted removal');
+  await until(async () => {
+    const repo = (await kit.call(user.token, '/api/projects')).body.items.find(p => p.id === project)?.repositories;
+    return repo?.length === 1 && repo[0].hasReadKey === true;
+  }, 10000, 'persisted removal and read key');
+  await click('.ph-gear[data-pset="' + project + '"]');
+  await click('[data-pset-act="repo"]');
+  await until(() => js("!!document.querySelector('.repo-row [data-clear-key]') && document.querySelector('.repo-row .repo-keyclear > span')?.textContent.trim() === 'Set'"), 8000, 'saved read key status');
+  await click('.modal [data-close]');
   const single = (await kit.call(user.token, '/api/projects', 'POST', { name: 'Docs' })).body.id;
   const docsUrl = 'https://github.com/example/docs';
   await kit.call(user.token, '/api/projects/' + single + '/repo', 'PUT', { url: docsUrl });

@@ -99,6 +99,7 @@ try {
   await click('[data-where="cloud"]');
   assert.equal(await js("document.querySelector('.env-field')?.hidden ?? true"), true, '雲端不問所在環境（開源版沒有這欄）');
   assert.deepEqual(await js("[...document.querySelectorAll('[name=\"cloudChoice\"] option')].map(o => o.textContent)"), ['公司地端 · qwen2.5:14b · 🏠 私人模型', '公司地端 · llama3.1:8b · 🏠 私人模型'], '只列可以用的設定（Gemini 還沒測試成功）');
+  await until(() => js("document.querySelector('.cloud-model .ui-sel-txt')?.textContent === document.querySelector('.cloud-model select').selectedOptions[0]?.textContent"), 5000, '模型選單顯示目前選項');
   await js("(() => { const b = [...document.querySelectorAll('#ai-form input[name=proj]:not(:disabled)')]; (b.find(i => i.value === '預設專案') || b[0]).checked = true; return true; })()");
   await setVal('#ai-form [name="name"]', '示範助理');
   await shot('new-ai-cloud-1280');

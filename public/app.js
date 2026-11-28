@@ -835,7 +835,7 @@
         ${pj ? `<div class="switch-row sw-pj-join"><div><b id="sw-pjj-t">新成員可以申請加入「${esc(pj.name)}」</b><span class="small muted">${swJoinOpen(pj) ? '打開中：自己註冊的人會在主畫面看到這個專案、按「申請加入」，你核准後就加入。' : '關閉中：註冊的人看不到這個專案，要你在「成員管理」把人加進來。'}</span></div><button type="button" class="switch" role="switch" aria-checked="${swJoinOpen(pj)}" aria-labelledby="sw-pjj-t" data-sw="pjjoin"><span></span></button></div>` : ''}
         <div class="sw-inv" data-msg-host><label class="field">邀請成員（產生一次性連結，直接加進「${esc(pj?.name || '')}」）<input id="sw-inv-name" maxlength="40" placeholder="成員名字"></label><button type="button" class="btn" data-sw="invite">產生邀請連結</button></div>
         ${st.invites.length ? `<ul class="sw-links">${st.invites.map((v, i) => `<li><b>${esc(v.name)}</b><code>${esc(v.url)}</code><button type="button" class="btn small" data-sw-copy="${i}">複製連結</button></li>`).join('')}</ul>` : ''}${btns('next', '下一步')}`;
-      else if (!st.ai) html = `<label class="field">角色範本<select id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p><p class="field-hint">要套用技能範本，完成設定後到「我的 AI」的「技能庫」，按「＋ 新增技能」。</p>${btns('ai', '建立 AI')}`;
+      else if (!st.ai) html = `<label class="field">角色範本<select data-ui-sel id="sw-role">${tpl.map(r => `<option value="${esc(r.key)}"${r.key === 'PG' ? ' selected' : ''}>${esc(r.option || r.key)}</option>`).join('')}</select></label><label class="field">AI 名稱<input id="sw-ai-name" maxlength="40"></label><p class="field-hint">六題設定先用範本，之後在「我的 AI」改。</p><p class="field-hint">要套用技能範本，完成設定後到「我的 AI」的「技能庫」，按「＋ 新增技能」。</p>${btns('ai', '建立 AI')}`;
       else {
         const oneLine = maHasLine(st.tool);
         const copyLabel = oneLine ? '複製一行啟動' : '複製接入文字';
@@ -2382,7 +2382,18 @@
     if (!btn) return;
     const opt = sel.selectedOptions?.[0] || sel.options?.[sel.selectedIndex] || sel.options?.[0];
     const txt = (opt?.textContent || '').replace(/\s*▾$/, '').trim();
-    const lbl = sel.getAttribute('aria-label') || '';
+    const label = sel.labels?.[0];
+    let lbl = sel.getAttribute('aria-label') || '';
+    if (!lbl && label) {
+      const labelParts = [];
+      for (const child of label.childNodes) {
+        if (child === wrap || child === sel) break;
+        labelParts.push(child.textContent);
+      }
+      lbl = labelParts.join('').trim();
+    }
+    const describedBy = sel.getAttribute('aria-describedby');
+    if (describedBy) btn.setAttribute('aria-describedby', describedBy);
     btn.disabled = !!sel.disabled;
     if (pill) {
       btn.setAttribute('aria-label', lbl ? (txt ? `${lbl}：${txt}` : lbl) : txt);
@@ -3045,6 +3056,8 @@
     const fdups = dupNameSet(people);
     sel.innerHTML = '<option value="">所有成員</option>' + people.map(p => `<option value="${esc(p.participantId)}">${esc(nameCodeText(p, fdups))}</option>`).join('');
     sel.value = f.member;
+    syncUiSelect(sel);
+    syncUiSelect($('#f-tag'));
     $('#f-clear').hidden = !filtering();
     const an = $('#f-ainow'); if (an) an.checked = aiNowOn();
     syncTbValues();
@@ -4638,7 +4651,7 @@
         ? pageText('已停用', 'Disabled')
         : pageText('超過 14 天沒出現', 'Not seen for 14 days');
     return `<details class="project-member" data-tm-id="${esc(m.participantId)}" data-person-search="${esc([m.name, role, m.shortCode].join(' ').toLowerCase())}">
-      <summary>${avatar(m, project === 'cross' ? null : project)} <b><span data-nt>${nameCodeHtml(m, dups)}</span><small>${esc([ai ? 'AI' : pageText('人', 'Human'), role, m.shortCode].filter(Boolean).join(' · '))}</small></b>
+      <summary>${avatar(m, project === 'cross' ? null : project)} <b><span class="tm-name" title="${esc(m.name)}" data-nt>${nameCodeHtml(m, dups)}</span><small>${esc([ai ? 'AI' : pageText('人', 'Human'), role, m.shortCode].filter(Boolean).join(' · '))}</small></b>
       <span class="project-chip rank-${inactive ? 'idle' : rank}">${inactive ? reason : !ai && rank === 4 ? pageText('在線', 'Online') : teamLabels()[rank]}</span>
       <span>${inactive ? '' : esc((m.status?.cardId ? m.status.cardId + ' ' : '') + (m.status?.title || (ai ? pageText('沒有在做的卡', 'No active card') : '—')))}</span>
       <small>${m.isOnline && !ai ? pageText('在線', 'Online') : agoText(m.lastSeenAt)}</small><span class="member-more">${pageText('詳情', 'Details')} ▾</span><span class="member-less">${pageText('收起', 'Close')} ▴</span></summary>
@@ -9075,13 +9088,13 @@
     let computers = data.launchers;
     const tools = maToolsOn().filter(([v]) => ['claude','codex','antigravity'].includes(v));
     dialog.innerHTML = `<form><div class="ma-launch-body"><h2>在電腦上跑 · ${esc(ai.name)}</h2>
-      <label>哪台電腦<select name="device">${computers.map(c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(platformName(c.platform))} · ${c.online ? '在線' : '離線'}</option>`).join('')}<option value="">＋ 新電腦…</option></select><small data-offline hidden>那台電腦沒開，或啟動器沒在跑。打開電腦後，在任一已登記資料夾執行 npx aigile-cli 就會連回來。</small></label>
-      <label data-existing>哪個資料夾<select name="folder"></select><small data-folder-path></small><small data-folder-warning hidden></small></label>
+      <label>哪台電腦<select data-ui-sel name="device">${computers.map(c => `<option value="${esc(c.id)}">${esc(c.name)} · ${esc(platformName(c.platform))} · ${c.online ? '在線' : '離線'}</option>`).join('')}<option value="">＋ 新電腦…</option></select><small data-offline hidden>那台電腦沒開，或啟動器沒在跑。打開電腦後，在任一已登記資料夾執行 npx aigile-cli 就會連回來。</small></label>
+      <label data-existing>哪個資料夾<select data-ui-sel name="folder"></select><small data-folder-path></small><small data-folder-warning hidden></small></label>
       <div data-pair><p>在這隻 AI 的工作資料夾開啟終端機，執行這一行。</p><div class="ma-launch-line"><code></code><button class="btn small" type="button" data-copy>複製</button></div>
         <label for="ma-pair-code">輸入終端機的 8 碼確認碼</label>
         <div class="ma-launch-line"><input id="ma-pair-code" name="pairCode" maxlength="8" autocomplete="off"><button class="btn" type="button" data-preview>確認是你的電腦</button></div>
         <p data-code-error aria-live="polite"></p><section data-detail hidden></section></div>
-      <label>用什麼工具<select name="tool"><option value="">請選擇工具</option>${tools.map(([key,label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('')}</select></label>
+      <label>用什麼工具<select data-ui-sel name="tool"><option value="">請選擇工具</option>${tools.map(([key,label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('')}</select></label>
       <p role="alert"></p></div><footer><small data-token-note>在新資料夾設定會發新 Token，用舊 Token 的連線會停止。</small><div><button class="btn" type="button" data-cancel>取消</button><button class="btn primary" type="submit" disabled>啟動</button></div></footer></form>`;
     document.body.append(dialog);
     const form = dialog.querySelector('form'), { device, folder, tool, pairCode } = form.elements;
@@ -9107,6 +9120,8 @@
         return opt;
       }));
       if (c && binding?.launcherId === c.id && c.folders.includes(binding.folder)) folder.value = binding.folder;
+      syncUiSelect(folder);
+      syncUiSelect(device);
       showFolder();
       submit.textContent = c ? '啟動' : '同意並啟動';
       submit.disabled = c ? !c.online || !folder.value : !previewCode;
@@ -9169,6 +9184,7 @@
         update();
         folder.prepend(new Option('請重新選擇資料夾',''));
         folder.value = '';
+        syncUiSelect(folder);
         showFolder();
         folder.setAttribute('aria-invalid','true');
         warning.textContent = '這個資料夾的登記改過了（路徑不同），請重新選一次。';
@@ -9237,7 +9253,7 @@
         ${ask ? '<p class="ma-tool-ask" role="status">第一次複製前先選工具：你的 AI 用哪一個？</p>' : ''}
         <div class="ma-f"><b>工具</b><span class="ma-tool" role="group" aria-label="這隻 AI 用的工具">${maToolsOn().map(([v, l]) => `<button type="button" data-act="tool" data-tool="${v}" data-id="${id}" aria-pressed="${tool === v}">${l}</button>`).join('')}</span></div>
         <p class="ma-hint">${maToolsOff.has('other') ? '選了會記住，下次不用再選。' : '選了會記住，下次不用再選。opencode 等其他工具選「其他」；Codex 版會多幾行「怎麼開網路」。'}</p>
-        ${maAutoWake(tool) ? `<label class="ma-f"><b>對話接續</b><select data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
+        ${maAutoWake(tool) ? `<label class="ma-f"><b>對話接續</b><select data-ui-sel data-ma-convo="${id}">${CONVO_OPTS.map(([v]) => `<option value="${v}"${o.convo === v ? ' selected' : ''}>${esc(convoLabel(v))}</option>`).join('')}</select></label>
         <p class="ma-hint">${esc(CONVO_HINT[o.convo || ''])}</p>
         <label class="ma-f"><b>自動待命</b><span class="check small"><input type="checkbox" data-ma-auto="${id}"${o.auto ? ' checked' : ''}> 簽到後自己啟動 watcher＋等待腳本</span></label>` : ''}
         <div class="ma-f"><b>複製</b><span class="ma-btns"><button class="btn primary" type="button" data-act="short" data-id="${id}">複製接入文字</button>${maHasLine(tool) ? `<button class="btn" type="button" data-act="start" data-id="${id}">複製一行啟動</button>` : ''}<button class="btn" type="button" data-act="copy" data-id="${id}">複製完整版</button></span></div>
@@ -10027,7 +10043,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const pjs = (skv.data?.projects || []).filter(p => p.canUpload);
     let files = null, target = pj || pjs[0]?.id || '', busy = false;
     const pick = skTargetPicker(() => target);
-    const body = openModal('上傳技能', `<label class="field sk-up-step">1. 上傳到<select id="sk-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    const body = openModal('上傳技能', `<label class="field sk-up-step">1. 上傳到<select data-ui-sel id="sk-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
       <div class="sk-up-sec"><b class="sk-up-step">2. 檔案</b><div id="sk-up-file"></div><p class="field-hint">資料夾或 zip，最上層要有 SKILL.md；1 MB 內、只收文字檔。<br>技能包（Claude Code 外掛）：最上層要有 .claude-plugin/plugin.json；文字 5 MB、800 個檔內，圖片等非文字檔會略過。會寫使用者層級設定（~/.claude 等）的技能可以留在包裡，但 AI 不要執行。</p></div>
       <div class="sk-up-sec"><b class="sk-up-step">3. 發給誰</b><div class="sk-to" id="sk-to">${pick.html()}</div></div>`,
       { size: 'sk-up', sub: '上架後，選到的 AI 會收到。', foot: '<p class="error" id="sk-err" role="alert"></p><div class="sk-up-bar"><span class="sk-up-note" id="sk-up-note"></span><button type="button" class="btn" data-skcancel>取消</button><button type="button" class="btn primary" data-sksend disabled>上架</button></div>' });
@@ -10114,7 +10130,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (!pjs.length) return toast('只有專案的 leader 或管理員能套用範本');
     let target = pjs.some(p => p.id === pj) ? pj : pjs[0].id, busy = false, cur = null, seq = 0;
     let pick = skTargetPicker(() => target);
-    const body = openModal('套用範本', `<label class="field sk-up-step">1. 套用到<select id="sk-ap-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    const body = openModal('套用範本', `<label class="field sk-up-step">1. 套用到<select data-ui-sel id="sk-ap-pj">${pjs.map(x => `<option value="${esc(x.id)}"${x.id === target ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
       <div class="sk-up-sec"><b class="sk-up-step">2. 內容（SKILL.md）</b><div id="sk-ap-cur"></div>
         <textarea id="sk-ap-text" class="sk-ap-text" rows="14" spellcheck="false" aria-label="SKILL.md 內容">${esc(tpl.text)}</textarea>
         <p class="field-hint">可以先改內容再上架。最上面幾行請保留，平台靠它知道這個技能來自哪個範本，有新版時才提醒得到你。</p></div>
@@ -10175,8 +10191,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const st = { target: pjs.some(p => p.id === pj) ? pj : pjs[0].id, q: '', cat: '', all: !!opt.all, unused: false, sel: '', peek: new Set() };
     const pjOpts = () => pjs.map(x => `<option value="${esc(x.id)}"${x.id === st.target ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
     const top = many
-      ? `<div class="sk-new-top"><label class="sk-new-pj"><span>加到：</span><select id="sk-new-pj" aria-label="加到哪個專案">${pjOpts()}</select></label><input type="search" id="sk-new-q" class="sk-new-q" placeholder="🔍 找範本：名稱或說明…" aria-label="找範本"></div>`
-      : `<label class="field sk-up-step">1. 加到哪個專案<select id="sk-new-pj">${pjOpts()}</select></label>`;
+      ? `<div class="sk-new-top"><label class="sk-new-pj"><span>加到：</span><select data-ui-sel id="sk-new-pj" aria-label="加到哪個專案">${pjOpts()}</select></label><input type="search" id="sk-new-q" class="sk-new-q" placeholder="🔍 找範本：名稱或說明…" aria-label="找範本"></div>`
+      : `<label class="field sk-up-step">1. 加到哪個專案<select data-ui-sel id="sk-new-pj">${pjOpts()}</select></label>`;
     const body = openModal('新增技能', `${top}<div id="sk-new-list"></div>
       <div class="sk-new-or" role="separator"><span>或</span></div>
       <div class="sk-new-up"><span class="sk-new-ic" aria-hidden="true">📄</span><span class="sk-new-tx"><b>上傳自己的 SKILL.md</b><span class="muted small">可以附腳本；含腳本的要核准</span></span><button type="button" class="btn small" data-sknew-up>選檔案</button></div>`,
@@ -10458,7 +10474,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <fieldset class="gr-items"><legend class="field-label">可以長期授權的事</legend>
           ${g.choices.map(c => `<label class="gr-ck"><input type="checkbox" name="items" value="${esc(c.key)}" ${cur.includes(c.key) ? 'checked' : ''}><span>${esc(c.label)}${c.note ? `<small>${esc(c.note)}</small>` : ''}</span></label>`).join('')}
         </fieldset>
-        <label class="field">有效到<select name="until">
+        <label class="field">有效到<select data-ui-sel name="until">
             <option value="quarter" ${sel === 'quarter' ? 'selected' : ''}>本季底（${twYmd(q)}）</option>
             <option value="30d">30 天（到 ${twYmd(d30)}）</option>
             <option value="none" ${sel === 'none' ? 'selected' : ''}>不限</option></select>
@@ -10513,6 +10529,11 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <p class="error" id="repo-err" role="alert"></p>
       </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="repo-form">儲存</button>' });
     const form = body.querySelector('#repo-form');
+    const keyStateHtml = item => (item.readKey
+      ? '<span class="repo-keyclear small muted">儲存後生效</span>'
+      : item.hasReadKey
+        ? `<span class="repo-keyclear small"><span class="muted">已設定</span><label class="repo-keyclear-chk"><input type="checkbox" data-clear-key ${item.clearReadKey ? 'checked' : ''}><span>清除金鑰</span></label></span>`
+        : '<span class="repo-keyclear small muted"></span>');
     function drawRows() {
       form.querySelector('.repo-list').innerHTML = items.map((item, i) => `<div data-row="${i}" class="repo-row">
         <button type="button" class="repo-grip" aria-label="拖曳或用上下鍵排序" ${items.length < 2 ? 'disabled' : ''}>⋮⋮</button>
@@ -10522,8 +10543,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <label class="repo-primary"><input type="radio" name="primary" data-primary ${item.primary ? 'checked' : ''}><span>主要</span></label>
         <button type="button" class="link small" data-repo-test>測試連線</button>
         <button type="button" class="repo-remove" data-remove aria-label="移除">✕</button>
-        <label class="field repo-key"><span>讀取金鑰</span><input name="readKey" type="password" autocomplete="new-password" spellcheck="false" maxlength="255" value="${esc(item.readKey || '')}" placeholder="${item.hasReadKey && !item.clearReadKey ? '已設定讀取金鑰（留空＝不變）' : '讀取金鑰（私有庫才需要，選填）'}"></label>
-        ${item.hasReadKey ? `<label class="repo-keyclear small"><input type="checkbox" data-clear-key ${item.clearReadKey ? 'checked' : ''}><span>清除金鑰</span></label>` : '<span class="repo-keyclear small muted">未設定</span>'}
+        <label class="repo-key"><span class="repo-key-label">讀取金鑰</span><input name="readKey" type="password" autocomplete="new-password" spellcheck="false" maxlength="255" value="${esc(item.readKey || '')}" placeholder="${item.hasReadKey && !item.clearReadKey ? '已設定讀取金鑰（留空＝不變）' : '讀取金鑰（私有庫才需要，選填）'}"></label>
+        ${keyStateHtml(item)}
       </div>`).join('') || '<span class="muted">尚無程式庫</span>';
       const add = form.querySelector('.repo-add');
       add.disabled = items.length >= 5;
@@ -10557,10 +10578,17 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     form.addEventListener('input', e => {
       const row = e.target.closest('[data-row]');
       if (!row) return;
+      const item = items[Number(row.dataset.row)];
       if (e.target.matches('[data-primary]')) {
-        items.forEach((item, i) => { item.primary = i === Number(row.dataset.row); });
-      } else if (e.target.matches('[data-clear-key]')) items[Number(row.dataset.row)].clearReadKey = e.target.checked; // 清除讀取金鑰
-      else items[Number(row.dataset.row)][e.target.name] = e.target.value;
+        items.forEach((it, i) => { it.primary = i === Number(row.dataset.row); });
+      } else if (e.target.matches('[data-clear-key]')) item.clearReadKey = e.target.checked; // 清除讀取金鑰
+      else {
+        item[e.target.name] = e.target.value;
+        if (e.target.name === 'readKey') {
+          const status = row.querySelector('.repo-keyclear');
+          if (status) status.outerHTML = keyStateHtml(item);
+        }
+      }
     });
     form.addEventListener('click', e => {
       const btn = e.target.closest('button');
@@ -10654,7 +10682,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <input type="hidden" name="runtime" value="local">
       <div class="cloud-fields" hidden>
         <div class="field"><span class="field-label" id="cpj-label">專案</span><div class="proj-row cloud-proj" role="radiogroup" aria-labelledby="cpj-label"></div><span class="field-hint">雲端 AI 只屬於一個專案，用那個專案的金鑰。</span></div>
-        <label class="cloud-model">模型<select name="cloudChoice"></select><span class="field-hint cloud-model-hint"></span></label>
+        <label class="cloud-model">模型<select data-ui-sel name="cloudChoice"></select><span class="field-hint cloud-model-hint"></span></label>
         <p class="mc-empty cloud-empty" hidden></p>
         <div class="field"><span class="field-label">每輪上限</span>
           <div class="limit-row">最多 <input name="maxTools" type="number" min="1" max="100" value="20" aria-label="每輪工具次數"> 次工具、<input name="maxTokens" type="number" min="1000" max="1000000" step="1000" value="50000" aria-label="每輪 token"> ${tokUnit()}</div>
@@ -10681,6 +10709,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       const p = curPj();
       if (!p) return;
       form.cloudChoice.innerHTML = p.choices.map((c, i) => `<option value="${i}">${esc(c.connectionName)} · ${esc(c.model)} · ${c.private ? '🏠 私人模型' : '官方'}</option>`).join('');
+      syncUiSelect(form.cloudChoice);
       box.querySelector('.cloud-model').hidden = !p.choices.length;
       box.querySelector('.cloud-model-hint').textContent = `${pjLabel(p.project)}的模型設定。費用算在這個專案的金鑰上。`;
       const empty = box.querySelector('.cloud-empty');
@@ -10717,7 +10746,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <form id="ai-form" class="stack"${editing ? '' : ' data-new="1"'}>
         ${editing ? '' : aiWhereHtml()}
         <label>角色範本
-          <select name="roleKey">${roleOptionsHtml(roles)}</select>
+          <select data-ui-sel name="roleKey">${roleOptionsHtml(roles)}</select>
           <span class="field-hint" id="role-hint">選取後自動預填下方六題，可再修改。</span>
         </label>
         ${aiProjField(ai)}
@@ -10796,6 +10825,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     };
     if (editing) {
       form.roleKey.value = ai.roleKey || 'custom';
+      syncUiSelect(form.roleKey);
       fill(ai, true);
       roleHint(form.roleKey.value);
     } else {
@@ -10807,7 +10837,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     let lastAutoName = form.name.value;
     let prevKey = form.roleKey.value;
     form.roleKey.addEventListener('change', async e => {
-      if (form.roleKey.value === '__ai') { form.roleKey.value = prevKey; e.stopImmediatePropagation(); const checked = [...form.querySelectorAll('input[name="proj"]:checked')].map(c => c.value); const pj = roleAiPj(checked) || await pickRoleAiPj(roleAiPjs(checked)); if (pj) askRoleAi(pj); return; }
+      if (form.roleKey.value === '__ai') { form.roleKey.value = prevKey; syncUiSelect(form.roleKey); e.stopImmediatePropagation(); const checked = [...form.querySelectorAll('input[name="proj"]:checked')].map(c => c.value); const pj = roleAiPj(checked) || await pickRoleAiPj(roleAiPjs(checked)); if (pj) askRoleAi(pj); return; }
       prevKey = form.roleKey.value;
       const r = roleHint(form.roleKey.value);
       const autoName = autoAiName(r);
@@ -12044,7 +12074,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
   const rvShort = v => (/^[0-9a-f]{40}$/.test(v || '') ? v.slice(0, 7) : v || '');
   const rvVer = v => `<code class="rv-ver">${esc(rvShort(v))}</code>`;
   const rvTime = t => esc(shortTime(t));
-  const rvLinks = (r, pj) => [r.diffDocId ? `<a class="link small" href="/api/projects/${encodeURIComponent(pj)}/docs/${encodeURIComponent(r.diffDocId)}" target="_blank" rel="noopener">📎 看 diff</a>` : '',
+  const rvLinks = (r, pj) => [r.diffDocId ? `<button type="button" class="link small" data-rv-diff="${esc(r.diffDocId)}" data-rv-pj="${esc(pj)}">📎 看 diff</button>` : '',
     r.comparisons?.length > 1 && r.comparisons.some(item => item.url) ? `<details class="repo-compare"><summary>比較 ▾</summary>${r.comparisons.map(item => {
       const label = `<span data-nt>${esc(item.name)}</span>${item.primary ? ' · <span>主要</span>' : ''}${item.branch ? ' · <span data-nt>' + esc(item.branch) + '</span>' : ''}`;
       return item.url ? `<a class="link" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : `<span class="muted">${label}</span>`;
@@ -12193,10 +12223,12 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     body.modal.querySelector('.modal-titles').prepend(kicker);
     const foot = body.modal.querySelector('.modal-foot');
     const select = document.createElement('select');
-    select.setAttribute('aria-label', '送審輪次');
+    select.dataset.uiSel = '';
+    select.setAttribute('aria-label', cw('送審輪次','Review round'));
     rounds.forEach((r, i) => select.add(new Option(roundName(i+1) + ' · ' + r.version.slice(0,7), r.roundId)));
     select.value = requests.has(initialRound) ? initialRound : rounds.at(-1).roundId;
     body.modal.querySelector('.modal-head').insertBefore(select, body.modal.querySelector('.modal-x'));
+    enhanceUiSelects(select);
     const origin = location.hash.startsWith('#diff/') ? '' : location.hash;
     body.modal.dataset.changeOrigin = origin;
     let generation = 0;
@@ -12222,7 +12254,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         if (!verified && previous) {
           const back = document.createElement('button');
           back.textContent = cw('查看','View')+' '+roundName(rounds.indexOf(previous)+1)+' '+cw('（審查通過的）','(reviewed)');
-          back.onclick = () => { select.value = previous.roundId; showRound(); };
+          back.onclick = () => { select.value = previous.roundId; syncUiSelect(select); showRound(); };
           banner.append(' ',back);
         }
         const review = document.createElement('section');
@@ -12316,7 +12348,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       <label>改了什麼、怎麼驗證<textarea name="note" rows="3" required maxlength="500"></textarea></label>
       <fieldset class="rv-code"><legend>程式卡</legend><label class="rv-check"><input type="checkbox" name="isCode" checked> 這是程式卡 <span class="muted small" data-rv-auto></span></label>
         <p class="muted small">平台看到 commit、分支、diff，或有人對這張卡請同意 commit，就當程式卡；判斷錯了作者可以改。</p></fieldset>
-      <label>審查者（選填）<select name="reviewerId">
+      <label>審查者（選填）<select data-ui-sel name="reviewerId">
         <option value="">${auto ? `平台自動挑：${esc(auto.name)}（${esc(rvTagText(auto))}，手上 ${auto.load} 件）` : '平台自動挑'}</option>
         ${pool.map(p => `<option value="${esc(p.participantId)}"${prev && prev.participantId === p.participantId && r.state === 'changes' ? ' selected' : ''}>${esc(p.name)}（${esc(rvTagText(p))}，手上 ${p.load} 件）</option>`).join('')}</select></label>
       <p class="muted small">只能選符合專案規則的；不能選作者。</p>
@@ -12395,7 +12427,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       }).join('');
       return {
         summary: `${ok} 位可以審 · ${no} 位不行`,
-        html: `<label class="rv-author">作者<select data-rv-author>${set.ais.map(a => `<option value="${esc(a.participantId)}"${a.participantId === authorId ? ' selected' : ''}>${esc(a.name)} · ${esc(rvTagText(a))}</option>`).join('')}</select></label><ul class="rv-cands">${list || '<li class="muted small">沒有符合的人或 AI</li>'}</ul>`,
+        html: `<label class="rv-author">作者<select data-ui-sel data-rv-author>${set.ais.map(a => `<option value="${esc(a.participantId)}"${a.participantId === authorId ? ' selected' : ''}>${esc(a.name)} · ${esc(rvTagText(a))}</option>`).join('')}</select></label><ul class="rv-cands">${list || '<li class="muted small">沒有符合的人或 AI</li>'}</ul>`,
       };
     };
     const nowSummary = () => {
@@ -12448,7 +12480,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     draw();
     body.modal.addEventListener('change', e => {
       const s = e.target.closest('[data-rv-author]');
-      if (s) { authorId = s.value; draw(); body.querySelector('[data-rv-author]')?.focus(); return; }
+      if (s) { authorId = s.value; draw(); enhanceUiSelects(body); body.querySelector('[data-rv-author]')?.parentElement.querySelector('.ui-sel-btn')?.focus(); return; }
       const m = e.target.closest('[data-rv-member]');
       if (m) {
         const id = m.dataset.rvMember;
@@ -12535,14 +12567,39 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       x.approved = true; toast('已同意 commit'); renderWork();
     } catch (err) { toast(err.message); }
   }
+  async function openReviewDiff(pj, docId) {
+    const path = `/api/projects/${encodeURIComponent(pj)}/docs/${encodeURIComponent(docId)}`;
+    const body = openModal('diff 內容', '<p class="muted small">載入中…</p>', {
+      size: 'wide',
+      foot: '<button class="btn" type="button" data-close>關閉</button><button class="btn" type="button" data-rv-diff-dl>下載</button>',
+    });
+    body.modal.querySelector('[data-rv-diff-dl]').onclick = () => downloadFrom(path, `${docId}.diff`);
+    try {
+      const r = await fetch(path, { headers: { Authorization: `Bearer ${state.token}` } });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e?.error?.message || `HTTP ${r.status}`);
+      }
+      const text = await r.text();
+      if (!body.isConnected) return;
+      const pre = document.createElement('pre');
+      pre.className = 'sk-pre rv-diff-pre';
+      pre.dataset.nt = '';
+      pre.textContent = text;
+      body.replaceChildren(pre);
+    } catch (err) {
+      if (body.isConnected) body.innerHTML = `<p class="error" role="alert">無法開啟 diff：${esc(err.message)}</p>`;
+    }
+  }
   document.addEventListener('click', e => {
-    const t = e.target.closest?.('[data-rv-pass], [data-rv-changes], [data-rv-commit], [data-rv-open], [data-rv-back]');
+    const t = e.target.closest?.('[data-rv-pass], [data-rv-changes], [data-rv-commit], [data-rv-open], [data-rv-back], [data-rv-diff]');
     if (!t) return;
     if (t.dataset.rvPass) return rvAnswer(t.dataset.rvPass, 'pass');
     if (t.dataset.rvChanges) return rvAnswer(t.dataset.rvChanges, 'changes');
     if (t.dataset.rvCommit) return rvApproveCommit(t.dataset.rvCommit);
     if (t.dataset.rvOpen) return openCard(t.dataset.rvOpen, t);
     if (t.dataset.rvBack) return rvSendBack(t.dataset.rvBack);
+    if (t.dataset.rvDiff) return openReviewDiff(t.dataset.rvPj, t.dataset.rvDiff);
   });
   // 同意 commit 旁的審查欄：讀那張卡的審查（快取 1 分鐘）；伺服器判定這則請示寫的版本跟審過的對不上就標紅
   work.rvCache = new Map();
@@ -13265,7 +13322,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       : t.envHours ? L(`目前用主機 ${env} 的值（${ttlZh(t.envHours)}）。在這裡改過之後就以這裡為準，${env} 不再影響。`, `Currently using the server's ${env} value (${ttlEn(t.envHours)}). Once you change it here, this setting wins and ${env} no longer applies.`)
         : L(`目前是預設的 24 小時（主機沒設 ${env}）。主機設了 ${env} 會改用它當初始值；在這裡改過之後就以這裡為準。`, `Currently the default of 24 hours (the server has no ${env}). If the server sets ${env}, that becomes the starting value; once you change it here, this setting wins.`);
     const logs = (t.log || []).map(e => `<li><span class="muted small">${esc(fmtTime(e.at))}</span> ${esc(L(`${e.byName || ''} 把保存時間從 ${ttlZh(e.from)} 改成 ${ttlZh(e.to)}`, `${e.byName || ''} changed retention from ${ttlEn(e.from)} to ${ttlEn(e.to)}`))}</li>`).join('');
-    return `<div class="pm-card adm-ttl"><div class="pm-setrow"><label for="adm-ttl">訊息附件保存時間</label><select id="adm-ttl" aria-describedby="adm-ttl-hint">${hs.map(h => `<option value="${h}"${h === t.hours ? ' selected' : ''}>${esc(ttlLabel(h))}${h === t.defaultHours ? L('（預設）', ' (default)') : ''}</option>`).join('')}</select><button type="button" class="btn small primary" data-pp="filettl">儲存</button>
+    return `<div class="pm-card adm-ttl"><div class="pm-setrow"><label for="adm-ttl">訊息附件保存時間</label><select data-ui-sel id="adm-ttl" aria-describedby="adm-ttl-hint">${hs.map(h => `<option value="${h}"${h === t.hours ? ' selected' : ''}>${esc(ttlLabel(h))}${h === t.defaultHours ? L('（預設）', ' (default)') : ''}</option>`).join('')}</select><button type="button" class="btn small primary" data-pp="filettl">儲存</button>
       <span class="muted small" id="adm-ttl-hint">只有訊息附件（在訊息裡上傳的文件、截圖）會在這段時間後自動刪除。專案文件和知識庫都不會自動刪除；知識庫裡的文件就是專案文件，只存一份。改了只影響之後上傳的檔；已經上傳的照上傳當時的設定到期，不會提早或延後刪除。存好立即生效，不用重新啟動或部署。</span>
       <span class="muted small adm-ttl-src">${src}</span></div>
       <details class="ui-fold pm-gs-log adm-ttl-log"${perm.ttlLogOpen ? ' open' : ''}><summary>異動紀錄</summary><ul class="pa-log">${logs || '<li class="muted small">還沒有紀錄</li>'}</ul></details></div>`;
@@ -13689,7 +13746,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const d = perm.aiTools;
     if (!d?.tools?.length) return '';
     const nOn = d.tools.filter(t => t.on).length;
-    return `<div class="pm-card pm-setrow"><label for="pm-launch-transport">AI 接入模式</label><select id="pm-launch-transport"><option value="mcp">MCP</option><option value="rest"${d.transport === 'rest' ? ' selected' : ''}>REST</option></select><button type="button" class="btn small primary" data-pp="transport">儲存</button><span class="muted small">套用到全站之後複製的一行啟動指令。</span></div>
+    return `<div class="pm-card pm-setrow"><label for="pm-launch-transport">AI 接入模式</label><select data-ui-sel id="pm-launch-transport"><option value="mcp">MCP</option><option value="rest"${d.transport === 'rest' ? ' selected' : ''}>REST</option></select><button type="button" class="btn small primary" data-pp="transport">儲存</button><span class="muted small">套用到全站之後複製的一行啟動指令。</span></div>
       <div class="pm-card pm-tools"><div class="pm-card-head"><strong>可以用的 AI 工具</strong><span class="grow"></span><button type="button" class="btn small primary" data-pp="aitools">儲存</button></div>
       <p class="muted small pm-tools-hint">取消勾選的工具不會出現在「我的 AI › 接入」，也拿不到接入文字與一行啟動。已經用它接好的 AI 照常運作。全站一份，不分專案；至少要留一個開著。改的紀錄在下面的「群組異動紀錄」。</p>
       <div class="pm-tools-list" role="group" aria-label="可以用的 AI 工具">${d.tools.map(t => `<label class="chk"><input type="checkbox" data-pm-tool="${esc(t.key)}"${t.on ? ' checked' : ''}> ${esc(toolName(t.key) || t.name)}${t.key === 'other' ? '<span class="muted small">opencode、Gemini CLI、Cursor 等</span>' : ''}</label>`).join('')}</div>
@@ -13987,8 +14044,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
           <div><b>${esc(x.name)}</b> <span class="muted small">${pj ? '' : esc(x.projectName) + ' · '}${esc(fmtTime(x.createdAt))}</span></div>
           <div class="jr-note">${x.note ? `「${esc(x.note)}」` : '<span class="muted small">沒寫原因</span>'}</div>
           ${x.lastRejected ? `<div class="muted small">上次被拒：${esc(x.lastRejected.reason)}</div>` : ''}
-          <div class="jr-acts"><label class="jr-lab"><span>角色</span><select data-jr-role="${esc(x.id)}">${roleOpts(x.project, x.role || '')}</select></label>
-            <label class="jr-lab"><span>權限</span><select data-jr-ro="${esc(x.id)}"><option value="">一般（可以發文、改卡片）</option><option value="1">👁 唯讀（只能看）</option></select></label>
+          <div class="jr-acts"><label class="jr-lab"><span>角色</span><select data-ui-sel data-jr-role="${esc(x.id)}">${roleOpts(x.project, x.role || '')}</select></label>
+            <label class="jr-lab"><span>權限</span><select data-ui-sel data-jr-ro="${esc(x.id)}"><option value="">一般（可以發文、改卡片）</option><option value="1">👁 唯讀（只能看）</option></select></label>
             <span class="grow"></span><button type="button" class="btn small danger-outline" data-jr-no="${esc(x.id)}">拒絕</button><button type="button" class="btn small primary" data-jr-ok="${esc(x.id)}">核准加入</button></div></div></div>`).join('')
         : '<p class="muted">沒有待審的申請。</p>';
     };

@@ -58,6 +58,13 @@ try {
   await capture('03-inbox');
   await call(apiCard+'/review',{version,roundId:round,result:'pass',comment:'日期邊界與檔名都有涵蓋，月底及空資料的測試通過。'});
   await dialog('.change-patch');await capture('01-zh-unified');
+  const roundButton = '.change-modal .modal-head .ui-sel-btn';
+  await ready(roundButton);
+  assert.equal(await js("document.querySelector('.change-modal .modal-head select').classList.contains('ui-sel-native')"), true);
+  await click(roundButton);
+  await ready('#ui-sel-menu [role=option]');
+  assert.equal(await js("document.querySelector('#ui-sel-menu [role=option][aria-selected=true]') !== null"), true);
+  await key('Escape');
   await click('.cc-modes [data-split=true]');assert.equal(await js("document.querySelector('.change-patch tr:last-child').children.length"),4);
   await capture('02-zh-split');
   await click('.cc-tabs button:nth-child(2)');assert.ok(await js("document.querySelector('.cc-tabs button:nth-child(2)').getAttribute('aria-pressed')==='true'"));

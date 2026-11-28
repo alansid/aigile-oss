@@ -82,7 +82,8 @@ try {
   await role('UX'); assert.equal(await txt('#sk-to .sk-to-n'), '會裝到 2 隻 AI。');
   await js("document.querySelector('[data-sk-more]').click(); true"); // 其他角色收在「更多角色」
   assert.equal(await js("document.querySelectorAll('.sk-up-role').length > 4 && new Set([...document.querySelectorAll('.sk-up-role')].map(b => Math.round(b.getBoundingClientRect().top))).size > 1"), true, '膠囊會換行');
-  await js("{ const s = document.querySelector('#sk-pj'); s.value = '第二專案'; s.dispatchEvent(new Event('change', { bubbles: true })); } true");
+  await js("document.querySelector('#sk-pj + .ui-sel-btn').click(); true");
+  await js(`(() => { const index = [...document.querySelector('#sk-pj').options].findIndex(o => o.value === '第二專案'); document.querySelector('#ui-sel-menu [data-ui-idx="' + index + '"]').click(); return true; })()`);
   assert.equal(await txt('#sk-to .sk-to-n'), '會裝到 1 隻 AI。', '換專案即時更新');
   await js("{ const s = document.querySelector('#sk-pj'); s.value = '預設專案'; s.dispatchEvent(new Event('change', { bubbles: true })); } true");
 

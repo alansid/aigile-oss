@@ -86,6 +86,20 @@ try {
 
   // 375：不橫向捲動、按鈕與句子在畫面內
   await size(375, 800);
+  assert.equal(await js("[...document.querySelectorAll('#f-member + .ui-sel-btn, #f-tag + .ui-sel-btn')].every(b => !b.getClientRects().length)"), true, '375px 維持手機的篩選抽屜入口');
+  const wrapsOnMobile = await js(`(() => {
+    const latest = document.querySelector('#latest-btn');
+    const wasHidden = latest.hidden;
+    latest.hidden = false;
+    const code = document.querySelector('.grant-line code');
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const lines = [...range.getClientRects()];
+    const clear = lines.every(line => line.right <= latest.getBoundingClientRect().left);
+    latest.hidden = wasHidden;
+    return lines.length > 1 && clear;
+  })()`);
+  assert.equal(wrapsOnMobile, true, '375px SHA 換行且避開回到最新按鈕');
   await sleep(300);
   await js(`document.getElementById('msg-${mB.messageId}').scrollIntoView({ block: 'center' }); true`);
   const geo = JSON.parse(await js(`(() => { const el = document.getElementById('msg-${mB.messageId}'), vw = document.documentElement.clientWidth;

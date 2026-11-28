@@ -295,7 +295,41 @@ try {
   await sleep(400); // 查完就該重畫；不靠之後別的重畫
   assert.ok(await js(`!!${confRow} && !${confRow}.querySelector('.rv-box')`), 'I 新查到的不用畫框：舊框一查完就消失');
 
-  console.log('review-ui-test：全部通過（專案 ⚙ › 審查、卡片審查欄與送審視窗、要改／已審查／作廢、要你處理請你審查與同意 commit、同意 commit 旁的審查欄綠框／紅框、英文、1280／375 不橫向捲動）');
+  // ---------- J 📎 看 diff：不放裸 API 網址、點開帶 Authorization 顯示 diff 內容（含英文） ----------
+  const K3 = await mkCard('匯出報表補 diff 檢視');
+  assert.equal((await call(liu.token, SET, 'PUT', { cards: 'code', diffUpload: true })).status, 200, 'J 打開上傳 diff');
+  const diffText = 'diff --git a/src/export.js b/src/export.js\n+export const ok = true;\n';
+  const upDiff = await fetch(`${kit.BASE}/api/cards/${encodeURIComponent(K3)}/review-diff?declared=review-diff&version=${SHA1}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${pg.token}`, 'Content-Type': 'text/plain' }, body: diffText,
+  });
+  assert.equal(upDiff.status, 201, 'J 上傳 diff');
+  const { docId: diffId } = await upDiff.json();
+  assert.equal((await request(pg.token, K3, { version: SHA1, diffDocId: diffId, reviewerId: liu.participant.participantId, note: '附 diff 檢視' })).status, 200, 'J 帶 diffDocId 送審');
+  await size(1280, 900);
+  await login(liu.token, '/');
+  await js("localStorage.setItem('aigile-lang', 'zh'); true");
+  await login(liu.token, '/p/main/inbox');
+  await until(() => js(`!!document.querySelector('[data-rv-row="${K3}"] [data-rv-diff="${diffId}"]')`), 15000, 'J 請你審查有 看 diff 按鈕');
+  assert.equal(await js(`!!document.querySelector('[data-rv-row="${K3}"] a[href*="/docs/"]')`), false, 'J 不再用裸 API <a href>');
+  await js(`document.querySelector('[data-rv-row="${K3}"] [data-rv-diff="${diffId}"]').click(); true`);
+  await until(() => js("document.querySelector('#modal-root .rv-diff-pre')?.textContent.includes('+export const ok = true;')"), 8000, 'J 檢視窗帶 Authorization 載入 diff 內容');
+  assert.equal(await js(`location.href.includes(${JSON.stringify(liu.token)})`), false, 'J Token 不進網址');
+  await click('#modal-root [data-close]');
+  await openDrawer(K3);
+  assert.equal(await js(`!!document.querySelector('#card-drawer .rv-box a[href*="/docs/"]')`), false, 'J 卡片審查欄也不是裸 API 連結');
+  await js(`document.querySelector('#card-drawer [data-rv-diff="${diffId}"]').click(); true`);
+  await until(() => js("document.querySelector('#modal-root .rv-diff-pre')?.textContent.includes('+export const ok = true;')"), 8000, 'J 卡片審查欄點開也看得到 diff');
+  await click('#modal-root [data-close]');
+  await login(liu.token, '/');
+  await js("localStorage.setItem('aigile-lang', 'en'); true");
+  await openDrawer(K3);
+  await enReady();
+  await until(() => js(`document.querySelector('#card-drawer [data-rv-diff="${diffId}"]')?.textContent.includes('View diff')`), 8000, 'J 英文 看 diff 按鈕');
+  await js(`document.querySelector('#card-drawer [data-rv-diff="${diffId}"]').click(); true`);
+  await until(() => js("document.querySelector('#modal-root .rv-diff-pre')?.textContent.includes('+export const ok = true;') && document.querySelector('#modal-root h2')?.textContent.trim() === 'Diff content'"), 8000, 'J 英文 diff 檢視窗');
+  await click('#modal-root [data-close]');
+
+  console.log('review-ui-test：全部通過（專案 ⚙ › 審查、卡片審查欄與送審視窗、要改／已審查／作廢、要你處理請你審查與同意 commit、同意 commit 旁的審查欄綠框／紅框、看 diff 檢視窗、英文、1280／375 不橫向捲動）');
 } finally {
   await kit.stop();
 }

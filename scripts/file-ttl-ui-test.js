@@ -50,7 +50,10 @@ try {
     await until(() => js("!!document.querySelector('#adm-ttl') && !!document.querySelector('.adm-store')"), 15000, '稽核與儲存的保存時間設定');
   };
   const save = async v => {
-    await js(`(() => { const s = document.querySelector('#adm-ttl'); s.value = '${v}'; s.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('[data-pp="filettl"]').click(); return true; })()`);
+    await until(() => js("!!document.querySelector('#adm-ttl + .ui-sel-btn')"), 5000, '保存時間使用新選單');
+    await js("document.querySelector('#adm-ttl + .ui-sel-btn').click(); true");
+    await js(`(() => { const index = [...document.querySelector('#adm-ttl').options].findIndex(o => o.value === '${v}'); document.querySelector('#ui-sel-menu [data-ui-idx="' + index + '"]').click(); return true; })()`);
+    await js("document.querySelector('[data-pp=\"filettl\"]').click(); true");
   };
   const helpers = `(() => { window.__pick = files => { const dt = new DataTransfer(); files.forEach(f => dt.items.add(f)); const i = document.querySelector('#file-input'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true })); return true; };
     window.__png = name => new Promise(res => { const c = document.createElement('canvas'); c.width = 480; c.height = 300; const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, 480, 300); g.fillStyle = '#1d4ed8'; g.fillRect(0, 0, 480, 44); g.fillStyle = '#fff'; g.font = 'bold 20px sans-serif'; g.fillText('示範系統（假資料）', 14, 29); c.toBlob(b => res(new File([b], name, { type: 'image/png' })), 'image/png'); });
@@ -99,7 +102,7 @@ try {
   // ---------- E 手機 375 ----------
   await size(375, 812);
   await admin();
-  await until(() => js("(() => { const r = document.querySelector('#adm-ttl').getBoundingClientRect(), b = document.querySelector('[data-pp=\"filettl\"]').getBoundingClientRect(); return innerWidth === 375 && r.right <= innerWidth && b.right <= innerWidth && r.width > 80; })()"), 5000, 'E 375 下拉與儲存鈕都在畫面內');
+  await until(() => js("(() => { const r = document.querySelector('#adm-ttl + .ui-sel-btn').getBoundingClientRect(), b = document.querySelector('[data-pp=\"filettl\"]').getBoundingClientRect(); return innerWidth === 375 && r.right <= innerWidth && b.right <= innerWidth && r.width > 80; })()"), 5000, 'E 375 下拉與儲存鈕都在畫面內');
   assert.ok(!(await hscroll()), 'E 375 沒有橫向捲動');
   assert.ok(await js("[...document.querySelectorAll('.adm-main .pm-card')].every(c => c.getBoundingClientRect().right <= innerWidth + 1)"), 'E 375 卡片都不超出畫面（稽核表格自己橫捲）');
   await js("document.querySelector('.adm-ttl').scrollIntoView({ block: 'start' }); true");

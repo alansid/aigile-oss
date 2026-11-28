@@ -42,6 +42,11 @@ try {
     const suffix = width+'-'+lang;
     assert.equal(await js("document.querySelectorAll('[data-human] dt').length"),4);
     assert.equal(await js("getComputedStyle(document.querySelector('.intro-extra summary')).display === 'none'"),width>600);
+    if (width === 1280) {
+      const fields = await js("[...document.querySelectorAll('[data-my-intro] .intro-columns .field')].map(el => el.getBoundingClientRect().toJSON())");
+      assert.equal(fields.length, 4);
+      for (let i = 0; i < 3; i++) assert.ok(Math.abs((fields[i + 1].top - fields[i].bottom) - 16) <= 1, 'intro field gap ' + i + ': ' + (fields[i + 1].top - fields[i].bottom));
+    }
     await capture('PLAT-487-editor-'+suffix);
     assert.ok(await js("document.querySelector('.intro-suggestion').innerText.includes('UX') && document.querySelector('.intro-suggestion').nextElementSibling.matches('.intro-columns')"));
     await capture('PLAT-487-suggestion-'+suffix);
@@ -61,6 +66,10 @@ try {
     const labels = await js("[...document.querySelector('.intro-read').querySelectorAll('dt')].map(el=>el.textContent)");
     assert.deepEqual(labels.slice(0,4),lang === 'zh' ? ['懂','擅長','能決定','怎麼問'] : ['Knows','Strengths','Decides','How to ask']);
     assert.equal(await js("document.querySelector('.intro-read').scrollWidth <= document.querySelector('.intro-read').clientWidth"),true);
+    if (width === 1280) {
+      const tm = await js("(() => { const n = document.querySelector('.project-member summary .tm-name[title=DemoMemberWithALongDisplayName]'); const chip = n?.closest('summary')?.querySelector('.project-chip'); return n && chip ? { overflow: n.scrollWidth > n.clientWidth, ellipsis: getComputedStyle(n).textOverflow === 'ellipsis', nowrap: getComputedStyle(n).whiteSpace === 'nowrap', clear: n.getBoundingClientRect().right <= chip.getBoundingClientRect().left + 1 } : null; })()");
+      assert.ok(tm && tm.overflow && tm.ellipsis && tm.nowrap && tm.clear, 'team long name ellipsis: ' + JSON.stringify(tm));
+    }
     await js("document.querySelector('.intro-read').scrollIntoView({block:'center'});true");
     await capture('PLAT-487-team-'+suffix);
 
