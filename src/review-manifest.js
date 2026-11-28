@@ -29,6 +29,14 @@ function ghError(status, token, what) {
   return 'Git 主機讀取失敗（HTTP ' + status + '）';
 }
 
+// Cloudflare Workers 的 fetch 不收 redirect:'error'（只收 follow／manual），正式站會直接報錯。
+// 改用 manual：拿到 3xx（或瀏覽器式的 opaqueredirect）就停，不跟隨，所以讀取金鑰只會送到 api.github.com
+const MANUAL = 'manual';
+function noRedirect(response) {
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) throw new Error('Git 主機要求轉址（HTTP ' + (response.status || '3xx') + '），為了不把讀取金鑰送到別處，已停止讀取');
+  return response;
+}
+
 // The origin is fixed. Never forward a project URL, user credentials, or a redirect.
 export async function fetchReviewChanges(repo, version, { fetchImpl = fetch, allowContent = false, token = '' } = {}) {
   if (!/^[a-f0-9]{40}$/.test(version)) throw new Error('這是差異指紋，Git 主機需要完整的 commit SHA');
@@ -43,9 +51,9 @@ export async function fetchReviewChanges(repo, version, { fetchImpl = fetch, all
   let byteLimit = false;
   let base = null, remaining = MAX_CONTENT;
   for (let page = 1; page <= 30; page++) {
-    const response = await fetchImpl(baseUrl + '?per_page=100&page=' + page, {
-      signal, redirect: 'error', headers: ghHeaders(token, { Accept: 'application/vnd.github+json' })
-    });
+    const response = noRedirect(await fetchImpl(baseUrl + '?per_page=100&page=' + page, {
+      signal, redirect: MANUAL, headers: ghHeaders(token, { Accept: 'application/vnd.github+json' })
+    }));
     if (!response.ok) throw new Error(ghError(response.status, token, '主機找不到這個提交'));
     const data = await readPage(response);
     if (data.sha !== version || !Array.isArray(data.files)) throw new Error('Git 主機回傳的版本或檔案清單不符');
@@ -83,13 +91,13 @@ export async function testGitHubRepo(input, branch, fetchImpl = fetch, token = '
   const slug = match[2].replace(/\.git$/, '');
   if (!slug || slug === '.' || slug === '..') throw new Error('程式庫網址無效');
   const url = 'https://api.github.com/repos/' + match[1] + '/' + slug;
-  const opts = { redirect: 'error', signal: AbortSignal.timeout(8000), headers: ghHeaders(token) };
-  const response = await fetchImpl(url, opts);
+  const opts = { redirect: MANUAL, signal: AbortSignal.timeout(8000), headers: ghHeaders(token) };
+  const response = noRedirect(await fetchImpl(url, opts));
   if (!response.ok) throw new Error(ghError(response.status, token, '讀不到這個程式庫，請確認網址'));
   const repo = await readPage(response);
   const selected = branch || repo.default_branch;
   if (!selected || !repo.full_name) throw new Error('Git 主機未回傳程式庫與分支');
-  const result = await fetchImpl(url + '/branches/' + encodeURIComponent(selected), opts);
+  const result = noRedirect(await fetchImpl(url + '/branches/' + encodeURIComponent(selected), opts));
   if (!result.ok) throw new Error('找不到分支，請檢查設定（HTTP ' + result.status + '）');
   const head = await readPage(result);
   if (!/^[a-f0-9]{40}$/.test(head.commit?.sha || '')) throw new Error('分支沒有可驗證的最新提交');

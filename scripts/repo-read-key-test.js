@@ -22,7 +22,7 @@ async function gitFetch(url, opts = {}) {
   const u = new URL(url), auth = opts.headers?.Authorization || '';
   seen.push({ path: u.pathname, auth });
   assert.equal(u.hostname, 'api.github.com', '只打 api.github.com');
-  assert.equal(opts.redirect, 'error', '不跟隨轉址');
+  assert.equal(opts.redirect, 'manual', '不跟隨轉址（manual，拿到 3xx 就停）');
   const priv = u.pathname.startsWith('/repos/example/private-repo');
   if (priv && auth && auth !== 'Bearer ' + KEY && auth !== 'Bearer ' + KEY2) return Response.json({ message: 'Bad credentials' }, { status: 401 });
   if (priv && !auth) return Response.json({ message: 'Not Found' }, { status: 404 }); // GitHub 對沒權限的私有庫回 404
@@ -54,6 +54,15 @@ try {
   await assert.rejects(testGitHubRepo(PRIV, 'main', gitFetch, WRONG), e => /HTTP 401/.test(e.message) && /換一把/.test(e.message) && !e.message.includes(WRONG), '金鑰錯：說換金鑰、不印金鑰');
   const ok = await testGitHubRepo(PRIV, 'main', gitFetch, KEY);
   assert.deepEqual([ok.private, ok.usedKey, ok.sha], [true, true, HEAD], '帶金鑰讀得到私有庫');
+  // 轉址：Workers 只收 follow／manual。用 manual，拿到 3xx 或 opaqueredirect 就停；不跟隨、金鑰不會被帶到別的網址
+  for (const reply of [() => new Response(null, { status: 302, headers: { Location: 'https://evil.example/steal' } }), () => ({ type: 'opaqueredirect', status: 0, ok: false, headers: new Headers() })]) {
+    const calls = [];
+    const hop = async (url, opts = {}) => { calls.push({ host: new URL(url).hostname, redirect: opts.redirect, auth: opts.headers?.Authorization || '' }); return reply(); };
+    await assert.rejects(fetchReviewChanges({ url: PRIV }, SHA, { fetchImpl: hop, token: KEY }), e => /轉址/.test(e.message) && !e.message.includes(KEY), '抓差異遇到轉址就停');
+    await assert.rejects(testGitHubRepo(PRIV, 'main', hop, KEY), e => /轉址/.test(e.message) && !e.message.includes(KEY), '測試連線遇到轉址就停');
+    assert.equal(calls.length, 2, '各只發一次請求，不跟隨轉址');
+    assert.ok(calls.every(c => c.host === 'api.github.com' && c.redirect === 'manual'), '只打 api.github.com、redirect 是 manual：' + JSON.stringify(calls.map(c => [c.host, c.redirect])));
+  }
 
   const liu = (await req(null, '/api/join', 'POST', { name: '劉昱志', role: 'PO' })).body; // 管理員
   const hua = (await req(null, '/api/join', 'POST', { name: '小華', role: 'PG' })).body;

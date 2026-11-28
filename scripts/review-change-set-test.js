@@ -5,7 +5,7 @@ const version = '1'.repeat(40);
 const files = [{ filename:'example.js', status:'modified', additions:600, deletions:0, patch:'@@ -0,0 +1,600 @@\n' + '+fixture\n'.repeat(600) }];
 const fetchImpl = async (url, opts) => {
   assert.equal(new URL(url).hostname,'api.github.com');
-  assert.equal(opts.redirect,'error');
+  assert.equal(opts.redirect,'manual');
   return Response.json({sha:version,parents:[{sha:'2'.repeat(40)}],files});
 };
 const metadata = await fetchReviewChanges(repo,version,{fetchImpl});
