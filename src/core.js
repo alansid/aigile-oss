@@ -1812,11 +1812,33 @@ ${ending}`;
     }
     return out;
   }
+  // 程式庫讀取金鑰（唯讀 Token）。另存在 repokeys:<專案>＝{ 正規化網址: { enc, at, by } }，跟 repo:<專案> 分開，
+  // 專案清單、/api/me、訊息、紀錄都只給「有沒有設定」；只有伺服器對 api.github.com 發請求時才解開
+  const repoCanon = u => String(u || '').trim().replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+  const repoKeysOf = async pj => { const v = await getJson('repokeys:' + pj); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; };
+  async function repoKeysMap() {
+    const out = {};
+    for (const r of await db.all("SELECT key, value FROM app_settings WHERE (key >= 'repokeys:' AND key < 'repokeys;')").catch(() => [])) {
+      try { out[r.key.slice(9)] = new Set(Object.keys(JSON.parse(r.value) || {})); } catch {}
+    }
+    return out;
+  }
+  async function repoKeyOf(pj, url) {
+    const hit = (await repoKeysOf(pj))[repoCanon(url)];
+    if (!hit?.enc) return '';
+    try { return await cloudApi.decryptSecret(hit.enc); } catch { throw new Error('讀取金鑰解不開（主密鑰換過或遺失），請到程式庫設定重填'); }
+  }
+  const readKeyOf = item => {
+    if (item.readKey === undefined || item.readKey === null || item.readKey === '') return '';
+    const k = typeof item.readKey === 'string' ? item.readKey.trim() : '';
+    if (!k || k.length > 255 || !/^[!-~]+$/.test(k)) throw invalid('讀取金鑰格式不對（不能有空白或中文，最多 255 字）');
+    return k;
+  };
   const reposOf = async p => {
     const all = await reposMap();
     return Object.fromEntries(projectsOf(p).filter(pj => all[pj]).map(pj => [pj, all[pj]]));
   };
-  const REPO_SECRET = '連結裡不要放帳號密碼或 Token，只放網址';
+  const REPO_SECRET = '連結裡不要放帳號密碼或 Token，只放網址；私有庫的唯讀金鑰請填在「讀取金鑰」欄';
   function readRepo(body) {
     const url = String(body.url ?? '').trim(), branch = String(body.branch ?? '').trim();
     if (!url) { if (branch) throw invalid('有分支就要填程式庫連結'); return { url: '', branch: '' }; }
@@ -1864,11 +1886,12 @@ ${ending}`;
     const people = await peopleMap(ctx);
     const counts = new Map((await db.all("SELECT project, COUNT(*) AS n FROM cards WHERE status IN ('待整理','待處理','進行中','待確認','受阻') GROUP BY project")).map(r => [r.project, r.n]));
     const repos = await reposMap(), dms = await dmMap(), rdefs = await roleDefsMap(), slugs = await slugMap();
+    const repoKeys = await repoKeysMap(); // 只看有沒有設定，金鑰本身不出伺服器
     await loadProjectRoles();
     const adminId = adminOf(people)?.id;
     const inUse = (pj, d) => [...people.values()].filter(p => p.status === 'active' && listOf(p).includes(pj) && (p.kind === 'ai' ? p.role_key === d.key : projRoles[p.id]?.[pj] === d.role)).length;
     const descriptions = new Map((await db.all('SELECT project, description FROM project_descriptions')).map(r => [r.project, r.description]));
-    return projectRows.map(r => ({ id: r.id, name: r.name, description: descriptions.get(r.id) || '', slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] ? { url: repos[r.id].url, branch: repos[r.id].branch } : null, repositories: repos[r.id]?.items || [], // ；C-xxx 網址英文名
+    return projectRows.map(r => ({ id: r.id, name: r.name, description: descriptions.get(r.id) || '', slug: slugs[r.id], code: projCodes[r.id] || null, archived: !!r.archived, createdAt: r.created_at, repo: repos[r.id] ? { url: repos[r.id].url, branch: repos[r.id].branch } : null, repositories: (repos[r.id]?.items || []).map(item => ({ ...item, hasReadKey: !!repoKeys[r.id]?.has(repoCanon(item.url)) })), // ；C-xxx 網址英文名；只帶有沒有讀取金鑰
       roles: (rdefs[r.id] || []).map(d => ({ ...d, createdByName: people.get(d.createdBy)?.name || null, inUse: inUse(r.id, d) })), // 本專案角色
       dm: dms[r.id] ? { ...dms[r.id], byName: people.get(dms[r.id].by)?.name || null } : { on: false, by: null, at: null, byName: null },
       memberCount: [...people.values()].filter(p => p.status === 'active' && p.kind !== 'system' && listOf(p).includes(r.id) && !ghostAdminIn(p, r.id, adminId)).length,
@@ -2400,6 +2423,7 @@ ${ending}`;
     if (!(admin && admin.id === me.id) && !leaderProjectsOf(me.id).includes(row.id)) throw new ApiError(403, 'NOT_ADMIN', `只有群組管理員或「${row.name}」的 leader 能改程式庫設定。`);
     const body = await readJson(req);
     let items;
+    const keyOps = []; // 每列的讀取金鑰動作（填了＝設定或換新、clearReadKey＝清除、沒填＝照舊）
     if (body.items === undefined) {
       const legacy = readRepo(body);
       items = legacy.url ? [{ ...legacy, name: '', primary: true }] : [];
@@ -2415,6 +2439,8 @@ ${ending}`;
         if (body.items.length > 1 && !name) throw invalid('多個程式庫都需要名稱');
         if (names.has(name)) throw invalid('程式庫名稱不能重複');
         names.add(name);
+        if (item.clearReadKey !== undefined && typeof item.clearReadKey !== 'boolean') throw invalid('clearReadKey 要是 true 或 false');
+        keyOps.push({ set: readKeyOf(item), clear: item.clearReadKey === true });
         return { ...repo, name, primary: item.primary };
       });
       if (items.length && items.filter(item => item.primary).length !== 1) throw invalid('請選一個主要程式庫');
@@ -2422,9 +2448,28 @@ ${ending}`;
     const repo = items.find(item => item.primary) || { url: '', branch: '' };
     const at = nowIso();
     if (body.items === undefined && (await reposMap())[row.id]?.items.length > 1) throw invalid('這個專案有多個程式庫，請以清單更新');
+    // 讀取金鑰跟著網址走；網址改了或移除的程式庫，舊金鑰一併丟掉（不會把金鑰送到別的程式庫）
+    // 同一個程式庫（正規化網址相同）可以設好幾列（不同分支），金鑰只有一把：各列的動作先依網址合併，互相衝突就擋
+    const byUrl = new Map();
+    for (const [i, item] of items.entries()) {
+      const c = repoCanon(item.url), op = keyOps[i] || {};
+      const g = byUrl.get(c) || { label: item.name || item.url, set: '', clear: false };
+      if (op.set) { if (g.set && g.set !== op.set) throw invalid(`「${g.label}」同一個程式庫的幾列填了不同的讀取金鑰，請只填一把`); g.set = op.set; }
+      if (op.clear) g.clear = true;
+      if (g.set && g.clear) throw invalid(`「${g.label}」同一個程式庫不能一列設定、另一列清除讀取金鑰`);
+      byUrl.set(c, g);
+    }
+    const oldKeys = await repoKeysOf(row.id), newKeys = {}, keyNotes = [];
+    for (const [c, g] of byUrl) {
+      if (g.set) { newKeys[c] = { enc: await cloudApi.encryptSecret(g.set), at, by: me.id }; keyNotes.push(`${me.name} ${oldKeys[c] ? '更換' : '設定'}「${g.label}」的讀取金鑰`); }
+      else if (g.clear) { if (oldKeys[c]) keyNotes.push(`${me.name} 清除「${g.label}」的讀取金鑰`); }
+      else if (oldKeys[c]) newKeys[c] = oldKeys[c];
+    }
     await db.batch([
       ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['repo:' + row.id, JSON.stringify({ ...repo, items, updatedAt: at, by: me.id })]],
+      Object.keys(newKeys).length ? ["INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ['repokeys:' + row.id, JSON.stringify(newKeys)]] : ['DELETE FROM app_settings WHERE key = ?', ['repokeys:' + row.id]],
       projEvent(row.id, me.id, repo.url ? `${me.name} 設定程式庫：${repo.url}${repo.branch ? `（分支 ${repo.branch}）` : ''}` : `${me.name} 清除程式庫連結`, at),
+      ...keyNotes.map(t => projEvent(row.id, me.id, t, at)),
     ]);
     return projectsResponse(ctx);
   });
@@ -2954,7 +2999,7 @@ ${ending}`;
       ['DELETE FROM project_events WHERE project_id = ?', [id]],
     ]);
     // 專案設定：單一鍵與 { 專案: … } 的 JSON
-    const settings = [['DELETE FROM app_settings WHERE key IN (SELECT value FROM json_each(?))', [JSON.stringify(['pcode:', 'slug:', 'repo:', 'roles:', 'pnomax:', 'dm:'].map(k => k + id))]],
+    const settings = [['DELETE FROM app_settings WHERE key IN (SELECT value FROM json_each(?))', [JSON.stringify(['pcode:', 'slug:', 'repo:', 'repokeys:', 'roles:', 'pnomax:', 'dm:'].map(k => k + id))]],
       ["DELETE FROM app_settings WHERE key >= 'pcodeold:' AND key < 'pcodeold;' AND value = ?", [id]]];
     const upsert = 'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
     for (const key of ['read_only', 'project_leaders', 'join_settings']) {
@@ -4010,7 +4055,7 @@ ${ending}`;
   // 審查者：設定能改的人跟知識庫一樣（管理員或這個專案的 leader）
   const introSummaries = registerHumanIntros({ route, db, readJson, invalid, requireHuman, assertWritable, projectsOf, nowIso, peopleMap, adminOf, loadLeaders, randId, ApiError, readRole, loadProjectRoles, projEvent, invalidatePeople });
   const reviewsApi = registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager: kbManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, isolatedFrom,
-    roleNamesIn: (p, pj) => (p.kind === 'ai' ? [p.role_key, p.role] : [projRoles[p.id]?.[pj]]).filter(Boolean), repoOf: async pj => (await reposMap())[pj] || null, docStorage, audit });
+    roleNamesIn: (p, pj) => (p.kind === 'ai' ? [p.role_key, p.role] : [projRoles[p.id]?.[pj]]).filter(Boolean), repoOf: async pj => (await reposMap())[pj] || null, repoKeyOf, gitFetch: config.gitFetch, docStorage, audit }); // 讀取金鑰；測試可換假的 GitHub
   async function launcherSetupText(ai, base, tool, currentToken) {
     await assertToolOn(tool);
     if (typeof currentToken === 'string' && currentToken.length <= 256 && ai.token_expires_at > Date.now() && await tokenKey(currentToken) === ai.token) {

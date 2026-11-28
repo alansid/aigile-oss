@@ -4147,18 +4147,24 @@ body.viewer-open .confirm-root:not(.under-viewer) .overlay { z-index: 1001; } /*
 .repo-primary { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .repo-primary input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }
 .repo-primary:has(:checked) { color: var(--primary); font-weight: 700; }
+/* 讀取金鑰：每列第二行，對齊連結欄 */
+.repo-row .repo-key { grid-column: 2 / 5; }
+.repo-keyclear { grid-column: 5 / 8; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.repo-keyclear input { width: 16px; height: 16px; margin: 0; }
 .repo-add { justify-self: start; }
 .repo-add:disabled { color: var(--muted); }
 @media (max-width: 600px) {
   .repo-head { display: none; }
   .repo-list { display: grid; gap: 8px; }
-  .repo-row { grid-template-columns: 18px minmax(0,1fr) 68px 20px; grid-template-areas: "grip name primary remove" "url url branch branch" "test test test test"; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+  .repo-row { grid-template-columns: 18px minmax(0,1fr) 68px 20px; grid-template-areas: "grip name primary remove" "url url branch branch" "key key key key" "test test clear clear"; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
   .repo-row [data-repo-test] { grid-area: test; justify-self: start; }
   .repo-grip { grid-area: grip; }
   .repo-name { grid-area: name; }
   .repo-primary { grid-area: primary; }
   .repo-remove { grid-area: remove; }
   .repo-url { grid-area: url; }
+  .repo-row .repo-key { grid-area: key; grid-column: auto; }
+  .repo-keyclear { grid-area: clear; grid-column: auto; justify-self: end; }
   .repo-branch { grid-area: branch; }
 }
 .repo-compare { display: inline-block; vertical-align: top; }

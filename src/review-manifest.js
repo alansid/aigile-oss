@@ -19,8 +19,18 @@ async function readPage(response) {
   }
 }
 
+// 讀取金鑰（程式庫設定填的唯讀 Token）只放在 Authorization 標頭送給固定的 api.github.com，不放網址、不轉送、不寫進錯誤訊息
+const ghHeaders = (token, extra = {}) => ({ ...extra, 'User-Agent': 'Aigile-review', ...(token ? { Authorization: 'Bearer ' + token } : {}) });
+// 沒有金鑰時 GitHub 對私有庫回 404（不說是私有），所以沒金鑰的 404 一律提示「私有庫請填唯讀金鑰」
+function ghError(status, token, what) {
+  if (status === 401) return '讀取金鑰無效或已過期（HTTP 401），請到程式庫設定換一把唯讀金鑰';
+  if (status === 404) return token ? what + '，或讀取金鑰沒有這個程式庫的讀取權限（HTTP 404）' : what + '；如果這是私有庫，請到程式庫設定填唯讀的讀取金鑰（HTTP 404）';
+  if (status === 403 || status === 429) return token ? '讀取金鑰沒有權限，或 GitHub 查詢次數已達上限（HTTP ' + status + '）' : 'GitHub 查詢次數已達上限（HTTP ' + status + '）；在程式庫設定填讀取金鑰可提高上限';
+  return 'Git 主機讀取失敗（HTTP ' + status + '）';
+}
+
 // The origin is fixed. Never forward a project URL, user credentials, or a redirect.
-export async function fetchReviewChanges(repo, version, { fetchImpl = fetch, allowContent = false } = {}) {
+export async function fetchReviewChanges(repo, version, { fetchImpl = fetch, allowContent = false, token = '' } = {}) {
   if (!/^[a-f0-9]{40}$/.test(version)) throw new Error('這是差異指紋，Git 主機需要完整的 commit SHA');
   const match = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+?)\/?$/.exec(repo?.url || '');
   if (!match) throw new Error('這個程式庫尚未設定支援的唯讀 Git 連線');
@@ -34,9 +44,9 @@ export async function fetchReviewChanges(repo, version, { fetchImpl = fetch, all
   let base = null, remaining = MAX_CONTENT;
   for (let page = 1; page <= 30; page++) {
     const response = await fetchImpl(baseUrl + '?per_page=100&page=' + page, {
-      signal, redirect: 'error', headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Aigile-review' }
+      signal, redirect: 'error', headers: ghHeaders(token, { Accept: 'application/vnd.github+json' })
     });
-    if (!response.ok) throw new Error(response.status === 404 ? '主機找不到這個提交，或目前沒有程式庫讀取權限' : 'Git 主機讀取失敗（HTTP ' + response.status + '）');
+    if (!response.ok) throw new Error(ghError(response.status, token, '主機找不到這個提交'));
     const data = await readPage(response);
     if (data.sha !== version || !Array.isArray(data.files)) throw new Error('Git 主機回傳的版本或檔案清單不符');
     base = data.parents?.[0]?.sha || null;
@@ -67,15 +77,15 @@ export async function fetchReviewChanges(repo, version, { fetchImpl = fetch, all
   throw new Error('檔案數超過支援上限');
 }
 
-export async function testGitHubRepo(input, branch, fetchImpl = fetch) {
+export async function testGitHubRepo(input, branch, fetchImpl = fetch, token = '') {
   const match = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+?)\/?$/.exec(String(input || ''));
   if (!match) throw new Error('請填完整的 GitHub 程式庫網址');
   const slug = match[2].replace(/\.git$/, '');
   if (!slug || slug === '.' || slug === '..') throw new Error('程式庫網址無效');
   const url = 'https://api.github.com/repos/' + match[1] + '/' + slug;
-  const opts = { redirect: 'error', signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'Aigile-review' } };
+  const opts = { redirect: 'error', signal: AbortSignal.timeout(8000), headers: ghHeaders(token) };
   const response = await fetchImpl(url, opts);
-  if (!response.ok) throw new Error('無法讀取程式庫，請確認網址與讀取權限（HTTP ' + response.status + '）');
+  if (!response.ok) throw new Error(ghError(response.status, token, '讀不到這個程式庫，請確認網址'));
   const repo = await readPage(response);
   const selected = branch || repo.default_branch;
   if (!selected || !repo.full_name) throw new Error('Git 主機未回傳程式庫與分支');
@@ -83,7 +93,7 @@ export async function testGitHubRepo(input, branch, fetchImpl = fetch) {
   if (!result.ok) throw new Error('找不到分支，請檢查設定（HTTP ' + result.status + '）');
   const head = await readPage(result);
   if (!/^[a-f0-9]{40}$/.test(head.commit?.sha || '')) throw new Error('分支沒有可驗證的最新提交');
-  return { repository: repo.full_name, branch: selected, sha: head.commit.sha };
+  return { repository: repo.full_name, branch: selected, sha: head.commit.sha, private: repo.private === true, usedKey: !!token };
 }
 
 export function localSnapshot(body, version, origins, content, invalid) {

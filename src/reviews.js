@@ -51,7 +51,7 @@ export function readReviewCfg(body, cur = REVIEW_DEFAULTS, invalid) {
   return out;
 }
 
-export function registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, roleNamesIn, loadRoles = async () => {}, isolatedFrom, repoOf = async () => null, docStorage = null, audit = async () => {}, fetchChanges = fetchReviewChanges }) {
+export function registerReviews({ route, db, ApiError, invalid, readJson, readBody, randId, nowIso, sha256, peopleMap, projectsOf, roIn, nameOf, isManager, getJson, setJson, createMessage, cardSeqByKey, cardKey, roleNamesIn, loadRoles = async () => {}, isolatedFrom, repoOf = async () => null, repoKeyOf = async () => '', gitFetch = fetch, docStorage = null, audit = async () => {}, fetchChanges = fetchReviewChanges }) {
   const notFound = () => new ApiError(404, 'NOT_FOUND', '找不到這張卡片');
   async function cfgOf(pj) { return normReviewCfg(((await getJson('review')) || {})[pj] || {}); }
   async function logOf(pj) { return (((await getJson('review')) || {})[pj]?.log || []); }
@@ -342,7 +342,11 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   route('POST', '/api/projects/:id/repo/test', async ({ ctx, me, req, params }) => {
     if (!(await isManager(ctx, me, params.id))) throw new ApiError(403, 'FORBIDDEN', '只有專案負責人或管理員能測試連線');
     const body = await readJson(req);
-    const info = await testGitHubRepo(body.url, body.branch).catch(error => { throw invalid(error.message); });
+    // 剛填還沒存的金鑰優先；沒填就用這個網址已存的金鑰。金鑰不回傳、不寫進錯誤
+    const typed = typeof body.readKey === 'string' ? body.readKey.trim() : '';
+    if (typed && (typed.length > 255 || !/^[!-~]+$/.test(typed))) throw invalid('讀取金鑰格式不對（不能有空白或中文，最多 255 字）');
+    const token = typed || await repoKeyOf(params.id, body.url).catch(error => { throw invalid(error.message); });
+    const info = await testGitHubRepo(body.url, body.branch, gitFetch, token).catch(error => { throw invalid(error.message); });
     return info;
   });
 
@@ -426,7 +430,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
         if (!selected?.url) throw new Error('這個專案沒有設定程式庫');
         if (body.origin !== undefined && (!body.origin || String(selected.url).replace(/\/$/, '').replace(/\.git$/, '').toLowerCase() !== body.origin)) throw new Error('本機 origin 與專案程式庫無法核對，請檢查工作樹與程式庫設定');
         if (cfg.localFallback && configuredOrigins(config,body.origins)) fallback = !cfg.diffUpload ? 'summary' : 'content';
-        fetched = await fetchChanges(selected, version, { allowContent: cfg.diffUpload });
+        fetched = await fetchChanges(selected, version, { allowContent: cfg.diffUpload, token: await repoKeyOf(c.project, selected.url), fetchImpl: gitFetch }); // 有讀取金鑰就帶
         fallback = null;
       } catch (error) {
         fetchIssue = error.message;

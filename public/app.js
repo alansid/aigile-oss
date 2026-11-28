@@ -10162,7 +10162,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <p class="small muted">API 代號：<b>${esc(p.id)}</b>（AI 發訊息、查卡片用這個，不能改）</p>
         <div><div class="repo-head" aria-hidden="true"><span>名稱</span><span>連結</span><span>分支</span></div><div class="repo-list"></div></div>
         <button class="link repo-add" type="button">＋ 加一個程式庫（最多 5 個）</button>
-        <p class="muted small">拖 ⋮⋮ 排順序；點「主要」設成卡片預設用的那個。最多 5 個；只放連結，不放帳密或 Token。</p>
+        <p class="muted small">拖 ⋮⋮ 排順序；點「主要」設成卡片預設用的那個。最多 5 個。連結只放網址；私有庫請在「讀取金鑰」填唯讀 Token（只存不顯示，可換、可清）。</p>
         <p class="error" id="repo-err" role="alert"></p>
       </form>`, { size: 'narrow', foot: '<button class="btn" type="button" data-close>取消</button><button class="btn primary" type="submit" form="repo-form">儲存</button>' });
     const form = body.querySelector('#repo-form');
@@ -10175,6 +10175,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
         <label class="repo-primary"><input type="radio" name="primary" data-primary ${item.primary ? 'checked' : ''}><span>主要</span></label>
         <button type="button" class="link small" data-repo-test>測試連線</button>
         <button type="button" class="repo-remove" data-remove aria-label="移除">✕</button>
+        <label class="field repo-key"><span>讀取金鑰</span><input name="readKey" type="password" autocomplete="new-password" spellcheck="false" maxlength="255" value="${esc(item.readKey || '')}" placeholder="${item.hasReadKey && !item.clearReadKey ? '已設定讀取金鑰（留空＝不變）' : '讀取金鑰（私有庫才需要，選填）'}"></label>
+        ${item.hasReadKey ? `<label class="repo-keyclear small"><input type="checkbox" data-clear-key ${item.clearReadKey ? 'checked' : ''}><span>清除金鑰</span></label>` : '<span class="repo-keyclear small muted">未設定</span>'}
       </div>`).join('') || '<span class="muted">尚無程式庫</span>';
       const add = form.querySelector('.repo-add');
       add.disabled = items.length >= 5;
@@ -10210,17 +10212,18 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       if (!row) return;
       if (e.target.matches('[data-primary]')) {
         items.forEach((item, i) => { item.primary = i === Number(row.dataset.row); });
-      } else items[Number(row.dataset.row)][e.target.name] = e.target.value;
+      } else if (e.target.matches('[data-clear-key]')) items[Number(row.dataset.row)].clearReadKey = e.target.checked; // 清除讀取金鑰
+      else items[Number(row.dataset.row)][e.target.name] = e.target.value;
     });
     form.addEventListener('click', e => {
       const btn = e.target.closest('button');
       if (!btn) return;
       const row = btn.closest('[data-row]');
       if (btn.hasAttribute('data-repo-test')) {
-        const { url, branch } = items[Number(row.dataset.row)];
+        const { url, branch, readKey } = items[Number(row.dataset.row)];
         btn.disabled = true;
-        api('/api/projects/' + encodeURIComponent(p.id) + '/repo/test', { method:'POST', body:{ url, branch } })
-          .then(r => { form.querySelector('#repo-err').textContent = r.repository + ' · ' + r.branch + ' · ' + r.sha.slice(0,12) + ' ✓'; })
+        api('/api/projects/' + encodeURIComponent(p.id) + '/repo/test', { method:'POST', body:{ url, branch, ...(readKey ? { readKey } : {}) } }) // 剛填的金鑰先拿來測，沒填就用已存的
+          .then(r => { form.querySelector('#repo-err').textContent = r.repository + ' · ' + r.branch + ' · ' + r.sha.slice(0,12) + (r.private ? ' · 私有庫' : '') + (r.usedKey ? ' · 用讀取金鑰' : '') + ' ✓'; })
           .catch(err => { form.querySelector('#repo-err').textContent = err.message; })
           .finally(() => { btn.disabled = false; });
         return;
@@ -10238,7 +10241,8 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     body.querySelector('#repo-form').addEventListener('submit', async e => {
       e.preventDefault();
       try {
-        await api(`/api/projects/${encodeURIComponent(pj)}/repo`, { method: 'PUT', body: { items } });
+        const send = items.map(({ name, url, branch, primary, readKey, clearReadKey }) => ({ name, url, branch, primary, ...(readKey ? { readKey } : {}), ...(clearReadKey && !readKey ? { clearReadKey: true } : {}) })); // 讀取金鑰只在有填時送，畫面不留
+        await api(`/api/projects/${encodeURIComponent(pj)}/repo`, { method: 'PUT', body: { items: send } });
         closeModal();
         await loadProjectList().catch(() => {});
         drawPerm();
@@ -13433,7 +13437,7 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
       err.textContent = '';
       if (!name) { err.textContent = '請輸入專案名稱'; return f.name.focus(); }
       if (!url && branch) { err.textContent = '有分支就要填程式庫連結'; return f.url.focus(); }
-      if (url && (!/^https?:\/\//i.test(url) || url.includes('@'))) { err.textContent = url.includes('@') ? '連結裡不要放帳號密碼或 Token，只放網址' : '程式庫連結要用 https:// 開頭'; return f.url.focus(); }
+      if (url && (!/^https?:\/\//i.test(url) || url.includes('@'))) { err.textContent = url.includes('@') ? '連結裡不要放帳號密碼或 Token，只放網址；私有庫的唯讀金鑰請填在程式庫設定的「讀取金鑰」欄' : '程式庫連結要用 https:// 開頭'; return f.url.focus(); }
       const sf = slugF.check();
       if (!sf) return;
       try {

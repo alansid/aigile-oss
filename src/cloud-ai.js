@@ -919,5 +919,5 @@ export function registerCloudAi(d) {
     return { stepped: n };
   }, { open: true });
 
-  return { wake, decorate, createCloudAi, checkProjects, drain, cloudInfo, checkModelUrl: u => checkModelUrl(u, { hosted }) };
+  return { wake, decorate, createCloudAi, checkProjects, drain, cloudInfo, checkModelUrl: u => checkModelUrl(u, { hosted }), encryptSecret: encryptKey, decryptSecret: decryptKey }; // 程式庫讀取金鑰也用同一把主密鑰加密
 }
