@@ -2,7 +2,7 @@
 // A. 專案 ⚙ › 審查：預設「不審」只有一列；打開「只有程式卡」展開其他設定、🔒 固定規則、現在符合的審查者（AI · 工具 · 模型；不明標黃）；「至少要有一位是人」選 1 位時不能按；儲存寫紀錄
 // B. 卡片審查欄：還沒送審＋送審視窗（版本、分支、說明、程式卡、審查者）→ 等審查
 // C. 要改（紅底意見、已退回作者）→ 重新送審 → ✅ 已審查（下一步：整合上線；要上線的 SHA 跟審過的不同就要重審）、歷次紀錄
-// D. 版本變了：通過已作廢＋重新送審
+// D. 版本變了：紅框顯示對不上的那個碼；只警告，卡片審查不作廢
 // E. 要你處理「請你審查」（審查者是人）：要改…要寫意見；通過後同一則出「同意 commit」（審查者是作者 AI 的主人）
 // F. 同意 commit 旁的審查欄：版本對得上綠框；對不上紅框＋退回重新送審／仍要同意
 // G. 1280、375 不橫向捲動
@@ -185,7 +185,25 @@ try {
     await shot(`06-${tag}-要你處理-同意commit旁的審查欄`);
   }
 
-  // ---------- D 版本變了：通過作廢（F 紅框） ----------
+  // ---------- F2 請示寫了疊在的候選 SHA（疊在候選的請示格式）：只比標明的指紋，仍是綠框 ----------
+  const BASE = '500c790ee837022e1890d79053177572dee527fd';
+  assert.equal((await call(pg.token, '/api/messages', 'POST', { project: '預設專案', text: `[需確認] ${K} 轉址修正已審過，請同意兩版本機 commit。\n• 審過的完整版本：${SHA2}\n• 工作樹：\n - 平台：/work/plat-redir（疊在 整合候選 ${BASE}）\n• 同意後：我 commit，完整 SHA 交回整合。`, requestId: 'ask-stacked' })).status, 201, 'F2 疊在候選的請示照發');
+  const stackRow = `[...document.querySelectorAll('.conf-row')].find(r => r.innerText.includes('轉址修正已審過'))`;
+  await login(liu.token, '/p/main/inbox');
+  await until(() => js(`!!${stackRow}?.querySelector('.rv-box')?.getClientRects().length && !document.documentElement.classList.contains('i18n-wait')`), 15000, 'F2 審查欄');
+  assert.match(await js(`${stackRow}.querySelector('.rv-box').innerText`), /✅ 已審查/, 'F2 疊在的候選 SHA 不比：綠框');
+  // F3 沒有比對結果的請示（改版前發的）：每則最多為它重讀卡片一次，不會一直重抓
+  const old = (await call(pg.token, '/api/messages', 'POST', { project: '預設專案', text: `[需確認] ${K} 請同意 commit（改版前的請示），版本：${SHA2}`, requestId: 'ask-legacy' })).body;
+  kit.sql("DELETE FROM card_reviews WHERE ev = 'ask' AND message_id = ?", old.messageId);
+  await login(liu.token, '/p/main/inbox');
+  const oldRow = `[...document.querySelectorAll('.conf-row')].find(r => r.innerText.includes('改版前的請示'))`;
+  await until(() => js(`!!${oldRow}?.querySelector('.rv-box')?.getClientRects().length`), 15000, 'F3 審查欄');
+  await sleep(3000);
+  const cardReads = await js(`performance.getEntriesByType('resource').filter(e => e.name.includes('/api/cards/${K}')).length`);
+  assert.ok(cardReads <= 3, 'F3 沒有比對結果時不會一直重抓卡片：' + cardReads + ' 次');
+  assert.match(await js(`${oldRow}.querySelector('.rv-box').innerText`), /✅ 已審查/, 'F3 沒有比對結果：照卡片狀態（已審查）');
+
+  // ---------- D 版本變了：紅框、顯示對不上的那個碼；只警告，審查不作廢 ----------
   assert.equal((await ask(K, SHA3)).status, 201, 'D 版本對不上的請同意 commit 照發');
   const badRow = `[...document.querySelectorAll('.conf-row')].find(r => r.innerText.includes('版本 ${SHA3.slice(0, 7)}，'))`;
   for (const [w, h, tag] of sizes) {
@@ -203,8 +221,8 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.match(await text('#card-drawer .rv-box'), /^審查與程式變更 通過已作廢 程式卡 示範Codex 通過的是 9f8e7d6，現在的版本是 4c5d6e7。 程式改過，原本的通過就不算。請重新送審。 重新送審/, `D ${tag} 通過已作廢`);
-    await shot(`04-${tag}-卡片-通過已作廢`);
+    assert.match(await text('#card-drawer .rv-box'), /^審查與程式變更 ✅ 已審查 程式卡 示範Codex .+通過 9f8e7d6/, `D ${tag} 對不上只警告：審查不作廢`);
+    await shot(`04-${tag}-卡片-對不上只警告`);
   }
 
   // ---------- E 要你處理「請你審查」（審查者是人、也是作者 AI 的主人） ----------
@@ -254,11 +272,14 @@ try {
   assert.match(await text('.rv-set'), /Cards that need review Off Code cards only All cards/, 'H 哪些卡要審');
   assert.match(await text('.rv-set'), /Attach diff Allow a diff file when submitting Off: reviewers check the version in git\. On: diffs are saved in project docs\. ?Notes/, 'H 送審附 diff 英文');
   await shot('08-1280-英文-審查設定');
+  // 舊資料裡已作廢的審查（以前請同意 commit 對不上會作廢）：畫面照樣顯示、要是英文
+  const seqK = Number((await call(liu.token, `/api/cards/${K}`)).body.legacyId.slice(2)) - 100;
+  kit.sql("INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, at) VALUES (?,?,?,?,?,?,?)", 'rv_legacy_void', seqK, '預設專案', 'void', SHA3, pg.participantId, new Date().toISOString());
   await openDrawer(K);
   await enReady();
   await sleep(400);
   const enBox = await text('#card-drawer .rv-box');
-  assert.match(enBox, /^Review & code changes Approval void /, 'H 卡片審查欄：' + enBox);
+  assert.match(enBox, /^Review & code changes Approval void /, 'H 卡片審查欄（舊資料的作廢）：' + enBox);
   assert.match(enBox, /示範Codex approved 9f8e7d6; the current version is 4c5d6e7\./, 'H 作廢那句是英文：' + enBox);
   for (const w of ['Version changed, approval void', 'Approved', 'Sent for review again', 'Changes requested', 'Sent for review']) assert.ok(enBox.includes(' · ' + w + ' · '), 'H 歷次紀錄翻成英文：' + w + '｜' + enBox);
   assert.ok(!/[㐀-鿿]/.test(enBox.replace(/示範\w+/g, '').replace(/劉昱志|林志明/g, '')), 'H 卡片審查欄沒有剩中文（人名除外）：' + enBox);

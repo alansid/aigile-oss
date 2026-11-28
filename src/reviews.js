@@ -31,6 +31,36 @@ export const COMMIT_ASK_RE = /^\s*\[需確認\][\s\S]*commit/i;
 const short = v => (/^[0-9a-f]{40}$/.test(v) ? v.slice(0, 7) : v);
 // 兩個版本是不是同一個：40 碼 SHA 與 7 碼以上的開頭也算同一個
 export const sameVersion = (a, b) => !!a && !!b && (a === b || (/^[0-9a-f]{7,40}$/.test(a) && /^[0-9a-f]{7,40}$/.test(b) && (a.startsWith(b) || b.startsWith(a))));
+// 請同意 commit 裡要比的碼：只比標明是版本的（「版本／指紋／SHA」後面的碼，或「請同意 push／部署／正式庫遷移：」行），其他碼一律不比。
+// 看同一行、從上一個碼到這個碼之間的字（最後一個逗號／分號後）：有「基底、疊在、候選、父提交…」就不比；只隔頓號、空白的接著前一個。
+// 這是從文字猜的止血做法；之後請示與同意改帶結構化欄位（動作、卡號、程式庫、SHA）就不用再解析文字
+const ASK_SKIP_RE = /基底|基準|疊在|候選|父提交|上游|\b(?:parent|base|onto|candidate)\b/i;
+const ASK_LABEL_RE = /版本|指紋|SHA|fingerprint|version|請同意\s*(?:push|部署|正式庫遷移)/i;
+export function askVersions(text) {
+  const labeled = [];
+  let prevEnd = 0, prevKind = null;
+  for (const x of String(text || '').matchAll(HEX_RE)) {
+    const lineStart = text.lastIndexOf('\n', x.index - 1) + 1;
+    const from = Math.max(lineStart, prevEnd), ctx = text.slice(from, x.index);
+    const seg = ctx.split(/[，,；;。]/).pop();
+    const kind = from > lineStart && prevKind && /^[\s、/與和及&+]*$/.test(ctx) ? prevKind
+      : ASK_SKIP_RE.test(seg) ? 'skip' : ASK_LABEL_RE.test(seg) ? 'label' : 'other';
+    if (kind === 'label') labeled.push(x[0]);
+    prevEnd = x.index + x[0].length; prevKind = kind;
+  }
+  return [...new Set(labeled)];
+}
+// 對不上的那個碼（對得上回 null）：兩版指紋時每個碼都要認得出是總指紋或某一版的，且給了總指紋或兩版都給
+export function askMismatch(hashes, version, repos, same = sameVersion) {
+  const eq = (h, v) => same(h, v) || (h.length >= 7 && v.length > h.length && v.startsWith(h)); // 64 碼指紋寫開頭幾碼也算
+  const components = (repos || []).map(r => r.fingerprint).filter(Boolean);
+  if (components.length < 2) return hashes.find(h => ![version, ...components].some(t => eq(h, t))) || null; // 一個程式庫：每個標明的碼都要對得上
+  const targets = [...new Set([version, ...components])];
+  const resolved = hashes.map(h => { const hits = targets.filter(t => t === h || (h.length >= 7 && h.length <= 12 && t.startsWith(h))); return hits.length === 1 ? hits[0] : null; });
+  const bad = resolved.indexOf(null);
+  if (bad >= 0) return hashes[bad];
+  return resolved.includes(version) || components.every(h => resolved.includes(h)) ? null : hashes[0];
+}
 
 export function readReviewCfg(body, cur = REVIEW_DEFAULTS, invalid) {
   const out = normReviewCfg(cur);
@@ -126,7 +156,8 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     if (me && isolatedFrom(me) && !projectsOf(me).includes(c.project)) throw new ApiError(403, 'CARD_FORBIDDEN', '這張卡屬於其他專案，你沒有權限查看。');
     return c;
   }
-  const eventsOf = seq => db.all('SELECT * FROM card_reviews WHERE card_seq = ? ORDER BY at, rowid', seq);
+  const allEventsOf = seq => db.all('SELECT * FROM card_reviews WHERE card_seq = ? ORDER BY at, rowid', seq);
+  const eventsOf = async seq => (await allEventsOf(seq)).filter(e => e.ev !== 'ask'); // ask＝請同意 commit 的版本比對結果，不算審查事件
   const ownerOf = p => (p.kind === 'ai' ? p.owner_id : p.id);
   const kindOf = p => (p.kind === 'ai' ? 'ai' : 'human');
 
@@ -200,8 +231,10 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   // 卡片的審查欄（GET /api/cards/:id 與 aigile_card_get 會帶）
   async function reviewOf(c, ctx) {
     const cfg = await cfgOf(c.project);
-    const evs = await eventsOf(c.seq);
+    const all = await allEventsOf(c.seq), evs = all.filter(e => e.ev !== 'ask');
     if (cfg.cards === 'off' && !evs.length) return null;
+    const asks = {}; // 每則請同意 commit 的比對結果（伺服器發文時算好）：網頁照這個標綠框／紅框
+    for (const e of all) if (e.ev === 'ask') { let d = {}; try { d = JSON.parse(e.comment || '{}'); } catch {} asks[e.message_id] = { reviewed: d.reviewed || null, mismatch: d.mismatch || null }; }
     const people = await peopleMap(ctx), maps = await aiInfo();
     const { state, round } = stateOf(evs, cfg, people);
     const previousRounds = new Map(), approvedBeforeVoid = new Set();
@@ -225,6 +258,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       ...(round.changes ? { changes: { by: person(people, round.changes.actor_id, maps, round.changes), at: round.changes.at, comment: round.changes.comment, version: round.changes.version } } : {}),
       ...(round.voided ? { voided: { at: round.voided.at, version: round.voided.version } } : {}),
       ...(passed ? { passed: { by: person(people, passed.actor_id, maps, passed), roundId: passed.message_id, at: passed.at, comment: passed.comment, version: passed.version } } : {}),
+      asks,
       // 歷次紀錄：送審、通過、要改帶當時的工具與模型（之後換模型不影響）
       history: evs.map(e => ({ at: e.at, ev: e.ev, roundId: e.message_id, ...(e.ev === 'request' ? { ...requestDetails(e.comment), approvedBeforeVoid:approvedBeforeVoid.has(e.message_id), roundState:previousRounds.get(e.message_id) || state } : {}), by: person(people, e.actor_id, maps, e.ev === 'void' ? { tool: null, model: null } : e), version: e.version, ...(e.comment && e.ev !== 'request' ? { comment: e.comment } : {}) })).reverse(),
     };
@@ -270,7 +304,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
   // 送審：作者做完呼叫，附版本、說明；審查者可指定（不符合規則直接回錯誤），不指定平台自動挑
   function appendSnapshot(stmts, c, mid, version, fetched, at, local = false) {
     // Recheck the round inside the write transaction. NULL fails the NOT NULL constraint and rolls back all parts.
-    const roundSql = local ? "(SELECT CASE WHEN ev='request' AND message_id=? THEN message_id END FROM card_reviews WHERE card_seq=? ORDER BY at DESC,rowid DESC LIMIT 1)" : '?';
+    const roundSql = local ? "(SELECT CASE WHEN ev='request' AND message_id=? THEN message_id END FROM card_reviews WHERE card_seq=? AND ev<>'ask' ORDER BY at DESC,rowid DESC LIMIT 1)" : '?';
     const roundArgs = local ? [mid, c.seq] : [mid];
     stmts.push([`INSERT INTO review_change_sets (card_seq, round_id, version, manifest) VALUES (?,${roundSql},?,?)`, [c.seq, ...roundArgs, version, JSON.stringify({ ...fetched.manifest, expiresAt: Date.parse(at) + 30 * 86400_000 })]]);
     {
@@ -545,7 +579,8 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     return { items };
   });
 
-  // 請人同意 commit 之前：專案開了審查，這張卡要先通過。commit 訊息寫的版本跟通過的對不上＝通過作廢（訊息照發，畫面標紅）
+  // 請人同意 commit 之前：專案開了審查，這張卡要先通過（沒通過就擋）。版本比對只在這裡算一次，網頁只顯示結果：
+  // 發文前算好 → 發文後 recordCommitAsk 記在這則訊息上（card_reviews ev='ask'，message_id＝這則請示）；對不上只警告，審查不作廢
   async function checkCommitAsk(me, text, card) {
     if (me.kind !== 'ai' || !COMMIT_ASK_RE.test(text)) return null;
     let c = card ? await db.get('SELECT * FROM cards WHERE seq = ?', card.seq) : null;
@@ -558,25 +593,19 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
     const { state, round } = stateOf(evs, cfg, people);
     if (!needsReview(cfg, round)) return null; // 只審程式卡、作者標了不是程式卡
     if (state !== 'passed') throw new ApiError(409, 'REVIEW_REQUIRED', '這張卡還沒通過審查，不能請人同意 commit。請先送審（aigile_review_request），通過後再發。');
-    const hexes = [...new Set(text.replace(/(?:基底|基準|疊在|base|parent)\s*(?:SHA|commit)?\s*[:：]?\s*\b[0-9a-f]{7,64}\b/gi,' ').match(HEX_RE) || [])];
-    const matches = (hashes, version, repos, same) => {
-      const components = (repos || []).map(r => r.fingerprint);
-      if (components.length < 2) return hashes.some(h => same(h, version));
-      const targets = [...new Set([version,...components])];
-      const resolved = hashes.map(h => {
-        const hits = targets.filter(t => t === h || (h.length >= 7 && h.length <= 12 && t.startsWith(h)));
-        return hits.length === 1 ? hits[0] : null;
-      });
-      return resolved.every(Boolean) && (resolved.includes(version) || components.every(h => resolved.includes(h)));
-    };
-    if (hexes.length && !matches(hexes, round.req.version, requestDetails(round.req.comment).summary?.repositories, sameVersion)) {
-      await db.batch([
-        ['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, at) VALUES (?,?,?,?,?,?,?)', [randId('rv'), c.seq, c.project, 'void', hexes.find(h => h.length === 40) || hexes[0], me.id, nowIso()]],
-        ['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, nowIso(), me.id, REVIEW_LOG, `版本變了，通過作廢（審過 ${short(round.req.version)}，要 commit 的是 ${short(hexes[0])}）`]],
-      ]);
-      return { voided: true };
-    }
-    return { cardSeq: c.seq };
+    const hexes = askVersions(text);
+    const bad = hexes.length ? askMismatch(hexes, round.req.version, requestDetails(round.req.comment).summary?.repositories) : null;
+    return { card: c, reviewed: round.req.version, mismatch: bad };
   }
-  return { reviewOf, checkCommitAsk, cfgOf, logOf, aiInfo };
+  // 只警告、不作廢：比對是從文字猜的，猜錯不能毀掉真的審查結果；真的改過，重新送審換版本時才作廢（review-request）
+  async function recordCommitAsk(me, chk, messageId) {
+    if (!chk?.card || !messageId) return null;
+    const { card: c, reviewed, mismatch } = chk, at = nowIso();
+    await db.batch([
+      ['INSERT INTO card_reviews (id, card_seq, project, ev, version, actor_id, comment, message_id, at) VALUES (?,?,?,?,?,?,?,?,?)', [randId('rv'), c.seq, c.project, 'ask', mismatch || reviewed, me.id, JSON.stringify({ reviewed, mismatch }), messageId, at]],
+      ...(mismatch ? [['INSERT INTO card_log (card_seq, at, by_id, via, text) VALUES (?,?,?,?,?)', [c.seq, at, me.id, REVIEW_LOG, `請同意 commit 寫的版本跟審過的對不上（審過 ${short(reviewed)}，請示寫 ${short(mismatch)}），審查沒有作廢，請人確認`]]] : []),
+    ]);
+    return mismatch ? `請示寫的版本 ${short(mismatch)} 跟審過的 ${short(reviewed)} 對不上：畫面已標紅給所屬人類看，審查沒有作廢。程式真的改過就重新送審（aigile_review_request）；沒改過請在請示寫「版本：<審過的完整版本>」。` : null;
+  }
+  return { reviewOf, checkCommitAsk, recordCommitAsk, cfgOf, logOf, aiInfo };
 }

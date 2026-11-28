@@ -12544,41 +12544,33 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     if (t.dataset.rvOpen) return openCard(t.dataset.rvOpen, t);
     if (t.dataset.rvBack) return rvSendBack(t.dataset.rvBack);
   });
-  // 同意 commit 旁的審查欄：讀那張卡的審查（快取 1 分鐘）；commit 寫的版本跟審過的對不上就標紅
+  // 同意 commit 旁的審查欄：讀那張卡的審查（快取 1 分鐘）；伺服器判定這則請示寫的版本跟審過的對不上就標紅
   work.rvCache = new Map();
+  work.rvAskTried = new Set(); // 為了拿比對結果重讀過卡片的請示
   const rvKeyOf = m => (m.text.match(/\b[A-Z]{2,5}-\d+\b/) || [])[0] || null;
   function rvRerender() { if (state.page === 'messages') renderMessages(false); else renderWork(); }
   function rvCommitBox(m) {
     const k = rvKeyOf(m);
     if (!k) return null;
     const c = work.rvCache.get(k);
-    if ((!c || Date.now() - c.at > 60_000) && !c?.loading) {
+    const fresh = c?.review?.asks && !(m.messageId in c.review.asks) && !work.rvAskTried.has(m.messageId); // 快取裡還沒有這則請示的比對結果（剛發的）：每則最多重讀一次，以前的請示本來就沒有
+    if ((!c || Date.now() - c.at > 60_000 || fresh) && !c?.loading) {
+      if (fresh) work.rvAskTried.add(m.messageId);
       work.rvCache.set(k, { ...(c || { at: 0 }), loading: true });
       api(`/api/cards/${encodeURIComponent(k)}`).then(d => { const shown = rv => !!(rv?.required && ['passed', 'void'].includes(rv.state) && rv.passed); work.rvCache.set(k, { at: Date.now(), review: d.review || null, project: d.project }); if (shown(c?.review) || shown(d.review)) rvRerender(); }) // 之前畫了框或現在要畫框才重畫（舊框要消失也重畫；沒開審查的專案不多重畫）
         .catch(() => work.rvCache.set(k, { at: Date.now(), review: null }));
     }
     const r = c?.review;
     if (!r || !r.required || !['passed', 'void'].includes(r.state) || !r.passed) return null;
-    const hexes = [...new Set(m.text.replace(/(?:基底|基準|疊在|base|parent)\s*(?:SHA|commit)?\s*[:：]?\s*\b[0-9a-f]{7,64}\b/gi,' ').match(/\b(?=[0-9]*[a-f])[0-9a-f]{7,80}\b/g) || [])];
-    const same = (a, b) => a === b || (a.length <= 40 && b.length <= 40 && (a.startsWith(b) || b.startsWith(a)));
-    // 訊息有寫版本就比訊息的（舊的那則請同意審過的版本仍是綠框）；沒寫版本才看卡片是不是已作廢
-    const matches = (hashes, version, repos, same) => {
-      const components = (repos || []).map(r => r.fingerprint);
-      if (components.length < 2) return hashes.some(h => same(h, version));
-      const targets = [...new Set([version,...components])];
-      const resolved = hashes.map(h => {
-        const hits = targets.filter(t => t === h || (h.length >= 7 && h.length <= 12 && t.startsWith(h)));
-        return hits.length === 1 ? hits[0] : null;
-      });
-      return resolved.every(Boolean) && (resolved.includes(version) || components.every(h => resolved.includes(h)));
-    };
-    const repos = r.history?.find(e => e.ev === 'request' && e.roundId === r.passed.roundId)?.summary?.repositories;
-    const target = hexes.length ? (matches(hexes, r.passed.version, repos, same) ? null : hexes[0]) : r.state === 'void' ? r.voided.version : null;
+    // 版本比對由伺服器在 AI 發請示時算好（review.asks[這則]），網頁只顯示；舊的那則請示對得上仍是綠框。沒有比對結果（以前的請示）才看卡片是不是已作廢
+    const chk = r.asks?.[m.messageId];
+    const target = chk ? chk.mismatch : r.state === 'void' ? r.voided.version : null;
+    const reviewed = chk?.reviewed || r.passed.version;
     const head = `<div class="rv-head"><b>審查</b> <span class="rv-pill ${target ? 'warn' : 'ok'}">${target ? '⚠ 版本對不上' : '✅ 已審查'}</span></div>
       <p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}`;
     if (!target) return { html: `<div class="rv-box rv-passed in-auth">${head}${rvLinks(r, c.project) ? `<p class="small">${rvLinks(r, c.project)}</p>` : ''}</div>`, mismatch: false };
-    m.rvMismatch = { a: r.passed.version, b: target };
-    return { html: `<div class="rv-box rv-void in-auth">${head}<p class="rv-comment bad">審過的是 ${rvVer(r.passed.version)}，要 commit 的是 ${rvVer(target)}。中間改過的程式沒人看過，建議先退回重新送審。</p></div>`, mismatch: true };
+    m.rvMismatch = { a: reviewed, b: target };
+    return { html: `<div class="rv-box rv-void in-auth">${head}<p class="rv-comment bad">審過的是 ${rvVer(reviewed)}，要 commit 的是 ${rvVer(target)}。中間改過的程式沒人看過，建議先退回重新送審。</p></div>`, mismatch: true };
   }
   async function rvSendBack(messageId) {
     const m = state.byId.get(messageId);

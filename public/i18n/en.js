@@ -3835,6 +3835,7 @@ window.AIGILE_EN = {
     "要改": "Changes requested",
     "通過": "Pass",
     "版本變了，通過作廢": "version changed, approval void",
+    "請同意 commit 寫的版本跟審過的對不上（審過 {0}，請示寫 {1}），審查沒有作廢，請人確認": "The version in the commit request does not match the reviewed one (reviewed {0}, request says {1}). The review still stands; please check.",
     "還沒送審": "Not requested",
     "等 {0} 審查": "Waiting for {0}",
     "✅ 已審查": "✅ Reviewed",

@@ -90,7 +90,7 @@ try {
   await click('.cc-ask [data-auth=commit]');await ready('.cc-ask [data-auth-send]');await capture('09-confirm');
   await click('.cc-ask [data-auth-send]');await ready('.cc-approved');await capture('10-approved');
   await key('Escape');
-  const wrong=await call('/api/messages',{project,cardId:card.cardId,text:'[需確認] '+card.cardId+' 請同意 commit '+('c'.repeat(40)),replyFrom:[human.participant.participantId],recipientIds:[human.participant.participantId],requestId:'fixture-wrong'},pg.token);
+  const wrong=await call('/api/messages',{project,cardId:card.cardId,text:'[需確認] '+card.cardId+' 請同意 commit，版本：'+('c'.repeat(40)),replyFrom:[human.participant.participantId],recipientIds:[human.participant.participantId],requestId:'fixture-wrong'},pg.token);
   await login(human.token,route+'/messages');
   const wrongLink='[data-change-message="'+wrong.messageId+'"]';await ready(wrongLink);await click(wrongLink);
   await ready('.cc-mismatch');await ready('.change-banner.ok');await capture('11-mismatch');

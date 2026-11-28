@@ -2,10 +2,10 @@
 // A. 預設不審：卡片沒有審查欄、請人同意 commit 不擋；只有 leader／管理員能改設定，改了寫進審查紀錄
 // B. 開了審查：沒通過就請人同意 commit → 409 REVIEW_REQUIRED；審查者不能是作者（寫死）、要不同家的 AI、不能是作者的主人
 // C. 送審 → 自動挑 AI（手上比較空的）→ 要改（一定要意見）→ 重新送審預設同一位 → 通過 → 請同意 commit 放行
-// D. 版本改了：commit 寫的 SHA 跟通過的不同＝通過作廢，下一次請同意 commit 擋下
+// D. 版本改了：請同意 commit 標明的版本跟通過的不同＝只警告（卡片紀錄留一筆），審查不作廢；沒標明是版本的碼不比
 // E. 要 2 位、至少一位是人：人的「要你處理」有這筆；人審查通過就算同意 commit（專案設定、審查者是作者 AI 的主人）
 // F. diff：開源版預設可以上傳（leader 可以關）；只有送審入口能附（存專案文件），開關寫進紀錄；有 GitHub 程式庫給比較連結
-// H. 請同意 commit 附 64 碼 diff 指紋：相同放行、不同作廢；日期、編號不當成版本
+// H. 請同意 commit 附 64 碼 diff 指紋：相同放行、不同只警告；日期、編號、基底、疊在的候選 SHA 不當成版本；指紋寫開頭幾碼也認得
 // I. 一輪＝一則送審訊息（前一輪晚到的回覆不算；回覆帶 roundId，舊畫面的回覆被拒）；合併核准要整輪通過；計票按不同審查者、資料庫擋同一輪重複回覆；回覆時重新驗證資格；只審程式卡時標成非程式卡的不擋
 // G. MCP：aigile_review_request、aigile_review、aigile_card_get 帶 review
 // 測試資料全部由程式產生，不連正式庫。用法：node scripts/review-test.js
@@ -137,12 +137,18 @@ try {
   r = await ask();
   assert.equal(r.status, 201, 'C 通過後請同意 commit 放行');
 
-  // ---------- D 版本改了：通過作廢 ----------
+  // ---------- D 版本改了：只警告、不作廢（重新送審時才作廢） ----------
   r = await ask(`[需確認] ${K} 請同意 commit（${SHA3}）`);
+  assert.equal(r.status, 201, 'D 沒標明是版本的碼：不比');
+  assert.equal((await getCard()).log.filter(l => /對不上/.test(l.text)).length, 0, 'D 沒標明的碼不留警告');
+  r = await ask(`[需確認] ${K} 請同意 commit，版本：${SHA3}`);
   assert.equal(r.status, 201, 'D 版本對不上：訊息照發（畫面標紅給人看）');
   c = await getCard();
-  assert.deepEqual([c.review.state, c.review.voided.version], ['void', SHA3], 'D 通過作廢');
-  assert.equal(code(await ask()), 'REVIEW_REQUIRED', 'D 作廢後請同意 commit 擋下');
+  assert.equal(c.review.state, 'passed', 'D 對不上只警告，審查不作廢');
+  assert.deepEqual(c.review.asks[r.body.messageId], { reviewed: SHA2, mismatch: SHA3 }, 'D 比對結果記在這則請示上（網頁照這個顯示）');
+  assert.ok(r.body.warnings?.some(w => w.includes(`請示寫的版本 ${SHA3.slice(0, 7)} 跟審過的 ${SHA2.slice(0, 7)} 對不上`)), 'D 發文回 warnings 告訴 AI：' + JSON.stringify(r.body.warnings));
+  assert.ok(!c.review.history.some(h => h.ev === 'ask'), 'D 比對結果不算審查歷次紀錄');
+  assert.ok(c.log.some(l => l.via === '審查' && l.text === `請同意 commit 寫的版本跟審過的對不上（審過 ${SHA2.slice(0, 7)}，請示寫 ${SHA3.slice(0, 7)}），審查沒有作廢，請人確認`), 'D 卡片紀錄留警告');
 
   // ---------- E 要 2 位、至少一位是人；人審查通過就算同意 commit ----------
   await req(lead.token, SET, 'PUT', { need: 2, needHuman: true, diffTool: false, humanPass: 'combined' });
@@ -255,7 +261,27 @@ try {
   r = await askOn(card3.cardId, `[需確認] ${card3.cardId} 請同意 commit（指紋 ${FP2}）`);
   assert.equal(r.status, 201, 'H 指紋不同：訊息照發');
   t = await tool(pg.token, 'aigile_card_get', { cardId: card3.cardId });
-  assert.deepEqual([t.review.state, t.review.voided?.version], ['void', FP2], 'H 64 碼指紋不同＝通過作廢');
+  assert.equal(t.review.state, 'passed', 'H 64 碼指紋不同：只警告，審查不作廢');
+  assert.ok(t.log.some(l => l.text.includes(`請示寫 ${FP2}`)), 'H 64 碼指紋不同：卡片紀錄留警告');
+  // 請示裡寫了基底、疊在…的候選 SHA：只比標明是版本的那個碼
+  const card4 = (await req(pg.token, '/api/cards', 'POST', { project: '預設專案', title: '第四張', ownerId: id(pg), requestId: 'c4' })).body;
+  await tool(pg.token, 'aigile_review_request', { cardId: card4.cardId, version: FP1, note: '第四張', reviewerId: id(cx) });
+  await tool(cx.token, 'aigile_review', { cardId: card4.cardId, version: FP1, result: 'pass' });
+  const BASE1 = '500c790ee837022e1890d79053177572dee527fd', BASE2 = 'e6d0e704b87bc7ad68ef299a461628d89ce256cd';
+  const stacked = fp => `[需確認] ${card4.cardId} 轉址修正已審過，請同意兩版本機 commit。\n• 審過的完整指紋：${fp}\n• 工作樹：\n - 平台：/work/plat-redir（疊在 整合候選 ${BASE1}）\n - 開源：/work/oss-redir（疊在 ${BASE2}）\n• 同意後：我 commit，完整 SHA 交回整合。`;
+  const state4 = async () => (await tool(pg.token, 'aigile_card_get', { cardId: card4.cardId })).review;
+  assert.equal((await askOn(card4.cardId, stacked(FP1))).status, 201, 'H 寫了疊在候選 SHA：訊息照發');
+  assert.equal((await state4()).state, 'passed', 'H 疊在、候選的 SHA 不比：通過不作廢');
+  await askOn(card4.cardId, `[需確認] ${card4.cardId} 請同意 commit，基底 SHA：${BASE1}，版本：${FP1.slice(0, 8)}`);
+  assert.equal((await state4()).state, 'passed', 'H 64 碼指紋寫開頭 8 碼也認得；基底 SHA 不比');
+  await askOn(card4.cardId, `[需確認] ${card4.cardId} 複審已通過（審查者，指紋 ${FP1.slice(0, 8)}…），請同意本機 commit。\n\n• ${card4.cardId}：程式庫設定加讀取金鑰。兩版都改。\n - 平台：/work/plat-x（從 492cf6d 開）\n - 開源：/work/oss-x（從 2fd5bcc 開）\n• 測試修正：/work/plat-y（從 main b7ea2ee 開）`);
+  assert.equal((await state4()).state, 'passed', 'H 指紋縮寫的請示格式：指紋縮寫認得，「從 … 開」的碼不比');
+  assert.equal((await tool(pg.token, 'aigile_card_get', { cardId: card4.cardId })).log.filter(l => /對不上/.test(l.text)).length, 0, 'H 對得上就不留警告');
+  await askOn(card4.cardId, stacked(FP2));
+  t = await state4();
+  assert.equal(t.state, 'passed', 'H 真的改過：只警告，審查不作廢');
+  const log4 = (await tool(pg.token, 'aigile_card_get', { cardId: card4.cardId })).log.filter(l => l.via === '審查' && /對不上/.test(l.text));
+  assert.ok(log4.length === 1 && log4[0].text.includes(`請示寫 ${FP2}`) && log4[0].text.includes(`審過 ${FP1}`), 'H 警告兩邊印不同的碼，記的是對不上的指紋（不是候選 SHA）：' + JSON.stringify(log4));
   const list = (await req(pg.token, '/api/mcp', 'POST', { jsonrpc: '2.0', id: 99, method: 'tools/list' })).body.result.tools.map(x => x.name);
   assert.ok(list.includes('aigile_review_request') && list.includes('aigile_review'), 'G 工具清單有兩個新工具');
 
@@ -341,13 +367,17 @@ try {
   assert.equal(snap.files[0].lines,undefined);
   assert.equal(snap.files[0].added,1);
   assert.equal((await req(cx.token,'/api/cards/'+K+'/review','POST',{version,roundId:sent.body.messageId,result:'pass'})).status,200);
-  const commitAsk = hashes => ask('[需確認] '+K+' 請同意 commit '+hashes.join(' '));
+  const commitAsk = hashes => ask('[需確認] '+K+' 請同意 commit，指紋：'+hashes.join(' '));
   assert.equal((await commitAsk(components)).status,201);
   assert.equal((await commitAsk([...components.map(h=>h.slice(0,9)),'疊在 abc0123 之上'])).status,201);
   assert.equal((await req(liu.token,'/api/cards/'+K)).body.review.state,'passed');
+  await ask(`[需確認] ${K} 請同意兩版 commit。\n• 平台指紋：${components[0]}，開源指紋：${components[1]}\n• 平台疊在 整合候選 ${'5'.repeat(39)}f，開源疊在 ${'e'.repeat(40)}`);
+  assert.equal((await req(liu.token,'/api/cards/'+K)).body.review.state,'passed','雙版指紋＋疊在的候選 SHA：只比兩版指紋');
   assert.equal((await commitAsk([components[0]])).status,201);
-  assert.equal((await req(liu.token,'/api/cards/'+K)).body.review.state,'void');
-  console.log('review-test：全部通過（預設不審、設定權限與紀錄、沒通過就擋 commit、審查者不能是作者／同一家／作者的主人、送審→要改→重新送審→通過、版本變了通過作廢、要 2 位至少一位是人、人通過就算同意 commit、diff 上傳開關（開源預設開）、比較連結、MCP）');
+  const last = (await req(liu.token,'/api/cards/'+K)).body;
+  assert.equal(last.review.state,'passed','只給一版指紋：只警告，審查不作廢');
+  assert.ok(last.log.some(l => l.text.includes('請示寫 '+components[0])),'只給一版指紋：警告印出那一版的指紋');
+  console.log('review-test：全部通過（預設不審、設定權限與紀錄、沒通過就擋 commit、審查者不能是作者／同一家／作者的主人、送審→要改→重新送審→通過、版本對不上只警告不作廢、只比標明的版本、要 2 位至少一位是人、人通過就算同意 commit、diff 上傳開關（開源預設開）、比較連結、MCP）');
 } finally {
   db.close();
   fs.rmSync(dataDir, { recursive: true, force: true });

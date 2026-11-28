@@ -3360,8 +3360,9 @@ ${ending}`;
       cardClosed = card && ['已完成', '已封存'].includes(card.status) ? card.status : '';
     }
     const fileIds = body.fileIds !== undefined && body.fileIds !== null ? await attachableFiles(me, body) : null;
-    await reviewsApi.checkCommitAsk(me, typeof body.text === 'string' ? body.text : '', card); // 專案開了審查，卡片沒通過就不能請人同意 commit
+    const askChk = await reviewsApi.checkCommitAsk(me, typeof body.text === 'string' ? body.text : '', card); // 專案開了審查，卡片沒通過就不能請人同意 commit
     const r = await createMessage(ctx, me, body, { checkProject: true, fileIds, docIds: readDocIds(body.docIds) });
+    const askWarn = askChk && !r.duplicate ? await reviewsApi.recordCommitAsk(me, askChk, r.message.messageId) : null; // 版本比對結果記在這則請示上，網頁照著顯示
     let cardLinked = cardMismatch ? false : undefined;
     if (cardSeq) {
       const n = (await db.get('SELECT COUNT(*) AS n FROM card_msgs WHERE card_seq = ?', cardSeq)).n;
@@ -3405,7 +3406,7 @@ ${ending}`;
       cardStarted = true;
     }
     const cardWaiting = card && !r.duplicate && isAcceptTag && !cardClosed && card.type !== '人類紀錄' ? await cardsApi.waitingOf(card.seq, me) : null; // 卡片關聯：接單成功也提醒還在等哪張（不擋）
-    const warnings = [...(r.warnings || []), ...(cardMismatch ? [cardMismatch] : [])];
+    const warnings = [...(r.warnings || []), ...(cardMismatch ? [cardMismatch] : []), ...(askWarn ? [askWarn] : [])];
     if (cardClosed && inferState(body.text || '') === 'working') warnings.push(`${body.cardId} 已${cardClosed}，新工作請開新卡（或請人重新打開這張），不要掛在已結案的卡上。`);
     return { __status: r.duplicate ? 200 : 201, ...r.message, ...(cardLinked === undefined ? {} : { cardLinked }), ...(cardStarted ? { cardStatus: '進行中' } : {}), ...(cardClaim ? { cardClaim } : {}), ...(cardWaiting ? { cardWaiting } : {}), ...(warnings.length ? { warnings } : {}) };
   });
