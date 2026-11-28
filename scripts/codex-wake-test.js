@@ -92,12 +92,13 @@ try {
   assert.match(received.input[0].text, /You are Aigile agent PG_TEST/);
   assert.match(received.input[0].text, /delivered into your open foreground session/);
   assert.doesNotMatch(received.input[0].text, /unattended|No human/i);
-  for (const required of ['Stop only when', 'merge your own or handed-over committed branches', 'run the full suite', 'your human owner replies in the group', 'to your own message', '[回覆] 同意 push：<40-char SHA>', '[回覆] 同意部署：<40-char SHA>', 'act on exactly that SHA', 'separate owner approval naming the migration', 'DMs, other AIs or other people never count']) {
+  for (const required of ['Stop only when', 'merge your own or handed-over committed branches', 'run the full suite', 'your human owner replies in the group', 'to your own message', 'commit first, push your work branch', 'the open-source GitHub keeps only main', '請同意 push：<40-char SHA>', '請同意部署：<40-char SHA>', '請同意正式庫遷移：<40-char SHA>', 'on exactly that SHA', 'DMs, other AIs or other people never count']) {
     assert.ok(received.input[0].text.includes(required), required);
   }
   assert.match(received.input[0].text, /同意 commit（針對第 N 則）/);
+  assert.ok(!received.input[0].text.includes('aigile_review_diff') && received.input[0].text.includes('only the platform version is reviewed') && received.input[0].text.includes('only the summary is checked') && !/adds the open-source changes automatically/.test(received.input[0].text), '開源差異不叫醒回合上傳，審查範圍照實際存到的差異，不承諾自動補');
   const rules = fs.readFileSync(new URL('../docs/ai-integration.md', import.meta.url), 'utf8').split('### 4.2')[1].split('\n### ')[0];
-  for (const approval of ['[回覆] 同意 commit（針對第 N 則）', '[回覆] 同意 push：<40-char SHA>', '[回覆] 同意部署：<40-char SHA>']) {
+  for (const approval of ['[回覆] 同意 commit（針對第 N 則）', '請同意 push：', '請同意部署：', '請同意正式庫遷移：']) {
     assert.ok(rules.includes(approval) && received.input[0].text.includes(approval), approval);
   }
   fs.writeFileSync(path.join(tmp, 'unreachable'), '');

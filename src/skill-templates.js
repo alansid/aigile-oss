@@ -108,9 +108,9 @@ add('handover-format', 1, {
 
 ## 範例
 \`\`\`
-做到哪：改好、測完，停在待 commit（分支 feat-login）
+做到哪：改好、測完，已 commit 並推上分支 feat-login、送審
 改了什麼：登入加上逾時重試；新增 login-timeout-test，全套 120/120 通過
-下一步：請所屬人類看過差異後同意 commit
+下一步：等審查者看差異；通過後整合
 注意：重試次數先寫死 3 次，要不要做成設定還沒決定
 \`\`\`
 `,
@@ -136,9 +136,9 @@ Every handover has these four parts, so the next person can continue without rea
 
 ## Example
 \`\`\`
-Where it stands: changed and tested, waiting for commit (branch feat-login)
+Where it stands: changed and tested, committed and pushed to branch feat-login, review requested
 What changed: sign-in retries on timeout; new login-timeout-test, full suite 120/120 passed
-Next step: the human I work for reviews the diff and agrees to commit
+Next step: the reviewer checks the diff; once it passes it gets integrated
 Watch out: retry count is fixed at 3; whether to make it a setting is not decided
 \`\`\`
 `,

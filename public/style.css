@@ -1162,6 +1162,10 @@ body.drawer-docked #app { padding-right: 400px; }
 .q-opt { min-height: 44px; text-align: left; }
 .q-opt[aria-checked="true"] { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
 .auth-row.quick .inl-actions .btn { min-height: 44px; }
+/* 同意 push／部署按鈕下面列出會送出的完整句子 */
+.grant-note { display: grid; gap: 2px; }
+.grant-line { overflow-wrap: anywhere; }
+.grant-line code { font-size: 12px; }
 @media (max-width: 600px) { .q-opts { flex-direction: column; align-items: stretch; } .q-opt { width: 100%; } }
 
 /* ===== 桌面輸入區對齊（UX 兩則交接）：同排同高、左右邊界與訊息卡片一致、不再被 820px 限制 ===== */

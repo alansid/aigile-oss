@@ -101,7 +101,7 @@ try {
   assert.match(sec, /--tool codex --mode auto/, '預設太長才換新，接入檢查帶 --mode');
   assert.match(sec, /Codex 視窗開著才會處理工作/);
   assert.match(sec, /太長＝同一個對話叫醒滿 10 次，由喚醒腳本數），免得對話越來越長、每次叫醒重讀越來越貴/, '--every 白話說明');
-  assert.match(sec, /前景叫醒依規格 4.2.*本機合併並跑全套.*所屬人類在群組回覆本則.*完整 40 碼 SHA/);
+  assert.match(sec, /前景叫醒依規格 4.2.*本機合併並跑全套.*開了審查先 commit.*請同意 push：<40 碼 SHA>.*所屬人類在群組回覆本則才做/);
 
   assert.match(sec, /codex\.exe 與 node\.exe/, '寫明怎麼確認已停');
   assert.match(sec, /watcher 在跑、日誌有連線或巡檢紀錄才算成功/, '成功判定改成 watcher');

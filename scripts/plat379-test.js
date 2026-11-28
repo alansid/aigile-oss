@@ -22,6 +22,7 @@ try {
   // 1. 規格文件檢查
   assert.ok(rules.includes('同意 commit（針對第 N 則）'), 'ai-integration.md 含同意 commit 規則');
   assert.ok(rules.includes('40 碼 SHA'), 'ai-integration.md 要求完整 40 碼 SHA');
+  assert.ok(rules.includes('開源 GitHub 只留 main、不推工作分支；審查範圍照該輪實際存到的差異：開源沒存到只審平台版，僅摘要只核對摘要，送審說明照寫。'), 'ai-integration.md 寫明開源只留 main，審查範圍照該輪實際存到的差異');
   // Codex 不再另開背景回合（codex exec）；真正另開的背景回合（Antigravity agy -p）仍不能 commit
   assert.ok(rules.includes('真正另開的背景回合') && rules.includes('不適用前景授權'), 'ai-integration.md 註明背景回合不適用前景授權（不 commit）');
   assert.match(apiRef, /擋掉 `git commit`／`push`／`merge`/, 'api-reference.md 註明背景回合擋掉 git commit');
@@ -33,7 +34,8 @@ try {
   const md = JSON.parse((await call(liu.token, `/api/my-ais/${ai.participantId}/onboarding?tool=codex`)).body).text;
   // 接入設定指向規格 4.2（同意 commit 的完整寫法在規格裡），只認所屬人類在群組回覆本則
   assert.ok(md.includes('前景叫醒依規格 4.2'), 'codex 接入設定指向規格 4.2');
-  assert.ok(md.includes('僅按所屬人類在群組回覆本則的明確授權執行'), 'codex 接入設定只認所屬人類在群組回覆（私訊、別人轉述不算）');
+  assert.ok(md.includes('所屬人類在群組回覆本則才做'), 'codex 接入設定只認所屬人類在群組回覆（私訊、別人轉述不算）');
+  assert.ok(md.includes('開了審查先 commit、推平台工作分支'), 'codex 接入設定：審查通過就 commit');
   assert.ok(md.includes('40 碼 SHA'), 'codex 接入設定要求 40 碼 SHA');
 
   // 3. aigile-codex.mjs 語法與前景／背景 prompt 區分

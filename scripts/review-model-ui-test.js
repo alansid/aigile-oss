@@ -128,7 +128,7 @@ try {
     await call(liu.token, SET, 'PUT', { differ: 'model' });
     await openDrawer(Km);
     const box = await text('#card-drawer .rv-box');
-    assert.match(box, new RegExp(`^審查與程式變更 ✅ 已審查 程式卡 示範PO AI · Claude · ${SONNET} 通過 a1b2c3d · .+ 專案規則：不同模型。寫的是 ${OPUS}、審的是 ${SONNET}，符合。 下一步：找人同意 commit。 ${w === 375 ? '程式變更請在電腦上看' : '看程式變更 ›'} 歷次紀錄 .+ · 通過 · 示範PO · Claude · ${SONNET} · a1b2c3d .+ · 送審 · 示範PG · Claude · ${OPUS} · a1b2c3d$`), `B ${tag} 不同模型：審查者帶模型、規則說明、歷次紀錄（作者之後換模型不影響）｜${box}`);
+    assert.match(box, new RegExp(`^審查與程式變更 ✅ 已審查 程式卡 示範PO AI · Claude · ${SONNET} 通過 a1b2c3d · .+ 專案規則：不同模型。寫的是 ${OPUS}、審的是 ${SONNET}，符合。 下一步：整合上線；要上線的 SHA 跟審過的不同就要重審。 ${w === 375 ? '程式變更請在電腦上看' : '看程式變更 ›'} 歷次紀錄 .+ · 通過 · 示範PO · Claude · ${SONNET} · a1b2c3d .+ · 送審 · 示範PG · Claude · ${OPUS} · a1b2c3d$`), `B ${tag} 不同模型：審查者帶模型、規則說明、歷次紀錄（作者之後換模型不影響）｜${box}`);
     assert.ok(!(await hscroll()), `C ${tag} 卡片不橫向捲動`);
     await shot(`04-${tag}-卡片-不同模型`);
     await openDrawer(Ku);

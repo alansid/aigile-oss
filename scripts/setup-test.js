@@ -68,7 +68,7 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     // 2. 長期授權：只有所屬人類能改；每隻 AI 都能設
     let g = (await call(boss.token, `/api/my-ais/${pg.participantId}/grants`)).body;
     assert.equal(g.grantable, true); assert.deepEqual(g.items, []); assert.deepEqual(g.choices.map(c => c.key), ['deploy'], '使用者選 C：只有部署');
-    assert.match(g.alwaysAsk, /git commit、push、merge、正式資料庫遷移/);
+    assert.match(g.alwaysAsk, /git commit（沒開審查時）、push、merge、正式資料庫遷移/);
     assert.match(g.never, /刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡/);
     assert.equal((await call(mate.token, `/api/my-ais/${pg.participantId}/grants`, 'PUT', { items: ['deploy'], until: 'quarter' })).status, 404, '別人不能改');
     assert.equal((await call(pg.token, `/api/my-ais/${pg.participantId}/grants`, 'PUT', { items: ['deploy'] })).status, 403, 'AI 自己不能改');
@@ -132,7 +132,7 @@ const sections = t => [...t.matchAll(/^## ([零一二三四五六七八九十]+)
     assert.match(obPg, /- 第二專案（第二專案）\n  - 沒有填程式庫：需要時問 林志明，不要自己猜。/, '7. 沒填寫問所屬人類');
     assert.match(obPg, /每則都帶 project（預設專案、第二專案，或 "all"/);
     assert.match(obPg, /林志明 已長期授權（到 \d{4}\/\d\d\/\d\d 為止，到期自動失效）：\n  - 部署到正式環境（自測全過才部署；不含資料庫遷移）\n- 最新授權/, '8. 列出長期授權與到期日');
-    assert.match(obPg, /- git commit、push、merge、正式資料庫遷移，以及沒有長期授權（或已到期）的部署，一律先在本機對話取得 林志明 明確同意；每次 push 都要重新取得授權/);
+    assert.match(obPg, /- git commit（沒開審查時）、push、merge、正式資料庫遷移，以及沒有長期授權（或已到期）的部署，一律先在本機對話取得 林志明 明確同意；每次 push 都要重新取得授權/);
     assert.match(obPg, /最新授權以 GET \/api\/me 的 grants 為準/);
     assert.match(obPg, /刪除資料、對外發布、付費、上傳程式碼或客戶個資、改別人的卡：不能長期授權/);
     assert.match(obPg, /＞ 本設定與群組規格 ＞/, '規則優先順序');

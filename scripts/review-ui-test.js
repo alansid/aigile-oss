@@ -1,7 +1,7 @@
 // 畫面測試：審查者（開源版：送審可以上傳 diff 預設打開）
 // A. 專案 ⚙ › 審查：預設「不審」只有一列；打開「只有程式卡」展開其他設定、🔒 固定規則、現在符合的審查者（AI · 工具 · 模型；不明標黃）；「至少要有一位是人」選 1 位時不能按；儲存寫紀錄
 // B. 卡片審查欄：還沒送審＋送審視窗（版本、分支、說明、程式卡、審查者）→ 等審查
-// C. 要改（紅底意見、已退回作者）→ 重新送審 → ✅ 已審查（下一步：找人同意 commit）、歷次紀錄
+// C. 要改（紅底意見、已退回作者）→ 重新送審 → ✅ 已審查（下一步：整合上線；要上線的 SHA 跟審過的不同就要重審）、歷次紀錄
 // D. 版本變了：通過已作廢＋重新送審
 // E. 要你處理「請你審查」（審查者是人）：要改…要寫意見；通過後同一則出「同意 commit」（審查者是作者 AI 的主人）
 // F. 同意 commit 旁的審查欄：版本對得上綠框；對不上紅框＋退回重新送審／仍要同意
@@ -132,7 +132,7 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.equal(await text('#card-drawer .rv-box'), '審查 還沒送審 這個專案的程式卡要 1 位審查通過，才能找人同意 commit。 送審', `B ${tag} 還沒送審`);
+    assert.equal(await text('#card-drawer .rv-box'), '審查 還沒送審 這個專案的程式卡要 1 位審查通過，才能整合上線。 送審', `B ${tag} 還沒送審`);
     await shot(`02-${tag}-卡片-還沒送審`);
     await click('#card-drawer [data-act="rv-request"]');
     await until(() => js("!!document.querySelector('#rv-form')"), 8000, 'B 送審視窗');
@@ -166,7 +166,7 @@ try {
   for (const [w, h, tag] of sizes) {
     await size(w, h);
     await openDrawer(K);
-    assert.match(await text('#card-drawer .rv-box'), /^審查與程式變更 ✅ 已審查 程式卡 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。 下一步：找人同意 commit。 (?:看程式變更 ›|程式變更請在電腦上看) 歷次紀錄 .+通過 · 示範Codex · Codex · 模型不明 · 9f8e7d6 .+重新送審 · 林志明 · 9f8e7d6 .+要改 · 示範Codex · Codex · 模型不明 · a1b2c3d .+送審 · 林志明 · a1b2c3d$/, `C ${tag} 已審查＋歷次紀錄`);
+    assert.match(await text('#card-drawer .rv-box'), /^審查與程式變更 ✅ 已審查 程式卡 示範Codex AI · Codex · 模型不明 通過 9f8e7d6 · .+ 意見：檢查加回來了，空值有測。可以。 下一步：整合上線；要上線的 SHA 跟審過的不同就要重審。 (?:看程式變更 ›|程式變更請在電腦上看) 歷次紀錄 .+通過 · 示範Codex · Codex · 模型不明 · 9f8e7d6 .+重新送審 · 林志明 · 9f8e7d6 .+要改 · 示範Codex · Codex · 模型不明 · a1b2c3d .+送審 · 林志明 · a1b2c3d$/, `C ${tag} 已審查＋歷次紀錄`);
     await shot(`03b-${tag}-卡片-已審查`);
   }
 

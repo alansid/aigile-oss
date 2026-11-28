@@ -65,8 +65,8 @@ export const MCP_TOOLS = [
       requestId: str('冪等鍵（選填）', { maxLength: 128 }), full: { type: 'boolean', description: '回完整欄位（舊格式），預設 false＝精簡' } }, ['project', 'text']) },
   { name: 'aigile_card_get', description: `讀一張卡：最前面是 claim（誰在做）與 handover（上一棒交接四欄）；有前置卡還沒完成時帶 waitingHint（只提醒、不擋接單），links 列前置卡／這張擋住／關聯卡；另有紀錄與關聯訊息。${UNTRUSTED}`,
     inputSchema: obj({ cardId: CARD_ID }, ['cardId']) },
-  // 審查者：專案開了審查時，做完先送審，通過了才找人同意 commit；被退回照意見改、改完重新送審
-  { name: 'aigile_review_request', description: '送審：專案開了審查時，做完先送審，通過了才請人同意 commit。只送版本、說明這類資料：version 帶要審的 40 碼 SHA 或 diff 指紋；note 寫改了什麼、怎麼驗證；model 帶你目前用的完整模型代號（記在審查紀錄上）；branch 選填（有設 GitHub 程式庫時審查者拿到比較連結）；reviewerId 選填（不符合專案規則會回錯誤，不帶平台自動挑；審查者不能是作者）；diffDocId 選填（先用 aigile_review_diff 上傳拿到的）。被退回改完重新送審，預設還是同一位審。',
+  // 審查者：專案開了審查時，先 commit、推工作分支，再帶 40 碼 commit SHA 送審（規格 4.2）；被退回照意見改、改完重新送審
+  { name: 'aigile_review_request', description: '送審：專案開了審查時，先 commit、推工作分支（不推 main），再送審；要改就同分支再 commit 重送，要上線的 SHA 跟審過的不同要重審。只送版本、說明這類資料：version 帶要審的 40 碼 commit SHA（不再送沒 commit 的指紋）；note 寫改了什麼、怎麼驗證；model 帶你目前用的完整模型代號（記在審查紀錄上）；branch 選填（有設 GitHub 程式庫時審查者拿到比較連結）；reviewerId 選填（不符合專案規則會回錯誤，不帶平台自動挑；審查者不能是作者）；diffDocId 選填（先用 aigile_review_diff 上傳拿到的）。被退回改完重新送審，預設還是同一位審。',
     inputSchema: obj({ cardId: CARD_ID, version: str('要審的版本：40 碼 SHA 或 diff 指紋', { minLength: 7, maxLength: 80 }), note: str('改了什麼、怎麼驗證', { maxLength: 500 }),
       repo: str('程式庫名稱（選填，預設主要）'), branch: str('分支名（選填）', { maxLength: 100 }), reviewerId: str('指定審查者 participantId（選填）', { pattern: '^p_' }), isCode: { type: 'boolean', description: '是不是程式卡（預設 true；判斷錯了作者可以改）' },
       tests: {type:'array',maxItems:100,items:{type:'object',properties:{name:{type:'string'},passed:{type:'boolean'}},required:['name','passed']}},

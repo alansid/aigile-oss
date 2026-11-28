@@ -6893,6 +6893,33 @@
     if (kind === 'commit') return `[回覆] 同意 commit（針對第 ${m.sequence} 則），請附完整 40 碼 SHA`;
     return kind === 'ok' ? '[回覆] 同意照辦' : '[回覆] 暫緩處理';
   }
+  // AI 請示 push／部署／正式庫遷移時一個動作一行「請同意 push：<40 碼 SHA>」「請同意部署：…」「請同意正式庫遷移：…」（規格 4.2）
+  // 按「同意」就把這幾行變成「同意 push：<SHA>」等完整句子送出，人不用自己打或複製 SHA
+  const GRANT_RE = /^[ \t]*(?:[-*•][ \t]*)?請同意[ \t]*(push|部署|正式庫遷移)[ \t]*[:：][ \t]*`?([0-9a-f]{40})`?[ \t]*$/gm;
+  function grantAsks(text) {
+    const seen = new Set(), out = [];
+    for (const x of String(text || '').matchAll(GRANT_RE)) if (!seen.has(x[1] + x[2])) { seen.add(x[1] + x[2]); out.push({ act: x[1], sha: x[2] }); }
+    return out;
+  }
+  const GRANT_HEAD = { push: '同意 push：', 部署: '同意部署：', 正式庫遷移: '同意正式庫遷移：' }; // 規格原文，送出與顯示都不翻
+  const grantHead = g => GRANT_HEAD[g.act];
+  const grantLine = g => grantHead(g) + g.sha;
+  function grantLabel(gs) { // 同一個 SHA 合併：同意 push＋部署 d92f98c；不同 SHA：同意 push 9f1a2b3、部署 d92f98c
+    const by = new Map();
+    for (const g of gs) by.set(g.sha, [...(by.get(g.sha) || []), g.act]);
+    const zh = [...by].map(([sha, acts]) => `${acts.join('＋')} ${sha.slice(0, 7)}`).join('、');
+    const en = [...by].map(([sha, acts]) => `${acts.map(a => ({ push: 'push', 部署: 'deploy', 正式庫遷移: 'production migration' })[a]).join(' + ')} ${sha.slice(0, 7)}`).join(', ');
+    return L('同意' + (zh.startsWith('push') ? ' ' : '') + zh, 'Approve ' + en);
+  }
+  // 送出後的「已回覆」用跟按鈕一樣的短句（同意 push＋部署 d92f98c），完整句子展開回覆看；開頭不是同意句子的照原文
+  const GRANT_REPLY_RE = /^同意[ \t]*(push|部署|正式庫遷移)[:：]([0-9a-f]{40})$/;
+  function grantReplyShort(body) {
+    const lines = body.split('\n'), gs = [];
+    for (let x; lines.length && (x = GRANT_REPLY_RE.exec(lines[0].trim())); lines.shift()) gs.push({ act: x[1], sha: x[2] });
+    const rest = lines.join(' ').trim();
+    return gs.length ? grantLabel(gs) + (rest ? '。' + rest : '') : null;
+  }
+  const grantNote = gs => `<div class="muted small grant-note"><span>按下會送出：</span>${gs.map(g => `<div class="grant-line" data-nt>${grantHead(g)}<code>${esc(g.sha)}</code></div>`).join('')}</div>`;
   const authBtn = (m, kind, label, sha, plain) => `<button type="button" class="btn auth-btn${plain ? ' plain' : kind === 'push' ? ' push' : ''}" data-auth="${kind}" data-asha="${sha || ''}" data-amsg="${esc(m.messageId)}">${label}</button>`;
   function authConfirm(m, p) {
     const hint = p.text.includes('push')
@@ -6999,7 +7026,8 @@
     const id = esc(m.messageId);
     const missing = qs.filter((_, i) => !q.sels[i]).length, picked = qs.length - missing;
     const textOnly = qs.length === 1 && missing && quickFilled(m.messageId); // 只有一題時，不選選項也能直接送出想法（只附圖也算）
-    const sendLabel = !qs.length ? '同意照辦' : textOnly ? '送出想法' : missing ? (qs.length === 1 ? '先選一個選項' : `還有 ${missing} 題未選`) : qs.length > 1 ? `送出 ${qs.length} 題回覆` : `選 ${esc(q.sels[0])} 並送出`;
+    const grants = qs.length ? [] : grantAsks(m.text); // 沒有選項、附了「請同意 push／部署：SHA」的請示
+    const sendLabel = !qs.length ? (grants.length ? esc(grantLabel(grants)) : '同意照辦') : textOnly ? '送出想法' : missing ? (qs.length === 1 ? '先選一個選項' : `還有 ${missing} 題未選`) : qs.length > 1 ? `送出 ${qs.length} 題回覆` : `選 ${esc(q.sels[0])} 並送出`;
     const recs = questionRecs(m.text, qs);
     const qBlock = (qq, i) => {
       const long = qq.opts.some(o => o.label.length > 16);
@@ -7016,6 +7044,7 @@
         <button type="button" class="btn small primary" data-q-send data-qm="${id}" ${q.busy || q.proxyAsk || (missing && !textOnly) ? 'disabled' : ''}>${q.busy ? '送出中…' : sendLabel}</button>
         <button type="button" class="btn small" data-q-hold data-qm="${id}" ${q.busy || q.proxyAsk ? 'disabled' : ''}>暫緩處理</button>
       </div>
+      ${grants.length ? grantNote(grants) : ''}
       ${q.proxyAsk ? (() => { // 代答確認：動態字句用 L() 直接給英文；回覆裡的標記「代答／代為暫緩（名字）」是給 AI 讀的，英文介面也照原文
         const hold = q.proxyAsk === 'hold', who = esc(proxyFor(m).map(pid => state.participants.get(pid)?.name || pid).join('、')), tag = `${hold ? '代為暫緩' : '代答'}（${esc(state.me?.name || '')}）`;
         return `<div class="auth-confirm" role="group" aria-label="${hold ? L('確認暫緩', 'Confirm hold') : L('確認代答', 'Confirm answering for them')}"><b>${hold ? L(`這題是問 ${who} 的，確定要幫忙暫緩嗎？`, `This question is for ${who}. Put it on hold on their behalf?`) : L(`這題是問 ${who} 的，確定要代答嗎？`, `This question is for ${who}. Answer on their behalf?`)}</b>
@@ -7066,10 +7095,11 @@
     const textOnly = kind === 'send' && qs.length === 1 && !q.sels[0] && quickFilled(id);
     if (kind === 'send' && !textOnly && qs.some((_, i) => !q.sels[i])) return;
     const picks = qs.length === 1 && !qs[0].named ? `選 ${q.sels[0]}` : qs.map((qq, i) => `問題${qq.no} 選 ${q.sels[i]}`).join('；');
-    const head = kind === 'hold' ? '暫緩處理' : qs.length ? picks : '同意照辦';
+    const grants = kind === 'hold' || qs.length ? [] : grantAsks(m.text); // 一個動作一行完整句子，想法另起一行
+    const head = kind === 'hold' ? '暫緩處理' : qs.length ? picks : grants.length ? grants.map(grantLine).join('\n') : '同意照辦';
     const proxy = proxyFor(m).length ? `${kind === 'hold' ? '代為暫緩' : '代答'}（${state.me?.name || ''}）：` : '';
     if (proxy && !confirmed) { q.proxyAsk = kind; refreshMsg(id); return; }
-    const text = textOnly ? `[回覆] ${proxy}${q.text.trim()}` : `[回覆] ${proxy}${head}${q.text.trim() ? '。' + q.text.trim() : ''}`;
+    const text = textOnly ? `[回覆] ${proxy}${q.text.trim()}` : `[回覆] ${proxy}${head}${q.text.trim() ? (grants.length ? '\n' : '。') + q.text.trim() : ''}`;
     q.busy = true; q.error = ''; refreshMsg(id);
     try {
       const fileIds = await quickFiles(id);
@@ -7141,7 +7171,8 @@
     // Push／Commit 授權列只給「程式開發（PG）AI 發的 [需確認]」；[完成]／[進度]／[通知] 就算含完整 SHA 也不顯示（事後會被誤按成再授權一次）
     const authorPG = (state.participants.get(m.author.participantId) || m.author).roleKey === 'PG';
     const isNeed = /^\s*\[需確認\]/.test(text);
-    const { commitAsk, pushAsk, shas } = owner && authorPG && isNeed ? parseGitAuth(text) : { commitAsk: false, pushAsk: false, shas: [] };
+    // 照格式附「請同意 push／部署：SHA」的請示一律走「同意」按鈕，不再用字面猜 commit／push
+    const { commitAsk, pushAsk, shas } = owner && authorPG && isNeed && !grantAsks(text).length ? parseGitAuth(text) : { commitAsk: false, pushAsk: false, shas: [] };
     if (isNeed) {
       // 任何人類回覆都算已處理（和伺服器收件匣規則一致），選項區收起；同時請 commit 與 push 時分開追蹤
       const humanR = repliesOf(m.messageId).filter(r => (state.participants.get(r.author.participantId) || r.author).memberType === 'human');
@@ -7184,7 +7215,7 @@
     const body = r.text.replace(/^\s*\[回覆\]\s*/, '');
     const qs = parseQuestions(m.text), picks = answerPicks(qs, body.replace(PROXY_RE, '')); // 代答的選項照樣標出
     const chosen = qs.map((qq, i) => { const o = picks[i] && qq.opts.find(x => x.key === picks[i]); return o ? `<span class="ans-pick">${qs.length > 1 ? `問題${qq.no} ` : ''}<b>${esc(o.key)}</b> ${esc(o.label)}<span class="ans-tag">已選</span></span>` : ''; }).join('');
-    return `<div class="auth-row sent answered"><button type="button" class="ans-jump" data-jump="${esc(r.messageId)}" title="跳到這則回覆"><b>已回覆：</b><span class="ans-text">${esc(oneLine(body.replace(PROXY_RE, ''), 60))}</span><span class="muted small">· ${esc(body.match(PROXY_RE)?.[1] || r.author.name)} · ${esc(shortTime(r.createdAt))}</span></button>${chosen ? `<div class="ans-picks">${chosen}</div>` : ''}</div>`;
+    return `<div class="auth-row sent answered"><button type="button" class="ans-jump" data-jump="${esc(r.messageId)}" title="跳到這則回覆"><b>已回覆：</b><span class="ans-text">${esc(oneLine(grantReplyShort(body.replace(PROXY_RE, '')) ?? body.replace(PROXY_RE, ''), 60))}</span><span class="muted small">· ${esc(body.match(PROXY_RE)?.[1] || r.author.name)} · ${esc(shortTime(r.createdAt))}</span></button>${chosen ? `<div class="ans-picks">${chosen}</div>` : ''}</div>`;
   }
   // 收件匣要顯示 [需確認] 的完整題目與選項，原文不在目前載入範圍的先抓回來（只放進 byId，不插進訊息串）
   async function loadConfirmMsgs() {
@@ -11940,13 +11971,13 @@ ${codex ? `下載失敗時：看到 127.0.0.1:9、curl 錯誤 7、連線被拒�
     const hist = (r.history || []).map((h, i, a) => `<li>${rvTime(h.at)} · ${h.ev === 'request' && a.slice(i + 1).some(x => x.ev === 'request') ? '重新送審' : RV_EV[h.ev]} · ${esc(h.by?.name || '')}${histTm(h)} · ${rvVer(h.version)}</li>`).join('');
     const ruleLine = rev => { const t = rvRuleLine(r.rule, r.requestedBy, rev); return t ? `<p class="muted small rv-rule">${esc(t)}</p>` : ''; };
     let body = '';
-    if (st === 'none') body = `<p class="small">這個專案的${r.rule.cards === 'all' ? '卡' : '程式卡'}要 ${r.rule.need} 位審查通過，才能找人同意 commit。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">送審</button>' : ''}`;
+    if (st === 'none') body = `<p class="small">這個專案的${r.rule.cards === 'all' ? '卡' : '程式卡'}要 ${r.rule.need} 位審查通過，才能整合上線。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">送審</button>' : ''}`;
     else if (st === 'waiting') body = `<p class="small">送審 ${rvVer(r.version)} · ${rvTime(r.requestedAt)} · ${esc(r.requestedBy?.name || '')}${r.branch ? ` · 分支 ${esc(r.branch)}` : ''}</p>
       <ul class="rv-revs">${r.reviewers.map(x => `<li>${rvWho(x)}${x.result === 'pass' ? ' · 通過' : ' · 還沒審'}</li>`).join('')}</ul>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
     else if (st === 'changes') body = `<p class="small">${rvWho(r.changes.by)} 審 ${rvVer(r.changes.version)} · ${rvTime(r.changes.at)}</p><p class="rv-comment bad">${esc(r.changes.comment)}</p>
       <p class="muted small">已退回作者。改好重新送審，預設還是由 ${esc(r.changes.by.name)} 審。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">重新送審</button>' : ''}`;
     else if (st === 'passed') body = `<p class="small">${rvWho(r.passed.by)} 通過 ${rvVer(r.passed.version)} · ${rvTime(r.passed.at)}</p>${ruleLine(r.passed.by)}${r.passed.comment ? `<p class="small">意見：${esc(r.passed.comment)}</p>` : ''}
-      <p class="small">下一步：找人同意 commit。</p>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
+      <p class="small">下一步：整合上線；要上線的 SHA 跟審過的不同就要重審。</p>${rvLinks(r, d.project) ? `<p class="small">${rvLinks(r, d.project)}</p>` : ''}`;
     else body = `<p class="small">${esc(`${r.passed?.by?.name || ''} 通過的是 ${rvShort(r.passed?.version || r.version)}，現在的版本是 ${rvShort(r.voided.version)}。`)}</p><p class="muted small">程式改過，原本的通過就不算。請重新送審。</p>${mine ? '<button type="button" class="btn small primary" data-act="rv-request">重新送審</button>' : ''}`;
     return `<div class="rv-box rv-${st}" data-rv-card="${esc(d.cardId)}"><div class="rv-head"><b>${r.roundId ? cw('審查與程式變更','Review & code changes') : '審查'}</b> <span class="rv-pill ${pill[1]}">${esc(pill[0])}</span>${st !== 'none' && rvCodeTag(r) ? ` <span class="muted small rv-kind">${esc(rvCodeTag(r))}</span>` : ''}</div>${body}
       ${r.roundId ? (r.summary?.repositories?.every(repo => Number.isFinite(repo.files)) ? r.summary.repositories.map((repo,i)=>'<div class="cc-card-count">'+(i?cw('開源版','Open source'):cw('平台版','Platform'))+' · '+repo.files+cw(' 檔 ',' files ')+changeCounts([repo])+'</div>').join('') : r.summary ? '<span class="small">'+r.summary.files+cw(' 檔 ',' files ')+changeCounts([r.summary])+'</span> ' : '') + reviewChangesLink(d.cardId) + '<span class="change-mobile small">程式變更請在電腦上看</span>' : ''}
