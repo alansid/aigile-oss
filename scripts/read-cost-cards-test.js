@@ -145,10 +145,13 @@ try {
   // 3. 自動封存：兩份程式共用上次執行時間，不各自每輪掃一次已完成卡
   const R1 = mk({ archiveEveryMs: '300' }), R2 = mk({ archiveEveryMs: '300' });
   seen.length = 0; recording = true;
+  const t0 = Date.now();
   for (let i = 0; i < 8; i++) { await call(i % 2 ? R1 : R2, liu.token, '/api/cards?status=open&limit=5'); await sleep(90); }
   recording = false;
   const scans = seen.filter(x => /FROM cards WHERE status = '已完成' AND verified_by IS NOT NULL/.test(flat(x.sql))).length;
-  assert.ok(scans >= 1 && scans <= 3, `約 720 毫秒、間隔 300 毫秒，全站只掃 1～3 次（掃了 ${scans} 次）`);
+  // 上限照實際花的時間算（全套同時跑時請求會變慢）：共用時間＝每 300 毫秒最多 1 次；各自算的話兩份程式會各掃一次、約兩倍
+  const most = Math.floor((Date.now() - t0) / 300) + 1;
+  assert.ok(scans >= 1 && scans <= most, `花了 ${Date.now() - t0} 毫秒、間隔 300 毫秒，全站最多掃 ${most} 次（掃了 ${scans} 次）`);
 
   console.log('read-cost-cards-test：全部通過');
 } catch (e) {
