@@ -313,7 +313,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       let rows = [], rowBytes = 2;
       function flush() {
         if (!rows.length) return;
-        stmts.push(["INSERT INTO review_change_parts (card_seq,round_id,file_index,part,lines,expires_at) SELECT ?,?,json_extract(value,'$[0]'),json_extract(value,'$[1]'),json_extract(value,'$[2]'),? FROM json_each(?)",
+        stmts.push(["INSERT INTO review_change_parts (card_seq,round_id,file_index,part,lines,expires_at) SELECT ?,?,CAST(json_extract(value,'$.fileIndex') AS INTEGER),CAST(json_extract(value,'$.part') AS INTEGER),json_extract(value,'$.lines'),? FROM json_each(?)",
           [c.seq,mid,expires,JSON.stringify(rows)]]);
         rows = [];
         rowBytes = 2;
@@ -321,7 +321,7 @@ export function registerReviews({ route, db, ApiError, invalid, readJson, readBo
       for (const patch of fetched.patches) {
         let chunk = [], size = 0, part = 0;
         const save = () => {
-          const row = [patch.index,part++,chunk];
+          const row = { fileIndex: patch.index, part: part++, lines: chunk };
           const bytes = encoder.encode(JSON.stringify(row)).length + 1;
           if (rowBytes + bytes > 96000) flush();
           rows.push(row);
