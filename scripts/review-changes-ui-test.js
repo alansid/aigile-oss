@@ -28,7 +28,7 @@ try {
   const lines=['@@ -8,3 +8,4 @@',' Report period','-End: Friday','+End: Sunday','+Timezone: local',' Total','@@ -25 +26 @@','-Daily summary','+Weekly summary'];
   const files=repositories.flatMap(({origin})=>names.map((name,i)=>({origin,name,status:i===2?'A':'M',added:i===2?2:3,removed:i===2?0:2,totalLines:i===2?3:9})));
   const baseManifest={version,base:'c49d21b'.padEnd(40,'a'),files,repositories,contentAllowed:true};
-  const setManifest = m=>kit.sql('INSERT OR REPLACE INTO review_change_sets(card_seq,round_id,version,manifest) VALUES(?,?,?,?)',seq,round,version,JSON.stringify(m));
+  const setManifest = m=>kit.sql('INSERT INTO review_change_sets(card_seq,round_id,version,manifest) VALUES(?,?,?,?) ON CONFLICT(card_seq,round_id) DO UPDATE SET version=excluded.version,manifest=excluded.manifest',seq,round,version,JSON.stringify(m));
   setManifest(baseManifest);
   const comment = kit.get("SELECT comment FROM card_reviews WHERE message_id=? AND ev='request'",round).comment;
   const saved = JSON.parse(comment.slice(1));
